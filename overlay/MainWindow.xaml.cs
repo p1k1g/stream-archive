@@ -247,6 +247,10 @@ public sealed partial class MainWindow : Window
         @"RECORD FINISHED channel=(?<name>.+?) duration=(?<duration>\S+) size=(?<size>.+?) reason=(?<reason>.+?) file=(?<file>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    static readonly Regex RecordFinishedEvent = new(
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)\s+\[account=(?<account>[A-Za-z0-9_]+)\]\s*:\s*RECORD FINISHED\s*\|\s*duration=(?<duration>[^|]*)\|\s*size=(?<size>[^|]*)\|\s*reason=(?<reason>[^|]*)\|\s*file=(?<file>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     static readonly Regex ChannelStopRequested = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*CHANNEL STOP REQUESTED BNO=(?<bno>\S*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -261,6 +265,10 @@ public sealed partial class MainWindow : Window
 
     static readonly Regex ChannelResumeRequested = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*CHANNEL RESUME REQUESTED(?: BNO=(?<bno>\S*))?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    static readonly Regex ChannelRemovedOrDisabled = new(
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)\s+\[account=(?<account>[A-Za-z0-9_]+)\]\s*:\s*CHANNEL\s+(?<action>REMOVED|DISABLED)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     static readonly Regex DashboardHealthState = new(
@@ -357,7 +365,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix45",
+            Text = "WinUI 3 · v1.2.0-preview1-fix46",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -2194,6 +2202,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var removedOrDisabled = ChannelRemovedOrDisabled.Match(text);
+        if (removedOrDisabled.Success)
+        {
+            var item = GetOrCreate(
+                removedOrDisabled.Groups["account"].Value.Trim(),
+                removedOrDisabled.Groups["name"].Value.Trim());
+            RemoveDashboardChannel(item);
+            return;
+        }
+
         var healthCleared = DashboardHealthCleared.Match(text);
         if (healthCleared.Success)
         {
@@ -2219,11 +2237,35 @@ public sealed partial class MainWindow : Window
             var detail = health.Groups["detail"].Success
                 ? health.Groups["detail"].Value.Trim()
                 : health.Groups["detail2"].Value.Trim();
+            if (rawStatus == "RECORD START FAILED")
+            {
+                var failedItem = GetOrCreate(
+                    health.Groups["account"].Value.Trim(),
+                    health.Groups["name"].Value.Trim());
+                RecordingItems.Remove(failedItem);
+                failedItem.RateText = "-";
+                failedItem.DisplayDrive = "";
+                failedItem.Drive = "";
+                ClearPendingProgress(failedItem.Account, failedItem.Name);
+            }
             SetDashboardAlert(
                 health.Groups["account"].Value.Trim(),
                 health.Groups["name"].Value.Trim(),
                 status,
                 detail);
+            return;
+        }
+
+        var finishedEvent = RecordFinishedEvent.Match(text);
+        if (finishedEvent.Success)
+        {
+            HandleRecordingFinished(
+                finishedEvent.Groups["account"].Value.Trim(),
+                finishedEvent.Groups["name"].Value.Trim(),
+                finishedEvent.Groups["duration"].Value.Trim(),
+                finishedEvent.Groups["size"].Value.Trim(),
+                finishedEvent.Groups["reason"].Value.Trim(),
+                finishedEvent.Groups["file"].Value.Trim());
             return;
         }
 
@@ -2284,8 +2326,10 @@ public sealed partial class MainWindow : Window
                 item.Title = pendingRecordTitle!;
 
             UpdateDrive(item, outputFile);
-            if (!RecordingItems.Contains(item))
-                MoveToRecording(item);
+            MoveToRecording(item);
+
+            if (notifyStart && uiNotifyRecordStart)
+                ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
 
             if (notifyStart && uiNotifyRecordStart)
                 ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
@@ -2316,8 +2360,7 @@ public sealed partial class MainWindow : Window
             item.RateText = "-";
             item.FilePath = file;
             UpdateDrive(item, file);
-            if (!RecordingItems.Contains(item))
-                MoveToRecording(item);
+            MoveToRecording(item);
             if (notifyStart && uiNotifyRecordStart)
                 ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
             return;
@@ -2399,8 +2442,86 @@ public sealed partial class MainWindow : Window
 
         // Compact backend progress intentionally does not need to update
         // FilePath/drive. Those are fixed by RECORD START.
+        var alertCleared = ClearDashboardAlert(item.Account, item.Name, refresh: false);
         if (!RecordingItems.Contains(item))
             MoveToRecording(item);
+        else if (alertCleared)
+            UpdateCounts();
+    }
+
+    void HandleRecordingFinished(
+        string account,
+        string name,
+        string duration,
+        string size,
+        string reason,
+        string file)
+    {
+        ShowRecordingFinishedNotification(name, duration, size, reason, file);
+        ClearPendingProgress(account, name);
+
+        var item = GetOrCreate(account, name);
+        RecordingItems.Remove(item);
+        item.RateText = "-";
+        item.DisplayDrive = "";
+        item.Drive = "";
+
+        var normalizedReason = reason.Trim().ToUpperInvariant();
+        if (normalizedReason is "CHANNEL REMOVED" or "CHANNEL DISABLED" or "WATCHER EXIT")
+        {
+            RemoveDashboardChannel(item);
+            return;
+        }
+
+        if (normalizedReason == "USER CHANNEL STOP")
+        {
+            // CHANNEL STOP COMPLETED follows and moves this same item into the
+            // selectable PAUSED collection. Until then it must not count REC.
+            item.Status = "중지 확인 중";
+            item.Detail = "사용자 중지 완료를 확인하고 있습니다.";
+            UpdateCounts();
+            return;
+        }
+
+        var detail = normalizedReason switch
+        {
+            "LOW DISK SPACE" => "최소 디스크 여유 공간에 도달해 녹화가 중단되었습니다.",
+            "RECORD STALLED" => "파일 증가가 멈춰 방송 상태와 녹화 재시작을 확인하고 있습니다.",
+            _ when normalizedReason.StartsWith("RECORDER EXIT", StringComparison.Ordinal) =>
+                "녹화 프로세스가 종료되어 방송 상태와 재시작을 확인하고 있습니다.",
+            _ => string.IsNullOrWhiteSpace(reason)
+                ? "녹화가 중단되어 재시작 여부를 확인하고 있습니다."
+                : reason
+        };
+        SetDashboardAlert(account, name, "녹화 재시작 확인", detail);
+    }
+
+    void ClearPendingProgress(string? account, string name)
+    {
+        if (!string.IsNullOrWhiteSpace(account))
+            pendingProgressByChannel.Remove("account:" + account.Trim());
+        if (!string.IsNullOrWhiteSpace(name))
+            pendingProgressByChannel.Remove("name:" + name.Trim());
+    }
+
+    void RemoveDashboardChannel(ChannelStatus item)
+    {
+        RecordingItems.Remove(item);
+        OfflineItems.Remove(item);
+        StoppedItems.Remove(item);
+        ClearDashboardAlert(item.Account, item.Name, refresh: false);
+        ClearPendingProgress(item.Account, item.Name);
+
+        foreach (var key in statusMap
+            .Where(x => ReferenceEquals(x.Value, item))
+            .Select(x => x.Key)
+            .ToArray())
+            statusMap.Remove(key);
+
+        if (ReferenceEquals(RecordingList?.SelectedItem, item))
+            RecordingList.SelectedItem = null;
+        UpdateSelectedRecordingActionButton();
+        UpdateCounts();
     }
 
     ChannelStatus GetOrCreate(string? account, string name)
@@ -2456,14 +2577,12 @@ public sealed partial class MainWindow : Window
     {
         var alreadyOffline = OfflineItems.Contains(item) &&
             !RecordingItems.Contains(item) &&
-            !StoppedItems.Contains(item) &&
-            !alertMap.ContainsKey(DashboardKey(item.Account, item.Name));
+            !StoppedItems.Contains(item);
         if (alreadyOffline)
             return;
 
         RecordingItems.Remove(item);
         StoppedItems.Remove(item);
-        ClearDashboardAlert(item.Account, item.Name, refresh: false);
         if (!OfflineItems.Contains(item))
             OfflineItems.Add(item);
 
@@ -2661,9 +2780,10 @@ public sealed partial class MainWindow : Window
 
                 var freeBytes = (double)drive.AvailableFreeSpace;
                 var freeGb = freeBytes / 1024d / 1024d / 1024d;
-                var reserveGb = double.IsNaN(MinDiskBox?.Value ?? double.NaN)
-                    ? 20d
-                    : MinDiskBox.Value;
+                var configuredReserveGb = MinDiskBox?.Value;
+                var reserveGb = configuredReserveGb is double value && !double.IsNaN(value)
+                    ? value
+                    : 20d;
                 var usableBytes = Math.Max(0d, freeBytes - reserveGb * 1024d * 1024d * 1024d);
                 var rate = rateByRoot.GetValueOrDefault(entry.Key);
                 var estimate = FormatDiskTimeEstimate(usableBytes, rate);

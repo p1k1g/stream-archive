@@ -468,6 +468,20 @@ function Write-RecordingSummary {
     }
     catch {}
 
+    # Machine-correlatable lifecycle event. Keep channel/account/reason/file on
+    # one line so concurrent recorder output cannot leave the GUI with a stale
+    # REC card after a recorder exits or a channel is removed.
+    Write-Host (
+        "[{0}] {1} [account={2}] : RECORD FINISHED | duration={3} | size={4} | reason={5} | file={6}" -f `
+        (Get-Date -Format "HH:mm:ss"),
+        $State.Name,
+        $State.Channel.Account,
+        (Format-Duration $duration),
+        (Format-BytesHuman $size),
+        $Reason,
+        $Recording.File
+    )
+
     Write-Host ""
     Show-Line
     Write-Host " RECORD FINISHED"
@@ -2398,6 +2412,14 @@ try {
                                     $state.Name
                                 )
                             }
+                            else {
+                                Write-Host (
+                                    "[{0}] {1} [account={2}] : CHANNEL DISABLED" -f `
+                                    (Get-Date -Format "HH:mm:ss"),
+                                    $state.Name,
+                                    $state.Channel.Account
+                                )
+                            }
                         }
 
                         # N -> Y: check immediately, even if same BNO.
@@ -2412,11 +2434,18 @@ try {
                 # stopped. Keeping the state lets the next reload retry.
                 foreach ($key in @($states.Keys)) {
                     if (-not $newByUrl.ContainsKey($key)) {
+                        $removedState = $states[$key]
                         $stopped = Stop-ChannelRecording `
                             -Key $key `
                             -Reason "CHANNEL REMOVED"
 
                         if ($stopped) {
+                            Write-Host (
+                                "[{0}] {1} [account={2}] : CHANNEL REMOVED" -f `
+                                (Get-Date -Format "HH:mm:ss"),
+                                $removedState.Name,
+                                $removedState.Channel.Account
+                            )
                             $states.Remove($key)
                         }
                         else {

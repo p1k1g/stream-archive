@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix45
+Version 1.2.0-preview1-fix46
 
 BUG FIX
 -------
@@ -1253,6 +1253,24 @@ fix45 implemented changes
 - It subtracts the configured minimum-free-space reserve and displays a stable
   tier such as under one hour, approximate hours/days, or three days or more.
 - PAUSED and restart-waiting items remain excluded from disk calculations.
+
+fix46 implemented changes
+-------------------------
+
+1. Deterministic recording-finish lifecycle
+- The backend emits recording-finished and channel-removed/disabled events with
+  stable account IDs on one line so the GUI can safely correlate concurrent
+  recorder output.
+- Finished, removed, and disabled recordings are removed from the active REC
+  collection immediately; queued stale progress is discarded at the same time.
+
+2. Recoverable alerts and disk cleanup
+- Recorder exits, stalls, low disk, and restart failures remain visible under
+  Needs Attention while a retry is pending.
+- The alert is cleared as soon as deterministic progress or a new recording
+  start proves that downloading resumed.
+- Only current REC items contribute to free-space and remaining-time summaries,
+  so removed or stopped channels cannot leave stale drive estimates behind.
 
 GitHub and Codex cloud preparation
 ----------------------------------
