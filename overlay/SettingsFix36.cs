@@ -263,6 +263,13 @@ public sealed partial class MainWindow
         ConsoleColorCheck = new CheckBox { Content = "상태 색상 사용 (백엔드 + 대시보드)", Foreground = White };
         ConsoleShowPathCheck = new CheckBox { Content = "녹화 파일 경로 표시 (백엔드 + 대시보드)", Foreground = White };
         logs.Children.Add(ConsoleAutoFormatCheck); logs.Children.Add(ConsoleColorCheck); logs.Children.Add(ConsoleShowPathCheck);
+        logs.Children.Add(FieldLabel("트레이 알림"));
+        NotifyRecordStartCheck = new CheckBox { Content = "녹화 시작 알림", Foreground = White };
+        NotifyRecordFinishCheck = new CheckBox { Content = "녹화 완료 알림", Foreground = White };
+        NotifyWarningCheck = new CheckBox { Content = "녹화 실패·디스크·인증 경고 알림", Foreground = White };
+        logs.Children.Add(NotifyRecordStartCheck);
+        logs.Children.Add(NotifyRecordFinishCheck);
+        logs.Children.Add(NotifyWarningCheck);
         logs.Children.Add(ActionButtonFix36("로그·표시 기본값 복원", (_, _) => ResetLogDefaultsFix36()));
         AddSettingsCardFix36(advanced, logs);
         stack.Children.Add(advanced);
@@ -365,8 +372,18 @@ public sealed partial class MainWindow
         SoopPasswordBox.PasswordChanged += (_, _) => { if (SoopPasswordBox.Password.Length > 0) clearSoopPassword = false; MarkSettingsDirtyFix36(); UpdateSecretStatusFix36(); };
         CloudflareApiKeyBox.PasswordChanged += (_, _) => { if (CloudflareApiKeyBox.Password.Length > 0) clearCloudflareApiKey = false; MarkSettingsDirtyFix36(); UpdateSecretStatusFix36(); };
         foreach (var box in new[] { QualityBox, FileNamePatternBox, MasterQualityBox }) box.SelectionChanged += (_, _) => MarkSettingsDirtyFix36();
-        foreach (var box in new[] { MinDiskBox, CheckIntervalBox, ChannelReloadIntervalBox, RecordRetryIntervalBox, RecordStallTimeoutBox, RecordMonitorIntervalBox, WorkerMaxRetryBox, LogRetentionDaysBox }) box.ValueChanged += (_, _) => MarkSettingsDirtyFix36();
-        foreach (var box in new[] { SoopPurgeCredentialsCheck, LogEnabledCheck, ConsoleAutoFormatCheck, ConsoleColorCheck, ConsoleShowPathCheck })
+        foreach (var box in new[] { MinDiskBox, CheckIntervalBox, ChannelReloadIntervalBox, RecordRetryIntervalBox, RecordStallTimeoutBox, RecordMonitorIntervalBox, WorkerMaxRetryBox, LogRetentionDaysBox })
+        {
+            box.ValueChanged += (_, _) => MarkSettingsDirtyFix36();
+            // Text changes immediately for typing, paste, touch keyboard, and
+            // accessibility input, while Value is committed later. Tracking
+            // the dependency property avoids KeyUp false positives from
+            // navigation/modifier keys and still enables Save before blur.
+            box.RegisterPropertyChangedCallback(
+                NumberBox.TextProperty,
+                (_, _) => MarkSettingsDirtyFix36());
+        }
+        foreach (var box in new[] { SoopPurgeCredentialsCheck, LogEnabledCheck, ConsoleAutoFormatCheck, ConsoleColorCheck, ConsoleShowPathCheck, NotifyRecordStartCheck, NotifyRecordFinishCheck, NotifyWarningCheck })
         {
             box.Checked += (_, _) => MarkSettingsDirtyFix36();
             box.Unchecked += (_, _) => MarkSettingsDirtyFix36();
@@ -556,7 +573,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix40",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix47",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });
@@ -669,6 +686,25 @@ public sealed partial class MainWindow
         if (string.IsNullOrWhiteSpace(OutputDirBox.Text)) return "기본 저장 경로가 비어 있습니다.";
         if (!Uri.TryCreate(CloudflareWorkerUrlBox.Text?.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps) return "Cloudflare Worker URL은 올바른 https 주소여야 합니다.";
         if (EffectiveSecretFix36("CLOUDFLARE_API_KEY", CloudflareApiKeyBox.Password, clearCloudflareApiKey).Length == 0) return "Cloudflare API Key가 비어 있습니다.";
+
+        foreach (var (box, name) in new (NumberBox Box, string Name)[]
+        {
+            (MinDiskBox, "최소 디스크 여유 공간"),
+            (CheckIntervalBox, "방송 확인 주기"),
+            (ChannelReloadIntervalBox, "채널 다시 읽기 주기"),
+            (RecordRetryIntervalBox, "녹화 재시도 주기"),
+            (RecordStallTimeoutBox, "녹화 정체 판정 시간"),
+            (RecordMonitorIntervalBox, "녹화 상태 확인 주기"),
+            (WorkerMaxRetryBox, "Worker 최대 재시도"),
+            (LogRetentionDaysBox, "로그 보존 기간")
+        })
+        {
+            if (double.IsNaN(box.Value))
+                return $"{name}에 올바른 숫자를 입력하세요.";
+            if (box.Value < box.Minimum || box.Value > box.Maximum)
+                return $"{name}은(는) {box.Minimum:0.##}~{box.Maximum:0.##} 범위로 입력하세요.";
+        }
+
         if (!double.IsNaN(RecordStallTimeoutBox.Value) && !double.IsNaN(RecordMonitorIntervalBox.Value) && RecordStallTimeoutBox.Value < RecordMonitorIntervalBox.Value * 2) return "Stall 판정 시간은 녹화 상태 확인 주기의 최소 2배 이상으로 설정하세요.";
         return null;
     }
@@ -678,7 +714,7 @@ public sealed partial class MainWindow
     void ResetWorkerDefaultsFix36() { MasterQualityBox.SelectedItem = "자동 (auto)"; }
     void ResetStreamlinkDefaultsFix36() { StreamlinkPathBox.Text = "AUTO"; StreamlinkFallbackBox.Text = @"C:\Program Files\Streamlink\bin\streamlink.exe"; }
     void ResetMonitoringDefaultsFix36() { CheckIntervalBox.Value = 30; ChannelReloadIntervalBox.Value = 2; RecordRetryIntervalBox.Value = 5; RecordStallTimeoutBox.Value = 90; RecordMonitorIntervalBox.Value = 5; WorkerMaxRetryBox.Value = 3; }
-    void ResetLogDefaultsFix36() { LogEnabledCheck.IsChecked = true; LogDirBox.Text = @".\logs"; LogRetentionDaysBox.Value = 30; ConsoleAutoFormatCheck.IsChecked = true; ConsoleColorCheck.IsChecked = true; ConsoleShowPathCheck.IsChecked = false; }
+    void ResetLogDefaultsFix36() { LogEnabledCheck.IsChecked = true; LogDirBox.Text = @".\logs"; LogRetentionDaysBox.Value = 30; ConsoleAutoFormatCheck.IsChecked = true; ConsoleColorCheck.IsChecked = true; ConsoleShowPathCheck.IsChecked = false; NotifyRecordStartCheck.IsChecked = false; NotifyRecordFinishCheck.IsChecked = true; NotifyWarningCheck.IsChecked = true; }
 
     async Task<bool> ConfirmLeaveSettingsFix36Async()
     {

@@ -53,6 +53,7 @@ public sealed partial class MainWindow : Window
     TextBlock WatcherStateText = null!;
     TextBlock DiskSummaryText = null!;
     Button StopSelectedRecordingButton = null!;
+    Button OpenSelectedRecordingFolderButton = null!;
     Button OfflineSummaryButton = null!;
     Button StoppedSummaryButton = null!;
     Button AlertSummaryButton = null!;
@@ -96,6 +97,9 @@ public sealed partial class MainWindow : Window
     CheckBox ConsoleAutoFormatCheck = null!;
     CheckBox ConsoleColorCheck = null!;
     CheckBox ConsoleShowPathCheck = null!;
+    CheckBox NotifyRecordStartCheck = null!;
+    CheckBox NotifyRecordFinishCheck = null!;
+    CheckBox NotifyWarningCheck = null!;
 
     Button SaveChannelsButton = null!;
     Button ReloadChannelsButton = null!;
@@ -127,6 +131,8 @@ public sealed partial class MainWindow : Window
     bool dashboardWatcherRunning = false;
     bool watcherStartInProgress = false;
     bool watcherStopInProgress = false;
+    bool watcherStopRequested = false;
+    int? pendingWatcherExitCode = null;
     string currentViewTag = "dashboard";
     Button SaveSettingsButton = null!;
     TextBox LogBox = null!;
@@ -138,6 +144,9 @@ public sealed partial class MainWindow : Window
     bool uiAutoFormat = true;
     bool uiConsoleColor = true;
     bool uiShowPath = false;
+    bool uiNotifyRecordStart = false;
+    bool uiNotifyRecordFinish = true;
+    bool uiNotifyWarning = true;
     bool windowCleanupDone = false;
     bool allowRealClose = false;
     bool closeDialogOpen = false;
@@ -145,16 +154,21 @@ public sealed partial class MainWindow : Window
     bool trayReady = false;
     UiPreferences uiPreferences = UiPreferences.Load();
     readonly ConcurrentQueue<string> backendLineQueue = new();
-    readonly Queue<string> logLines = new();
-    bool logTextDirty = false;
-    readonly Dictionary<string, string> pendingProgressByChannel =
+    readonly ConcurrentQueue<string> priorityBackendLineQueue = new();
+    readonly ConcurrentDictionary<string, string> latestProgressByChannel =
         new(StringComparer.OrdinalIgnoreCase);
+    readonly Queue<string> logLines = new();
+    string lastGuiLogLine = "";
+    bool logTextDirty = false;
 
     DispatcherTimer? uiFlushTimer;
     long queuedBackendLines = 0;
     long flushedBackendLines = 0;
+    long droppedBackendLines = 0;
     DateTime lastUiFlush = DateTime.MinValue;
+    DateTime lastDiskEstimateRefresh = DateTime.MinValue;
     const int MaxGuiLogLines = 50;
+    const int MaxQueuedBackendEvents = 2000;
     const int UiFlushMilliseconds = 250;
     static readonly string[] GuiLogTokens =
     {
@@ -237,6 +251,10 @@ public sealed partial class MainWindow : Window
         @"RECORD FINISHED channel=(?<name>.+?) duration=(?<duration>\S+) size=(?<size>.+?) reason=(?<reason>.+?) file=(?<file>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    static readonly Regex RecordFinishedEvent = new(
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)\s+\[account=(?<account>[A-Za-z0-9_]+)\]\s*:\s*RECORD FINISHED\s*\|\s*duration=(?<duration>[^|]*)\|\s*size=(?<size>[^|]*)\|\s*reason=(?<reason>[^|]*)\|\s*file=(?<file>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     static readonly Regex ChannelStopRequested = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*CHANNEL STOP REQUESTED BNO=(?<bno>\S*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -251,6 +269,10 @@ public sealed partial class MainWindow : Window
 
     static readonly Regex ChannelResumeRequested = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*CHANNEL RESUME REQUESTED(?: BNO=(?<bno>\S*))?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    static readonly Regex ChannelRemovedOrDisabled = new(
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)\s+\[account=(?<account>[A-Za-z0-9_]+)\]\s*:\s*CHANNEL\s+(?<action>REMOVED|DISABLED)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     static readonly Regex DashboardHealthState = new(
@@ -304,8 +326,8 @@ public sealed partial class MainWindow : Window
         iniPath = Path.Combine(backendDir, "SOOP_LIVE_SETTING.ini");
         channelPath = Path.Combine(backendDir, "SOOP_LIVE_CHANNELS.txt");
 
-        backend.Output += line => EnqueueBackendLine(line);
-        backend.Exited += code => DispatcherQueue.TryEnqueue(() => OnBackendExited(code));
+        backend.Output += Backend_Output;
+        backend.Exited += Backend_Exited;
 
         ConfigureWindow();
         LoadStaticFiles();
@@ -347,7 +369,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix40",
+            Text = "WinUI 3 · v1.2.0-preview1-fix47",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -579,10 +601,28 @@ public sealed partial class MainWindow : Window
             IsEnabled = false
         }, 154);
         StopSelectedRecordingButton.Click += StopSelectedRecording_Click;
-        Grid.SetColumn(StopSelectedRecordingButton, 1);
+
+        OpenSelectedRecordingFolderButton = ApplyButtonMetricsFix39(new Button
+        {
+            Content = "폴더 열기",
+            IsEnabled = false
+        }, 112);
+        ToolTipService.SetToolTip(
+            OpenSelectedRecordingFolderButton,
+            "선택한 채널이 현재 녹화 중인 폴더를 엽니다.");
+        OpenSelectedRecordingFolderButton.Click += OpenSelectedRecordingFolder_Click;
+
+        var recordingActions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8
+        };
+        recordingActions.Children.Add(OpenSelectedRecordingFolderButton);
+        recordingActions.Children.Add(StopSelectedRecordingButton);
+        Grid.SetColumn(recordingActions, 1);
 
         recordingHeader.Children.Add(recordingTitle);
-        recordingHeader.Children.Add(StopSelectedRecordingButton);
+        recordingHeader.Children.Add(recordingActions);
         stack.Children.Add(recordingHeader);
 
         DashboardEmptyTitleText = new TextBlock
@@ -622,6 +662,7 @@ public sealed partial class MainWindow : Window
         };
         RecordingList.SelectionChanged += (_, _) =>
             UpdateSelectedRecordingActionButton();
+        RecordingList.ContainerContentChanging += RecordingList_ContainerContentChanging;
         RecordingList.ItemTemplate = BuildRecordingTemplate();
         stack.Children.Add(RecordingList);
         RecordingList.ItemsSource = RecordingItems;
@@ -1524,7 +1565,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            if (trayIcon == null)
+            if (trayIcon == null || !uiNotifyRecordFinish)
                 return;
 
             var body = $"{channel} 녹화가 종료되었습니다.\n{duration} · {size}";
@@ -1540,6 +1581,15 @@ public sealed partial class MainWindow : Window
                 "녹화 종료",
                 body,
                 FormsToolTipIcon.Info);
+        }
+        catch { }
+    }
+
+    void ShowGuiNotification(string title, string body, FormsToolTipIcon icon)
+    {
+        try
+        {
+            trayIcon?.ShowBalloonTip(6000, title, body, icon);
         }
         catch { }
     }
@@ -1578,6 +1628,22 @@ public sealed partial class MainWindow : Window
         }
         catch { }
 
+        backend.Output -= Backend_Output;
+        backend.Exited -= Backend_Exited;
+
+        while (backendLineQueue.TryDequeue(out _)) { }
+        while (priorityBackendLineQueue.TryDequeue(out _)) { }
+        latestProgressByChannel.Clear();
+        ResetBackendQueueCounters();
+        RecordingItems.Clear();
+        OfflineItems.Clear();
+        StoppedItems.Clear();
+        AlertItems.Clear();
+        statusMap.Clear();
+        alertMap.Clear();
+        logLines.Clear();
+        lastGuiLogLine = "";
+
         try
         {
             if (trayIcon != null)
@@ -1599,6 +1665,17 @@ public sealed partial class MainWindow : Window
 
         try { backend.Dispose(); } catch { }
     }
+
+    void ResetBackendQueueCounters()
+    {
+        Interlocked.Exchange(ref queuedBackendLines, 0);
+        Interlocked.Exchange(ref droppedBackendLines, 0);
+    }
+
+    void Backend_Output(string line) => EnqueueBackendLine(line);
+
+    void Backend_Exited(int code) =>
+        DispatcherQueue.TryEnqueue(() => OnBackendExited(code));
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -1742,6 +1819,12 @@ public sealed partial class MainWindow : Window
         ConsoleAutoFormatCheck.IsChecked = B(G("CONSOLE_AUTO_FORMAT", "Y"), true);
         ConsoleColorCheck.IsChecked = B(G("CONSOLE_COLOR", "Y"), true);
         ConsoleShowPathCheck.IsChecked = B(G("CONSOLE_SHOW_PATH", "N"), false);
+        uiNotifyRecordStart = B(G("GUI_NOTIFY_RECORD_START", "N"), false);
+        uiNotifyRecordFinish = B(G("GUI_NOTIFY_RECORD_FINISH", "Y"), true);
+        uiNotifyWarning = B(G("GUI_NOTIFY_WARNING", "Y"), true);
+        NotifyRecordStartCheck.IsChecked = uiNotifyRecordStart;
+        NotifyRecordFinishCheck.IsChecked = uiNotifyRecordFinish;
+        NotifyWarningCheck.IsChecked = uiNotifyWarning;
 
         ApplyConsoleDisplayOptions(
             ConsoleAutoFormatCheck.IsChecked == true,
@@ -1766,6 +1849,8 @@ public sealed partial class MainWindow : Window
         }
 
         watcherStartInProgress = true;
+        watcherStopRequested = false;
+        pendingWatcherExitCode = null;
         SetWatcherStartControlsFix38(false);
         try
         {
@@ -1813,9 +1898,7 @@ public sealed partial class MainWindow : Window
             {
                 dashboardWatcherRunning = false;
                 WatcherStateText.Text = "시작 실패";
-                var failureMessage = string.IsNullOrWhiteSpace(ex.Message)
-                    ? "Watcher 시작 중 원인을 확인할 수 없는 오류가 발생했습니다."
-                    : ex.Message;
+                var failureMessage = DescribeWatcherStartException(ex);
                 WriteStartupLog("Watcher startup FAILED", ex);
                 await ShowDialogAsync("Watcher 시작 실패", failureMessage);
             }
@@ -1868,18 +1951,45 @@ public sealed partial class MainWindow : Window
             return;
 
         watcherStopInProgress = true;
+        watcherStopRequested = true;
         StopButton.IsEnabled = false;
         WatcherStateText.Text = "종료 중";
         AppendLog("[GUI] Watcher 종료 요청");
 
         try
         {
-            await backend.StopAsync();
+            var stopped = await backend.StopAsync();
 
-            if (backend.IsRunning)
+            if (!stopped || backend.IsRunning)
             {
+                watcherStopRequested = false;
                 WatcherStateText.Text = "종료 확인 필요";
                 StopButton.IsEnabled = true;
+                AppendLog("[GUI] Watcher 종료 실패 · 프로세스 상태를 다시 확인해 주세요.");
+
+                if (pendingWatcherExitCode is int exitCode)
+                {
+                    pendingWatcherExitCode = null;
+                    CompleteWatcherExit(exitCode, requestedStop: false);
+                }
+            }
+            else if (pendingWatcherExitCode is int exitCode)
+            {
+                pendingWatcherExitCode = null;
+                CompleteWatcherExit(exitCode, requestedStop: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            watcherStopRequested = false;
+            WatcherStateText.Text = "종료 확인 필요";
+            StopButton.IsEnabled = backend.IsRunning;
+            AppendLog("[GUI] Watcher 종료 확인 실패: " + ex.Message);
+
+            if (pendingWatcherExitCode is int exitCode)
+            {
+                pendingWatcherExitCode = null;
+                CompleteWatcherExit(exitCode, requestedStop: false);
             }
         }
         finally
@@ -1891,24 +2001,50 @@ public sealed partial class MainWindow : Window
 
     void OnBackendExited(int code)
     {
+        if (watcherStopInProgress)
+        {
+            // StopAsync verifies exact-process-tree termination off the UI
+            // thread. Defer classification until that result is available.
+            pendingWatcherExitCode = code;
+            return;
+        }
+
+        CompleteWatcherExit(code, watcherStopRequested);
+    }
+
+    void CompleteWatcherExit(int code, bool requestedStop)
+    {
+        watcherStopRequested = false;
+        pendingWatcherExitCode = null;
         watcherStopInProgress = false;
         dashboardWatcherRunning = false;
         ResetDashboardState();
         SetWatcherStartControlsFix38(true);
         StopButton.IsEnabled = false;
-        WatcherStateText.Text = code == 0 ? "중지됨" : $"오류 종료 ({code})";
+        // taskkill terminates the GUI-owned PowerShell process tree and can
+        // produce a non-zero process exit code. That is still a normal stop
+        // when it directly follows the user's explicit Watcher stop request.
+        WatcherStateText.Text = requestedStop || code == 0
+            ? "중지됨"
+            : $"오류 종료 ({code})";
         OfflineCountText.Text = "-";
         StoppedCountText.Text = "-";
         AlertCountText.Text = "-";
         UpdateDashboardEmptyState();
-        AppendLog($"[GUI] Watcher 종료 Exit={code}");
+        AppendLog(requestedStop
+            ? $"[GUI] Watcher 사용자 요청으로 중지 Exit={code}"
+            : $"[GUI] Watcher 종료 Exit={code}");
     }
 
     void ResetDashboardState()
     {
-        while (backendLineQueue.TryDequeue(out _)) { }
-        Interlocked.Exchange(ref queuedBackendLines, 0);
-        pendingProgressByChannel.Clear();
+        while (backendLineQueue.TryDequeue(out _))
+            Interlocked.Decrement(ref queuedBackendLines);
+        while (priorityBackendLineQueue.TryDequeue(out _)) { }
+        if (Interlocked.Read(ref queuedBackendLines) < 0)
+            Interlocked.Exchange(ref queuedBackendLines, 0);
+        Interlocked.Exchange(ref droppedBackendLines, 0);
+        latestProgressByChannel.Clear();
         RecordingItems.Clear();
         OfflineItems.Clear();
         StoppedItems.Clear();
@@ -1918,9 +2054,32 @@ public sealed partial class MainWindow : Window
         pendingRecordChannel = null;
         pendingRecordAccount = null;
         pendingRecordTitle = null;
-        RecordingList?.SelectedItems.Clear();
-        StoppedFlyoutList?.SelectedItems.Clear();
+        // These ListViews use single-selection mode. Mutating SelectedItems in
+        // that mode can throw a WinRT E_ILLEGAL_METHOD_CALL before the watcher
+        // process is even started; clear the single SelectedItem instead.
+        if (RecordingList != null)
+            RecordingList.SelectedItem = null;
+        if (StoppedFlyoutList != null)
+            StoppedFlyoutList.SelectedItem = null;
         UpdateCounts();
+    }
+
+    static string DescribeWatcherStartException(Exception ex)
+    {
+        if (!string.IsNullOrWhiteSpace(ex.Message))
+            return ex.Message;
+
+        var exceptionType = ex.GetType().FullName ?? ex.GetType().Name;
+        var details = $"예외 형식: {exceptionType}\nHRESULT: 0x{ex.HResult:X8}";
+        if (ex.InnerException is { } inner)
+        {
+            var innerType = inner.GetType().FullName ?? inner.GetType().Name;
+            details += $"\n내부 예외: {innerType}";
+            if (!string.IsNullOrWhiteSpace(inner.Message))
+                details += "\n" + inner.Message;
+        }
+
+        return "Watcher 시작 준비 중 오류가 발생했습니다.\n" + details;
     }
 
     void InitializeUiFlushTimer()
@@ -1939,15 +2098,45 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(line))
             return;
 
+        // Coalesce progress before it enters the event queue. This keeps only
+        // one producer-side sample per stable channel even if the UI thread is
+        // blocked, preventing progress output from causing unbounded memory.
+        var progress = CompactRecording.Match(line.Trim());
+        if (progress.Success)
+        {
+            var account = progress.Groups["account"].Value.Trim();
+            var name = progress.Groups["name"].Value.Trim();
+            var key = string.IsNullOrWhiteSpace(account)
+                ? "name:" + name
+                : "account:" + account;
+            if (!string.IsNullOrWhiteSpace(name))
+                latestProgressByChannel[key] = line;
+            return;
+        }
+
+        if (IsCriticalBackendEventLine(line))
+        {
+            priorityBackendLineQueue.Enqueue(line);
+            return;
+        }
+
         backendLineQueue.Enqueue(line);
-        Interlocked.Increment(ref queuedBackendLines);
+        var queued = Interlocked.Increment(ref queuedBackendLines);
+        while (queued > MaxQueuedBackendEvents && backendLineQueue.TryDequeue(out _))
+        {
+            Interlocked.Decrement(ref queuedBackendLines);
+            Interlocked.Increment(ref droppedBackendLines);
+            queued = Interlocked.Read(ref queuedBackendLines);
+        }
     }
 
     void FlushBackendUiQueue()
     {
         ReconcileWatcherRunningUiFix39();
 
-        if (backendLineQueue.IsEmpty)
+        if (priorityBackendLineQueue.IsEmpty &&
+            backendLineQueue.IsEmpty &&
+            latestProgressByChannel.IsEmpty)
             return;
 
         // Bound work per UI tick so a noisy backend can never monopolize
@@ -1955,69 +2144,55 @@ public sealed partial class MainWindow : Window
         const int maxLinesPerFlush = 400;
         int count = 0;
 
+        while (count < maxLinesPerFlush && priorityBackendLineQueue.TryDequeue(out var priorityLine))
+        {
+            ProcessBackendLine(priorityLine);
+            count++;
+        }
+
         while (count < maxLinesPerFlush && backendLineQueue.TryDequeue(out var line))
         {
-            ProcessBackendLine(line, deferProgressUi: true);
+            if (Interlocked.Decrement(ref queuedBackendLines) < 0)
+                Interlocked.Exchange(ref queuedBackendLines, 0);
+            ProcessBackendLine(line);
             count++;
         }
 
         flushedBackendLines += count;
-        Interlocked.Add(ref queuedBackendLines, -count);
 
-        // Progress can be very noisy. During one 250 ms window keep only
-        // the newest row per channel and update the UI once.
-        if (pendingProgressByChannel.Count > 0)
+        var dropped = Interlocked.Exchange(ref droppedBackendLines, 0);
+        if (dropped > 0)
+            AppendLog($"[WARN] GUI backend event queue overflow · 오래된 {dropped}줄 생략");
+
+        // Progress is already coalesced on the producer thread. Consume at
+        // most the current latest value for each channel during this UI tick.
+        if (!latestProgressByChannel.IsEmpty)
         {
-            var latest = pendingProgressByChannel.Values.ToArray();
-            pendingProgressByChannel.Clear();
-
-            foreach (var progressLine in latest)
-                ProcessBackendLine(progressLine, deferProgressUi: false);
+            foreach (var entry in latestProgressByChannel.ToArray())
+                if (latestProgressByChannel.TryRemove(entry.Key, out var progressLine))
+                    ProcessBackendLine(progressLine);
         }
 
         FlushLogText();
         lastUiFlush = DateTime.Now;
     }
 
-    void ProcessBackendLine(string line, bool deferProgressUi)
+    static bool IsCriticalBackendEventLine(string line) =>
+        line.Contains(" : RECORD FINISHED | ", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : CHANNEL REMOVED", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : CHANNEL DISABLED", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : CHANNEL STOP ", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : LOW DISK", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : DISK SPACE UNKNOWN", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("WATCHER ERROR", StringComparison.OrdinalIgnoreCase);
+
+    void ProcessBackendLine(string line)
     {
         ReconcileWatcherRunningUiFix39();
         AppendLog(line);
 
         var text = line.Trim();
         if (text.Length == 0) return;
-
-        // Progress rows are the noisiest output. During queue draining,
-        // cache the newest line per channel and defer actual WinUI updates.
-        if (deferProgressUi)
-        {
-            // fix33 backend guarantees:
-            // [time] CHANNEL : RECORDING | [download] ...
-            // The channel key and the metrics now travel in the same line.
-            var queuedCompact = CompactRecording.Match(text);
-            if (queuedCompact.Success)
-            {
-                var channel = queuedCompact.Groups["name"].Value.Trim();
-                var account = queuedCompact.Groups["account"].Value.Trim();
-                var progressKey = string.IsNullOrWhiteSpace(account)
-                    ? "name:" + channel
-                    : "account:" + account;
-
-                if (!string.IsNullOrWhiteSpace(channel))
-                    pendingProgressByChannel[progressKey] = line;
-
-                return;
-            }
-
-            // Ignore untagged raw [download] lines for dashboard metrics.
-            // Guessing their channel from a previous console line is unsafe
-            // when several recorder processes are active concurrently.
-            if (DownloadProgressWithPath.IsMatch(text) ||
-                DownloadProgressNoPath.IsMatch(text))
-            {
-                return;
-            }
-        }
 
         var stopRequested = ChannelStopRequested.Match(text);
         if (stopRequested.Success)
@@ -2078,6 +2253,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var removedOrDisabled = ChannelRemovedOrDisabled.Match(text);
+        if (removedOrDisabled.Success)
+        {
+            var item = GetOrCreate(
+                removedOrDisabled.Groups["account"].Value.Trim(),
+                removedOrDisabled.Groups["name"].Value.Trim());
+            RemoveDashboardChannel(item);
+            return;
+        }
+
         var healthCleared = DashboardHealthCleared.Match(text);
         if (healthCleared.Success)
         {
@@ -2103,11 +2288,37 @@ public sealed partial class MainWindow : Window
             var detail = health.Groups["detail"].Success
                 ? health.Groups["detail"].Value.Trim()
                 : health.Groups["detail2"].Value.Trim();
+            if (rawStatus == "RECORD START FAILED")
+            {
+                var failedItem = GetOrCreate(
+                    health.Groups["account"].Value.Trim(),
+                    health.Groups["name"].Value.Trim());
+                RecordingItems.Remove(failedItem);
+                failedItem.RateText = "-";
+                failedItem.RateBytesPerSecond = 0;
+                failedItem.DisplayDrive = "";
+                failedItem.Drive = "";
+                ClearPendingProgress(failedItem.Account, failedItem.Name);
+                RefreshDiskSummary();
+            }
             SetDashboardAlert(
                 health.Groups["account"].Value.Trim(),
                 health.Groups["name"].Value.Trim(),
                 status,
                 detail);
+            return;
+        }
+
+        var finishedEvent = RecordFinishedEvent.Match(text);
+        if (finishedEvent.Success)
+        {
+            HandleRecordingFinished(
+                finishedEvent.Groups["account"].Value.Trim(),
+                finishedEvent.Groups["name"].Value.Trim(),
+                finishedEvent.Groups["duration"].Value.Trim(),
+                finishedEvent.Groups["size"].Value.Trim(),
+                finishedEvent.Groups["reason"].Value.Trim(),
+                finishedEvent.Groups["file"].Value.Trim());
             return;
         }
 
@@ -2152,6 +2363,8 @@ public sealed partial class MainWindow : Window
         {
             var outputFile = startOutputLine.Groups["value"].Value.Trim();
             var item = GetOrCreate(pendingRecordAccount, pendingRecordChannel!);
+            var notifyStart = item.Status != "● REC" ||
+                !string.Equals(item.FilePath, outputFile, StringComparison.OrdinalIgnoreCase);
 
             item.Status = "● REC";
             item.Time = DateTime.Now.ToString("HH:mm:ss");
@@ -2160,14 +2373,17 @@ public sealed partial class MainWindow : Window
             item.SizeText = "-";
             item.ElapsedText = "-";
             item.RateText = "-";
+            item.RateBytesPerSecond = 0;
             item.FilePath = outputFile;
 
             if (!string.IsNullOrWhiteSpace(pendingRecordTitle))
                 item.Title = pendingRecordTitle!;
 
             UpdateDrive(item, outputFile);
-            if (!RecordingItems.Contains(item))
-                MoveToRecording(item);
+            MoveToRecording(item);
+
+            if (notifyStart && uiNotifyRecordStart)
+                ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
 
             pendingRecordChannel = null;
             pendingRecordAccount = null;
@@ -2183,6 +2399,8 @@ public sealed partial class MainWindow : Window
             ParseRecordStartRest(start.Groups["rest"].Value, out var title, out var file);
 
             var item = GetOrCreate(account, name);
+            var notifyStart = item.Status != "● REC" ||
+                !string.Equals(item.FilePath, file, StringComparison.OrdinalIgnoreCase);
             item.Status = "● REC";
             item.Title = title;
             item.Time = DateTime.Now.ToString("HH:mm:ss");
@@ -2191,10 +2409,12 @@ public sealed partial class MainWindow : Window
             item.SizeText = "-";
             item.ElapsedText = "-";
             item.RateText = "-";
+            item.RateBytesPerSecond = 0;
             item.FilePath = file;
             UpdateDrive(item, file);
-            if (!RecordingItems.Contains(item))
-                MoveToRecording(item);
+            MoveToRecording(item);
+            if (notifyStart && uiNotifyRecordStart)
+                ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
             return;
         }
 
@@ -2265,11 +2485,97 @@ public sealed partial class MainWindow : Window
         item.SizeText = progress.Groups["size"].Value.Trim();
         item.ElapsedText = progress.Groups["duration"].Value.Trim();
         item.RateText = progress.Groups["rate"].Value.Trim();
+        item.RateBytesPerSecond = ParseRateBytesPerSecond(item.RateText);
+
+        if ((DateTime.Now - lastDiskEstimateRefresh).TotalSeconds >= 5)
+        {
+            lastDiskEstimateRefresh = DateTime.Now;
+            RefreshDiskSummary();
+        }
 
         // Compact backend progress intentionally does not need to update
         // FilePath/drive. Those are fixed by RECORD START.
+        var alertCleared = ClearDashboardAlert(item.Account, item.Name, refresh: false);
         if (!RecordingItems.Contains(item))
             MoveToRecording(item);
+        else if (alertCleared)
+            UpdateCounts(refreshDisk: false);
+    }
+
+    void HandleRecordingFinished(
+        string account,
+        string name,
+        string duration,
+        string size,
+        string reason,
+        string file)
+    {
+        ShowRecordingFinishedNotification(name, duration, size, reason, file);
+        ClearPendingProgress(account, name);
+
+        var item = GetOrCreate(account, name);
+        RecordingItems.Remove(item);
+        item.RateText = "-";
+        item.RateBytesPerSecond = 0;
+        item.DisplayDrive = "";
+        item.Drive = "";
+
+        var normalizedReason = reason.Trim().ToUpperInvariant();
+        if (normalizedReason is "CHANNEL REMOVED" or "CHANNEL DISABLED" or "WATCHER EXIT")
+        {
+            RemoveDashboardChannel(item);
+            return;
+        }
+
+        if (normalizedReason == "USER CHANNEL STOP")
+        {
+            // CHANNEL STOP COMPLETED follows and moves this same item into the
+            // selectable PAUSED collection. Until then it must not count REC.
+            item.Status = "중지 확인 중";
+            item.Detail = "사용자 중지 완료를 확인하고 있습니다.";
+            UpdateCounts();
+            return;
+        }
+
+        var detail = normalizedReason switch
+        {
+            "LOW DISK SPACE" => "최소 디스크 여유 공간에 도달해 녹화가 중단되었습니다.",
+            "RECORD STALLED" => "파일 증가가 멈춰 방송 상태와 녹화 재시작을 확인하고 있습니다.",
+            _ when normalizedReason.StartsWith("RECORDER EXIT", StringComparison.Ordinal) =>
+                "녹화 프로세스가 종료되어 방송 상태와 재시작을 확인하고 있습니다.",
+            _ => string.IsNullOrWhiteSpace(reason)
+                ? "녹화가 중단되어 재시작 여부를 확인하고 있습니다."
+                : reason
+        };
+        SetDashboardAlert(account, name, "녹화 재시작 확인", detail);
+    }
+
+    void ClearPendingProgress(string? account, string name)
+    {
+        if (!string.IsNullOrWhiteSpace(account))
+            latestProgressByChannel.TryRemove("account:" + account.Trim(), out _);
+        if (!string.IsNullOrWhiteSpace(name))
+            latestProgressByChannel.TryRemove("name:" + name.Trim(), out _);
+    }
+
+    void RemoveDashboardChannel(ChannelStatus item)
+    {
+        RecordingItems.Remove(item);
+        OfflineItems.Remove(item);
+        StoppedItems.Remove(item);
+        ClearDashboardAlert(item.Account, item.Name, refresh: false);
+        ClearPendingProgress(item.Account, item.Name);
+
+        foreach (var key in statusMap
+            .Where(x => ReferenceEquals(x.Value, item))
+            .Select(x => x.Key)
+            .ToArray())
+            statusMap.Remove(key);
+
+        if (ReferenceEquals(RecordingList?.SelectedItem, item))
+            RecordingList.SelectedItem = null;
+        UpdateSelectedRecordingActionButton();
+        UpdateCounts();
     }
 
     ChannelStatus GetOrCreate(string? account, string name)
@@ -2325,14 +2631,12 @@ public sealed partial class MainWindow : Window
     {
         var alreadyOffline = OfflineItems.Contains(item) &&
             !RecordingItems.Contains(item) &&
-            !StoppedItems.Contains(item) &&
-            !alertMap.ContainsKey(DashboardKey(item.Account, item.Name));
+            !StoppedItems.Contains(item);
         if (alreadyOffline)
             return;
 
         RecordingItems.Remove(item);
         StoppedItems.Remove(item);
-        ClearDashboardAlert(item.Account, item.Name, refresh: false);
         if (!OfflineItems.Contains(item))
             OfflineItems.Add(item);
 
@@ -2377,9 +2681,11 @@ public sealed partial class MainWindow : Window
 
         item.Status = status;
         item.Detail = detail;
+        if (uiNotifyWarning)
+            ShowGuiNotification("녹화 확인 필요", $"{name}\n{detail}", FormsToolTipIcon.Warning);
         if (uiAutoFormat)
             SortDashboardItems();
-        UpdateCounts();
+        UpdateCounts(refreshDisk: false);
     }
 
     bool ClearDashboardAlert(string? account, string name, bool refresh = true)
@@ -2390,11 +2696,11 @@ public sealed partial class MainWindow : Window
 
         AlertItems.Remove(alert);
         if (refresh)
-            UpdateCounts();
+            UpdateCounts(refreshDisk: false);
         return true;
     }
 
-    void UpdateCounts()
+    void UpdateCounts(bool refreshDisk = true)
     {
         SetTextIfChangedFix38(
             RecordingCountText,
@@ -2402,7 +2708,8 @@ public sealed partial class MainWindow : Window
         SetTextIfChangedFix38(OfflineCountText, OfflineItems.Count.ToString());
         SetTextIfChangedFix38(StoppedCountText, StoppedItems.Count.ToString());
         SetTextIfChangedFix38(AlertCountText, AlertItems.Count.ToString());
-        RefreshDiskSummary();
+        if (refreshDisk)
+            RefreshDiskSummary();
         UpdateDashboardEmptyState();
     }
 
@@ -2482,24 +2789,32 @@ public sealed partial class MainWindow : Window
             .Where(x => x.Status == "● REC")
             .ToList();
 
-        var perRoot = new Dictionary<string, string>(
-            StringComparer.OrdinalIgnoreCase);
+        var rateByRoot = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var itemsByRoot = new Dictionary<string, List<ChannelStatus>>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var item in activeItems)
         {
-            if (string.IsNullOrWhiteSpace(item.Drive))
-                continue;
-
-            var n = item.Drive.IndexOf(' ');
-            var root = n > 0 ? item.Drive[..n] : item.Drive;
-            perRoot[root] = item.Drive;
+            try
+            {
+                var root = Path.GetPathRoot(Path.GetFullPath(item.FilePath));
+                if (string.IsNullOrWhiteSpace(root))
+                    continue;
+                if (!itemsByRoot.TryGetValue(root, out var rootItems))
+                {
+                    rootItems = new List<ChannelStatus>();
+                    itemsByRoot[root] = rootItems;
+                }
+                rootItems.Add(item);
+                rateByRoot[root] = rateByRoot.GetValueOrDefault(root) + item.RateBytesPerSecond;
+            }
+            catch { }
         }
 
         // PAUSED/restart-waiting cards must never contribute stale drive info.
         foreach (var item in RecordingItems.Where(x => x.Status != "● REC"))
             item.DisplayDrive = "";
 
-        if (perRoot.Count == 0)
+        if (itemsByRoot.Count == 0)
         {
             DiskSummaryText.Text = "-";
 
@@ -2509,13 +2824,81 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        DiskSummaryText.Text =
-            string.Join(" · ", perRoot.Values.OrderBy(x => x));
+        var summaries = new List<string>();
+        foreach (var entry in itemsByRoot.OrderBy(x => x.Key))
+        {
+            try
+            {
+                var drive = new DriveInfo(entry.Key);
+                if (!drive.IsReady)
+                    continue;
 
-        var showPerCard = perRoot.Count > 1;
+                var freeBytes = (double)drive.AvailableFreeSpace;
+                var freeGb = freeBytes / 1024d / 1024d / 1024d;
+                var configuredReserveGb = MinDiskBox?.Value;
+                var reserveGb = configuredReserveGb is double value && !double.IsNaN(value)
+                    ? value
+                    : 20d;
+                var usableBytes = Math.Max(0d, freeBytes - reserveGb * 1024d * 1024d * 1024d);
+                var rate = rateByRoot.GetValueOrDefault(entry.Key);
+                var estimate = FormatDiskTimeEstimate(usableBytes, rate);
+                var display = $"{drive.Name.TrimEnd('\\')} {freeGb:N1} GB";
+                if (!string.IsNullOrWhiteSpace(estimate))
+                    display += $" · {estimate}";
+                summaries.Add(display);
+                foreach (var item in entry.Value)
+                    item.Drive = display;
+            }
+            catch { }
+        }
+
+        DiskSummaryText.Text = summaries.Count == 0
+            ? "-"
+            : string.Join(" · ", summaries);
+
+        var showPerCard = summaries.Count > 1;
 
         foreach (var item in activeItems)
             item.DisplayDrive = showPerCard ? item.Drive : "";
+    }
+
+    static double ParseRateBytesPerSecond(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+        var match = Regex.Match(
+            text,
+            @"(?<value>[0-9]+(?:[.,][0-9]+)?)\s*(?<unit>[KMGT]?B)/s",
+            RegexOptions.IgnoreCase);
+        if (!match.Success ||
+            !double.TryParse(
+                match.Groups["value"].Value.Replace(',', '.'),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var value))
+            return 0;
+
+        return match.Groups["unit"].Value.ToUpperInvariant() switch
+        {
+            "KB" => value * 1024d,
+            "MB" => value * 1024d * 1024d,
+            "GB" => value * 1024d * 1024d * 1024d,
+            "TB" => value * 1024d * 1024d * 1024d * 1024d,
+            _ => value
+        };
+    }
+
+    static string FormatDiskTimeEstimate(double usableBytes, double bytesPerSecond)
+    {
+        if (bytesPerSecond <= 0 || usableBytes <= 0)
+            return usableBytes <= 0 ? "여유 한도 도달" : "남은 시간 계산 중";
+
+        var hours = usableBytes / bytesPerSecond / 3600d;
+        if (hours < 1) return "1시간 미만";
+        if (hours < 24) return $"약 {Math.Max(1, Math.Floor(hours)):0}시간";
+        var days = hours / 24d;
+        if (days < 3) return $"약 {Math.Max(1, Math.Floor(days)):0}일";
+        return "3일 이상";
     }
 
     async void Nav_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
@@ -3119,8 +3502,8 @@ public sealed partial class MainWindow : Window
             }
 
             string YesNo(CheckBox box) => box.IsChecked == true ? "Y" : "N";
-            string Num(NumberBox box, string fallback) =>
-                double.IsNaN(box.Value) ? fallback : box.Value.ToString("0.##");
+            string Num(NumberBox box) =>
+                box.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
             var quality = QualityBox.SelectedItem?.ToString() switch
             {
@@ -3151,7 +3534,7 @@ public sealed partial class MainWindow : Window
                 ["OUTPUT_DIR"] = OutputDirBox.Text?.Trim() ?? "",
                 ["QUALITY"] = quality,
                 ["FILE_NAME_PATTERN"] = filePattern,
-                ["MIN_FREE_SPACE_GB"] = Num(MinDiskBox, "20"),
+                ["MIN_FREE_SPACE_GB"] = Num(MinDiskBox),
 
                 ["SOOP_USERNAME"] = SoopUsernameBox.Text?.Trim() ?? "",
                 ["SOOP_PASSWORD"] = clearSoopPassword ? "" : ExistingOrNewSecret("SOOP_PASSWORD", SoopPasswordBox.Password),
@@ -3164,20 +3547,23 @@ public sealed partial class MainWindow : Window
                 ["STREAMLINK_PATH"] = string.IsNullOrWhiteSpace(StreamlinkPathBox.Text) ? "AUTO" : StreamlinkPathBox.Text.Trim(),
                 ["STREAMLINK_FALLBACK"] = StreamlinkFallbackBox.Text?.Trim() ?? "",
 
-                ["CHECK_INTERVAL"] = Num(CheckIntervalBox, "30"),
-                ["CHANNEL_RELOAD_INTERVAL"] = Num(ChannelReloadIntervalBox, "2"),
-                ["RECORD_RETRY_INTERVAL"] = Num(RecordRetryIntervalBox, "5"),
-                ["RECORD_STALL_TIMEOUT"] = Num(RecordStallTimeoutBox, "90"),
-                ["RECORD_MONITOR_INTERVAL"] = Num(RecordMonitorIntervalBox, "5"),
-                ["WORKER_MAX_RETRY"] = Num(WorkerMaxRetryBox, "3"),
+                ["CHECK_INTERVAL"] = Num(CheckIntervalBox),
+                ["CHANNEL_RELOAD_INTERVAL"] = Num(ChannelReloadIntervalBox),
+                ["RECORD_RETRY_INTERVAL"] = Num(RecordRetryIntervalBox),
+                ["RECORD_STALL_TIMEOUT"] = Num(RecordStallTimeoutBox),
+                ["RECORD_MONITOR_INTERVAL"] = Num(RecordMonitorIntervalBox),
+                ["WORKER_MAX_RETRY"] = Num(WorkerMaxRetryBox),
 
                 ["LOG_ENABLED"] = YesNo(LogEnabledCheck),
                 ["LOG_DIR"] = LogDirBox.Text?.Trim() ?? @".\logs",
-                ["LOG_RETENTION_DAYS"] = Num(LogRetentionDaysBox, "30"),
+                ["LOG_RETENTION_DAYS"] = Num(LogRetentionDaysBox),
 
                 ["CONSOLE_AUTO_FORMAT"] = YesNo(ConsoleAutoFormatCheck),
                 ["CONSOLE_COLOR"] = YesNo(ConsoleColorCheck),
-                ["CONSOLE_SHOW_PATH"] = YesNo(ConsoleShowPathCheck)
+                ["CONSOLE_SHOW_PATH"] = YesNo(ConsoleShowPathCheck),
+                ["GUI_NOTIFY_RECORD_START"] = YesNo(NotifyRecordStartCheck),
+                ["GUI_NOTIFY_RECORD_FINISH"] = YesNo(NotifyRecordFinishCheck),
+                ["GUI_NOTIFY_WARNING"] = YesNo(NotifyWarningCheck)
             };
 
             BackupFile(iniPath);
@@ -3187,6 +3573,9 @@ public sealed partial class MainWindow : Window
                 ConsoleAutoFormatCheck.IsChecked == true,
                 ConsoleColorCheck.IsChecked == true,
                 ConsoleShowPathCheck.IsChecked == true);
+            uiNotifyRecordStart = NotifyRecordStartCheck.IsChecked == true;
+            uiNotifyRecordFinish = NotifyRecordFinishCheck.IsChecked == true;
+            uiNotifyWarning = NotifyWarningCheck.IsChecked == true;
 
             settingsLoading = true;
             SoopPasswordBox.Password = "";
@@ -3546,15 +3935,20 @@ public sealed partial class MainWindow : Window
 
     void UpdateSelectedRecordingActionButton()
     {
-        if (StopSelectedRecordingButton == null)
+        if (StopSelectedRecordingButton == null ||
+            OpenSelectedRecordingFolderButton == null)
             return;
 
         if (RecordingList?.SelectedItem is not ChannelStatus selected)
         {
             StopSelectedRecordingButton.Content = "■ 선택 채널 녹화 중지";
             StopSelectedRecordingButton.IsEnabled = false;
+            OpenSelectedRecordingFolderButton.IsEnabled = false;
             return;
         }
+
+        OpenSelectedRecordingFolderButton.IsEnabled =
+            !string.IsNullOrWhiteSpace(selected.FilePath);
 
         if (selected.Status == "● REC")
         {
@@ -3565,6 +3959,105 @@ public sealed partial class MainWindow : Window
 
         StopSelectedRecordingButton.Content = "녹화 상태 확인 중";
         StopSelectedRecordingButton.IsEnabled = false;
+    }
+
+    void RecordingList_ContainerContentChanging(
+        ListViewBase sender,
+        ContainerContentChangingEventArgs args)
+    {
+        if (args.InRecycleQueue ||
+            args.ItemContainer is not ListViewItem container ||
+            args.Item is not ChannelStatus item)
+            return;
+
+        var menu = new MenuFlyout();
+        var openFolder = new MenuFlyoutItem { Text = "녹화 폴더 열기" };
+        openFolder.Click += async (_, _) => await OpenRecordingLocationAsync(item, selectFile: false);
+        var selectFile = new MenuFlyoutItem { Text = "파일 위치에서 선택" };
+        selectFile.Click += async (_, _) => await OpenRecordingLocationAsync(item, selectFile: true);
+        var copyPath = new MenuFlyoutItem { Text = "녹화 경로 복사" };
+        copyPath.Click += async (_, _) => await CopyRecordingPathAsync(item);
+        var stop = new MenuFlyoutItem
+        {
+            Text = "현재 방송 녹화 중지",
+            IsEnabled = item.Status == "● REC"
+        };
+        stop.Click += (_, _) =>
+        {
+            RecordingList.SelectedItem = item;
+            StopSelectedRecording_Click(StopSelectedRecordingButton, new RoutedEventArgs());
+        };
+
+        var hasPath = !string.IsNullOrWhiteSpace(item.FilePath);
+        openFolder.IsEnabled = hasPath;
+        selectFile.IsEnabled = hasPath;
+        copyPath.IsEnabled = hasPath;
+        menu.Items.Add(openFolder);
+        menu.Items.Add(selectFile);
+        menu.Items.Add(copyPath);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(stop);
+        container.ContextFlyout = menu;
+    }
+
+    async void OpenSelectedRecordingFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (RecordingList?.SelectedItem is not ChannelStatus selected)
+            return;
+
+        await OpenRecordingLocationAsync(selected, selectFile: false);
+    }
+
+    async Task OpenRecordingLocationAsync(ChannelStatus selected, bool selectFile)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(selected.FilePath))
+                throw new InvalidOperationException("선택한 녹화의 파일 경로를 아직 확인하지 못했습니다.");
+
+            var fullPath = Path.GetFullPath(selected.FilePath);
+            var directory = Path.GetDirectoryName(fullPath);
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                throw new DirectoryNotFoundException("녹화 폴더를 찾을 수 없습니다.\n" + directory);
+
+            var startInfo = new ProcessStartInfo("explorer.exe")
+            {
+                UseShellExecute = true
+            };
+            if (selectFile && File.Exists(fullPath))
+            {
+                startInfo.ArgumentList.Add("/select,");
+                startInfo.ArgumentList.Add(fullPath);
+            }
+            else
+            {
+                startInfo.ArgumentList.Add(directory);
+            }
+            Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            await ShowDialogAsync("녹화 폴더 열기 실패", ex.Message);
+        }
+    }
+
+    async Task CopyRecordingPathAsync(ChannelStatus selected)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(selected.FilePath))
+                throw new InvalidOperationException("선택한 녹화의 파일 경로를 아직 확인하지 못했습니다.");
+
+            var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            package.SetText(Path.GetFullPath(selected.FilePath));
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+            Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
+            AppendLog($"[GUI] 녹화 경로 복사 channel={selected.Name}");
+        }
+        catch (Exception ex)
+        {
+            await ShowDialogAsync("녹화 경로 복사 실패", ex.Message);
+        }
     }
 
     async void StopSelectedRecording_Click(object sender, RoutedEventArgs e)
@@ -3712,6 +4205,7 @@ public sealed partial class MainWindow : Window
     void ClearLog_Click(object sender, RoutedEventArgs e)
     {
         logLines.Clear();
+        lastGuiLogLine = "";
         LogBox.Text="";
     }
 
@@ -3731,6 +4225,8 @@ public sealed partial class MainWindow : Window
     {
         if (string.IsNullOrWhiteSpace(line)) return false;
         var text=line.Trim();
+        if (text.StartsWith('<') || text.StartsWith('"') ||
+            text is "{" or "}" or "[" or "]") return false;
         // The frequent dashboard/progress rows have stable text markers.
         // Avoid running four regular expressions for every such line.
         if (text.Contains(" : RECORDING | ", StringComparison.OrdinalIgnoreCase) ||
@@ -3745,6 +4241,13 @@ public sealed partial class MainWindow : Window
     void AppendLog(string line)
     {
         if (!IsGuiEventLogLine(line)) return;
+        line = line.Trim();
+        const int maxEventCharacters = 600;
+        if (line.Length > maxEventCharacters)
+            line = line[..maxEventCharacters] + " … [truncated]";
+        if (string.Equals(lastGuiLogLine, line, StringComparison.Ordinal))
+            return;
+        lastGuiLogLine = line;
         logLines.Enqueue(line);
         while(logLines.Count>MaxGuiLogLines) logLines.Dequeue();
         logTextDirty = true;

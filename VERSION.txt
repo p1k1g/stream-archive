@@ -1,8 +1,8 @@
 ﻿SOOP LIVE Downloader
 GUI: WinUI 3
-Version: 1.2.0-preview1-fix40
-Feature: actionable Watcher startup diagnostics and adaptive Settings layout
-Includes: all fix39/fix38/fix37 and earlier functionality
+Version: 1.2.0-preview1-fix47
+Feature: bounded backend queues, producer-side progress coalescing, and cleanup
+Includes: all fix46/fix45/fix44 and earlier functionality
 Settings: fix36 path/auth/dependency tests, dirty save bar, defaults, and INI export/import
 Dashboard: Watcher-exit cleanup, stop ACK, stopped/resume flyout, alerts, natural empty states
 Channels: saved-snapshot dirty tracking, account/name search, filters, natural labels, collapsed raw editor
