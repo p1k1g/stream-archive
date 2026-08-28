@@ -50,6 +50,7 @@ $ScriptDir = $PSScriptRoot.TrimEnd("\")
 $SettingFile = Join-Path $ScriptDir "SOOP_LIVE_SETTING.ini"
 $ChannelFile = Join-Path $ScriptDir "SOOP_LIVE_CHANNELS.txt"
 $ControlDir = Join-Path $ScriptDir "control"
+$RecorderDiagnosticDir = Join-Path $ScriptDir "logs\recorder-diagnostics"
 $scriptExitCode = 0
 
 # Daily logging can be hot-toggled from SOOP_LIVE_SETTING.bat.
@@ -77,6 +78,25 @@ $states = @{}
 
 function Show-Line {
     Write-Host "========================================"
+}
+
+function Write-GuiEvent {
+    param([string]$Type,[hashtable]$Data = @{})
+
+    try {
+        $payload = [ordered]@{
+            version   = 1
+            type      = $Type
+            timestamp = (Get-Date).ToString("o")
+        }
+        foreach ($key in $Data.Keys) {
+            $payload[$key] = $Data[$key]
+        }
+        Write-Host ("@@SOOP_EVENT@@" + ($payload | ConvertTo-Json -Compress -Depth 6))
+    }
+    catch {
+        Write-LogMessage ("GUI EVENT SERIALIZE FAILED type={0} error={1}" -f $Type,$_.Exception.Message) -Level "WARN"
+    }
 }
 
 function Get-IniConfig {
@@ -489,19 +509,17 @@ function Write-RecordingSummary {
     $duration = $endedAt - $Recording.StartedAt
     $size = Get-RecordingOutputSize -Recording $Recording
 
-    # Machine-correlatable lifecycle event. Keep channel/account/reason/file on
-    # one line so concurrent recorder output cannot leave the GUI with a stale
-    # REC card after a recorder exits or a channel is removed.
-    Write-Host (
-        "[{0}] {1} [account={2}] : RECORD FINISHED | duration={3} | size={4} | reason={5} | file={6}" -f `
-        (Get-Date -Format "HH:mm:ss"),
-        $State.Name,
-        $State.Channel.Account,
-        (Format-Duration $duration),
-        (Format-BytesHuman $size),
-        $Reason,
-        $Recording.File
-    )
+    Write-GuiEvent -Type "recording_finished" -Data @{
+        account = $State.Channel.Account
+        name = $State.Name
+        duration = (Format-Duration $duration)
+        durationSeconds = [Math]::Max(0,[Math]::Floor($duration.TotalSeconds))
+        size = (Format-BytesHuman $size)
+        sizeBytes = $size
+        reason = $Reason
+        file = $Recording.File
+        diagnosticFile = [string]$Recording.DiagnosticFile
+    }
 
     # Machine-correlatable lifecycle event. Keep channel/account/reason/file on
     # one line so concurrent recorder output cannot leave the GUI with a stale
@@ -1528,7 +1546,7 @@ function Get-UniqueOutputFile {
     $candidate = Join-Path $Directory ($baseName + ".ts")
     $number = 2
 
-    while (Test-Path $candidate) {
+    while (Test-Path -LiteralPath $candidate) {
         if ($number -gt 9999) {
             throw "동일 출력 파일 충돌이 너무 많습니다: $baseName"
         }
@@ -1655,6 +1673,65 @@ function Remove-StaleRecorderConsoleFiles {
     }
     catch {
         # Temp cleanup must never stop the watcher.
+    }
+}
+
+function Protect-RecorderDiagnosticText {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return "" }
+
+    $safe = $Text
+    $safe = $safe -replace '(?im)^.*(?:SOOP_PASSWORD|WORKER_API_KEY|API_KEY|AUTHORIZATION|COOKIE)\s*[:=].*$', '<redacted sensitive header>'
+    $safe = $safe -replace '(?i)(SOOP_PASSWORD|WORKER_API_KEY|API_KEY|AUTHORIZATION|COOKIE)\s*[:=]\s*[^\s;]+', '$1=<redacted>'
+    $safe = $safe -replace '(?i)(Bearer|Basic)\s+[A-Za-z0-9+/=_\-.]+', '$1 <redacted>'
+    $safe = $safe -replace '(?i)([?&](?:aid|token|key|apikey|api_key|worker_api_key|password|passwd)=)[^&\s]+', '$1<redacted>'
+    return $safe
+}
+
+function Save-RecorderErrorDiagnostic {
+    param($State,$Recording,[string]$Reason)
+
+    if ($null -eq $Recording -or [string]::IsNullOrWhiteSpace([string]$Recording.StderrFile)) {
+        return ""
+    }
+
+    try {
+        if (-not (Test-Path -LiteralPath $Recording.StderrFile -PathType Leaf)) {
+            return ""
+        }
+
+        $tail = @(Get-Content -LiteralPath $Recording.StderrFile -Tail 50 -Encoding UTF8 -ErrorAction Stop)
+        if ($tail.Count -eq 0) { return "" }
+
+        New-Item -ItemType Directory -Path $RecorderDiagnosticDir -Force | Out-Null
+        $account = Get-SafeFileName -Name ([string]$State.Channel.Account) -MaxLength 40
+        $reasonName = Get-SafeFileName -Name $Reason -MaxLength 40
+        $diagnosticPath = Join-Path $RecorderDiagnosticDir (
+            "{0}_{1}_{2}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"),$account,$reasonName
+        )
+        $header = @(
+            "SOOP LIVE recorder diagnostic"
+            "Time: $((Get-Date).ToString('o'))"
+            "Account: $($State.Channel.Account)"
+            "Channel: $($State.Name)"
+            "Reason: $Reason"
+            "Output: $($Recording.File)"
+            "--- stderr tail (last 50 lines) ---"
+        )
+        $content = Protect-RecorderDiagnosticText (($header + $tail) -join [Environment]::NewLine)
+        Set-Content -LiteralPath $diagnosticPath -Value $content -Encoding UTF8 -ErrorAction Stop
+
+        @(Get-ChildItem -LiteralPath $RecorderDiagnosticDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -Skip 20) |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
+        Write-LogMessage ("RECORDER DIAGNOSTIC SAVED channel={0} file={1}" -f $State.Name,$diagnosticPath) -Level "WARN"
+        return $diagnosticPath
+    }
+    catch {
+        Write-LogMessage ("RECORDER DIAGNOSTIC SAVE FAILED channel={0} error={1}" -f $State.Name,$_.Exception.Message) -Level "WARN"
+        return ""
     }
 }
 
@@ -1948,6 +2025,15 @@ function Start-ChannelRecording {
         -RedirectStandardError $stderrFile `
         -PassThru
 
+    Write-GuiEvent -Type "recording_started" -Data @{
+        account = $Channel.Account
+        name = $Channel.Name
+        title = $LiveInfo.Title
+        bno = [string]$LiveInfo.Bno
+        file = $outputFile
+        quality = $streamInfo.Quality
+    }
+
     return [PSCustomObject]@{
         Process    = $proc
         PID        = $proc.Id
@@ -1961,6 +2047,7 @@ function Start-ChannelRecording {
         OutputDir     = $outputDir
         StdoutFile         = $stdoutFile
         StderrFile         = $stderrFile
+        DiagnosticFile     = ""
         DashboardLastSize  = [int64]0
         DashboardLastAt    = Get-Date
     }
@@ -1991,6 +2078,9 @@ function Stop-ChannelRecording {
             Write-LogMessage ("PROCESS STOP FAILED channel={0} pid={1} reason={2}" -f $state.Name,$rec.PID,$Reason) -Level "ERROR"
             return $false
         }
+    }
+    if ($Reason -eq "RECORD STALLED") {
+        $rec.DiagnosticFile = Save-RecorderErrorDiagnostic -State $state -Recording $rec -Reason $Reason
     }
     Write-RecordingSummary -State $state -Recording $rec -Reason $Reason
     Remove-RecorderConsoleFiles -Recording $rec
@@ -2034,6 +2124,13 @@ function Update-RecordingStates {
                 $exitCode
             )
 
+            if ($null -eq $exitCode -or $exitCode -ne 0) {
+                $rec.DiagnosticFile = Save-RecorderErrorDiagnostic `
+                    -State $state `
+                    -Recording $rec `
+                    -Reason ("RECORDER EXIT CODE=" + $exitCode)
+            }
+
             Write-RecordingSummary `
                 -State $state `
                 -Recording $rec `
@@ -2067,6 +2164,14 @@ function Update-RecordingStates {
         }
 
         if ($disk.IsLow) {
+            Write-GuiEvent -Type "low_disk" -Data @{
+                account = $state.Channel.Account
+                name = $state.Name
+                drive = $disk.Root
+                freeGB = $disk.FreeGB
+                limitGB = $MinFreeSpaceGB
+                detail = ("Free={0} GB / Limit={1} GB" -f $disk.FreeGB,$MinFreeSpaceGB)
+            }
             Write-Host ""
             Write-Host (
                 "[{0}] {1} [account={2}] : LOW DISK SPACE" -f `
@@ -2097,6 +2202,13 @@ function Update-RecordingStates {
         }
 
         if (($now - $rec.LastGrowthAt).TotalSeconds -ge $StallTimeout) {
+            Write-GuiEvent -Type "recording_stalled" -Data @{
+                account = $state.Channel.Account
+                name = $state.Name
+                file = $rec.File
+                noGrowthSeconds = $StallTimeout
+                detail = ("{0}s no growth" -f $StallTimeout)
+            }
             Write-LogMessage ("RECORD STALLED channel={0} no_growth={1}s" -f $state.Name,$StallTimeout) -Level "WARN"
             Write-Host (
                 "[{0}] {1} : RECORD STALLED ({2}s no growth)" -f `
@@ -2477,6 +2589,11 @@ try {
                                 )
                             }
                             else {
+                                Write-GuiEvent -Type "channel_disabled" -Data @{
+                                    account = $state.Channel.Account
+                                    name = $state.Name
+                                    action = "disabled"
+                                }
                                 Write-Host (
                                     "[{0}] {1} [account={2}] : CHANNEL DISABLED" -f `
                                     (Get-Date -Format "HH:mm:ss"),
@@ -2504,6 +2621,11 @@ try {
                             -Reason "CHANNEL REMOVED"
 
                         if ($stopped) {
+                            Write-GuiEvent -Type "channel_removed" -Data @{
+                                account = $removedState.Channel.Account
+                                name = $removedState.Name
+                                action = "removed"
+                            }
                             Write-Host (
                                 "[{0}] {1} [account={2}] : CHANNEL REMOVED" -f `
                                 (Get-Date -Format "HH:mm:ss"),
@@ -2703,6 +2825,13 @@ $state.LastStatus = "OFFLINE"
             catch {
                 if ($_.Exception.Message -match '^\[WORKER_CIRCUIT_OPEN\]\s+seconds=(?<seconds>\d+)\s+until=(?<until>\S+)') {
                     $cooldownSeconds = [int]$Matches['seconds']
+                    Write-GuiEvent -Type "worker_cooldown" -Data @{
+                        account = $channel.Account
+                        name = $channel.Name
+                        cooldownSeconds = $cooldownSeconds
+                        until = $Matches['until']
+                        detail = ("seconds={0} until={1}" -f $cooldownSeconds,$Matches['until'])
+                    }
                     Write-Host (
                         "[{0}] {1} [account={2}] : WORKER COOLDOWN - seconds={3} until={4}" -f `
                         (Get-Date -Format "HH:mm:ss"),

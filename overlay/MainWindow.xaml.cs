@@ -158,6 +158,8 @@ public sealed partial class MainWindow : Window
     readonly ConcurrentDictionary<string, string> latestProgressByChannel =
         new(StringComparer.OrdinalIgnoreCase);
     readonly Queue<string> logLines = new();
+    readonly Dictionary<string, DateTime> recentStructuredEvents =
+        new(StringComparer.OrdinalIgnoreCase);
     string lastGuiLogLine = "";
     bool logTextDirty = false;
 
@@ -225,10 +227,6 @@ public sealed partial class MainWindow : Window
 
     static readonly Regex PlainOffline = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*OFFLINE$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    static readonly Regex RecordStart = new(
-        @"^\[(?<date>[^]]+)\] \[INFO\] RECORD START channel=(?<name>.+?) account=(?<account>[A-Za-z0-9_]+) bno=(?<bno>\S+) (?<rest>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     static readonly Regex RecordStartChannelLine = new(
@@ -369,7 +367,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix49",
+            Text = "WinUI 3 · v1.2.0-preview1-fix50",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -1634,6 +1632,7 @@ public sealed partial class MainWindow : Window
         while (backendLineQueue.TryDequeue(out _)) { }
         while (priorityBackendLineQueue.TryDequeue(out _)) { }
         latestProgressByChannel.Clear();
+        recentStructuredEvents.Clear();
         ResetBackendQueueCounters();
         RecordingItems.Clear();
         OfflineItems.Clear();
@@ -2045,6 +2044,7 @@ public sealed partial class MainWindow : Window
             Interlocked.Exchange(ref queuedBackendLines, 0);
         Interlocked.Exchange(ref droppedBackendLines, 0);
         latestProgressByChannel.Clear();
+        recentStructuredEvents.Clear();
         RecordingItems.Clear();
         OfflineItems.Clear();
         StoppedItems.Clear();
@@ -2178,6 +2178,7 @@ public sealed partial class MainWindow : Window
     }
 
     static bool IsCriticalBackendEventLine(string line) =>
+        line.StartsWith(BackendEventParser.Prefix, StringComparison.Ordinal) ||
         line.Contains(" : RECORD FINISHED | ", StringComparison.OrdinalIgnoreCase) ||
         line.Contains(" : CHANNEL REMOVED", StringComparison.OrdinalIgnoreCase) ||
         line.Contains(" : CHANNEL DISABLED", StringComparison.OrdinalIgnoreCase) ||
@@ -2194,6 +2195,18 @@ public sealed partial class MainWindow : Window
 
         var text = line.Trim();
         if (text.Length == 0) return;
+
+        // JSON v1 is the authoritative machine protocol. Human-readable text
+        // remains below as a compatibility fallback for older backends.
+        var isJsonEvent = text.StartsWith(BackendEventParser.Prefix, StringComparison.Ordinal);
+        if (BackendEventParser.TryParse(text, out var backendEvent) && backendEvent is not null)
+        {
+            if (!isJsonEvent && WasRecentlyHandledStructured(
+                    backendEvent.Type, backendEvent.Account, backendEvent.Name))
+                return;
+            ProcessStructuredBackendEvent(backendEvent);
+            return;
+        }
 
         var stopRequested = ChannelStopRequested.Match(text);
         if (stopRequested.Success)
@@ -2393,33 +2406,6 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var start = RecordStart.Match(text);
-        if (start.Success)
-        {
-            var name = start.Groups["name"].Value.Trim();
-            var account = start.Groups["account"].Value.Trim();
-            ParseRecordStartRest(start.Groups["rest"].Value, out var title, out var file);
-
-            var item = GetOrCreate(account, name);
-            var notifyStart = item.Status != "● REC" ||
-                !string.Equals(item.FilePath, file, StringComparison.OrdinalIgnoreCase);
-            item.Status = "● REC";
-            item.Title = title;
-            item.Time = DateTime.Now.ToString("HH:mm:ss");
-            item.Detail = "녹화 중";
-            item.IsSuspended = false;
-            item.SizeText = "-";
-            item.ElapsedText = "-";
-            item.RateText = "-";
-            item.RateBytesPerSecond = 0;
-            item.FilePath = file;
-            UpdateDrive(item, file);
-            MoveToRecording(item);
-            if (notifyStart && uiNotifyRecordStart)
-                ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
-            return;
-        }
-
         var compact = CompactRecording.Match(text);
         if (compact.Success)
         {
@@ -2463,6 +2449,85 @@ public sealed partial class MainWindow : Window
             item.Detail = "";
             MoveToOffline(item);
         }
+    }
+
+    void ProcessStructuredBackendEvent(BackendEvent backendEvent)
+    {
+        var expiry = DateTime.UtcNow.AddMinutes(-1);
+        foreach (var expiredKey in recentStructuredEvents
+            .Where(entry => entry.Value < expiry)
+            .Select(entry => entry.Key)
+            .ToArray())
+            recentStructuredEvents.Remove(expiredKey);
+        recentStructuredEvents[StructuredEventKey(
+            backendEvent.Type, backendEvent.Account, backendEvent.Name)] = DateTime.UtcNow;
+        switch (backendEvent.Type)
+        {
+            case "recording_started":
+            {
+                var item = GetOrCreate(backendEvent.Account, backendEvent.Name);
+                var notifyStart = item.Status != "● REC" ||
+                    !string.Equals(item.FilePath, backendEvent.File, StringComparison.OrdinalIgnoreCase);
+                item.Status = "● REC";
+                item.Title = backendEvent.Title;
+                item.Time = DateTime.Now.ToString("HH:mm:ss");
+                item.Detail = "녹화 중";
+                item.IsSuspended = false;
+                item.SizeText = "-";
+                item.ElapsedText = "-";
+                item.RateText = "-";
+                item.RateBytesPerSecond = 0;
+                item.FilePath = backendEvent.File;
+                UpdateDrive(item, backendEvent.File);
+                MoveToRecording(item);
+                ClearDashboardAlert(item.Account, item.Name);
+                if (notifyStart && uiNotifyRecordStart)
+                    ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
+                break;
+            }
+            case "recording_finished":
+                HandleRecordingFinished(
+                    backendEvent.Account, backendEvent.Name, backendEvent.Duration,
+                    backendEvent.Size, backendEvent.Reason, backendEvent.File);
+                break;
+            case "recording_stalled":
+                SetDashboardAlert(
+                    backendEvent.Account, backendEvent.Name, "녹화 재시작 확인",
+                    string.IsNullOrWhiteSpace(backendEvent.Detail)
+                        ? "파일 증가가 멈춰 방송 상태와 녹화 재시작을 확인하고 있습니다."
+                        : backendEvent.Detail);
+                break;
+            case "low_disk":
+                SetDashboardAlert(
+                    backendEvent.Account, backendEvent.Name, "디스크 공간 부족",
+                    string.IsNullOrWhiteSpace(backendEvent.Detail)
+                        ? "최소 디스크 여유 공간에 도달했습니다."
+                        : backendEvent.Detail);
+                break;
+            case "worker_cooldown":
+                SetDashboardAlert(
+                    backendEvent.Account, backendEvent.Name, "Worker 복구 대기",
+                    backendEvent.CooldownSeconds is int seconds
+                        ? $"Worker 요청을 {seconds}초 후 다시 시도합니다."
+                        : backendEvent.Detail);
+                break;
+            case "channel_removed":
+            case "channel_disabled":
+                RemoveDashboardChannelByIdentity(backendEvent.Account, backendEvent.Name);
+                break;
+        }
+    }
+
+    static string StructuredEventKey(string type, string account, string name) =>
+        type + "|" + (string.IsNullOrWhiteSpace(account) ? "name:" + name : "account:" + account);
+
+    bool WasRecentlyHandledStructured(string type, string account, string name)
+    {
+        var key = StructuredEventKey(type, account, name);
+        if (!recentStructuredEvents.TryGetValue(key, out var handledAt)) return false;
+        if ((DateTime.UtcNow - handledAt).TotalSeconds <= 5) return true;
+        recentStructuredEvents.Remove(key);
+        return false;
     }
 
     void ApplyProgress(string? account, string? name, Match progress)
@@ -2578,6 +2643,23 @@ public sealed partial class MainWindow : Window
             RecordingList.SelectedItem = null;
         UpdateSelectedRecordingActionButton();
         UpdateCounts();
+    }
+
+    void RemoveDashboardChannelByIdentity(string account, string name)
+    {
+        var key = string.IsNullOrWhiteSpace(account)
+            ? "name:" + name
+            : "account:" + account;
+        if (statusMap.TryGetValue(key, out var item))
+        {
+            RemoveDashboardChannel(item);
+            return;
+        }
+
+        // RECORD FINISHED may already have removed the same channel. Clear
+        // residual queue/alert state without recreating a transient card.
+        ClearPendingProgress(account, name);
+        ClearDashboardAlert(account, name);
     }
 
     ChannelStatus GetOrCreate(string? account, string name)
@@ -2745,25 +2827,6 @@ public sealed partial class MainWindow : Window
             DashboardEmptyStartButton.Visibility = Visibility.Visible;
             DashboardEmptyStartButton.IsEnabled = StartButton?.IsEnabled != false;
         }
-    }
-
-    static void ParseRecordStartRest(string rest, out string title, out string file)
-    {
-        title = "";
-        file = "";
-
-        var fileIndex = rest.LastIndexOf(" file=", StringComparison.OrdinalIgnoreCase);
-        if (fileIndex >= 0)
-        {
-            file = rest[(fileIndex + 6)..].Trim();
-            rest = rest[..fileIndex];
-        }
-
-        var hlsIndex = rest.IndexOf(" hls=", StringComparison.OrdinalIgnoreCase);
-        var titlePart = hlsIndex >= 0 ? rest[..hlsIndex].Trim() : rest.Trim();
-
-        if (titlePart.StartsWith("title=", StringComparison.OrdinalIgnoreCase))
-            title = titlePart[6..].Trim();
     }
 
     void UpdateDrive(ChannelStatus item, string file)

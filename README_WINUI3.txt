@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix49
+Version 1.2.0-preview1-fix50
 
 BUG FIX
 -------
@@ -1333,3 +1333,30 @@ fix49 implemented changes
   detected instead of remaining at a false `0 B` and restarting every 90 seconds.
 - The configured 90-second genuine no-growth recovery, immediate LIVE recheck,
   collision-safe naming, and exact owned-process termination remain unchanged.
+
+fix50 implemented changes
+-------------------------
+
+1. Versioned backend event protocol
+- Critical lifecycle events now emit `@@SOOP_EVENT@@` JSON version 1 records for
+  recording start/finish/stall, low disk, Worker cooldown, and channel removal
+  or disable. Human-readable lines remain for users and older GUI fallback.
+- `BackendEventParser` owns JSON and legacy text parsing, preserving Korean and
+  delimiter characters such as `[`, `]`, `|`, and `=` without correlation loss.
+- Structured lifecycle lines use the priority UI queue and recent-event
+  suppression prevents the paired legacy line from applying the same action twice.
+
+2. Automated protocol regressions
+- A dependency-free .NET 8 console test covers every introduced JSON event,
+  legacy fallback parsing, malformed/version-mismatched JSON, Korean text, and
+  special-character names, titles, and paths.
+- A PowerShell regression verifies literal-path size checks for wildcard-like
+  filenames and guards against reintroducing non-literal watchdog access.
+
+3. Bounded redacted recorder diagnostics
+- Unexpected recorder exits and genuine RECORD STALLED stops retain only the
+  final 50 stderr lines under `backend\logs\recorder-diagnostics`.
+- Authorization, cookie, password, API-key, AID, and token-shaped values are
+  redacted before writing; only the newest 20 diagnostic files are retained.
+- Normal recording completion, user stop, channel removal, and low-disk stops
+  continue deleting temporary recorder console files without diagnostic churn.
