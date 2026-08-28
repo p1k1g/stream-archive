@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("soop_literal_path_" + [Guid]::NewGuid().ToString('N'))
 try {
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-    $specialPath = Join-Path $tempDir '녹화`[테스트`]|=제목.ts'
+    $specialPath = Join-Path $tempDir '녹화[테스트]|=제목.ts'
     [System.IO.File]::WriteAllBytes($specialPath, [byte[]](1..32))
 
     if (-not (Test-Path -LiteralPath $specialPath -PathType Leaf)) {
