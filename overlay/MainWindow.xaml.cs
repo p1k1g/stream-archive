@@ -249,6 +249,10 @@ public sealed partial class MainWindow : Window
         @"RECORD FINISHED channel=(?<name>.+?) duration=(?<duration>\S+) size=(?<size>.+?) reason=(?<reason>.+?) file=(?<file>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    static readonly Regex RecordFinishedEvent = new(
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)\s+\[account=(?<account>[A-Za-z0-9_]+)\]\s*:\s*RECORD FINISHED\s*\|\s*duration=(?<duration>[^|]*)\|\s*size=(?<size>[^|]*)\|\s*reason=(?<reason>[^|]*)\|\s*file=(?<file>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     static readonly Regex ChannelStopRequested = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*CHANNEL STOP REQUESTED BNO=(?<bno>\S*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -263,6 +267,10 @@ public sealed partial class MainWindow : Window
 
     static readonly Regex ChannelResumeRequested = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*CHANNEL RESUME REQUESTED(?: BNO=(?<bno>\S*))?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    static readonly Regex ChannelRemovedOrDisabled = new(
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)\s+\[account=(?<account>[A-Za-z0-9_]+)\]\s*:\s*CHANNEL\s+(?<action>REMOVED|DISABLED)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     static readonly Regex DashboardHealthState = new(
@@ -2259,6 +2267,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var removedOrDisabled = ChannelRemovedOrDisabled.Match(text);
+        if (removedOrDisabled.Success)
+        {
+            var item = GetOrCreate(
+                removedOrDisabled.Groups["account"].Value.Trim(),
+                removedOrDisabled.Groups["name"].Value.Trim());
+            RemoveDashboardChannel(item);
+            return;
+        }
+
         var healthCleared = DashboardHealthCleared.Match(text);
         if (healthCleared.Success)
         {
@@ -2303,6 +2321,19 @@ public sealed partial class MainWindow : Window
                 health.Groups["name"].Value.Trim(),
                 status,
                 detail);
+            return;
+        }
+
+        var finishedEvent = RecordFinishedEvent.Match(text);
+        if (finishedEvent.Success)
+        {
+            HandleRecordingFinished(
+                finishedEvent.Groups["account"].Value.Trim(),
+                finishedEvent.Groups["name"].Value.Trim(),
+                finishedEvent.Groups["duration"].Value.Trim(),
+                finishedEvent.Groups["size"].Value.Trim(),
+                finishedEvent.Groups["reason"].Value.Trim(),
+                finishedEvent.Groups["file"].Value.Trim());
             return;
         }
 
