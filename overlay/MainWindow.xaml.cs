@@ -2493,6 +2493,12 @@ public sealed partial class MainWindow : Window
             RefreshDiskSummary();
         }
 
+        if ((DateTime.Now - lastDiskEstimateRefresh).TotalSeconds >= 5)
+        {
+            lastDiskEstimateRefresh = DateTime.Now;
+            RefreshDiskSummary();
+        }
+
         // Compact backend progress intentionally does not need to update
         // FilePath/drive. Those are fixed by RECORD START.
         var alertCleared = ClearDashboardAlert(item.Account, item.Name, refresh: false);
