@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix52
+Version 1.2.0-preview1-fix53
 
 BUG FIX
 -------
@@ -1422,3 +1422,20 @@ fix52 implemented changes
 - A windows-latest workflow runs parser/DPAPI and PowerShell regressions, prepares
   the official WinUI template, invokes BUILD_EXE.bat, verifies unpackaged compact
   properties and publish/backend modules, and uploads the win-x64 artifact.
+
+fix53 implemented changes
+-------------------------
+
+1. Windows source-test CRLF correction
+- The distributed-secret invariant now requires a real non-line-ending character
+  after `=`. Empty SOOP_PASSWORD/CLOUDFLARE_API_KEY defaults no longer become
+  false positives because `.` consumed the CR in Windows CRLF files.
+
+2. Normal recorder-exit classification
+- Recorder processes are given a final WaitForExit/Refresh before reading the
+  exit code. Code 0 and the Windows/PowerShell unavailable-code case are emitted
+  as NORMAL; known non-zero codes retain diagnostics and confirmation alerts.
+- The GUI also normalizes legacy `RECORDER EXIT CODE=` and code 0 finish events
+  to NORMAL, clears any stale channel alert, migrates matching recent-history
+  reasons, and keeps non-zero exits actionable.
+- Parser regressions cover empty, zero, unavailable, and non-zero finish reasons.

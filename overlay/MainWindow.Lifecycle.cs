@@ -328,7 +328,8 @@ public sealed partial class MainWindow
                 return;
 
             var body = $"{channel} 녹화가 종료되었습니다.\n{duration} · {size}";
-            if (!string.IsNullOrWhiteSpace(reason))
+            if (!string.IsNullOrWhiteSpace(reason) &&
+                !string.Equals(reason, "NORMAL", StringComparison.OrdinalIgnoreCase))
                 body += $"\n{reason}";
 
             trayIcon.Tag = file;

@@ -20,6 +20,24 @@ function Get-RecordingOutputSize {
     return [int64]0
 }
 
+function Get-RecorderExitReason {
+    param($ExitCode)
+
+    # A completed Process can occasionally lose its native exit-code handle
+    # before PowerShell reads ExitCode. An unavailable value previously became
+    # the misleading string "RECORDER EXIT CODE=" and left a GUI alert even
+    # after a complete recording. Known non-zero codes remain actionable.
+    if ($null -eq $ExitCode -or [string]::IsNullOrWhiteSpace([string]$ExitCode)) {
+        return "NORMAL"
+    }
+
+    $numericCode = 0
+    if ([int]::TryParse([string]$ExitCode,[ref]$numericCode) -and $numericCode -eq 0) {
+        return "NORMAL"
+    }
+    return "RECORDER EXIT CODE=" + [string]$ExitCode
+}
+
 function Write-RecordingSummary {
     param(
         $State,
@@ -835,7 +853,13 @@ function Update-RecordingStates {
 
         if ($rec.Process.HasExited) {
             $exitCode = $null
-            try { $exitCode = $rec.Process.ExitCode } catch {}
+            try {
+                [void]$rec.Process.WaitForExit(1000)
+                $rec.Process.Refresh()
+                $exitCode = $rec.Process.ExitCode
+            }
+            catch {}
+            $exitReason = Get-RecorderExitReason -ExitCode $exitCode
 
             Write-Host (
                 "[{0}] RECORDER EXIT {1} PID={2} CODE={3}" -f `
@@ -845,17 +869,17 @@ function Update-RecordingStates {
                 $exitCode
             )
 
-            if ($null -eq $exitCode -or $exitCode -ne 0) {
+            if ($exitReason -ne "NORMAL") {
                 $rec.DiagnosticFile = Save-RecorderErrorDiagnostic `
                     -State $state `
                     -Recording $rec `
-                    -Reason ("RECORDER EXIT CODE=" + $exitCode)
+                    -Reason $exitReason
             }
 
             Write-RecordingSummary `
                 -State $state `
                 -Recording $rec `
-                -Reason ("RECORDER EXIT CODE=" + $exitCode)
+                -Reason $exitReason
 
             Remove-RecorderConsoleFiles -Recording $rec
 

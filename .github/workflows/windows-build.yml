@@ -23,6 +23,7 @@ jobs:
         shell: powershell
         run: |
           ./tests/BackendLiteralPath.Tests.ps1
+          ./tests/RecorderExit.Tests.ps1
           ./tests/UserFeaturesSource.Tests.ps1
           ./tests/SecurityAndModules.Tests.ps1
 

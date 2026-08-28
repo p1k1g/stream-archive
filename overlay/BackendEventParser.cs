@@ -123,6 +123,16 @@ internal static partial class BackendEventParser
     static BackendEvent Empty(string type) =>
         new(1, type, "", "", "", "", "", "", "", "", null, "", "");
 
+    internal static string NormalizeRecordingFinishedReason(string? reason)
+    {
+        var value = reason?.Trim() ?? "";
+        if (value.Length == 0) return "NORMAL";
+        if (Regex.IsMatch(value, @"^RECORDER\s+EXIT\s+CODE\s*=\s*(?:0)?$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return "NORMAL";
+        return value;
+    }
+
     static string Text(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null
             ? value.ToString() : "";

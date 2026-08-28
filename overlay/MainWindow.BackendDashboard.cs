@@ -494,19 +494,28 @@ public sealed partial class MainWindow
         string reason,
         string file)
     {
-        ShowRecordingFinishedNotification(name, duration, size, reason, file);
+        var displayReason = BackendEventParser.NormalizeRecordingFinishedReason(reason);
+        ShowRecordingFinishedNotification(name, duration, size, displayReason, file);
         ClearPendingProgress(account, name);
 
         var item = GetOrCreate(account, name);
         AddRecentRecordingFix51(
-            account, name, item.Title, duration, size, reason, file);
+            account, name, item.Title, duration, size, displayReason, file);
         RecordingItems.Remove(item);
         item.RateText = "-";
         item.RateBytesPerSecond = 0;
         item.DisplayDrive = "";
         item.Drive = "";
 
-        var normalizedReason = reason.Trim().ToUpperInvariant();
+        var normalizedReason = displayReason.ToUpperInvariant();
+        if (normalizedReason == "NORMAL")
+        {
+            ClearDashboardAlert(account, name, refresh: false);
+            item.Status = "완료";
+            item.Detail = "정상 종료";
+            UpdateCounts();
+            return;
+        }
         if (normalizedReason is "CHANNEL REMOVED" or "CHANNEL DISABLED" or "WATCHER EXIT")
         {
             RemoveDashboardChannel(item);
@@ -529,9 +538,7 @@ public sealed partial class MainWindow
             "RECORD STALLED" => "파일 증가가 멈춰 방송 상태와 녹화 재시작을 확인하고 있습니다.",
             _ when normalizedReason.StartsWith("RECORDER EXIT", StringComparison.Ordinal) =>
                 "녹화 프로세스가 종료되어 방송 상태와 재시작을 확인하고 있습니다.",
-            _ => string.IsNullOrWhiteSpace(reason)
-                ? "녹화가 중단되어 재시작 여부를 확인하고 있습니다."
-                : reason
+            _ => displayReason
         };
         SetDashboardAlert(account, name, "녹화 재시작 확인", detail);
     }

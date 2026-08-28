@@ -42,8 +42,18 @@ if ($cliSettings -notmatch 'Protect-DpapiSecret' -or
 }
 
 $example = Get-Content -LiteralPath (Join-Path $backend 'SOOP_LIVE_SETTING.example.ini') -Raw -Encoding UTF8
-if ($example -match '(?m)^(SOOP_PASSWORD|CLOUDFLARE_API_KEY)=.+$') {
+# On CRLF files, `.` also consumes the carriage return before multiline `$`.
+# Require an actual non-line-ending character after `=` so empty defaults do
+# not become false positives on Windows PowerShell/GitHub Actions.
+$credentialValuePattern = '(?m)^(SOOP_PASSWORD|CLOUDFLARE_API_KEY)=[^\r\n]+'
+if ($example -match $credentialValuePattern) {
     throw 'Distributed example contains a credential value.'
+}
+if ("SOOP_PASSWORD=`r`nCLOUDFLARE_API_KEY=`r`n" -match $credentialValuePattern) {
+    throw 'CRLF empty credential regression fixture was treated as populated.'
+}
+if ("SOOP_PASSWORD=not-empty`r`n" -notmatch $credentialValuePattern) {
+    throw 'Populated credential regression fixture was not detected.'
 }
 
 $sync = Get-Content -LiteralPath (Join-Path $root 'SYNC_PROJECT.ps1') -Raw -Encoding UTF8

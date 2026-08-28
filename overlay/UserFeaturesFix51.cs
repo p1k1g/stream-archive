@@ -147,8 +147,19 @@ public sealed partial class MainWindow
         RecentRecordingItems.Clear();
         try
         {
+            var migratedReason = false;
             foreach (var item in RecentStore.Load())
+            {
+                var normalized = BackendEventParser.NormalizeRecordingFinishedReason(item.Reason);
+                if (!string.Equals(item.Reason, normalized, StringComparison.Ordinal))
+                {
+                    item.Reason = normalized;
+                    migratedReason = true;
+                }
                 RecentRecordingItems.Add(item);
+            }
+            if (migratedReason)
+                SaveRecentRecordingsFix51();
         }
         catch (Exception ex)
         {
@@ -247,7 +258,7 @@ public sealed partial class MainWindow
         try
         {
             var text = DiagnosticInfoService.CreateReport(
-                "1.2.0-preview1-fix52",
+                "1.2.0-preview1-fix53",
                 backend.IsRunning,
                 RecordingItems.Count,
                 OfflineItems.Count,

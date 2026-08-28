@@ -26,6 +26,10 @@ static class BackendEventParserRegression
         Check(!BackendEventParser.TryParse("@@SOOP_EVENT@@{broken", out _), "malformed JSON must be rejected");
         Check(!BackendEventParser.TryParse("@@SOOP_EVENT@@[]", out _), "non-object JSON must be rejected");
         Check(!BackendEventParser.TryParse("@@SOOP_EVENT@@{\"version\":2,\"type\":\"recording_started\"}", out _), "unknown JSON version must be rejected");
+        Check(BackendEventParser.NormalizeRecordingFinishedReason("") == "NORMAL", "empty recorder exit reason must be normal");
+        Check(BackendEventParser.NormalizeRecordingFinishedReason("RECORDER EXIT CODE=") == "NORMAL", "missing recorder exit code must be normal");
+        Check(BackendEventParser.NormalizeRecordingFinishedReason("RECORDER EXIT CODE=0") == "NORMAL", "zero recorder exit code must be normal");
+        Check(BackendEventParser.NormalizeRecordingFinishedReason("RECORDER EXIT CODE=1") == "RECORDER EXIT CODE=1", "non-zero recorder exit code must remain actionable");
 
         if (OperatingSystem.IsWindows())
         {

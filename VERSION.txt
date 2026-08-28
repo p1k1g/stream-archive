@@ -1,7 +1,7 @@
 ﻿SOOP LIVE Downloader
 GUI: WinUI 3
-Version: 1.2.0-preview1-fix52
-Feature: DPAPI credentials, separated UI/backend modules, and Windows publish CI
+Version: 1.2.0-preview1-fix53
+Feature: CRLF-safe security tests and normal recorder-exit classification
 Includes: all fix47/fix46/fix45 and earlier functionality
 Settings: fix36 path/auth/dependency tests, dirty save bar, defaults, and INI export/import
 Dashboard: Watcher-exit cleanup, stop ACK, stopped/resume flyout, alerts, natural empty states
