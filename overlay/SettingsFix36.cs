@@ -263,6 +263,13 @@ public sealed partial class MainWindow
         ConsoleColorCheck = new CheckBox { Content = "상태 색상 사용 (백엔드 + 대시보드)", Foreground = White };
         ConsoleShowPathCheck = new CheckBox { Content = "녹화 파일 경로 표시 (백엔드 + 대시보드)", Foreground = White };
         logs.Children.Add(ConsoleAutoFormatCheck); logs.Children.Add(ConsoleColorCheck); logs.Children.Add(ConsoleShowPathCheck);
+        logs.Children.Add(FieldLabel("트레이 알림"));
+        NotifyRecordStartCheck = new CheckBox { Content = "녹화 시작 알림", Foreground = White };
+        NotifyRecordFinishCheck = new CheckBox { Content = "녹화 완료 알림", Foreground = White };
+        NotifyWarningCheck = new CheckBox { Content = "녹화 실패·디스크·인증 경고 알림", Foreground = White };
+        logs.Children.Add(NotifyRecordStartCheck);
+        logs.Children.Add(NotifyRecordFinishCheck);
+        logs.Children.Add(NotifyWarningCheck);
         logs.Children.Add(ActionButtonFix36("로그·표시 기본값 복원", (_, _) => ResetLogDefaultsFix36()));
         AddSettingsCardFix36(advanced, logs);
         stack.Children.Add(advanced);
@@ -376,7 +383,7 @@ public sealed partial class MainWindow
                 NumberBox.TextProperty,
                 (_, _) => MarkSettingsDirtyFix36());
         }
-        foreach (var box in new[] { SoopPurgeCredentialsCheck, LogEnabledCheck, ConsoleAutoFormatCheck, ConsoleColorCheck, ConsoleShowPathCheck })
+        foreach (var box in new[] { SoopPurgeCredentialsCheck, LogEnabledCheck, ConsoleAutoFormatCheck, ConsoleColorCheck, ConsoleShowPathCheck, NotifyRecordStartCheck, NotifyRecordFinishCheck, NotifyWarningCheck })
         {
             box.Checked += (_, _) => MarkSettingsDirtyFix36();
             box.Unchecked += (_, _) => MarkSettingsDirtyFix36();
@@ -566,7 +573,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix43",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix45",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });
@@ -707,7 +714,7 @@ public sealed partial class MainWindow
     void ResetWorkerDefaultsFix36() { MasterQualityBox.SelectedItem = "자동 (auto)"; }
     void ResetStreamlinkDefaultsFix36() { StreamlinkPathBox.Text = "AUTO"; StreamlinkFallbackBox.Text = @"C:\Program Files\Streamlink\bin\streamlink.exe"; }
     void ResetMonitoringDefaultsFix36() { CheckIntervalBox.Value = 30; ChannelReloadIntervalBox.Value = 2; RecordRetryIntervalBox.Value = 5; RecordStallTimeoutBox.Value = 90; RecordMonitorIntervalBox.Value = 5; WorkerMaxRetryBox.Value = 3; }
-    void ResetLogDefaultsFix36() { LogEnabledCheck.IsChecked = true; LogDirBox.Text = @".\logs"; LogRetentionDaysBox.Value = 30; ConsoleAutoFormatCheck.IsChecked = true; ConsoleColorCheck.IsChecked = true; ConsoleShowPathCheck.IsChecked = false; }
+    void ResetLogDefaultsFix36() { LogEnabledCheck.IsChecked = true; LogDirBox.Text = @".\logs"; LogRetentionDaysBox.Value = 30; ConsoleAutoFormatCheck.IsChecked = true; ConsoleColorCheck.IsChecked = true; ConsoleShowPathCheck.IsChecked = false; NotifyRecordStartCheck.IsChecked = false; NotifyRecordFinishCheck.IsChecked = true; NotifyWarningCheck.IsChecked = true; }
 
     async Task<bool> ConfirmLeaveSettingsFix36Async()
     {

@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix43
+Version 1.2.0-preview1-fix45
 
 BUG FIX
 -------
@@ -1223,6 +1223,36 @@ fix43 implemented changes
 - Empty, invalid, and out-of-range numeric values are rejected before saving;
   they are no longer silently replaced with defaults.
 - Numeric INI values are written with invariant-culture formatting.
+
+fix44 implemented changes
+-------------------------
+
+1. Open an active recording folder
+- Selecting a recording now enables a compact Folder Open action beside the
+  existing per-channel Stop action in the dashboard header.
+- The action uses the actual output file path reported by the backend, opens
+  only its existing parent directory, and shows a clear error when the path is
+  not available instead of creating or guessing a folder.
+
+fix45 implemented changes
+-------------------------
+
+1. Configurable tray notifications
+- Settings can independently enable recording-start, recording-finished, and
+  actionable warning notifications. Defaults avoid noisy start notifications
+  while retaining completion and important failure/disk/auth warnings.
+
+2. Recording card context actions
+- Right-clicking a recording card offers Folder Open, Select File, Copy Path,
+  and Stop Current Recording without adding permanent dashboard button clutter.
+- All path actions use the backend-reported output path.
+
+3. Conservative disk-time estimate
+- The disk summary combines actual free space with the summed real file-growth
+  rates of active REC items on each output drive.
+- It subtracts the configured minimum-free-space reserve and displays a stable
+  tier such as under one hour, approximate hours/days, or three days or more.
+- PAUSED and restart-waiting items remain excluded from disk calculations.
 
 GitHub and Codex cloud preparation
 ----------------------------------
