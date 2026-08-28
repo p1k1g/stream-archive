@@ -127,6 +127,8 @@ public sealed partial class MainWindow : Window
     bool dashboardWatcherRunning = false;
     bool watcherStartInProgress = false;
     bool watcherStopInProgress = false;
+    bool watcherStopRequested = false;
+    int? pendingWatcherExitCode = null;
     string currentViewTag = "dashboard";
     Button SaveSettingsButton = null!;
     TextBox LogBox = null!;
@@ -347,7 +349,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix40",
+            Text = "WinUI 3 · v1.2.0-preview1-fix43",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -1766,6 +1768,8 @@ public sealed partial class MainWindow : Window
         }
 
         watcherStartInProgress = true;
+        watcherStopRequested = false;
+        pendingWatcherExitCode = null;
         SetWatcherStartControlsFix38(false);
         try
         {
@@ -1813,9 +1817,7 @@ public sealed partial class MainWindow : Window
             {
                 dashboardWatcherRunning = false;
                 WatcherStateText.Text = "시작 실패";
-                var failureMessage = string.IsNullOrWhiteSpace(ex.Message)
-                    ? "Watcher 시작 중 원인을 확인할 수 없는 오류가 발생했습니다."
-                    : ex.Message;
+                var failureMessage = DescribeWatcherStartException(ex);
                 WriteStartupLog("Watcher startup FAILED", ex);
                 await ShowDialogAsync("Watcher 시작 실패", failureMessage);
             }
@@ -1868,18 +1870,45 @@ public sealed partial class MainWindow : Window
             return;
 
         watcherStopInProgress = true;
+        watcherStopRequested = true;
         StopButton.IsEnabled = false;
         WatcherStateText.Text = "종료 중";
         AppendLog("[GUI] Watcher 종료 요청");
 
         try
         {
-            await backend.StopAsync();
+            var stopped = await backend.StopAsync();
 
-            if (backend.IsRunning)
+            if (!stopped || backend.IsRunning)
             {
+                watcherStopRequested = false;
                 WatcherStateText.Text = "종료 확인 필요";
                 StopButton.IsEnabled = true;
+                AppendLog("[GUI] Watcher 종료 실패 · 프로세스 상태를 다시 확인해 주세요.");
+
+                if (pendingWatcherExitCode is int exitCode)
+                {
+                    pendingWatcherExitCode = null;
+                    CompleteWatcherExit(exitCode, requestedStop: false);
+                }
+            }
+            else if (pendingWatcherExitCode is int exitCode)
+            {
+                pendingWatcherExitCode = null;
+                CompleteWatcherExit(exitCode, requestedStop: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            watcherStopRequested = false;
+            WatcherStateText.Text = "종료 확인 필요";
+            StopButton.IsEnabled = backend.IsRunning;
+            AppendLog("[GUI] Watcher 종료 확인 실패: " + ex.Message);
+
+            if (pendingWatcherExitCode is int exitCode)
+            {
+                pendingWatcherExitCode = null;
+                CompleteWatcherExit(exitCode, requestedStop: false);
             }
         }
         finally
@@ -1891,17 +1920,39 @@ public sealed partial class MainWindow : Window
 
     void OnBackendExited(int code)
     {
+        if (watcherStopInProgress)
+        {
+            // StopAsync verifies exact-process-tree termination off the UI
+            // thread. Defer classification until that result is available.
+            pendingWatcherExitCode = code;
+            return;
+        }
+
+        CompleteWatcherExit(code, watcherStopRequested);
+    }
+
+    void CompleteWatcherExit(int code, bool requestedStop)
+    {
+        watcherStopRequested = false;
+        pendingWatcherExitCode = null;
         watcherStopInProgress = false;
         dashboardWatcherRunning = false;
         ResetDashboardState();
         SetWatcherStartControlsFix38(true);
         StopButton.IsEnabled = false;
-        WatcherStateText.Text = code == 0 ? "중지됨" : $"오류 종료 ({code})";
+        // taskkill terminates the GUI-owned PowerShell process tree and can
+        // produce a non-zero process exit code. That is still a normal stop
+        // when it directly follows the user's explicit Watcher stop request.
+        WatcherStateText.Text = requestedStop || code == 0
+            ? "중지됨"
+            : $"오류 종료 ({code})";
         OfflineCountText.Text = "-";
         StoppedCountText.Text = "-";
         AlertCountText.Text = "-";
         UpdateDashboardEmptyState();
-        AppendLog($"[GUI] Watcher 종료 Exit={code}");
+        AppendLog(requestedStop
+            ? $"[GUI] Watcher 사용자 요청으로 중지 Exit={code}"
+            : $"[GUI] Watcher 종료 Exit={code}");
     }
 
     void ResetDashboardState()
@@ -1918,9 +1969,32 @@ public sealed partial class MainWindow : Window
         pendingRecordChannel = null;
         pendingRecordAccount = null;
         pendingRecordTitle = null;
-        RecordingList?.SelectedItems.Clear();
-        StoppedFlyoutList?.SelectedItems.Clear();
+        // These ListViews use single-selection mode. Mutating SelectedItems in
+        // that mode can throw a WinRT E_ILLEGAL_METHOD_CALL before the watcher
+        // process is even started; clear the single SelectedItem instead.
+        if (RecordingList != null)
+            RecordingList.SelectedItem = null;
+        if (StoppedFlyoutList != null)
+            StoppedFlyoutList.SelectedItem = null;
         UpdateCounts();
+    }
+
+    static string DescribeWatcherStartException(Exception ex)
+    {
+        if (!string.IsNullOrWhiteSpace(ex.Message))
+            return ex.Message;
+
+        var exceptionType = ex.GetType().FullName ?? ex.GetType().Name;
+        var details = $"예외 형식: {exceptionType}\nHRESULT: 0x{ex.HResult:X8}";
+        if (ex.InnerException is { } inner)
+        {
+            var innerType = inner.GetType().FullName ?? inner.GetType().Name;
+            details += $"\n내부 예외: {innerType}";
+            if (!string.IsNullOrWhiteSpace(inner.Message))
+                details += "\n" + inner.Message;
+        }
+
+        return "Watcher 시작 준비 중 오류가 발생했습니다.\n" + details;
     }
 
     void InitializeUiFlushTimer()
@@ -3119,8 +3193,8 @@ public sealed partial class MainWindow : Window
             }
 
             string YesNo(CheckBox box) => box.IsChecked == true ? "Y" : "N";
-            string Num(NumberBox box, string fallback) =>
-                double.IsNaN(box.Value) ? fallback : box.Value.ToString("0.##");
+            string Num(NumberBox box) =>
+                box.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
             var quality = QualityBox.SelectedItem?.ToString() switch
             {
@@ -3151,7 +3225,7 @@ public sealed partial class MainWindow : Window
                 ["OUTPUT_DIR"] = OutputDirBox.Text?.Trim() ?? "",
                 ["QUALITY"] = quality,
                 ["FILE_NAME_PATTERN"] = filePattern,
-                ["MIN_FREE_SPACE_GB"] = Num(MinDiskBox, "20"),
+                ["MIN_FREE_SPACE_GB"] = Num(MinDiskBox),
 
                 ["SOOP_USERNAME"] = SoopUsernameBox.Text?.Trim() ?? "",
                 ["SOOP_PASSWORD"] = clearSoopPassword ? "" : ExistingOrNewSecret("SOOP_PASSWORD", SoopPasswordBox.Password),
@@ -3164,16 +3238,16 @@ public sealed partial class MainWindow : Window
                 ["STREAMLINK_PATH"] = string.IsNullOrWhiteSpace(StreamlinkPathBox.Text) ? "AUTO" : StreamlinkPathBox.Text.Trim(),
                 ["STREAMLINK_FALLBACK"] = StreamlinkFallbackBox.Text?.Trim() ?? "",
 
-                ["CHECK_INTERVAL"] = Num(CheckIntervalBox, "30"),
-                ["CHANNEL_RELOAD_INTERVAL"] = Num(ChannelReloadIntervalBox, "2"),
-                ["RECORD_RETRY_INTERVAL"] = Num(RecordRetryIntervalBox, "5"),
-                ["RECORD_STALL_TIMEOUT"] = Num(RecordStallTimeoutBox, "90"),
-                ["RECORD_MONITOR_INTERVAL"] = Num(RecordMonitorIntervalBox, "5"),
-                ["WORKER_MAX_RETRY"] = Num(WorkerMaxRetryBox, "3"),
+                ["CHECK_INTERVAL"] = Num(CheckIntervalBox),
+                ["CHANNEL_RELOAD_INTERVAL"] = Num(ChannelReloadIntervalBox),
+                ["RECORD_RETRY_INTERVAL"] = Num(RecordRetryIntervalBox),
+                ["RECORD_STALL_TIMEOUT"] = Num(RecordStallTimeoutBox),
+                ["RECORD_MONITOR_INTERVAL"] = Num(RecordMonitorIntervalBox),
+                ["WORKER_MAX_RETRY"] = Num(WorkerMaxRetryBox),
 
                 ["LOG_ENABLED"] = YesNo(LogEnabledCheck),
                 ["LOG_DIR"] = LogDirBox.Text?.Trim() ?? @".\logs",
-                ["LOG_RETENTION_DAYS"] = Num(LogRetentionDaysBox, "30"),
+                ["LOG_RETENTION_DAYS"] = Num(LogRetentionDaysBox),
 
                 ["CONSOLE_AUTO_FORMAT"] = YesNo(ConsoleAutoFormatCheck),
                 ["CONSOLE_COLOR"] = YesNo(ConsoleColorCheck),
