@@ -3,7 +3,14 @@ $ErrorActionPreference = 'Stop'
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("soop_literal_path_" + [Guid]::NewGuid().ToString('N'))
 try {
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-    $specialPath = Join-Path $tempDir '녹화[테스트]|=제목.ts'
+    # '[' and ']' are valid Windows filename characters but wildcard metacharacters
+    # to PowerShell path cmdlets. Keep them for the LiteralPath regression while
+    # avoiding characters such as '|' that Windows forbids before path handling.
+    $specialFileName = '녹화[테스트]=제목.ts'
+    if ($specialFileName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+        throw 'Literal-path fixture contains a Windows-invalid filename character.'
+    }
+    $specialPath = Join-Path $tempDir $specialFileName
     [System.IO.File]::WriteAllBytes($specialPath, [byte[]](1..32))
 
     if (-not (Test-Path -LiteralPath $specialPath -PathType Leaf)) {
@@ -14,6 +21,14 @@ try {
     }
 
     $backendPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'backend\SOOP_LIVE.ps1'
+    $recorderModule = Join-Path (Split-Path $backendPath -Parent) 'modules\SOOP.Recorder.ps1'
+    . $recorderModule
+    $sanitizedName = Get-SafeFileName -Name '녹화[테스트]|=제목'
+    if ($sanitizedName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+        $sanitizedName -ne '녹화[테스트]_=제목') {
+        throw 'Windows-invalid filename characters are not sanitized as expected.'
+    }
+
     $source = (Get-Content -LiteralPath $backendPath -Raw -Encoding UTF8) + "`n" +
         ((Get-ChildItem -LiteralPath (Join-Path (Split-Path $backendPath -Parent) 'modules') -Filter '*.ps1' -File |
             ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join "`n")
