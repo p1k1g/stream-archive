@@ -23,6 +23,7 @@ public sealed partial class MainWindow
     Button DiscardSettingsButton = null!;
     bool settingsChangesDirty;
     bool settingsLoading;
+    int settingsUiTransitionDepth;
     bool clearSoopPassword;
     bool clearCloudflareApiKey;
 
@@ -157,9 +158,21 @@ public sealed partial class MainWindow
         };
         advancedToggle.Click += (_, _) =>
         {
+            var wasDirty = settingsChangesDirty;
+            settingsUiTransitionDepth++;
             var opening = advanced.Visibility != Visibility.Visible;
             advanced.Visibility = opening ? Visibility.Visible : Visibility.Collapsed;
             advancedToggle.Content = opening ? "고급 설정 접기" : "고급 설정 펼치기";
+            // NumberBox can commit its display Text while the previously
+            // collapsed panel is measured. Suppress those layout-only
+            // callbacks across two dispatcher turns, without discarding an
+            // already real user edit.
+            DispatcherQueue.TryEnqueue(() => DispatcherQueue.TryEnqueue(() =>
+            {
+                settingsUiTransitionDepth = Math.Max(0, settingsUiTransitionDepth - 1);
+                if (!wasDirty && settingsUiTransitionDepth == 0)
+                    SetSettingsDirtyFix36(false);
+            }));
         };
 
         var cloudflare = SettingsCard(
@@ -395,7 +408,8 @@ public sealed partial class MainWindow
 
     void MarkSettingsDirtyFix36()
     {
-        if (!settingsLoading) SetSettingsDirtyFix36(true);
+        if (!settingsLoading && settingsUiTransitionDepth == 0)
+            SetSettingsDirtyFix36(true);
     }
 
     void SetSettingsDirtyFix36(bool dirty)
@@ -573,7 +587,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix50",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix51",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });

@@ -2265,6 +2265,11 @@ function Process-ControlCommands {
                 Write-LogMessage ("CHANNEL RESUME REQUESTED channel={0} account={1} bno={2}" -f $state.Name,$account,$resumeBno)
                 Write-Host ("[{0}] {1} [account={2}] : CHANNEL RESUME REQUESTED BNO={3}" -f (Get-Date -Format "HH:mm:ss"),$state.Name,$account,$resumeBno)
             }
+            elseif($action -eq "RECHECK"){
+                $state.NextCheck=Get-Date
+                Write-LogMessage ("CHANNEL RECHECK REQUESTED channel={0} account={1}" -f $state.Name,$account)
+                Write-Host ("[{0}] {1} [account={2}] : CHANNEL RECHECK REQUESTED" -f (Get-Date -Format "HH:mm:ss"),$state.Name,$account)
+            }
         }catch{
             Write-LogMessage ("CONTROL COMMAND FAILED file={0} error={1}" -f $file.Name,$_.Exception.Message) -Level "WARN"
         }finally{

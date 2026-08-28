@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix50
+Version 1.2.0-preview1-fix51
 
 BUG FIX
 -------
@@ -1360,3 +1360,31 @@ fix50 implemented changes
   redacted before writing; only the newest 20 diagnostic files are retained.
 - Normal recording completion, user stop, channel removal, and low-disk stops
   continue deleting temporary recorder console files without diagnostic churn.
+
+fix51 implemented changes
+-------------------------
+
+1. Recent recording history
+- A dedicated Recent Recordings page keeps the newest 200 completed/interrupted
+  recordings in an atomically replaced local JSON file under `backend\history`.
+- Users can open the folder, select an existing file, copy its path, or clear
+  history without deleting any recording file.
+
+2. Actionable Needs Attention cards
+- Alert cards now show a timestamp, structured status/detail, and a recommended
+  action. Selected alerts offer immediate recheck, recording-folder, Settings,
+  and Logs shortcuts.
+- RECHECK uses the existing GUID temporary-command-to-`.cmd` claim protocol and
+  only schedules that exact account for an immediate LIVE check.
+
+3. Safe diagnostics and channel-name preview
+- Logs now provides one-click diagnostic copy with app/runtime/watcher state and
+  the bounded GUI event tail, after credential and token-shaped values are redacted.
+- Channel Management can check selected channels (or all when none are selected)
+  in bounded batches, preview old/new names and failures, and stage confirmed
+  changes without saving until the existing atomic Save action is used.
+
+4. Advanced-settings dirty-state correction
+- Expanding or collapsing Advanced Settings suppresses NumberBox layout/format
+  callbacks across the UI transition. An existing real edit remains dirty, while
+  opening an untouched panel no longer asks the user to save unchanged settings.

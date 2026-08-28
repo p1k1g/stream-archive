@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Xaml.Media;
+using System.Text.Json.Serialization;
 using Windows.UI;
 
 namespace SOOPLiveWinUI;
@@ -119,4 +120,23 @@ public sealed class EditableChannel : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
     void OnChanged([CallerMemberName] string? n = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+}
+
+public sealed class RecentRecordingEntry
+{
+    public DateTime EndedAt { get; set; }
+    public string Account { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string File { get; set; } = "";
+    public string Duration { get; set; } = "";
+    public string Size { get; set; } = "";
+    public string Reason { get; set; } = "";
+
+    [JsonIgnore] public string EndedAtText => EndedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    [JsonIgnore] public string FileName
+    {
+        get { try { return Path.GetFileName(File); } catch { return File; } }
+    }
+    [JsonIgnore] public string StateText => System.IO.File.Exists(File) ? "파일 있음" : "파일 없음";
 }

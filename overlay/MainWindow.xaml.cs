@@ -176,6 +176,7 @@ public sealed partial class MainWindow : Window
     {
         "WATCHER", "RECORD START", "RECORD FINISHED", "RECORDER EXIT", "RECORD STALLED",
         "RETRY", "LOW DISK", "DISK UNKNOWN", "CHANNEL STOP", "CHANNEL DISABLED", "CHANNEL REMOVED",
+        "RECHECK",
         "SETTING", "HOT RELOAD", "AUTH", "WORKER", "[ERROR]", "[WARN]", "ERROR", "FAILED"
     };
     static readonly HttpClient SoopProfileClient = new()
@@ -329,6 +330,7 @@ public sealed partial class MainWindow : Window
 
         ConfigureWindow();
         LoadStaticFiles();
+        LoadRecentRecordingsFix51();
         InitializeTrayIcon();
         HookAppWindowClosing();
         InitializeUiFlushTimer();
@@ -367,7 +369,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix50",
+            Text = "WinUI 3 · v1.2.0-preview1-fix51",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -404,6 +406,7 @@ public sealed partial class MainWindow : Window
         Nav.MenuItems.Add(NavigationItemFix39("대시보드", "dashboard", Symbol.Home));
         Nav.MenuItems.Add(NavigationItemFix39("채널 관리", "channels", Symbol.People));
         Nav.MenuItems.Add(NavigationItemFix39("설정", "settings", Symbol.Setting));
+        Nav.MenuItems.Add(NavigationItemFix39("최근 녹화", "recent", Symbol.Document));
         Nav.MenuItems.Add(NavigationItemFix39("로그", "logs", Symbol.Document));
         Nav.SelectionChanged += Nav_SelectionChanged;
 
@@ -411,11 +414,13 @@ public sealed partial class MainWindow : Window
         DashboardView = BuildDashboard();
         ChannelsView = BuildChannelsView();
         SettingsView = BuildSettingsViewFix36();
+        RecentRecordingsView = BuildRecentRecordingsViewFix51();
         LogsView = BuildLogsView();
 
         contentRoot.Children.Add(DashboardView);
         contentRoot.Children.Add(ChannelsView);
         contentRoot.Children.Add(SettingsView);
+        contentRoot.Children.Add(RecentRecordingsView);
         contentRoot.Children.Add(LogsView);
 
         Nav.Content = contentRoot;
@@ -558,11 +563,12 @@ public sealed partial class MainWindow : Window
         AlertFlyoutList = new ListView
         {
             ItemsSource = AlertItems,
-            SelectionMode = ListViewSelectionMode.None,
+            SelectionMode = ListViewSelectionMode.Single,
             MinWidth = 410,
             MaxHeight = 420,
-            ItemTemplate = BuildOfflineFlyoutTemplate()
+            ItemTemplate = BuildAlertFlyoutTemplateFix51()
         };
+        AlertFlyoutList.SelectionChanged += (_, _) => UpdateAlertActionsFix51();
         var alertPanel = new StackPanel { Spacing = 8, MinWidth = 430 };
         alertPanel.Children.Add(new TextBlock
         {
@@ -571,6 +577,20 @@ public sealed partial class MainWindow : Window
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
         });
         alertPanel.Children.Add(AlertFlyoutList);
+        var alertActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        AlertRetryButton = ApplyButtonMetricsFix39(new Button { Content = "즉시 다시 확인", IsEnabled = false }, 120);
+        AlertFolderButton = ApplyButtonMetricsFix39(new Button { Content = "녹화 폴더", IsEnabled = false }, 104);
+        var alertSettings = ApplyButtonMetricsFix39(new Button { Content = "설정" });
+        var alertLogs = ApplyButtonMetricsFix39(new Button { Content = "로그" });
+        AlertRetryButton.Click += RetrySelectedAlertFix51;
+        AlertFolderButton.Click += OpenSelectedAlertFolderFix51;
+        alertSettings.Click += (_, _) => NavigateToViewFix51("settings");
+        alertLogs.Click += (_, _) => NavigateToViewFix51("logs");
+        alertActions.Children.Add(AlertRetryButton);
+        alertActions.Children.Add(AlertFolderButton);
+        alertActions.Children.Add(alertSettings);
+        alertActions.Children.Add(alertLogs);
+        alertPanel.Children.Add(alertActions);
         AlertSummaryButton.Flyout = new Flyout
         {
             Content = alertPanel,
@@ -852,7 +872,7 @@ public sealed partial class MainWindow : Window
             StoppedFlyoutList.ItemTemplate = BuildOfflineFlyoutTemplate();
 
         if (AlertFlyoutList != null)
-            AlertFlyoutList.ItemTemplate = BuildOfflineFlyoutTemplate();
+            AlertFlyoutList.ItemTemplate = BuildAlertFlyoutTemplateFix51();
 
         if (uiAutoFormat)
         {
@@ -947,6 +967,7 @@ public sealed partial class MainWindow : Window
 
         AddChannelButton = ApplyButtonMetricsFix39(new Button { Content = "채널 추가" });
         ImportChannelsButton = ApplyButtonMetricsFix39(new Button { Content = "채널 가져오기" }, 118);
+        var refreshChannelNamesButton = ApplyButtonMetricsFix39(new Button { Content = "채널명 일괄 확인" }, 132);
         EditChannelButton = ApplyButtonMetricsFix39(new Button { Content = "수정" });
         SelectedChannelActionsButton = ApplyButtonMetricsFix39(new Button { Content = "선택 작업 ▾", IsEnabled = false }, 108);
         ApplyRawChannelsButton = ApplyButtonMetricsFix39(new Button { Content = "목록에 반영" }, 110);
@@ -965,6 +986,7 @@ public sealed partial class MainWindow : Window
 
         AddChannelButton.Click += AddChannel_Click;
         ImportChannelsButton.Click += ImportChannelsFix38_Click;
+        refreshChannelNamesButton.Click += RefreshChannelNamesPreviewFix51_Click;
         EditChannelButton.Click += EditChannel_Click;
         DeleteChannelMenuItem.Click += DeleteChannel_Click;
         EnableSelectedChannelsMenuItem.Click += EnableSelectedChannels_Click;
@@ -1013,6 +1035,7 @@ public sealed partial class MainWindow : Window
         };
         primaryActions.Children.Add(AddChannelButton);
         primaryActions.Children.Add(ImportChannelsButton);
+        primaryActions.Children.Add(refreshChannelNamesButton);
         primaryActions.Children.Add(EditChannelButton);
         primaryActions.Children.Add(SelectedChannelActionsButton);
         commandBar.Children.Add(primaryActions);
@@ -1166,10 +1189,13 @@ public sealed partial class MainWindow : Window
 
         var clear = ApplyButtonMetricsFix39(new Button { Content = "로그 지우기" });
         var open = ApplyButtonMetricsFix39(new Button { Content = "프로그램 폴더 열기" }, 142);
+        var copyDiagnostic = ApplyButtonMetricsFix39(new Button { Content = "진단 정보 복사" }, 126);
         clear.Click += ClearLog_Click;
         open.Click += OpenBackend_Click;
+        copyDiagnostic.Click += async (_, _) => await CopyDiagnosticInfoFix51();
         buttons.Children.Add(clear);
         buttons.Children.Add(open);
+        buttons.Children.Add(copyDiagnostic);
 
         LogBox = new TextBox
         {
@@ -2581,6 +2607,8 @@ public sealed partial class MainWindow : Window
         ClearPendingProgress(account, name);
 
         var item = GetOrCreate(account, name);
+        AddRecentRecordingFix51(
+            account, name, item.Title, duration, size, reason, file);
         RecordingItems.Remove(item);
         item.RateText = "-";
         item.RateBytesPerSecond = 0;
@@ -2765,6 +2793,15 @@ public sealed partial class MainWindow : Window
 
         item.Status = status;
         item.Detail = detail;
+        item.Time = DateTime.Now.ToString("HH:mm:ss");
+        item.Title = status switch
+        {
+            "디스크 공간 부족" => "권장 작업: 녹화 폴더 또는 설정에서 최소 여유 공간을 확인하세요.",
+            "Worker 복구 대기" => "권장 작업: 자동 재시도를 기다리거나 설정의 Worker 연결을 확인하세요.",
+            "로그인 확인 필요" => "권장 작업: 설정에서 SOOP 로그인을 다시 확인하세요.",
+            "녹화 시작 실패" => "권장 작업: 즉시 다시 확인하거나 로그에서 상세 오류를 확인하세요.",
+            _ => "권장 작업: 즉시 다시 확인하거나 녹화 폴더와 로그를 확인하세요."
+        };
         if (uiNotifyWarning)
             ShowGuiNotification("녹화 확인 필요", $"{name}\n{detail}", FormsToolTipIcon.Warning);
         if (uiAutoFormat)
@@ -3040,6 +3077,7 @@ public sealed partial class MainWindow : Window
         DashboardView.Visibility = tag == "dashboard" ? Visibility.Visible : Visibility.Collapsed;
         ChannelsView.Visibility = tag == "channels" ? Visibility.Visible : Visibility.Collapsed;
         SettingsView.Visibility = tag == "settings" ? Visibility.Visible : Visibility.Collapsed;
+        RecentRecordingsView.Visibility = tag == "recent" ? Visibility.Visible : Visibility.Collapsed;
         LogsView.Visibility = tag == "logs" ? Visibility.Visible : Visibility.Collapsed;
 
         if (tag is "channels" or "settings")
