@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix47
+Version 1.2.0-preview1-fix49
 
 BUG FIX
 -------
@@ -1294,6 +1294,23 @@ fix47 implemented changes
   window closes. Timers, bounded queues, progress samples, dashboard maps, and
   log references are cleared without forcing GC or broad process termination.
 
+fix48 implemented changes
+-------------------------
+
+1. Worker endpoint circuit breaker
+- Two complete failed Worker request cycles open a shared endpoint circuit.
+- Cooldown grows through bounded 30, 60, 120, and 300 second tiers. Existing
+  recordings continue; only new playlist acquisition is delayed.
+- A successful probe or saved Worker URL/API-key change resets the circuit.
+
+2. Compact recovery diagnostics
+- External HTML/JSON errors are reduced to a whitespace-normalized 300-character
+  summary before reaching stdout and the GUI event log.
+- During an open circuit, each affected channel receives a stable account-tagged
+  WORKER COOLDOWN event and schedules its next check at the cooldown boundary.
+- Needs Attention shows Worker recovery wait and clears normally when a new
+  recording start/progress proves recovery.
+
 GitHub and Codex cloud preparation
 ----------------------------------
 - Generated projects, publish output, logs, runtime control files, local INI
@@ -1304,3 +1321,15 @@ GitHub and Codex cloud preparation
   synchronization, and publish. Private values must be entered locally.
 - Codex cloud can edit and review this repository, but the final WinUI 3 build
   and EXE test must run on Windows. See CLOUD_SETUP.md.
+
+fix49 implemented changes
+-------------------------
+
+1. Wildcard-safe recording growth watchdog
+- The watchdog and RECORD FINISHED size calculation now use PowerShell
+  `-LiteralPath` for the generated output filename.
+- Broadcast titles containing valid filename characters such as `[` and `]`
+  are no longer interpreted as wildcard patterns. Their real file growth is
+  detected instead of remaining at a false `0 B` and restarting every 90 seconds.
+- The configured 90-second genuine no-growth recovery, immediate LIVE recheck,
+  collision-safe naming, and exact owned-process termination remain unchanged.

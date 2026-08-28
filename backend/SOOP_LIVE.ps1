@@ -62,6 +62,12 @@ $script:LastSettingWriteTime = [DateTime]::MinValue
 $script:WatcherMutex = $null
 $script:WatcherMutexAcquired = $false
 
+# Shared Worker circuit breaker. The watcher is single-threaded, so all live
+# channels naturally share this endpoint-level failure state without locking.
+$script:WorkerFailureCycles = 0
+$script:WorkerCircuitLevel = 0
+$script:WorkerCircuitOpenUntil = [DateTime]::MinValue
+
 # Keyed by channel URL so NAME can be changed without losing identity.
 $states = @{}
 
@@ -316,6 +322,7 @@ function Update-HotConfig {
         ) {
             $changes += "CLOUDFLARE_WORKER_URL: changed"
             $script:workerUrl = $vText
+            Reset-WorkerCircuit
         }
 
         $vText = [string]$newConfig["CLOUDFLARE_API_KEY"]
@@ -325,6 +332,7 @@ function Update-HotConfig {
         ) {
             $changes += "CLOUDFLARE_API_KEY: changed"
             $script:workerApiKey = $vText
+            Reset-WorkerCircuit
         }
 
         # SOOP login - preserve active recordings, refresh auth session.
@@ -446,6 +454,26 @@ function Format-Duration {
     )
 }
 
+function Get-RecordingOutputSize {
+    param($Recording)
+
+    if ($null -eq $Recording -or [string]::IsNullOrWhiteSpace([string]$Recording.File)) {
+        return [int64]0
+    }
+
+    try {
+        # Recording titles can legitimately contain wildcard characters such as
+        # '[' and ']'. -LiteralPath is required or PowerShell interprets the
+        # generated filename as a wildcard and incorrectly reports zero bytes.
+        if (Test-Path -LiteralPath $Recording.File -PathType Leaf) {
+            return [int64](Get-Item -LiteralPath $Recording.File -ErrorAction Stop).Length
+        }
+    }
+    catch {}
+
+    return [int64]0
+}
+
 function Write-RecordingSummary {
     param(
         $State,
@@ -459,14 +487,21 @@ function Write-RecordingSummary {
 
     $endedAt = Get-Date
     $duration = $endedAt - $Recording.StartedAt
-    $size = [int64]0
+    $size = Get-RecordingOutputSize -Recording $Recording
 
-    try {
-        if (Test-Path $Recording.File -PathType Leaf) {
-            $size = (Get-Item -LiteralPath $Recording.File -ErrorAction Stop).Length
-        }
-    }
-    catch {}
+    # Machine-correlatable lifecycle event. Keep channel/account/reason/file on
+    # one line so concurrent recorder output cannot leave the GUI with a stale
+    # REC card after a recorder exits or a channel is removed.
+    Write-Host (
+        "[{0}] {1} [account={2}] : RECORD FINISHED | duration={3} | size={4} | reason={5} | file={6}" -f `
+        (Get-Date -Format "HH:mm:ss"),
+        $State.Name,
+        $State.Channel.Account,
+        (Format-Duration $duration),
+        (Format-BytesHuman $size),
+        $Reason,
+        $Recording.File
+    )
 
     # Machine-correlatable lifecycle event. Keep channel/account/reason/file on
     # one line so concurrent recorder output cannot leave the GUI with a stale
@@ -511,6 +546,33 @@ function Test-WorkerSoopAuthExpired {
     }
 
     return ($Text -match '(?i)(AUTH[_ -]?(EXPIRED|REQUIRED)|LOGIN[_ -]?REQUIRED|SOOP[_ -]?AUTH|COOKIE[_ -]?(EXPIRED|REQUIRED)|AGE[_ -]?RESTRICT|ADULT[_ -]?AUTH|로그인|인증.*만료)')
+}
+
+function Get-CompactExternalError {
+    param([string]$Text,[int]$MaxLength = 300)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return "empty response" }
+    $value = $Text -replace '(?is)<[^>]+>', ' '
+    $value = $value -replace '\s+', ' '
+    $value = $value.Trim()
+    if ($value.Length -gt $MaxLength) { $value = $value.Substring(0,$MaxLength) + "..." }
+    return $value
+}
+
+function Reset-WorkerCircuit {
+    $script:WorkerFailureCycles = 0
+    $script:WorkerCircuitLevel = 0
+    $script:WorkerCircuitOpenUntil = [DateTime]::MinValue
+}
+
+function Open-WorkerCircuit {
+    $script:WorkerFailureCycles++
+    if ($script:WorkerFailureCycles -lt 2) { return }
+    $cooldowns = @(30,60,120,300)
+    $index = [Math]::Min($script:WorkerCircuitLevel,$cooldowns.Count - 1)
+    $seconds = $cooldowns[$index]
+    $script:WorkerCircuitLevel = [Math]::Min($script:WorkerCircuitLevel + 1,$cooldowns.Count - 1)
+    $script:WorkerCircuitOpenUntil = (Get-Date).AddSeconds($seconds)
+    Write-LogMessage "WORKER CIRCUIT OPEN cooldown=${seconds}s until=$($script:WorkerCircuitOpenUntil.ToString('o'))" -Level "WARN"
 }
 
 function Get-SafeFileName {
@@ -1122,6 +1184,12 @@ function Get-CloudflarePlaylistUrl {
         [int]$MaxRetry = 3
     )
 
+    $now = Get-Date
+    if ($now -lt $script:WorkerCircuitOpenUntil) {
+        $seconds = [Math]::Max(1,[Math]::Ceiling(($script:WorkerCircuitOpenUntil - $now).TotalSeconds))
+        throw ("[WORKER_CIRCUIT_OPEN] seconds={0} until={1}" -f $seconds,$script:WorkerCircuitOpenUntil.ToString("o"))
+    }
+
     if ([string]::IsNullOrWhiteSpace($WorkerUrl)) {
         throw "CLOUDFLARE_WORKER_URL 설정이 없습니다."
     }
@@ -1245,6 +1313,7 @@ function Get-CloudflarePlaylistUrl {
                             Write-LogMessage "Worker recovered on attempt $attempt/$MaxRetry channel=$($Channel.Name)"
                         }
 
+                        Reset-WorkerCircuit
                         return [PSCustomObject]@{
                             Quality     = if ($workerJson.quality) { [string]$workerJson.quality } else { $quality }
                             Cdn         = [string]$workerJson.cdn
@@ -1268,7 +1337,7 @@ function Get-CloudflarePlaylistUrl {
                         throw "[SOOP_AUTH_EXPIRED] $message"
                     }
 
-                    $lastError = "Cloudflare Worker URL 발급 실패: $message"
+                    $lastError = "Cloudflare Worker URL 발급 실패: $(Get-CompactExternalError $message)"
                 }
             }
             catch {
@@ -1276,15 +1345,15 @@ function Get-CloudflarePlaylistUrl {
                     throw
                 }
 
-                $lastError = "Cloudflare Worker JSON/응답 처리 실패 (HTTP $httpStatus): $responseBody"
+                $lastError = "Cloudflare Worker JSON/응답 처리 실패 (HTTP $httpStatus): $(Get-CompactExternalError $responseBody)"
             }
         }
         else {
             if ($curlExitCode -ne 0) {
-                $lastError = "Cloudflare Worker transport 실패 (curl=$curlExitCode): $responseBody"
+                $lastError = "Cloudflare Worker transport 실패 (curl=$curlExitCode): $(Get-CompactExternalError $responseBody)"
             }
             else {
-                $lastError = "Cloudflare Worker HTTP $httpStatus : $responseBody"
+                $lastError = "Cloudflare Worker HTTP $httpStatus : $(Get-CompactExternalError $responseBody)"
             }
         }
 
@@ -1298,6 +1367,7 @@ function Get-CloudflarePlaylistUrl {
         }
     }
 
+    Open-WorkerCircuit
     throw $lastError
 }
 
@@ -2018,13 +2088,7 @@ function Update-RecordingStates {
             continue
         }
 
-        $size = [int64]0
-        try {
-            if (Test-Path $rec.File -PathType Leaf) {
-                $size = (Get-Item $rec.File -ErrorAction Stop).Length
-            }
-        }
-        catch {}
+        $size = Get-RecordingOutputSize -Recording $rec
 
         if ($size -gt $rec.LastSize) {
             $rec.LastSize = $size
@@ -2637,6 +2701,19 @@ $state.LastStatus = "OFFLINE"
                 $state.NextCheck = (Get-Date).AddSeconds($checkInterval)
             }
             catch {
+                if ($_.Exception.Message -match '^\[WORKER_CIRCUIT_OPEN\]\s+seconds=(?<seconds>\d+)\s+until=(?<until>\S+)') {
+                    $cooldownSeconds = [int]$Matches['seconds']
+                    Write-Host (
+                        "[{0}] {1} [account={2}] : WORKER COOLDOWN - seconds={3} until={4}" -f `
+                        (Get-Date -Format "HH:mm:ss"),
+                        $channel.Name,
+                        $channel.Account,
+                        $cooldownSeconds,
+                        $Matches['until']
+                    )
+                    $state.NextCheck = (Get-Date).AddSeconds($cooldownSeconds)
+                    continue
+                }
                 Write-LogMessage ("RECORD START FAILED channel={0} error={1}" -f $channel.Name,$_.Exception.Message) -Level "ERROR"
                 Write-Host (
                     "[{0}] {1} [account={2}] : RECORD START FAILED - {3}" -f `

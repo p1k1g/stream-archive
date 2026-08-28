@@ -276,7 +276,7 @@ public sealed partial class MainWindow : Window
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     static readonly Regex DashboardHealthState = new(
-        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*(?<status>LOW DISK(?: SPACE)?|DISK SPACE UNKNOWN|CHECK ERROR|LOGIN REQUIRED|RECORD START FAILED)(?:\s*-\s*(?<detail>.*)|\s*\((?<detail2>.*)\))?$",
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*(?<status>LOW DISK(?: SPACE)?|DISK SPACE UNKNOWN|CHECK ERROR|LOGIN REQUIRED|RECORD START FAILED|WORKER COOLDOWN)(?:\s*-\s*(?<detail>.*)|\s*\((?<detail2>.*)\))?$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     static readonly Regex DashboardHealthCleared = new(
@@ -369,7 +369,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix47",
+            Text = "WinUI 3 · v1.2.0-preview1-fix49",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -2184,6 +2184,7 @@ public sealed partial class MainWindow : Window
         line.Contains(" : CHANNEL STOP ", StringComparison.OrdinalIgnoreCase) ||
         line.Contains(" : LOW DISK", StringComparison.OrdinalIgnoreCase) ||
         line.Contains(" : DISK SPACE UNKNOWN", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : WORKER COOLDOWN", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("WATCHER ERROR", StringComparison.OrdinalIgnoreCase);
 
     void ProcessBackendLine(string line)
@@ -2283,6 +2284,7 @@ public sealed partial class MainWindow : Window
                 "CHECK ERROR" => "방송 상태 확인 실패",
                 "LOGIN REQUIRED" => "로그인 확인 필요",
                 "RECORD START FAILED" => "녹화 시작 실패",
+                "WORKER COOLDOWN" => "Worker 복구 대기",
                 _ => "확인 필요"
             };
             var detail = health.Groups["detail"].Success
@@ -2486,12 +2488,6 @@ public sealed partial class MainWindow : Window
         item.ElapsedText = progress.Groups["duration"].Value.Trim();
         item.RateText = progress.Groups["rate"].Value.Trim();
         item.RateBytesPerSecond = ParseRateBytesPerSecond(item.RateText);
-
-        if ((DateTime.Now - lastDiskEstimateRefresh).TotalSeconds >= 5)
-        {
-            lastDiskEstimateRefresh = DateTime.Now;
-            RefreshDiskSummary();
-        }
 
         if ((DateTime.Now - lastDiskEstimateRefresh).TotalSeconds >= 5)
         {
