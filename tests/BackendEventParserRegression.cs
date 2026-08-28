@@ -27,6 +27,23 @@ static class BackendEventParserRegression
         Check(!BackendEventParser.TryParse("@@SOOP_EVENT@@[]", out _), "non-object JSON must be rejected");
         Check(!BackendEventParser.TryParse("@@SOOP_EVENT@@{\"version\":2,\"type\":\"recording_started\"}", out _), "unknown JSON version must be rejected");
 
+        if (OperatingSystem.IsWindows())
+        {
+            const string secret = "한글[secret]|=token";
+            var protectedValue = SecretProtectionService.Protect(secret);
+            Check(protectedValue.StartsWith(SecretProtectionService.Prefix, StringComparison.Ordinal), "DPAPI prefix must be present");
+            Check(SecretProtectionService.Unprotect(protectedValue) == secret, "DPAPI secret must round-trip for current user");
+            Check(SecretProtectionService.Unprotect(secret) == secret, "legacy plaintext must remain readable for migration");
+            var protectedIni = SecretProtectionService.ProtectIniSecretsForCurrentUser(
+                "SOOP_PASSWORD=legacy-password\r\nCLOUDFLARE_API_KEY=legacy-key\r\nQUALITY=best\r\n");
+            Check(!protectedIni.Contains("legacy-password", StringComparison.Ordinal), "imported password must be migrated before write");
+            Check(!protectedIni.Contains("legacy-key", StringComparison.Ordinal), "imported API key must be migrated before write");
+            Check(protectedIni.Contains("\r\nQUALITY=best\r\n", StringComparison.Ordinal), "DPAPI import migration must preserve CRLF");
+            var protectedPassword = protectedIni.Split("\r\n", StringSplitOptions.RemoveEmptyEntries)
+                .Single(x => x.StartsWith("SOOP_PASSWORD=", StringComparison.OrdinalIgnoreCase))["SOOP_PASSWORD=".Length..];
+            Check(SecretProtectionService.Unprotect(protectedPassword) == "legacy-password", "migrated imported password must decrypt");
+        }
+
         if (failures != 0) throw new InvalidOperationException($"{failures} parser regression test(s) failed.");
         Console.WriteLine("BackendEventParser regression tests passed.");
     }

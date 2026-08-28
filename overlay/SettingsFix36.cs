@@ -428,14 +428,26 @@ public sealed partial class MainWindow
         if (SoopSecretStatusText != null)
         {
             var exists = !clearSoopPassword && (SoopPasswordBox.Password.Length > 0 || (cfg.TryGetValue("SOOP_PASSWORD", out var value) && !string.IsNullOrWhiteSpace(value)));
-            SoopSecretStatusText.Text = clearSoopPassword ? "● 저장 시 기존 비밀번호 삭제" : exists ? "✓ 저장된 비밀번호 있음" : "저장된 비밀번호 없음";
-            SoopSecretStatusText.Foreground = clearSoopPassword ? MakeBrush("#F4C95D") : exists ? Accent : Muted;
+            var protectedValue = cfg.TryGetValue("SOOP_PASSWORD", out var storedPassword) && SecretProtectionService.IsProtected(storedPassword);
+            SoopSecretStatusText.Text = clearSoopPassword ? "● 저장 시 기존 비밀번호 삭제"
+                : SoopPasswordBox.Password.Length > 0 ? "● 저장 시 Windows DPAPI로 보호"
+                : protectedValue ? "✓ Windows DPAPI로 보호된 비밀번호 있음"
+                : exists ? "⚠ 기존 평문 비밀번호 · 다음 저장 시 DPAPI 전환"
+                : "저장된 비밀번호 없음";
+            SoopSecretStatusText.Foreground = clearSoopPassword || (exists && !protectedValue)
+                ? MakeBrush("#F4C95D") : exists ? Accent : Muted;
         }
         if (CloudflareSecretStatusText != null)
         {
             var exists = !clearCloudflareApiKey && (CloudflareApiKeyBox.Password.Length > 0 || (cfg.TryGetValue("CLOUDFLARE_API_KEY", out var value) && !string.IsNullOrWhiteSpace(value)));
-            CloudflareSecretStatusText.Text = clearCloudflareApiKey ? "● 저장 시 기존 API Key 삭제" : exists ? "✓ 저장된 API Key 있음" : "저장된 API Key 없음";
-            CloudflareSecretStatusText.Foreground = clearCloudflareApiKey ? MakeBrush("#F4C95D") : exists ? Accent : Muted;
+            var protectedValue = cfg.TryGetValue("CLOUDFLARE_API_KEY", out var storedKey) && SecretProtectionService.IsProtected(storedKey);
+            CloudflareSecretStatusText.Text = clearCloudflareApiKey ? "● 저장 시 기존 API Key 삭제"
+                : CloudflareApiKeyBox.Password.Length > 0 ? "● 저장 시 Windows DPAPI로 보호"
+                : protectedValue ? "✓ Windows DPAPI로 보호된 API Key 있음"
+                : exists ? "⚠ 기존 평문 API Key · 다음 저장 시 DPAPI 전환"
+                : "저장된 API Key 없음";
+            CloudflareSecretStatusText.Foreground = clearCloudflareApiKey || (exists && !protectedValue)
+                ? MakeBrush("#F4C95D") : exists ? Accent : Muted;
         }
     }
 
@@ -452,7 +464,9 @@ public sealed partial class MainWindow
         if (clear) return "";
         if (!string.IsNullOrWhiteSpace(entered)) return entered;
         var cfg = IniService.Read(iniPath);
-        return cfg.TryGetValue(key, out var value) ? value : "";
+        return cfg.TryGetValue(key, out var value)
+            ? SecretProtectionService.Unprotect(value)
+            : "";
     }
 
     async Task PickFolderFix36(TextBox target)
@@ -565,9 +579,9 @@ public sealed partial class MainWindow
             var choice = new ContentDialog
             {
                 Title = "설정 내보내기",
-                Content = "전체 내보내기에는 SOOP 비밀번호와 Worker API Key가 포함됩니다. 공유용 파일은 인증정보 제외를 권장합니다.",
+                Content = "인증정보는 Windows DPAPI 암호문으로 저장됩니다. 다른 PC·Windows 사용자에게 공유할 파일은 인증정보 제외를 권장합니다.",
                 PrimaryButtonText = "인증정보 제외",
-                SecondaryButtonText = "전체 내보내기",
+                SecondaryButtonText = "DPAPI 암호문 포함",
                 CloseButtonText = "취소",
                 DefaultButton = ContentDialogButton.Primary,
                 XamlRoot = Content is FrameworkElement fe ? fe.XamlRoot : null
@@ -587,7 +601,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix51",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix52",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });
@@ -633,8 +647,9 @@ public sealed partial class MainWindow
             };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
 
-            var text = await Windows.Storage.FileIO.ReadTextAsync(file);
-            BackupFile(iniPath);
+            var text = SecretProtectionService.ProtectIniSecretsForCurrentUser(
+                await Windows.Storage.FileIO.ReadTextAsync(file));
+            BackupProtectedSettingsFix52();
             AtomicWriteAllText(iniPath, text, new UTF8Encoding(false));
             LoadStaticFiles();
             await ShowDialogAsync("설정 가져오기 완료", "설정을 불러왔습니다. Streamlink 경로 등 일부 항목은 Watcher 재시작 후 적용됩니다.");
@@ -746,4 +761,138 @@ public sealed partial class MainWindow
         if (result == ContentDialogResult.Secondary) { LoadStaticFiles(); return true; }
         return false;
     }
+    async void SaveSettings_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var validationError = ValidateSettingsInputsFix36();
+            if (!string.IsNullOrWhiteSpace(validationError))
+            {
+                await ShowDialogAsync("설정 입력 확인", validationError);
+                return;
+            }
+
+            var current = IniService.Read(iniPath);
+
+            string ExistingOrNewSecret(string key, string entered)
+            {
+                if (!string.IsNullOrWhiteSpace(entered))
+                    return entered;
+
+                return current.TryGetValue(key, out var oldValue)
+                    ? SecretProtectionService.Unprotect(oldValue)
+                    : "";
+            }
+
+            string ProtectedSecret(string key, string entered, bool clear) =>
+                clear ? "" : SecretProtectionService.Protect(ExistingOrNewSecret(key, entered));
+
+            string YesNo(CheckBox box) => box.IsChecked == true ? "Y" : "N";
+            string Num(NumberBox box) =>
+                box.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+            var quality = QualityBox.SelectedItem?.ToString() switch
+            {
+                "원본/마스터 (master)" => "master",
+                "1080p" => "1080p",
+                "720p" => "720p",
+                _ => "best"
+            };
+
+            var filePattern = FileNamePatternBox.SelectedItem?.ToString() switch
+            {
+                "제목 + 번호 — 260826_방송제목_01_BJ.ts" => "TITLE_NUMBER",
+                "시간 + 제목 — 260826_153000_방송제목_BJ.ts" => "TIME_TITLE",
+                "BJ + 제목 — 260826_BJ_방송제목.ts" => "BJ_TITLE",
+                _ => "LEGACY"
+            };
+
+            var masterQuality = MasterQualityBox.SelectedItem?.ToString() switch
+            {
+                "master" => "master",
+                "1080p" => "1080p",
+                "720p" => "720p",
+                _ => "auto"
+            };
+
+            var updates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["OUTPUT_DIR"] = OutputDirBox.Text?.Trim() ?? "",
+                ["QUALITY"] = quality,
+                ["FILE_NAME_PATTERN"] = filePattern,
+                ["MIN_FREE_SPACE_GB"] = Num(MinDiskBox),
+
+                ["SOOP_USERNAME"] = SoopUsernameBox.Text?.Trim() ?? "",
+                ["SOOP_PASSWORD"] = ProtectedSecret("SOOP_PASSWORD", SoopPasswordBox.Password, clearSoopPassword),
+                ["SOOP_PURGE_CREDENTIALS"] = YesNo(SoopPurgeCredentialsCheck),
+
+                ["CLOUDFLARE_WORKER_URL"] = CloudflareWorkerUrlBox.Text?.Trim() ?? "",
+                ["CLOUDFLARE_API_KEY"] = ProtectedSecret("CLOUDFLARE_API_KEY", CloudflareApiKeyBox.Password, clearCloudflareApiKey),
+                ["MASTER_QUALITY"] = masterQuality,
+
+                ["STREAMLINK_PATH"] = string.IsNullOrWhiteSpace(StreamlinkPathBox.Text) ? "AUTO" : StreamlinkPathBox.Text.Trim(),
+                ["STREAMLINK_FALLBACK"] = StreamlinkFallbackBox.Text?.Trim() ?? "",
+
+                ["CHECK_INTERVAL"] = Num(CheckIntervalBox),
+                ["CHANNEL_RELOAD_INTERVAL"] = Num(ChannelReloadIntervalBox),
+                ["RECORD_RETRY_INTERVAL"] = Num(RecordRetryIntervalBox),
+                ["RECORD_STALL_TIMEOUT"] = Num(RecordStallTimeoutBox),
+                ["RECORD_MONITOR_INTERVAL"] = Num(RecordMonitorIntervalBox),
+                ["WORKER_MAX_RETRY"] = Num(WorkerMaxRetryBox),
+
+                ["LOG_ENABLED"] = YesNo(LogEnabledCheck),
+                ["LOG_DIR"] = LogDirBox.Text?.Trim() ?? @".\logs",
+                ["LOG_RETENTION_DAYS"] = Num(LogRetentionDaysBox),
+
+                ["CONSOLE_AUTO_FORMAT"] = YesNo(ConsoleAutoFormatCheck),
+                ["CONSOLE_COLOR"] = YesNo(ConsoleColorCheck),
+                ["CONSOLE_SHOW_PATH"] = YesNo(ConsoleShowPathCheck),
+                ["GUI_NOTIFY_RECORD_START"] = YesNo(NotifyRecordStartCheck),
+                ["GUI_NOTIFY_RECORD_FINISH"] = YesNo(NotifyRecordFinishCheck),
+                ["GUI_NOTIFY_WARNING"] = YesNo(NotifyWarningCheck)
+            };
+
+            BackupProtectedSettingsFix52();
+            UpdateIniFile(iniPath, updates);
+
+            ApplyConsoleDisplayOptions(
+                ConsoleAutoFormatCheck.IsChecked == true,
+                ConsoleColorCheck.IsChecked == true,
+                ConsoleShowPathCheck.IsChecked == true);
+            uiNotifyRecordStart = NotifyRecordStartCheck.IsChecked == true;
+            uiNotifyRecordFinish = NotifyRecordFinishCheck.IsChecked == true;
+            uiNotifyWarning = NotifyWarningCheck.IsChecked == true;
+
+            settingsLoading = true;
+            SoopPasswordBox.Password = "";
+            CloudflareApiKeyBox.Password = "";
+            clearSoopPassword = false;
+            clearCloudflareApiKey = false;
+            settingsLoading = false;
+            UpdateSecretStatusFix36(IniService.Read(iniPath));
+            SetSettingsDirtyFix36(false);
+
+            await ShowDialogAsync(
+                "설정 저장 완료",
+                "SOOP_LIVE_SETTING.ini에 저장했습니다.\n\n" +
+                "• 디스크·감시·로그·표시: 실행 중 반영\n" +
+                "• 녹화 화질·파일명·저장 경로: 다음 녹화부터\n" +
+                "• Streamlink 경로: Watcher 재시작 필요\n" +
+                "• 인증정보: Windows DPAPI(CurrentUser)로 보호 후 재인증");
+        }
+        catch (Exception ex)
+        {
+            await ShowDialogAsync("설정 저장 실패", ex.Message);
+        }
+    }
+
+    void BackupProtectedSettingsFix52()
+    {
+        if (!File.Exists(iniPath)) return;
+        var backupPath = iniPath + ".bak";
+        var protectedText = SecretProtectionService.ProtectIniSecretsForCurrentUser(
+            File.ReadAllText(iniPath, Encoding.UTF8));
+        AtomicWriteAllText(backupPath, protectedText, new UTF8Encoding(false));
+    }
+
 }

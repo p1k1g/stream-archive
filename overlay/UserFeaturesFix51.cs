@@ -3,9 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.Json;
 
 namespace SOOPLiveWinUI;
 
@@ -20,8 +18,11 @@ public sealed partial class MainWindow
     Button RecentCopyPathButton = null!;
     Button AlertRetryButton = null!;
     Button AlertFolderButton = null!;
+    RecentRecordingStore? recentRecordingStore;
 
     string RecentRecordingsPath => Path.Combine(backendDir, "history", "recent-recordings.json");
+    RecentRecordingStore RecentStore =>
+        recentRecordingStore ??= new RecentRecordingStore(RecentRecordingsPath, MaxRecentRecordings);
 
     static DataTemplate BuildAlertFlyoutTemplateFix51()
     {
@@ -146,13 +147,7 @@ public sealed partial class MainWindow
         RecentRecordingItems.Clear();
         try
         {
-            if (!File.Exists(RecentRecordingsPath)) return;
-            var items = JsonSerializer.Deserialize<List<RecentRecordingEntry>>(
-                File.ReadAllText(RecentRecordingsPath, Encoding.UTF8)) ?? new();
-            foreach (var item in items
-                .Where(x => !string.IsNullOrWhiteSpace(x.Name))
-                .OrderByDescending(x => x.EndedAt)
-                .Take(MaxRecentRecordings))
+            foreach (var item in RecentStore.Load())
                 RecentRecordingItems.Add(item);
         }
         catch (Exception ex)
@@ -186,10 +181,7 @@ public sealed partial class MainWindow
     {
         try
         {
-            var json = JsonSerializer.Serialize(
-                RecentRecordingItems.ToArray(),
-                new JsonSerializerOptions { WriteIndented = true });
-            AtomicWriteAllText(RecentRecordingsPath, json, new UTF8Encoding(false));
+            RecentStore.Save(RecentRecordingItems);
         }
         catch (Exception ex)
         {
@@ -254,41 +246,21 @@ public sealed partial class MainWindow
     {
         try
         {
-            var logSnapshot = string.Join(Environment.NewLine, logLines.TakeLast(50));
-            var text = new StringBuilder()
-                .AppendLine("SOOP LIVE Downloader diagnostic")
-                .AppendLine("Version: 1.2.0-preview1-fix51")
-                .AppendLine("Time: " + DateTimeOffset.Now.ToString("o"))
-                .AppendLine("OS: " + RuntimeInformation.OSDescription)
-                .AppendLine("Runtime: " + RuntimeInformation.FrameworkDescription)
-                .AppendLine("Process architecture: " + RuntimeInformation.ProcessArchitecture)
-                .AppendLine("Watcher running: " + backend.IsRunning)
-                .AppendLine("Recording/Offline/Paused/Alert: " +
-                    $"{RecordingItems.Count}/{OfflineItems.Count}/{StoppedItems.Count}/{AlertItems.Count}")
-                .AppendLine("Backend script present: " + File.Exists(Path.Combine(backendDir, "SOOP_LIVE.ps1")))
-                .AppendLine("Settings present: " + File.Exists(iniPath))
-                .AppendLine("Channels present: " + File.Exists(channelPath))
-                .AppendLine()
-                .AppendLine("Recent GUI events:")
-                .AppendLine(RedactDiagnosticTextFix51(logSnapshot))
-                .ToString();
+            var text = DiagnosticInfoService.CreateReport(
+                "1.2.0-preview1-fix52",
+                backend.IsRunning,
+                RecordingItems.Count,
+                OfflineItems.Count,
+                StoppedItems.Count,
+                AlertItems.Count,
+                File.Exists(Path.Combine(backendDir, "SOOP_LIVE.ps1")),
+                File.Exists(iniPath),
+                File.Exists(channelPath),
+                logLines);
             if (await CopyTextToClipboardFix51(text, "진단 정보"))
                 AppendLog("[GUI] 진단 정보를 클립보드에 복사했습니다.");
         }
         catch (Exception ex) { await ShowDialogAsync("진단 정보 복사 실패", ex.Message); }
-    }
-
-    static string RedactDiagnosticTextFix51(string text)
-    {
-        var safe = System.Text.RegularExpressions.Regex.Replace(
-            text, @"(?im)^.*(?:SOOP_PASSWORD|WORKER_API_KEY|API_KEY|AUTHORIZATION|COOKIE)\s*[:=].*$", "<redacted sensitive header>");
-        safe = System.Text.RegularExpressions.Regex.Replace(
-            safe, @"(?i)(SOOP_PASSWORD|WORKER_API_KEY|API_KEY|AUTHORIZATION|COOKIE)\s*[:=]\s*[^\s;]+", "$1=<redacted>");
-        safe = System.Text.RegularExpressions.Regex.Replace(
-            safe, @"(?i)(Bearer|Basic)\s+[A-Za-z0-9+/=_\-.]+", "$1 <redacted>");
-        safe = System.Text.RegularExpressions.Regex.Replace(
-            safe, @"(?i)([?&](?:aid|token|key|apikey|api_key|worker_api_key|password|passwd)=)[^&\s]+", "$1<redacted>");
-        return safe;
     }
 
     async Task<bool> CopyTextToClipboardFix51(string text, string label)

@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\overlay\BackendEventParser.cs" Link="BackendEventParser.cs" />
+    <Compile Include="..\overlay\SecretProtectionService.cs" Link="SecretProtectionService.cs" />
   </ItemGroup>
 </Project>

@@ -1,7 +1,7 @@
 ﻿SOOP LIVE Downloader
 GUI: WinUI 3
-Version: 1.2.0-preview1-fix51
-Feature: recent recordings, actionable alerts, diagnostics copy, and channel-name preview
+Version: 1.2.0-preview1-fix52
+Feature: DPAPI credentials, separated UI/backend modules, and Windows publish CI
 Includes: all fix47/fix46/fix45 and earlier functionality
 Settings: fix36 path/auth/dependency tests, dirty save bar, defaults, and INI export/import
 Dashboard: Watcher-exit cleanup, stop ACK, stopped/resume flyout, alerts, natural empty states
@@ -11,5 +11,5 @@ Optimization: automatic source sync, reduced polling/I/O/UI churn, cached brushe
 
 Next planned roadmap (not implemented):
 - Structured log filters and a user-facing recorder-diagnostic viewer.
-- Protected Windows credential storage and Windows publish integration tests.
 - Optional recent-history export and richer disk/recording statistics.
+- Credential Manager opt-in and signed release packaging/release automation.

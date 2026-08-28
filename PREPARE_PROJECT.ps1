@@ -7,7 +7,7 @@ $overlayDir = Join-Path $root 'overlay'
 $backendDir = Join-Path $root 'backend'
 
 Write-Host '========================================'
-Write-Host ' SOOP LIVE WinUI 3 fix51 Project Prep'
+Write-Host ' SOOP LIVE WinUI 3 fix52 Project Prep'
 Write-Host ' UNPACKAGED / SINGLE PROJECT'
 Write-Host '========================================'
 Write-Host ''
@@ -55,10 +55,11 @@ function Set-ProjectProperties([string]$ProjectFile) {
 
     Set-Prop 'WindowsPackageType' 'None'
     Set-Prop 'EnableWinAppRunSupport' 'false'
+    Set-Prop 'WindowsAppSDKSelfContained' 'false'
     Set-Prop 'PublishTrimmed' 'false'
     Set-Prop 'ApplicationIcon' 'Assets\SOOPLiveDownloader.ico'
-    Set-Prop 'Version' '1.2.0-preview1-fix51'
-    Set-Prop 'InformationalVersion' '1.2.0-preview1-fix51'
+    Set-Prop 'Version' '1.2.0-preview1-fix52'
+    Set-Prop 'InformationalVersion' '1.2.0-preview1-fix52'
 
     # Do NOT set UseWindowsForms=true in a WinUI project.
     # That imports WindowsDesktop/WPF XAML targets and causes App.xaml to be
@@ -185,9 +186,17 @@ foreach ($runtimeFile in @(
     }
 }
 
-$requiredBackend = Join-Path $destBackend 'SOOP_LIVE.ps1'
-if (-not (Test-Path -LiteralPath $requiredBackend -PathType Leaf)) {
-    throw "Backend copy verification failed: $requiredBackend"
+foreach ($requiredBackendFile in @(
+    'SOOP_LIVE.ps1',
+    'modules\SOOP.Security.ps1',
+    'modules\SOOP.Core.ps1',
+    'modules\SOOP.Network.ps1',
+    'modules\SOOP.Recorder.ps1'
+)) {
+    $requiredBackend = Join-Path $destBackend $requiredBackendFile
+    if (-not (Test-Path -LiteralPath $requiredBackend -PathType Leaf)) {
+        throw "Backend copy verification failed: $requiredBackend"
+    }
 }
 
 Write-Host ''

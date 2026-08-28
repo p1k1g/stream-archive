@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix51
+Version 1.2.0-preview1-fix52
 
 BUG FIX
 -------
@@ -1388,3 +1388,37 @@ fix51 implemented changes
 - Expanding or collapsing Advanced Settings suppresses NumberBox layout/format
   callbacks across the UI transition. An existing real edit remains dirty, while
   opening an untouched panel no longer asks the user to save unchanged settings.
+
+fix52 implemented changes
+-------------------------
+
+1. Windows DPAPI credential protection
+- New Settings saves protect SOOP_PASSWORD and CLOUDFLARE_API_KEY with Windows
+  DPAPI CurrentUser scope and an application-specific entropy value. INI files
+  contain only `dpapi:v1:` ciphertext; secret fields remain blank in the GUI.
+- Legacy plaintext remains readable for one-way migration on the next explicit
+  save/import. The watcher decrypts only in memory and fails safely when another
+  Windows user or damaged ciphertext cannot be unprotected.
+- Settings backups created during GUI or CLI writes are also migrated to DPAPI,
+  so a legacy plaintext value is not retained in the newly written .bak file.
+- Shared exports exclude secrets by default; optional full exports contain only
+  current-user DPAPI ciphertext and imports re-protect secrets before file write.
+
+2. Completed role boundaries
+- MainWindow remains programmatic WinUI composition and thin event coordination;
+  backend event parsing/process ownership, Settings, imports, recent-history
+  persistence, diagnostics construction, and DPAPI are isolated in dedicated files.
+- Recent history validation/atomic replacement and diagnostic redaction no longer
+  live in the Window partial, reducing UI lifecycle coupling and test surface.
+
+3. Feature-based PowerShell modules
+- SOOP_LIVE.ps1 is now orchestration-only and fail-fast dot-sources Security,
+  Core/config, Network/auth/Worker, and Recorder/control modules.
+- Generated-project synchronization now recursively copies backend modules and
+  hash-verifies every required file. Compact/self-contained builds verify the
+  main watcher and all modules without broad process or path fallback changes.
+
+4. Windows build and publish CI
+- A windows-latest workflow runs parser/DPAPI and PowerShell regressions, prepares
+  the official WinUI template, invokes BUILD_EXE.bat, verifies unpackaged compact
+  properties and publish/backend modules, and uploads the win-x64 artifact.
