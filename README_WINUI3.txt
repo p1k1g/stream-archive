@@ -1184,6 +1184,17 @@ Remaining roadmap after fix40
   log search/filter/export.
 - Protected Windows credential storage and automated regression tests.
 
+fix41 implemented changes
+-------------------------
+
+1. Watcher start reset reliability
+- Dashboard, header, and tray Watcher starts no longer mutate the SelectedItems
+  collection of single-selection recording lists during dashboard reset.
+- Reset now clears SelectedItem directly, preventing the WinRT illegal-method
+  exception that could stop startup before PowerShell was launched.
+- Empty startup exception messages now include the exception type and HRESULT,
+  while full details continue to be written to SOOPLiveWinUI_startup.log.
+
 GitHub and Codex cloud preparation
 ----------------------------------
 - Generated projects, publish output, logs, runtime control files, local INI
