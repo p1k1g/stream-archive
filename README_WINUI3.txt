@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix40
+Version 1.2.0-preview1-fix45
 
 BUG FIX
 -------
@@ -1183,6 +1183,76 @@ Remaining roadmap after fix40
 - Bulk SOOP name refresh with preview, recent-recording history, and structured
   log search/filter/export.
 - Protected Windows credential storage and automated regression tests.
+
+fix41 implemented changes
+-------------------------
+
+1. Watcher start reset reliability
+- Dashboard, header, and tray Watcher starts no longer mutate the SelectedItems
+  collection of single-selection recording lists during dashboard reset.
+- Reset now clears SelectedItem directly, preventing the WinRT illegal-method
+  exception that could stop startup before PowerShell was launched.
+- Empty startup exception messages now include the exception type and HRESULT,
+  while full details continue to be written to SOOPLiveWinUI_startup.log.
+
+fix42 implemented changes
+-------------------------
+
+1. Accurate Watcher stop state
+- A non-zero PowerShell exit code caused by terminating the GUI-owned process
+  tree is now shown as a normal stop when it follows an explicit user request.
+- Unexpected backend exits without a pending stop request still retain the
+  existing error-exit status and exit code.
+
+2. Typed numeric setting changes
+- NumberBox keyboard edits now mark Settings dirty immediately, enabling Save
+  before focus leaves the field. ValueChanged remains in place for committed,
+  spin-button, paste, and programmatic value changes.
+
+fix43 implemented changes
+-------------------------
+
+1. Verified Watcher termination
+- Backend process-tree termination now returns success/failure to the GUI.
+- The GUI reports a stop-confirmation warning when the exact owned process tree
+  could not be confirmed stopped instead of treating intent alone as success.
+
+2. Validated numeric settings
+- NumberBox dirty tracking now follows actual Text changes rather than every
+  KeyUp, covering paste and accessibility input without navigation-key noise.
+- Empty, invalid, and out-of-range numeric values are rejected before saving;
+  they are no longer silently replaced with defaults.
+- Numeric INI values are written with invariant-culture formatting.
+
+fix44 implemented changes
+-------------------------
+
+1. Open an active recording folder
+- Selecting a recording now enables a compact Folder Open action beside the
+  existing per-channel Stop action in the dashboard header.
+- The action uses the actual output file path reported by the backend, opens
+  only its existing parent directory, and shows a clear error when the path is
+  not available instead of creating or guessing a folder.
+
+fix45 implemented changes
+-------------------------
+
+1. Configurable tray notifications
+- Settings can independently enable recording-start, recording-finished, and
+  actionable warning notifications. Defaults avoid noisy start notifications
+  while retaining completion and important failure/disk/auth warnings.
+
+2. Recording card context actions
+- Right-clicking a recording card offers Folder Open, Select File, Copy Path,
+  and Stop Current Recording without adding permanent dashboard button clutter.
+- All path actions use the backend-reported output path.
+
+3. Conservative disk-time estimate
+- The disk summary combines actual free space with the summed real file-growth
+  rates of active REC items on each output drive.
+- It subtracts the configured minimum-free-space reserve and displays a stable
+  tier such as under one hour, approximate hours/days, or three days or more.
+- PAUSED and restart-waiting items remain excluded from disk calculations.
 
 GitHub and Codex cloud preparation
 ----------------------------------
