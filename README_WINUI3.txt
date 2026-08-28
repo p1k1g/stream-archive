@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix40
+Version 1.2.0-preview1-fix43
 
 BUG FIX
 -------
@@ -1194,6 +1194,35 @@ fix41 implemented changes
   exception that could stop startup before PowerShell was launched.
 - Empty startup exception messages now include the exception type and HRESULT,
   while full details continue to be written to SOOPLiveWinUI_startup.log.
+
+fix42 implemented changes
+-------------------------
+
+1. Accurate Watcher stop state
+- A non-zero PowerShell exit code caused by terminating the GUI-owned process
+  tree is now shown as a normal stop when it follows an explicit user request.
+- Unexpected backend exits without a pending stop request still retain the
+  existing error-exit status and exit code.
+
+2. Typed numeric setting changes
+- NumberBox keyboard edits now mark Settings dirty immediately, enabling Save
+  before focus leaves the field. ValueChanged remains in place for committed,
+  spin-button, paste, and programmatic value changes.
+
+fix43 implemented changes
+-------------------------
+
+1. Verified Watcher termination
+- Backend process-tree termination now returns success/failure to the GUI.
+- The GUI reports a stop-confirmation warning when the exact owned process tree
+  could not be confirmed stopped instead of treating intent alone as success.
+
+2. Validated numeric settings
+- NumberBox dirty tracking now follows actual Text changes rather than every
+  KeyUp, covering paste and accessibility input without navigation-key noise.
+- Empty, invalid, and out-of-range numeric values are rejected before saving;
+  they are no longer silently replaced with defaults.
+- Numeric INI values are written with invariant-culture formatting.
 
 GitHub and Codex cloud preparation
 ----------------------------------
