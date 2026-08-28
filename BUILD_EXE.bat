@@ -68,7 +68,15 @@ if not exist "%~dp0publish\backend\SOOP_LIVE.ps1" (
     exit /b 1
 )
 
-echo [OK] publish backend verified.
+for %%M in (SOOP.Security.ps1 SOOP.Core.ps1 SOOP.Network.ps1 SOOP.Recorder.ps1) do (
+  if not exist "%~dp0publish\backend\modules\%%M" (
+    echo.
+    echo [ERROR] publish backend module missing: %%M
+    exit /b 1
+  )
+)
+
+echo [OK] publish backend and modules verified.
 echo.
 
 pause

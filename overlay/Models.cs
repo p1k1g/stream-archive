@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Xaml.Media;
+using System.Text.Json.Serialization;
 using Windows.UI;
 
 namespace SOOPLiveWinUI;
@@ -25,6 +26,7 @@ public sealed class ChannelStatus : INotifyPropertyChanged
     string _sizeText = "-";
     string _elapsedText = "-";
     string _rateText = "-";
+    double _rateBytesPerSecond;
     bool _isSuspended;
 
     public string Time { get => _time; set { if (Equals(_time, value)) return; _time = value; OnChanged(); } }
@@ -92,6 +94,7 @@ public sealed class ChannelStatus : INotifyPropertyChanged
     public string SizeText { get => _sizeText; set { if (Equals(_sizeText, value)) return; _sizeText = value; OnChanged(); } }
     public string ElapsedText { get => _elapsedText; set { if (Equals(_elapsedText, value)) return; _elapsedText = value; OnChanged(); } }
     public string RateText { get => _rateText; set { if (Equals(_rateText, value)) return; _rateText = value; OnChanged(); } }
+    public double RateBytesPerSecond { get => _rateBytesPerSecond; set { if (Equals(_rateBytesPerSecond, value)) return; _rateBytesPerSecond = value; } }
     public bool IsSuspended { get => _isSuspended; set { if (Equals(_isSuspended, value)) return; _isSuspended = value; OnChanged(); } }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -117,4 +120,23 @@ public sealed class EditableChannel : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
     void OnChanged([CallerMemberName] string? n = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+}
+
+public sealed class RecentRecordingEntry
+{
+    public DateTime EndedAt { get; set; }
+    public string Account { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string File { get; set; } = "";
+    public string Duration { get; set; } = "";
+    public string Size { get; set; } = "";
+    public string Reason { get; set; } = "";
+
+    [JsonIgnore] public string EndedAtText => EndedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    [JsonIgnore] public string FileName
+    {
+        get { try { return Path.GetFileName(File); } catch { return File; } }
+    }
+    [JsonIgnore] public string StateText => System.IO.File.Exists(File) ? "파일 있음" : "파일 없음";
 }

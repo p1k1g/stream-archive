@@ -23,6 +23,7 @@ public sealed partial class MainWindow
     Button DiscardSettingsButton = null!;
     bool settingsChangesDirty;
     bool settingsLoading;
+    int settingsUiTransitionDepth;
     bool clearSoopPassword;
     bool clearCloudflareApiKey;
 
@@ -157,9 +158,21 @@ public sealed partial class MainWindow
         };
         advancedToggle.Click += (_, _) =>
         {
+            var wasDirty = settingsChangesDirty;
+            settingsUiTransitionDepth++;
             var opening = advanced.Visibility != Visibility.Visible;
             advanced.Visibility = opening ? Visibility.Visible : Visibility.Collapsed;
             advancedToggle.Content = opening ? "고급 설정 접기" : "고급 설정 펼치기";
+            // NumberBox can commit its display Text while the previously
+            // collapsed panel is measured. Suppress those layout-only
+            // callbacks across two dispatcher turns, without discarding an
+            // already real user edit.
+            DispatcherQueue.TryEnqueue(() => DispatcherQueue.TryEnqueue(() =>
+            {
+                settingsUiTransitionDepth = Math.Max(0, settingsUiTransitionDepth - 1);
+                if (!wasDirty && settingsUiTransitionDepth == 0)
+                    SetSettingsDirtyFix36(false);
+            }));
         };
 
         var cloudflare = SettingsCard(
@@ -263,6 +276,13 @@ public sealed partial class MainWindow
         ConsoleColorCheck = new CheckBox { Content = "상태 색상 사용 (백엔드 + 대시보드)", Foreground = White };
         ConsoleShowPathCheck = new CheckBox { Content = "녹화 파일 경로 표시 (백엔드 + 대시보드)", Foreground = White };
         logs.Children.Add(ConsoleAutoFormatCheck); logs.Children.Add(ConsoleColorCheck); logs.Children.Add(ConsoleShowPathCheck);
+        logs.Children.Add(FieldLabel("트레이 알림"));
+        NotifyRecordStartCheck = new CheckBox { Content = "녹화 시작 알림", Foreground = White };
+        NotifyRecordFinishCheck = new CheckBox { Content = "녹화 완료 알림", Foreground = White };
+        NotifyWarningCheck = new CheckBox { Content = "녹화 실패·디스크·인증 경고 알림", Foreground = White };
+        logs.Children.Add(NotifyRecordStartCheck);
+        logs.Children.Add(NotifyRecordFinishCheck);
+        logs.Children.Add(NotifyWarningCheck);
         logs.Children.Add(ActionButtonFix36("로그·표시 기본값 복원", (_, _) => ResetLogDefaultsFix36()));
         AddSettingsCardFix36(advanced, logs);
         stack.Children.Add(advanced);
@@ -365,8 +385,18 @@ public sealed partial class MainWindow
         SoopPasswordBox.PasswordChanged += (_, _) => { if (SoopPasswordBox.Password.Length > 0) clearSoopPassword = false; MarkSettingsDirtyFix36(); UpdateSecretStatusFix36(); };
         CloudflareApiKeyBox.PasswordChanged += (_, _) => { if (CloudflareApiKeyBox.Password.Length > 0) clearCloudflareApiKey = false; MarkSettingsDirtyFix36(); UpdateSecretStatusFix36(); };
         foreach (var box in new[] { QualityBox, FileNamePatternBox, MasterQualityBox }) box.SelectionChanged += (_, _) => MarkSettingsDirtyFix36();
-        foreach (var box in new[] { MinDiskBox, CheckIntervalBox, ChannelReloadIntervalBox, RecordRetryIntervalBox, RecordStallTimeoutBox, RecordMonitorIntervalBox, WorkerMaxRetryBox, LogRetentionDaysBox }) box.ValueChanged += (_, _) => MarkSettingsDirtyFix36();
-        foreach (var box in new[] { SoopPurgeCredentialsCheck, LogEnabledCheck, ConsoleAutoFormatCheck, ConsoleColorCheck, ConsoleShowPathCheck })
+        foreach (var box in new[] { MinDiskBox, CheckIntervalBox, ChannelReloadIntervalBox, RecordRetryIntervalBox, RecordStallTimeoutBox, RecordMonitorIntervalBox, WorkerMaxRetryBox, LogRetentionDaysBox })
+        {
+            box.ValueChanged += (_, _) => MarkSettingsDirtyFix36();
+            // Text changes immediately for typing, paste, touch keyboard, and
+            // accessibility input, while Value is committed later. Tracking
+            // the dependency property avoids KeyUp false positives from
+            // navigation/modifier keys and still enables Save before blur.
+            box.RegisterPropertyChangedCallback(
+                NumberBox.TextProperty,
+                (_, _) => MarkSettingsDirtyFix36());
+        }
+        foreach (var box in new[] { SoopPurgeCredentialsCheck, LogEnabledCheck, ConsoleAutoFormatCheck, ConsoleColorCheck, ConsoleShowPathCheck, NotifyRecordStartCheck, NotifyRecordFinishCheck, NotifyWarningCheck })
         {
             box.Checked += (_, _) => MarkSettingsDirtyFix36();
             box.Unchecked += (_, _) => MarkSettingsDirtyFix36();
@@ -378,7 +408,8 @@ public sealed partial class MainWindow
 
     void MarkSettingsDirtyFix36()
     {
-        if (!settingsLoading) SetSettingsDirtyFix36(true);
+        if (!settingsLoading && settingsUiTransitionDepth == 0)
+            SetSettingsDirtyFix36(true);
     }
 
     void SetSettingsDirtyFix36(bool dirty)
@@ -397,14 +428,26 @@ public sealed partial class MainWindow
         if (SoopSecretStatusText != null)
         {
             var exists = !clearSoopPassword && (SoopPasswordBox.Password.Length > 0 || (cfg.TryGetValue("SOOP_PASSWORD", out var value) && !string.IsNullOrWhiteSpace(value)));
-            SoopSecretStatusText.Text = clearSoopPassword ? "● 저장 시 기존 비밀번호 삭제" : exists ? "✓ 저장된 비밀번호 있음" : "저장된 비밀번호 없음";
-            SoopSecretStatusText.Foreground = clearSoopPassword ? MakeBrush("#F4C95D") : exists ? Accent : Muted;
+            var protectedValue = cfg.TryGetValue("SOOP_PASSWORD", out var storedPassword) && SecretProtectionService.IsProtected(storedPassword);
+            SoopSecretStatusText.Text = clearSoopPassword ? "● 저장 시 기존 비밀번호 삭제"
+                : SoopPasswordBox.Password.Length > 0 ? "● 저장 시 Windows DPAPI로 보호"
+                : protectedValue ? "✓ Windows DPAPI로 보호된 비밀번호 있음"
+                : exists ? "⚠ 기존 평문 비밀번호 · 다음 저장 시 DPAPI 전환"
+                : "저장된 비밀번호 없음";
+            SoopSecretStatusText.Foreground = clearSoopPassword || (exists && !protectedValue)
+                ? MakeBrush("#F4C95D") : exists ? Accent : Muted;
         }
         if (CloudflareSecretStatusText != null)
         {
             var exists = !clearCloudflareApiKey && (CloudflareApiKeyBox.Password.Length > 0 || (cfg.TryGetValue("CLOUDFLARE_API_KEY", out var value) && !string.IsNullOrWhiteSpace(value)));
-            CloudflareSecretStatusText.Text = clearCloudflareApiKey ? "● 저장 시 기존 API Key 삭제" : exists ? "✓ 저장된 API Key 있음" : "저장된 API Key 없음";
-            CloudflareSecretStatusText.Foreground = clearCloudflareApiKey ? MakeBrush("#F4C95D") : exists ? Accent : Muted;
+            var protectedValue = cfg.TryGetValue("CLOUDFLARE_API_KEY", out var storedKey) && SecretProtectionService.IsProtected(storedKey);
+            CloudflareSecretStatusText.Text = clearCloudflareApiKey ? "● 저장 시 기존 API Key 삭제"
+                : CloudflareApiKeyBox.Password.Length > 0 ? "● 저장 시 Windows DPAPI로 보호"
+                : protectedValue ? "✓ Windows DPAPI로 보호된 API Key 있음"
+                : exists ? "⚠ 기존 평문 API Key · 다음 저장 시 DPAPI 전환"
+                : "저장된 API Key 없음";
+            CloudflareSecretStatusText.Foreground = clearCloudflareApiKey || (exists && !protectedValue)
+                ? MakeBrush("#F4C95D") : exists ? Accent : Muted;
         }
     }
 
@@ -421,7 +464,9 @@ public sealed partial class MainWindow
         if (clear) return "";
         if (!string.IsNullOrWhiteSpace(entered)) return entered;
         var cfg = IniService.Read(iniPath);
-        return cfg.TryGetValue(key, out var value) ? value : "";
+        return cfg.TryGetValue(key, out var value)
+            ? SecretProtectionService.Unprotect(value)
+            : "";
     }
 
     async Task PickFolderFix36(TextBox target)
@@ -534,9 +579,9 @@ public sealed partial class MainWindow
             var choice = new ContentDialog
             {
                 Title = "설정 내보내기",
-                Content = "전체 내보내기에는 SOOP 비밀번호와 Worker API Key가 포함됩니다. 공유용 파일은 인증정보 제외를 권장합니다.",
+                Content = "인증정보는 Windows DPAPI 암호문으로 저장됩니다. 다른 PC·Windows 사용자에게 공유할 파일은 인증정보 제외를 권장합니다.",
                 PrimaryButtonText = "인증정보 제외",
-                SecondaryButtonText = "전체 내보내기",
+                SecondaryButtonText = "DPAPI 암호문 포함",
                 CloseButtonText = "취소",
                 DefaultButton = ContentDialogButton.Primary,
                 XamlRoot = Content is FrameworkElement fe ? fe.XamlRoot : null
@@ -556,7 +601,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix40",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix52",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });
@@ -602,8 +647,9 @@ public sealed partial class MainWindow
             };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
 
-            var text = await Windows.Storage.FileIO.ReadTextAsync(file);
-            BackupFile(iniPath);
+            var text = SecretProtectionService.ProtectIniSecretsForCurrentUser(
+                await Windows.Storage.FileIO.ReadTextAsync(file));
+            BackupProtectedSettingsFix52();
             AtomicWriteAllText(iniPath, text, new UTF8Encoding(false));
             LoadStaticFiles();
             await ShowDialogAsync("설정 가져오기 완료", "설정을 불러왔습니다. Streamlink 경로 등 일부 항목은 Watcher 재시작 후 적용됩니다.");
@@ -669,6 +715,25 @@ public sealed partial class MainWindow
         if (string.IsNullOrWhiteSpace(OutputDirBox.Text)) return "기본 저장 경로가 비어 있습니다.";
         if (!Uri.TryCreate(CloudflareWorkerUrlBox.Text?.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps) return "Cloudflare Worker URL은 올바른 https 주소여야 합니다.";
         if (EffectiveSecretFix36("CLOUDFLARE_API_KEY", CloudflareApiKeyBox.Password, clearCloudflareApiKey).Length == 0) return "Cloudflare API Key가 비어 있습니다.";
+
+        foreach (var (box, name) in new (NumberBox Box, string Name)[]
+        {
+            (MinDiskBox, "최소 디스크 여유 공간"),
+            (CheckIntervalBox, "방송 확인 주기"),
+            (ChannelReloadIntervalBox, "채널 다시 읽기 주기"),
+            (RecordRetryIntervalBox, "녹화 재시도 주기"),
+            (RecordStallTimeoutBox, "녹화 정체 판정 시간"),
+            (RecordMonitorIntervalBox, "녹화 상태 확인 주기"),
+            (WorkerMaxRetryBox, "Worker 최대 재시도"),
+            (LogRetentionDaysBox, "로그 보존 기간")
+        })
+        {
+            if (double.IsNaN(box.Value))
+                return $"{name}에 올바른 숫자를 입력하세요.";
+            if (box.Value < box.Minimum || box.Value > box.Maximum)
+                return $"{name}은(는) {box.Minimum:0.##}~{box.Maximum:0.##} 범위로 입력하세요.";
+        }
+
         if (!double.IsNaN(RecordStallTimeoutBox.Value) && !double.IsNaN(RecordMonitorIntervalBox.Value) && RecordStallTimeoutBox.Value < RecordMonitorIntervalBox.Value * 2) return "Stall 판정 시간은 녹화 상태 확인 주기의 최소 2배 이상으로 설정하세요.";
         return null;
     }
@@ -678,7 +743,7 @@ public sealed partial class MainWindow
     void ResetWorkerDefaultsFix36() { MasterQualityBox.SelectedItem = "자동 (auto)"; }
     void ResetStreamlinkDefaultsFix36() { StreamlinkPathBox.Text = "AUTO"; StreamlinkFallbackBox.Text = @"C:\Program Files\Streamlink\bin\streamlink.exe"; }
     void ResetMonitoringDefaultsFix36() { CheckIntervalBox.Value = 30; ChannelReloadIntervalBox.Value = 2; RecordRetryIntervalBox.Value = 5; RecordStallTimeoutBox.Value = 90; RecordMonitorIntervalBox.Value = 5; WorkerMaxRetryBox.Value = 3; }
-    void ResetLogDefaultsFix36() { LogEnabledCheck.IsChecked = true; LogDirBox.Text = @".\logs"; LogRetentionDaysBox.Value = 30; ConsoleAutoFormatCheck.IsChecked = true; ConsoleColorCheck.IsChecked = true; ConsoleShowPathCheck.IsChecked = false; }
+    void ResetLogDefaultsFix36() { LogEnabledCheck.IsChecked = true; LogDirBox.Text = @".\logs"; LogRetentionDaysBox.Value = 30; ConsoleAutoFormatCheck.IsChecked = true; ConsoleColorCheck.IsChecked = true; ConsoleShowPathCheck.IsChecked = false; NotifyRecordStartCheck.IsChecked = false; NotifyRecordFinishCheck.IsChecked = true; NotifyWarningCheck.IsChecked = true; }
 
     async Task<bool> ConfirmLeaveSettingsFix36Async()
     {
@@ -696,4 +761,138 @@ public sealed partial class MainWindow
         if (result == ContentDialogResult.Secondary) { LoadStaticFiles(); return true; }
         return false;
     }
+    async void SaveSettings_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var validationError = ValidateSettingsInputsFix36();
+            if (!string.IsNullOrWhiteSpace(validationError))
+            {
+                await ShowDialogAsync("설정 입력 확인", validationError);
+                return;
+            }
+
+            var current = IniService.Read(iniPath);
+
+            string ExistingOrNewSecret(string key, string entered)
+            {
+                if (!string.IsNullOrWhiteSpace(entered))
+                    return entered;
+
+                return current.TryGetValue(key, out var oldValue)
+                    ? SecretProtectionService.Unprotect(oldValue)
+                    : "";
+            }
+
+            string ProtectedSecret(string key, string entered, bool clear) =>
+                clear ? "" : SecretProtectionService.Protect(ExistingOrNewSecret(key, entered));
+
+            string YesNo(CheckBox box) => box.IsChecked == true ? "Y" : "N";
+            string Num(NumberBox box) =>
+                box.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+            var quality = QualityBox.SelectedItem?.ToString() switch
+            {
+                "원본/마스터 (master)" => "master",
+                "1080p" => "1080p",
+                "720p" => "720p",
+                _ => "best"
+            };
+
+            var filePattern = FileNamePatternBox.SelectedItem?.ToString() switch
+            {
+                "제목 + 번호 — 260826_방송제목_01_BJ.ts" => "TITLE_NUMBER",
+                "시간 + 제목 — 260826_153000_방송제목_BJ.ts" => "TIME_TITLE",
+                "BJ + 제목 — 260826_BJ_방송제목.ts" => "BJ_TITLE",
+                _ => "LEGACY"
+            };
+
+            var masterQuality = MasterQualityBox.SelectedItem?.ToString() switch
+            {
+                "master" => "master",
+                "1080p" => "1080p",
+                "720p" => "720p",
+                _ => "auto"
+            };
+
+            var updates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["OUTPUT_DIR"] = OutputDirBox.Text?.Trim() ?? "",
+                ["QUALITY"] = quality,
+                ["FILE_NAME_PATTERN"] = filePattern,
+                ["MIN_FREE_SPACE_GB"] = Num(MinDiskBox),
+
+                ["SOOP_USERNAME"] = SoopUsernameBox.Text?.Trim() ?? "",
+                ["SOOP_PASSWORD"] = ProtectedSecret("SOOP_PASSWORD", SoopPasswordBox.Password, clearSoopPassword),
+                ["SOOP_PURGE_CREDENTIALS"] = YesNo(SoopPurgeCredentialsCheck),
+
+                ["CLOUDFLARE_WORKER_URL"] = CloudflareWorkerUrlBox.Text?.Trim() ?? "",
+                ["CLOUDFLARE_API_KEY"] = ProtectedSecret("CLOUDFLARE_API_KEY", CloudflareApiKeyBox.Password, clearCloudflareApiKey),
+                ["MASTER_QUALITY"] = masterQuality,
+
+                ["STREAMLINK_PATH"] = string.IsNullOrWhiteSpace(StreamlinkPathBox.Text) ? "AUTO" : StreamlinkPathBox.Text.Trim(),
+                ["STREAMLINK_FALLBACK"] = StreamlinkFallbackBox.Text?.Trim() ?? "",
+
+                ["CHECK_INTERVAL"] = Num(CheckIntervalBox),
+                ["CHANNEL_RELOAD_INTERVAL"] = Num(ChannelReloadIntervalBox),
+                ["RECORD_RETRY_INTERVAL"] = Num(RecordRetryIntervalBox),
+                ["RECORD_STALL_TIMEOUT"] = Num(RecordStallTimeoutBox),
+                ["RECORD_MONITOR_INTERVAL"] = Num(RecordMonitorIntervalBox),
+                ["WORKER_MAX_RETRY"] = Num(WorkerMaxRetryBox),
+
+                ["LOG_ENABLED"] = YesNo(LogEnabledCheck),
+                ["LOG_DIR"] = LogDirBox.Text?.Trim() ?? @".\logs",
+                ["LOG_RETENTION_DAYS"] = Num(LogRetentionDaysBox),
+
+                ["CONSOLE_AUTO_FORMAT"] = YesNo(ConsoleAutoFormatCheck),
+                ["CONSOLE_COLOR"] = YesNo(ConsoleColorCheck),
+                ["CONSOLE_SHOW_PATH"] = YesNo(ConsoleShowPathCheck),
+                ["GUI_NOTIFY_RECORD_START"] = YesNo(NotifyRecordStartCheck),
+                ["GUI_NOTIFY_RECORD_FINISH"] = YesNo(NotifyRecordFinishCheck),
+                ["GUI_NOTIFY_WARNING"] = YesNo(NotifyWarningCheck)
+            };
+
+            BackupProtectedSettingsFix52();
+            UpdateIniFile(iniPath, updates);
+
+            ApplyConsoleDisplayOptions(
+                ConsoleAutoFormatCheck.IsChecked == true,
+                ConsoleColorCheck.IsChecked == true,
+                ConsoleShowPathCheck.IsChecked == true);
+            uiNotifyRecordStart = NotifyRecordStartCheck.IsChecked == true;
+            uiNotifyRecordFinish = NotifyRecordFinishCheck.IsChecked == true;
+            uiNotifyWarning = NotifyWarningCheck.IsChecked == true;
+
+            settingsLoading = true;
+            SoopPasswordBox.Password = "";
+            CloudflareApiKeyBox.Password = "";
+            clearSoopPassword = false;
+            clearCloudflareApiKey = false;
+            settingsLoading = false;
+            UpdateSecretStatusFix36(IniService.Read(iniPath));
+            SetSettingsDirtyFix36(false);
+
+            await ShowDialogAsync(
+                "설정 저장 완료",
+                "SOOP_LIVE_SETTING.ini에 저장했습니다.\n\n" +
+                "• 디스크·감시·로그·표시: 실행 중 반영\n" +
+                "• 녹화 화질·파일명·저장 경로: 다음 녹화부터\n" +
+                "• Streamlink 경로: Watcher 재시작 필요\n" +
+                "• 인증정보: Windows DPAPI(CurrentUser)로 보호 후 재인증");
+        }
+        catch (Exception ex)
+        {
+            await ShowDialogAsync("설정 저장 실패", ex.Message);
+        }
+    }
+
+    void BackupProtectedSettingsFix52()
+    {
+        if (!File.Exists(iniPath)) return;
+        var backupPath = iniPath + ".bak";
+        var protectedText = SecretProtectionService.ProtectIniSecretsForCurrentUser(
+            File.ReadAllText(iniPath, Encoding.UTF8));
+        AtomicWriteAllText(backupPath, protectedText, new UTF8Encoding(false));
+    }
+
 }
