@@ -1813,9 +1813,7 @@ public sealed partial class MainWindow : Window
             {
                 dashboardWatcherRunning = false;
                 WatcherStateText.Text = "시작 실패";
-                var failureMessage = string.IsNullOrWhiteSpace(ex.Message)
-                    ? "Watcher 시작 중 원인을 확인할 수 없는 오류가 발생했습니다."
-                    : ex.Message;
+                var failureMessage = DescribeWatcherStartException(ex);
                 WriteStartupLog("Watcher startup FAILED", ex);
                 await ShowDialogAsync("Watcher 시작 실패", failureMessage);
             }
@@ -1918,9 +1916,32 @@ public sealed partial class MainWindow : Window
         pendingRecordChannel = null;
         pendingRecordAccount = null;
         pendingRecordTitle = null;
-        RecordingList?.SelectedItems.Clear();
-        StoppedFlyoutList?.SelectedItems.Clear();
+        // These ListViews use single-selection mode. Mutating SelectedItems in
+        // that mode can throw a WinRT E_ILLEGAL_METHOD_CALL before the watcher
+        // process is even started; clear the single SelectedItem instead.
+        if (RecordingList != null)
+            RecordingList.SelectedItem = null;
+        if (StoppedFlyoutList != null)
+            StoppedFlyoutList.SelectedItem = null;
         UpdateCounts();
+    }
+
+    static string DescribeWatcherStartException(Exception ex)
+    {
+        if (!string.IsNullOrWhiteSpace(ex.Message))
+            return ex.Message;
+
+        var exceptionType = ex.GetType().FullName ?? ex.GetType().Name;
+        var details = $"예외 형식: {exceptionType}\nHRESULT: 0x{ex.HResult:X8}";
+        if (ex.InnerException is { } inner)
+        {
+            var innerType = inner.GetType().FullName ?? inner.GetType().Name;
+            details += $"\n내부 예외: {innerType}";
+            if (!string.IsNullOrWhiteSpace(inner.Message))
+                details += "\n" + inner.Message;
+        }
+
+        return "Watcher 시작 준비 중 오류가 발생했습니다.\n" + details;
     }
 
     void InitializeUiFlushTimer()
