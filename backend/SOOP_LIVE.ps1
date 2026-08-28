@@ -503,6 +503,20 @@ function Write-RecordingSummary {
         $Recording.File
     )
 
+    # Machine-correlatable lifecycle event. Keep channel/account/reason/file on
+    # one line so concurrent recorder output cannot leave the GUI with a stale
+    # REC card after a recorder exits or a channel is removed.
+    Write-Host (
+        "[{0}] {1} [account={2}] : RECORD FINISHED | duration={3} | size={4} | reason={5} | file={6}" -f `
+        (Get-Date -Format "HH:mm:ss"),
+        $State.Name,
+        $State.Channel.Account,
+        (Format-Duration $duration),
+        (Format-BytesHuman $size),
+        $Reason,
+        $Recording.File
+    )
+
     Write-Host ""
     Show-Line
     Write-Host " RECORD FINISHED"
