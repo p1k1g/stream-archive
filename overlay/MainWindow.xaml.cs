@@ -2331,6 +2331,9 @@ public sealed partial class MainWindow : Window
             if (notifyStart && uiNotifyRecordStart)
                 ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
 
+            if (notifyStart && uiNotifyRecordStart)
+                ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
+
             pendingRecordChannel = null;
             pendingRecordAccount = null;
             pendingRecordTitle = null;
