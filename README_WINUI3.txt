@@ -1,0 +1,1196 @@
+﻿SOOP LIVE Downloader - WinUI 3
+Version 1.2.0-preview1-fix40
+
+BUG FIX
+-------
+fix14 GUI saved these INI keys but the backend SOOP_LIVE.ps1 did not read them:
+- CONSOLE_AUTO_FORMAT
+- CONSOLE_COLOR
+- CONSOLE_SHOW_PATH
+
+Therefore the settings previously had no backend effect.
+
+fix15 implements them in BOTH backend output and WinUI dashboard.
+
+CONSOLE_AUTO_FORMAT
+-------------------
+Y:
+- backend sorts channels by name
+- grouped RECORDING console layout
+- GUI recording/offline lists sort by channel name
+
+N:
+- backend does not apply name sorting
+- compact one-line recording output
+- GUI keeps arrival/channel-processing order
+
+CONSOLE_COLOR
+-------------
+Y:
+- backend uses status colors where supported
+- GUI REC/status highlighting is enabled
+
+N:
+- backend uses plain/default console colors
+- GUI status text uses neutral colors
+
+CONSOLE_SHOW_PATH
+-----------------
+Y:
+- backend progress includes "to <full path>"
+- GUI shows full recording file path below the recording row
+
+N:
+- backend progress omits the full file path
+- GUI hides the path
+
+HOT RELOAD
+----------
+All three backend values are included in Update-HotConfig.
+Changing and saving the setting while Watcher is running takes effect without
+requiring a full restart, though GUI templates are also refreshed immediately.
+
+TEST
+----
+1. PREPARE_PROJECT.bat
+2. RUN_SOURCE.bat
+3. Start Watcher.
+4. Test each display checkbox ON/OFF and save.
+5. Confirm both Logs/backend output and Dashboard behavior change.
+6. BUILD_EXE.bat after validation.
+
+
+preview1-fix16
+-------------
+Fixes C# compiler errors introduced in fix15:
+- CS9006
+- CS1073
+
+Cause:
+Interpolated raw strings ($""") were used for XAML DataTemplate text while
+the XAML itself contains {Binding ...} expressions. C# interpreted the binding
+braces as interpolation syntax.
+
+Fix:
+- DataTemplate XAML now uses non-interpolated raw strings.
+- Dynamic status color / optional path row are inserted with string.Replace().
+- No backend behavior change from fix15.
+
+
+preview1-fix17
+-------------
+Standalone settings CLI bug fix.
+
+Problem:
+General Settings -> All Settings and several other submenus called:
+  $cfg = Read-Ini
+without passing SOOP_LIVE_SETTING.ini.
+
+Read-Ini then received an empty LiteralPath and failed with:
+  Cannot bind argument to parameter 'LiteralPath' because it is an empty string.
+
+Fix:
+- All zero-argument Read-Ini calls now use:
+    Read-Ini $IniPath
+- Read-Ini is also hardened with:
+    param([string]$Path = $IniPath)
+  and falls back to $IniPath when blank.
+
+Affected menu functions included:
+- All Settings
+- Runtime / Hot Reload Settings
+- Recording Settings
+- SOOP Login Settings
+- Cloudflare Worker Settings
+- Log Settings
+
+
+preview1-fix18
+-------------
+Window-close process cleanup fix.
+
+Problem:
+Closing the WinUI window with the X button terminated only the GUI.
+The PowerShell watcher remained alive in the background, so killing a
+Streamlink/Python recorder process caused the watcher to start it again.
+
+Fix:
+- MainWindow hooks the WinUI Window.Closed event.
+- On X close, BackendProcessService.StopNow() is called synchronously.
+- StopNow uses:
+    taskkill /PID <watcher-pid> /T /F
+  so the whole descendant process tree is terminated:
+    GUI-managed PowerShell watcher
+      -> Streamlink
+         -> Python / child processes
+- Fallback uses Process.Kill(entireProcessTree: true).
+- Dispose() now uses the same StopNow cleanup path.
+- Duplicate-close cleanup is guarded.
+
+Expected behavior:
+- Stop button:
+    stops Watcher/recorders, GUI stays open.
+- X button:
+    stops Watcher/recorders first, then GUI closes.
+- After X close, SOOP_LIVE.ps1 / streamlink / recorder Python processes
+  started by this GUI should no longer remain or restart.
+
+Test:
+1. PREPARE_PROJECT.bat
+2. RUN_SOURCE.bat
+3. Start Watcher and confirm a recording is active.
+4. Click the window X without pressing Stop.
+5. Confirm the output file stops growing.
+6. Confirm the related powershell/streamlink/python child processes disappear.
+
+
+preview1-fix19
+-------------
+Dashboard path-display fix:
+- Progress parsing is now split into two explicit patterns:
+  1) Written <size> to <full path> (...)
+  2) Written <size> (...)
+- The path-aware pattern is always tried first.
+- This prevents the optional regex branch from swallowing "to <path>" as part
+  of the size text.
+- When CONSOLE_SHOW_PATH=Y, FilePath is stored and displayed on the second
+  line of the recording card.
+
+BAT cleanup:
+Removed obsolete diagnostic BAT files when present:
+- RUN_VANILLA.bat
+- COMPARE_DIAG.bat
+- RUN_SOURCE_DIAG.bat
+- CHECK_ENV.bat
+- CHECK_PREREQ.bat
+
+Retained root BAT files:
+- PREPARE_PROJECT.bat
+- RUN_SOURCE.bat
+- BUILD_EXE.bat
+
+Retained backend CLI BAT files:
+- backend\SOOP_LIVE.bat
+- backend\SOOP_LIVE_SETTING.bat
+
+Those backend BATs remain intentionally because they provide the verified
+standalone CLI watcher/settings workflow.
+
+
+preview1-fix20
+-------------
+Publish size optimization.
+
+Why the old BUILD_EXE was 600+ MB:
+- --self-contained true
+- WindowsAppSDKSelfContained=true
+This copied the .NET runtime and Windows App SDK runtime into the output.
+
+New default:
+BUILD_EXE.bat
+- framework-dependent
+- WindowsPackageType=None
+- WindowsAppSDKSelfContained=false
+- output: publish- requires .NET 8 Desktop Runtime x64 + Windows App Runtime already installed
+
+Optional:
+BUILD_SELFCONTAINED.bat
+- keeps the old large all-in-one deployment
+- output: publish_selfcontained
+RUN_SOURCE.bat note:
+dotnet run already builds an EXE, but it lives under:
+.generated\SOOPLiveWinUIin\...
+Use SHOW_BUILT_EXE.bat to display those paths.
+
+
+preview1-fix21
+-------------
+Recording path display reliability fix.
+
+Root cause addressed:
+The GUI previously depended mainly on periodic [download] progress text to
+discover the output file path. This made FilePath dependent on console format
+and parser timing.
+
+New behavior:
+- GUI directly parses the RECORD START information block emitted by backend:
+    Channel : <name>
+    Title   : <title>
+    Output  : <full path>
+- Output path is stored in ChannelStatus.FilePath immediately when recording
+  starts.
+- CONSOLE_SHOW_PATH now controls DISPLAY only. It no longer determines whether
+  the GUI internally knows the path.
+- When enabled, dashboard displays:
+    파일 : C:\...\recording.ts
+
+Backend correction:
+- Initial CONSOLE_AUTO_FORMAT / CONSOLE_COLOR / CONSOLE_SHOW_PATH loading was
+  accidentally placed inside Update-HotConfig in an earlier patch.
+- Initial loading is now in Main after reading SOOP_LIVE_SETTING.ini.
+- Hot reload keeps only newConfig-based updates.
+
+Next planned UI change:
+- Dedicated application icon for EXE, taskbar and window.
+- Remove the generic/default WinUI application image.
+See NEXT_CHANGES.txt.
+
+
+preview1-fix22
+-------------
+UI/UX consolidation release.
+
+1. Vanilla project cleanup
+- .generated\VanillaWinUI is no longer created.
+- PREPARE_PROJECT creates only .generated\SOOPLiveWinUI.
+
+2. Vanilla-style UI polish
+- Cleaner header and restrained styling.
+- Recording card information density reduced.
+- Large right-side broadcast-title column removed.
+- Broadcast title remains as a small secondary line.
+- Optional file path appears as a small tertiary line.
+
+3. Dedicated application icon
+- Custom generic SOOP LIVE Downloader icon included.
+- EXE ApplicationIcon configured.
+- WinUI AppWindow icon configured.
+- Tray icon uses the same icon.
+- This is custom artwork, not an official SOOP brand asset.
+
+4. X close behavior
+- X asks:
+  * System tray
+  * Exit completely
+  * Cancel
+- Optional "remember this choice".
+- Remembered preference is stored in SOOPLiveWinUI.user.json.
+- Tray mode keeps Watcher/recording alive.
+- Exit mode stops the GUI-owned watcher process tree.
+
+5. System tray
+- Double-click: reopen window.
+- Context menu:
+  * Open
+  * Watcher start
+  * Watcher stop
+  * Exit completely
+
+6. Recording-finished notification
+- Backend RECORD FINISHED log is detected.
+- Tray balloon shows channel / duration / size / reason.
+- Clicking the notification opens the recording folder.
+
+7. Existing fixes retained
+- X full-exit process-tree cleanup.
+- Dashboard recording-path display.
+- Compact framework-dependent BUILD_EXE.
+- Optional BUILD_SELFCONTAINED.
+
+
+preview1-fix22-fix1
+-------------------
+BUILD_EXE / publish compilation fix.
+
+Observed error:
+MC6000:
+PresentationCore, PresentationFramework must be included in the .NET Framework
+assembly reference list.
+
+Cause:
+fix22 enabled:
+  <UseWindowsForms>true</UseWindowsForms>
+
+In this WinUI 3 project that caused WindowsDesktop/WPF XAML build targets to
+process the WinUI App.xaml, resulting in the WPF assembly requirement.
+
+Fix:
+- Removed UseWindowsForms=true.
+- Added only:
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
+- System.Windows.Forms.NotifyIcon/tray functionality is retained.
+- WinUI XAML continues through the Windows App SDK compiler only.
+
+Also recorded for the next revision:
+- suppress repetitive OFFLINE rows from file logs
+- event-focused logs
+- GUI Logs tab limited to the latest 50 lines
+
+
+preview1-fix23
+-------------
+Selected usability/stability improvements.
+
+1. Channel management table
+- Structured ListView over SOOP_LIVE_CHANNELS.txt.
+- Add / Edit / Delete / Enable-disable toggle / Reload / Save.
+- Raw text editor remains below for advanced direct editing.
+- Save creates SOOP_LIVE_CHANNELS.txt.bak first.
+
+2. Event-focused logs
+- Repetitive OFFLINE state is not intended for daily file logs.
+- GUI Logs tab keeps only the latest 50 lines.
+
+3. Start validation
+Before Watcher start, GUI checks:
+- Cloudflare Worker URL exists and uses https://
+- API key exists
+- output directory is usable
+- at least one channel is enabled
+
+4. Per-channel recording stop
+- Select a recording row and click "선택 채널 녹화 중지".
+- GUI writes STOP_ONCE|<account> to SOOP_LIVE_CONTROL.txt.
+- Backend consumes the command, stops only that recording, and suppresses
+  restart until that current live session becomes OFFLINE.
+
+5. Backups
+- Settings save creates SOOP_LIVE_SETTING.ini.bak.
+- Channel save creates SOOP_LIVE_CHANNELS.txt.bak.
+
+Not added:
+- Windows automatic startup
+- automatic tray-start mode
+
+
+preview1-fix24
+-------------
+System tray visibility fix.
+
+Symptom:
+Choosing "시스템 트레이로" hid the window, but no tray icon was visible.
+
+Likely cause:
+System.Windows.Forms.NotifyIcon can be Visible=true while still not appearing
+when Icon is null. The custom .ico asset was not guaranteed to be copied into
+the runtime/publish output folder.
+
+fix24:
+- Forces Assets\SOOPLiveDownloader.ico and .png to CopyToOutputDirectory and
+  CopyToPublishDirectory.
+- Loads the custom icon from multiple runtime candidate paths.
+- Falls back to SystemIcons.Application if the custom icon is missing/invalid.
+- Assigns Icon BEFORE setting NotifyIcon.Visible=true.
+- Tracks trayReady state.
+- X -> tray will NOT hide the window if tray initialization failed.
+- Tray initialization/restore/hide errors are written to
+  SOOPLiveWinUI_startup.log.
+- Existing tray menu remains:
+  Open / Watcher Start / Watcher Stop / Exit.
+- All fix23 functionality is retained:
+  channel table management, latest-50 GUI logs, start validation,
+  per-channel recording stop, .bak backups.
+
+
+preview1-fix25
+-------------
+High-CPU / "Not Responding" GUI fix.
+
+Observed:
+- SOOPLiveWinUI.exe remained alive and downloading normally.
+- One GUI thread consumed essentially an entire CPU core continuously.
+- Windows reported Responding=False.
+- No .NET Runtime/Application Hang error was recorded.
+
+Changes:
+1. Backend stdout/stderr no longer posts one DispatcherQueue callback per line.
+   Lines are stored in a ConcurrentQueue.
+2. WinUI flushes backend output every 250 ms in bounded batches.
+3. At most 400 raw backend lines are processed per UI tick.
+4. Recording progress is coalesced by channel:
+   within one UI interval only the newest progress row per channel is applied.
+5. GUI log is stored separately and limited to 50 lines.
+   LogBox.Text is rebuilt only once per UI flush, not once per backend line.
+6. Repetitive OFFLINE rows are suppressed from the GUI log.
+7. Progress updates no longer call MoveToRecording / collection re-sort when
+   the channel is already in RecordingItems.
+8. Model property setters avoid PropertyChanged when the value did not change.
+9. UI flush timer is stopped during real application shutdown.
+
+All previous behavior retained:
+- robust tray icon / X tray-or-exit dialog
+- recording-finished notifications
+- channel table add/edit/delete/toggle
+- start validation
+- per-channel recording stop
+- .bak settings/channel backup
+- compact and self-contained build options
+
+Important:
+Forcibly terminating SOOPLiveWinUI.exe in Task Manager does NOT guarantee that
+the watcher/streamlink/python child processes stop. Use the normal
+"완전히 종료" action when possible so the watcher process tree is terminated.
+
+
+preview1-fix25-fix1
+-------------------
+Compile fix for fix25.
+
+Observed:
+CS0136:
+- progressWithPath
+- progressNoPath
+
+Cause:
+The new queued-progress/coalescing block declared local variables using the
+same names as the existing progress parser later in ProcessBackendLine().
+C# does not allow those local names to be redeclared in the enclosing method
+scope in this arrangement.
+
+Fix:
+- progressWithPath     -> queuedProgressWithPath
+- progressNoPath       -> queuedProgressNoPath
+- progressMatch        -> queuedProgressMatch
+
+The WMC1509/WMC9999 XAML messages that followed were secondary build errors
+after the C# compilation failure.
+
+All fix25 UI batching/high-CPU changes are retained.
+
+
+preview1-fix26
+-------------
+Channel-management synchronization fix.
+
+Observed:
+- Channel dashboard/backend could recognize configured channels.
+- Channel-management table could appear empty.
+- Pasting an older SOOP_LIVE_CHANNELS.txt into the raw editor and pressing
+  Save could result in only the header remaining.
+
+Root cause:
+SaveChannels_Click always called SyncRawChannelTextFromItems() first.
+Therefore the structured table was treated as authoritative even when the
+user had just pasted/edited the raw text. If ChannelItems was empty, the
+pasted raw text was overwritten with only:
+  # ENABLED|NAME|ACCOUNT|OUTDIR
+
+fix26:
+- Tracks whether the raw channel editor was modified by the user.
+- If raw text is newer, Save parses RAW -> structured table first.
+- If structured buttons are newer, Save writes TABLE -> raw text.
+- Add/Edit/Delete/Toggle first apply any pending raw edits so pasted channels
+  cannot be silently lost.
+- Added "원본 적용" button for explicit RAW -> TABLE refresh.
+- Shows the exact active SOOP_LIVE_CHANNELS.txt path in the Channel page.
+- Reload resets raw dirty state and reparses the file.
+- Save reports the channel count and exact target file path.
+- Invalid raw lines are rejected with line number and expected format.
+- Existing .bak backup behavior remains.
+
+All fix25 UI batching/high-CPU fixes and earlier features are retained.
+
+
+preview1-fix27
+-------------
+Channel raw-editor save hardening.
+
+Reported valid input:
+  # ENABLED|NAME|ACCOUNT|OUTDIR
+  Y|둘기얏|1004ysus|
+  Y|고라니율|golaniyule0|
+  ...
+was incorrectly reported as having no valid channels.
+
+fix27:
+- Save no longer depends on rawChannelTextDirty to choose the source.
+- If the raw editor has any non-comment data row, RAW is always authoritative.
+- If raw has only the header but the table has rows, TABLE is authoritative.
+- Y|NAME|ACCOUNT| with an empty OUTDIR is explicitly supported.
+- Parser uses Split('|', 4) for simpler/safer handling.
+- After successful raw parsing, text is normalized from parsed table rows.
+- "원본 적용" rejects an actual zero-row parse with useful diagnostics.
+- Save errors include raw character count and candidate channel-row count.
+- Exact target channel file path display and .bak backups remain.
+
+All fix25 high-CPU batching and previous functionality are retained.
+
+
+preview1-fix27-fix1
+-------------------
+Compile fix for fix27.
+
+Observed:
+CS1039 / CS1003 / CS1010 around MainWindow.xaml.cs line 2062.
+
+Cause:
+Some diagnostic strings added in fix27 were emitted with physical newlines
+inside normal C# quoted string literals.
+
+Fix:
+- Replaced those physical line breaks with escaped \n sequences.
+- Channel raw parser/save-source changes from fix27 are unchanged.
+- WMC1509/WMC9999 messages were downstream build failures after the C# syntax
+  error and should disappear once compilation proceeds normally.
+
+
+preview1-fix28
+-------------
+Channel raw-editor line-ending compatibility fix.
+
+Observed:
+The raw editor visibly contained valid rows such as:
+  Y|둘기얏|1004ysus|
+  Y|문월|moonwol0614|
+but "원본 적용" reported:
+  유효한 채널 행을 찾지 못했습니다.
+  원본 문자 수: 136
+
+Root cause:
+The previous parser used:
+  Replace("\r", "").Split('\n')
+
+If the WinUI TextBox/pasted content uses CR-only line endings, removing '\r'
+collapses every visible row into one physical string. Because the resulting
+string begins with '# ENABLED...', the parser treats the entire content as
+one comment line and returns zero channels.
+
+fix28:
+- Added SplitChannelLines().
+- Supports CRLF (\r\n), LF (\n), and CR (\r) line endings.
+- Both raw parser and Save source detection use the same normalized splitter.
+- Zero-channel diagnostic also reports detected line count.
+- Empty OUTDIR remains supported.
+- All prior channel synchronization and UI high-CPU fixes are retained.
+
+
+preview1-fix29
+--------------
+Applied 15 requested changes: NEXT_CHANGES removal; atomic INI/channel saves; verified process-tree termination; race-free per-command control files; event-only backend/GUI logs; clear-log queue fix; BNO-based STOP_ONCE; fixed local backend path; disk summary card; recording progress-focused rows; short filename + full-path tooltip; compact OFFLINE rows; OFFLINE time removal; selection-gated per-channel stop button.
+
+
+preview1-fix30
+--------------
+1. Recorder stop bug fixed
+- PowerShell automatic variable $PID is read-only and case-insensitive.
+- fix29 used a Stop-RecorderProcessTree parameter named $Pid, which collided
+  with $PID and caused VariableNotWritable when stopping a recording.
+- Renamed the parameter to $ProcessId.
+- Applies to both:
+  * dashboard "선택 채널 녹화 중지"
+  * channel disable/remove paths that stop an active recorder
+
+2. Dashboard OFFLINE UX
+- OFFLINE rows are no longer permanently rendered below RECORDING.
+- The top "오프라인" summary card is clickable.
+- Clicking it opens a flyout showing the current OFFLINE channel list.
+- Offline count remains visible at all times.
+- This leaves the main dashboard focused on active recordings.
+
+All fix29 stability hardening and dashboard improvements are retained.
+
+
+preview1-fix30-fix1
+-------------------
+Compile fix for fix30.
+
+Observed:
+CS0103: 'FlyoutPlacementMode' does not exist in the current context.
+
+Cause:
+FlyoutPlacementMode is defined under:
+  Microsoft.UI.Xaml.Controls.Primitives
+
+Fix:
+The offline summary-card flyout now uses:
+  Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Bottom
+
+All fix30 behavior is retained:
+- PowerShell $PID collision fix
+- dashboard OFFLINE flyout
+- all fix29 stability/dashboard changes
+
+
+preview1-fix31
+--------------
+Published EXE startup fix.
+
+Symptom:
+- BUILD_EXE.bat / publish succeeds.
+- publish\SOOPLiveWinUI.exe does not open.
+
+Root cause:
+fix29 intentionally restricted backend discovery to:
+  AppContext.BaseDirectory\backend
+
+However PREPARE_PROJECT copied the backend into the generated project source
+tree without explicitly marking backend\**\* for SDK publish output.
+Therefore dotnet publish could omit publish\backend\SOOP_LIVE.ps1.
+ResolveBackendDirectory then threw before the window finished opening.
+
+fix31:
+- Generated csproj explicitly includes backend\**\* as Content.
+- CopyToOutputDirectory=PreserveNewest.
+- CopyToPublishDirectory=PreserveNewest.
+- PREPARE_PROJECT verifies generated-project backend\SOOP_LIVE.ps1.
+- BUILD_EXE verifies publish\backend\SOOP_LIVE.ps1 and fails loudly if absent.
+- MainWindow startup log now records successful/failed backend resolution.
+- Strict current-version backend path policy is retained; no old-parent-folder
+  fallback is reintroduced.
+
+All fix30/fix29 functionality is retained.
+
+
+preview1-fix31-fix1
+-------------------
+Startup NullReferenceException fix.
+
+Observed startup log:
+  SOOP programmatic UI FAILED
+  NullReferenceException
+  MainWindow.BuildDashboard()
+
+Root cause:
+fix30 removed the permanently-rendered dashboard OFFLINE ListView, but one
+old statement remained:
+  OfflineList.ItemsSource = OfflineItems;
+
+OfflineList was therefore null during BuildDashboard() and the application
+exited before the window appeared.
+
+Fix:
+- Removed the stale OfflineList.ItemsSource assignment.
+- Current OFFLINE data is bound only to OfflineFlyoutList, opened from the
+  clickable top "오프라인" summary card.
+- RecordingList.ItemsSource remains unchanged.
+- fix31 published-backend verification and all earlier functionality remain.
+
+
+preview1-fix32
+--------------
+Recording resume + stable dashboard refresh.
+
+1. Stop / resume current live broadcast
+- A user-stopped card remains visible as:
+    ■ 중지됨
+    사용자 중지 · 다시 시작 가능
+- Selecting it changes the dashboard action button to:
+    ▶ 선택 채널 녹화 재시작
+- RESUME_ONCE clears the current BNO suppression and schedules an immediate
+  LIVE recheck. If the same broadcast is still LIVE, recording starts again
+  into a new collision-safe output filename.
+- Active recording cards still use:
+    ■ 선택 채널 녹화 중지
+
+2. Progress display / flicker reduction
+- Start time, BJ name, title and filename are static after RECORD START.
+- ApplyProgress no longer overwrites the start time every refresh.
+- Only three dedicated properties are updated during normal recording:
+    file size
+    elapsed recording time
+    download rate
+- These values are rendered in a visually separate right-side progress panel.
+- Disk free-space lookup is not repeated for every progress update when the
+  output file is unchanged.
+
+3. Progress batching bug fixed
+- CONSOLE_AUTO_FORMAT=N compact RECORDING lines are now coalesced by channel.
+- CONSOLE_AUTO_FORMAT=Y raw [download] lines use the preceding channel header
+  as their channel key.
+- This restores file size / elapsed / download-rate output while preventing
+  noisy progress lines from repeatedly repainting the whole dashboard.
+
+4. Recording summary count
+- Top "녹화 중" counts only cards currently in ● REC state.
+- User-stopped/restart-waiting cards can stay visible without inflating the
+  active recording count.
+
+All fix31 published-backend verification, fix30 OFFLINE flyout and fix29
+stability hardening are retained.
+
+
+preview1-fix33
+--------------
+Deterministic multi-channel progress and stable metric refresh.
+
+1. Missing progress on one of several simultaneous recordings
+- fix32 could correlate an untagged [download] line to the most recently seen
+  channel header.
+- With concurrent channels, output ordering can interleave and that heuristic
+  is not reliable.
+- Backend now ALWAYS emits:
+    [HH:mm:ss] BJ_NAME : RECORDING | [download] ...
+  with the BJ name and metrics on the same physical line.
+- GUI only accepts those channel-tagged CompactRecording progress lines.
+- Untagged raw [download] lines are ignored for dashboard metrics.
+- Every simultaneous recording therefore has an independent progress key.
+
+2. Flicker / redraw reduction
+- No collection sorting, removal, or re-add happens during ordinary metric
+  updates.
+- Start time, BJ, title, filename remain static.
+- Only SizeText, ElapsedText and RateText receive steady-state updates.
+- Metric columns use fixed widths so changing numeric text does not shift the
+  surrounding card layout.
+- The selection action button is no longer rewritten on every metric sample.
+
+3. Pause state presentation
+- User-stopped current broadcast remains selectable in the recording area.
+- Status changes from green "● REC" to yellow "Ⅱ PAUSED".
+- Detail:
+    사용자 일시정지 · 다시 시작 가능
+- Selecting the paused card exposes:
+    ▶ 선택 채널 녹화 재시작
+- Resume returns the status to green REC when recording actually resumes.
+
+All fix32 resume behavior, fix31 publish verification, fix30 OFFLINE flyout,
+and fix29 stability hardening are retained.
+
+
+preview1-fix34
+--------------
+Maintenance / long-running stability cleanup.
+
+1. Dead GUI code removed
+- Removed obsolete dashboard OfflineList.
+- Removed obsolete BuildOfflineTemplate().
+- ApplyConsoleDisplayOptions now refreshes OfflineFlyoutList directly.
+- Removed currentProgressChannel and ChannelHeader correlation logic left from
+  the pre-fix33 untagged progress implementation.
+- CompactRecording now passes its channel name as a local value.
+
+2. Disk summary includes only active recordings
+- The top disk-free card now considers only Status == "● REC".
+- PAUSED/restart-waiting cards cannot leave stale drive entries in the summary.
+- Per-card multi-drive text is also cleared for non-REC cards.
+
+3. Channel disable/delete recorder-stop failure is no longer ignored
+- CHANNEL DISABLED:
+  If the owned recorder cannot be stopped, the in-memory state is restored to
+  enabled and an ERROR is logged. A later hot-reload retries the stop.
+- CHANNEL REMOVED:
+  State is removed only after Stop-ChannelRecording confirms success.
+  On failure the state is retained for another retry.
+- No process-name-wide kill was introduced.
+
+4. Dashboard sorting no longer Clear/Add rebuilds collections
+- Previous SortDashboardItems called Clear() and re-added every card.
+- fix34 computes the desired order and uses ObservableCollection.Move only for
+  items that are actually out of position.
+- This preserves existing ListView item containers as much as possible and
+  reduces state-change flicker.
+
+All fix33 deterministic multi-channel progress / yellow PAUSED UI, fix32
+resume support, fix31 publish verification, fix30 OFFLINE flyout, and fix29
+stability hardening are retained.
+
+
+preview1-fix34-fix1
+-------------------
+Compile-only correction for fix34.
+
+Observed:
+CS0103: DownloadProgressWithPath does not exist in the current context.
+
+Cause:
+The fix34 dead-code cleanup intended to remove only the obsolete ChannelHeader
+Regex declaration. The cleanup pattern crossed declaration boundaries and also
+removed the still-required DownloadProgressWithPath declaration.
+
+Fix:
+- Restored DownloadProgressWithPath exactly from fix33.
+- ChannelHeader/currentProgressChannel/OfflineList dead code remains removed.
+- No fix34 runtime behavior was reverted.
+
+
+preview1-fix34-fix2
+-------------------
+Channel management usability and data-loss protection.
+
+1. Version consistency
+- Updated the window version label, VERSION.txt, README header, maintenance
+  prompt, and source/build labels to 1.2.0-preview1-fix34-fix2.
+- Generated .NET project Version and InformationalVersion now use the same
+  product version instead of the SDK default.
+
+2. Unsaved-change protection
+- Channel table and raw-editor changes now share an explicit dirty state.
+- The channel page shows whether changes are saved or still pending.
+- Reloading the saved file requires confirmation when changes are pending.
+- Leaving the channel page offers Save and continue, Continue without saving,
+  or Cancel instead of silently replacing pending edits.
+
+3. Multi-channel actions
+- Channel ListView selection mode is now Multiple and uses selection checkboxes.
+- Added Select all, selected count, bulk delete, bulk enable, and bulk disable.
+- Bulk delete confirms the affected channels and remains pending until Save.
+
+4. Clearer commands
+- Renamed the ambiguous raw/reload/save commands to describe their data flow.
+- Added tooltips explaining that raw-to-list does not save, reload reads the
+  last saved file, and Save keeps the existing .bak behavior.
+
+
+preview1-fix35
+--------------
+Account-first channel registration and stable GUI identity.
+
+1. Account-only channel add
+- SOOP account ID or supported channel URL is the only required identity input.
+- The GUI queries SOOP station status and fills the broadcaster nickname.
+- Existing manually stored names remain unchanged unless the user explicitly
+  requests a name refresh from the edit dialog.
+- Network lookup failure uses the normalized account ID as a safe temporary
+  display name; a confirmed nonexistent account is rejected.
+
+2. Validation and compatibility
+- Duplicate account IDs are rejected case-insensitively.
+- Raw channel rows accept an empty NAME and fall back to ACCOUNT.
+- Existing Y|NAME|ACCOUNT|OUTDIR files remain compatible.
+- Account IDs and supported SOOP channel URLs are normalized before saving.
+
+3. Stable account-keyed dashboard state
+- Backend dashboard/progress/control lines include [account=SOOP_ID].
+- GUI statusMap correlation now uses account ID rather than mutable nickname.
+- Same-name broadcasters and nickname refreshes no longer merge dashboard state.
+- Legacy output without the account marker retains a name-based fallback.
+
+4. Runtime live-name fallback
+- When a saved fallback NAME equals ACCOUNT, a later LIVE response may promote
+  BJNICK for the current watcher runtime.
+- Custom and previously stored display names are not overwritten automatically.
+
+All fix34-fix2 channel multi-selection, unsaved-change protection, atomic
+channel saves, account-based control commands, and recorder safety remain.
+
+
+preview1-fix36
+--------------
+Settings usability/safety overhaul and channel edit/save state corrections.
+
+1. Recording and path settings
+- Added folder Browse, Open, and write-test actions for recording and log paths.
+- The recording path shows its drive, current free space, and configured limit.
+- The UI explains that a per-channel directory overrides the default path.
+- Common recording/login settings remain visible; Worker, Streamlink,
+  monitoring/retry, and log/display settings are grouped under Advanced.
+
+2. Authentication and dependency checks
+- SOOP password and Worker API Key now show whether a saved value exists.
+- Blank secret fields preserve saved values; explicit Delete actions stage
+  deletion, removing the former keep/delete ambiguity.
+- Added SOOP login, Worker health/API-key, Streamlink version, and folder tests.
+- Worker request quality is described separately from final recording quality.
+
+3. Settings change safety
+- Added a fixed bottom dirty-state bar with Discard and Save actions.
+- Save is enabled only after a setting changes.
+- Leaving the page with pending settings requires an explicit decision.
+- Each section shows its apply timing and recommended numeric values.
+- Added section-level restore actions and relationship validation; stall time
+  must be at least twice the recorder monitor interval.
+- Added INI export/import. Export can remove secrets for sharing; import shows
+  whether secrets are present, requires confirmation, and preserves a .bak.
+- Save confirmation summarizes immediate, next-recording, and restart effects.
+
+4. Sequential channel edit fix
+- Programmatic raw-editor synchronization is no longer treated as a new user
+  edit, including deferred TextChanged delivery.
+- Raw text is reparsed during Save only when the user actually edited it.
+- Selection is captured/restored by stable account ID across necessary list
+  rebuilds and after a successful channel edit.
+- Users can edit the same or different channels repeatedly; all edits remain
+  pending until the explicit Change Save action.
+
+5. Channel dirty state after Save
+- Change Save normalizes/writes the channel file, clears both raw/table dirty
+  state, and restores the selected rows.
+- A programmatic raw TextBox update can no longer turn the saved indicator back
+  into an unsaved indicator after the write completes.
+
+All fix35 account-first registration/name lookup/account-keyed dashboard state,
+fix34-fix2 multi-selection and data-loss protection, and earlier recorder
+safety/performance behavior remain.
+
+
+Planned roadmap after fix36 (not implemented)
+---------------------------------------------
+
+Priority 1 - state correctness and stop reliability
+
+1. Channel dirty indicator after Change Save
+- The yellow unsaved indicator can still return after a successful channel
+  save and must be treated as an unresolved fix36 bug.
+- Normalize CRLF, LF, and CR before comparing raw-editor content.
+- After the atomic write succeeds, capture the actual TextBox content as the
+  saved snapshot and clear raw/table dirty state together.
+- Programmatic table-to-raw synchronization must never raise a user-edit dirty
+  transition, including deferred TextChanged delivery.
+- Save must finish with "✓ 저장된 상태" and the Save button disabled until a
+  real user edit occurs.
+
+2. Watcher exit dashboard reconciliation
+- The current UI can show "Watcher 중지됨" while stale REC cards and an active
+  count remain. When the backend exits, clear/reconcile active cards, count,
+  selection, and active-drive disk data.
+- Show "중지됨" for exit code 0; show an error state/code only for abnormal
+  exit. Offline counts shown while stopped must be marked as stale or replaced
+  by "-".
+
+3. Reliable selected-channel stop
+- Backend STOP_ONCE must report separate accepted/completed/failed events and
+  must not ignore Stop-ChannelRecording's Boolean result.
+- Remove the card from RECORDING only after recorder termination is confirmed.
+- On failure, keep the card with a clear error and Retry action.
+- Preserve SuppressedBno for the current broadcast and never affect another
+  channel recorder or the Watcher.
+
+4. Separate stopped-channel flyout and natural Korean copy
+- A successfully stopped channel disappears from the active recording list.
+- Add a separate summary/flyout so RESUME_ONCE remains available.
+- Final Korean UI copy:
+
+  Summary title:
+    "직접 중지한 채널"
+
+  Item detail:
+    "문월:-) · 지금 방송은 자동으로 다시 녹화하지 않습니다."
+
+  Action:
+    "녹화 다시 시작"
+
+- Avoid awkward copy such as "사용자가 중지한 방송" or "현재 방송 재녹화
+  억제 중".
+
+5. Account-keyed progress and actionable health states
+- The 250 ms progress coalescing dictionary must use account ID, not nickname,
+  so same-name channels cannot overwrite each other's progress.
+- Parse and display LOW DISK, DISK UNKNOWN, CHECK ERROR, authentication errors,
+  and Worker errors as structured dashboard warning/error states.
+
+Priority 2 - dashboard and channel-management UX
+
+6. Natural dashboard empty states
+- Watcher running, no active recordings:
+
+    "현재 녹화 중인 방송이 없습니다."
+    "등록된 채널 7개의 방송 상태를 확인하고 있습니다."
+
+- Watcher stopped:
+
+    "현재 채널 확인이 중지되어 있습니다."
+    "방송 상태를 확인하려면 Watcher를 시작해 주세요."
+    [Watcher 시작]
+
+- Use the enabled-channel count in the running message, not a hard-coded value.
+
+7. Dashboard clarity and responsive layout
+- Rename the global button to "Watcher 중지" so it is not confused with
+  "선택 채널 녹화 중지".
+- Add a meaningful empty-state panel instead of a large blank area.
+- Make summary/recording cards adapt to narrower windows and show the last
+  successful status-update time when information may be stale.
+
+8. Channel management
+- Add nickname/account search and active/inactive/path filters.
+- Replace raw True/False display with natural active/inactive labels and add
+  column headers, double-click Edit, copy actions, and responsive overflow.
+- Collapse the raw editor by default as an Advanced tool and show parse errors
+  with exact line numbers.
+- Add selected/all-channel SOOP name refresh with a preview of changed names.
+- Add folder Browse/Open actions to the per-channel output-directory editor.
+
+9. Recent recordings and logs
+- Add a recent-recordings view with channel, finish reason, duration, size,
+  file/folder actions, and a bounded history.
+- Replace the plain latest-50-lines log box with structured severity/channel
+  filters, search, auto-scroll control, copy/export, and log-folder access.
+
+Priority 3 - long-term reliability and security
+
+10. Machine-readable backend events
+- Keep human-readable console output, but emit separate JSON events for the GUI
+  with event type, account ID, BNO, status, paths, metrics, and error details.
+- Stop relying on multiple regular expressions for critical state transitions.
+
+11. Protected credentials
+- Move SOOP password and Worker API Key from plaintext INI storage to Windows
+  Credential Manager or DPAPI while preserving a safe migration path.
+
+12. Regression tests
+- Add automated tests for CRLF/LF/CR parsing, dirty/saved transitions,
+  account-keyed progress, stop ACK success/failure, Watcher exit cleanup,
+  BNO suppression/resume, filename collisions, and low-disk behavior.
+
+Suggested fix37 scope:
+1) dirty indicator after channel Save,
+2) Watcher-exit dashboard cleanup,
+3) stop completed/failed ACK,
+4) remove stopped cards plus a separate stopped-channel resume flyout,
+5) account-keyed progress coalescing,
+6) structured low-disk/check/auth/Worker states,
+7) natural empty-state copy and channel search/filter.
+
+
+fix37 implemented changes
+-------------------------
+
+1. Channel saved-state correctness
+- CRLF, LF, and CR are normalized before comparisons.
+- A successful atomic write captures the actual editor content as the saved
+  snapshot and clears raw/table dirty state together.
+- Deferred programmatic TextChanged events no longer restore the yellow
+  unsaved indicator after Change Save.
+
+2. Dashboard lifecycle and natural Korean copy
+- Watcher exit clears recording/offline/stopped/alert cards, selections,
+  queued progress, account status, and stale disk information.
+- Normal exit displays "중지됨"; abnormal exit displays its error code.
+- The running and stopped empty states use the agreed natural Korean wording,
+  and the global stop button is explicitly named "Watcher 중지".
+
+3. Reliable per-channel stop and resume
+- STOP_ONCE emits REQUESTED, COMPLETED, or FAILED based on the recorder process
+  termination result. A failed stop clears broadcast suppression.
+- A channel leaves RECORDING only after COMPLETED. It moves to a separate
+  "직접 중지" flyout with the detail "지금 방송은 자동으로 다시 녹화하지
+  않습니다." and the action "녹화 다시 시작".
+
+4. Account-first progress and health visibility
+- Progress coalescing uses account ID when present, preventing same-name
+  channels from overwriting one another's latest progress line.
+- Low disk, disk-check failure, broadcast-check failure, and login-required
+  events include account IDs and appear in a separate dashboard alert flyout.
+
+5. Channel-management usability
+- Search supports channel name and account ID.
+- Filters cover all, active, inactive, and per-channel output-path rows.
+- True/False and blank paths are shown as natural active/inactive and
+  default-path labels.
+- The raw editor is collapsed by default as an advanced tool.
+
+fix38 implemented changes
+-------------------------
+
+1. Channel import
+- "채널 가져오기" accepts TXT/BAK/CSV files using the existing pipe-delimited
+  channel schema and reports exact invalid or duplicate line numbers.
+- The preview separates new and existing account IDs. Users can add only new
+  channels or also update existing channel name/enabled/path values.
+- Cancel leaves the list untouched. Applied imports remain yellow unsaved
+  changes until the explicit "변경 저장" action.
+
+2. Reliable Watcher start and natural wording
+- Header, dashboard, and tray starts share one guarded start state. Both start
+  buttons are disabled during startup, and an already-running process is never
+  reported as a failed start.
+- BackendProcessService captures each process instance in its exit handler and
+  cleans up a partially initialized process instead of leaving it running.
+- "backend 폴더 열기" is now "프로그램 폴더 열기".
+
+3. UI and code optimization
+- Channel list replacement/import/delete paths batch collection notifications
+  and rebuild search/filter results once.
+- Repeated OFFLINE and identical alert rows no longer re-sort/recount the whole
+  dashboard. Count text and log text update only when their value changed.
+- Frequently requested status brushes are cached, common progress/log rows use
+  cheap text routing before regex parsing, and queue accounting is balanced.
+- The unused legacy BuildSettingsView implementation was removed; the fix36+
+  settings partial remains the single active settings UI.
+
+4. Backend optimization
+- Channel files are parsed only when LastWriteTime changes while the cached
+  channel set still drives disable/remove retry reconciliation.
+- Hot-setting metadata checks run once per second rather than every 500 ms.
+- Control commands use an account-ID index instead of scanning every state.
+- Dashboard progress reuses the recorder monitor's latest file-size sample,
+  and PowerShell hot-path collections use generic lists instead of array +=.
+
+5. Build and file optimization
+- BUILD_EXE and BUILD_SELFCONTAINED automatically run SYNC_PROJECT.ps1, so the
+  latest overlay/backend and VERSION always reach the generated project.
+- PREPARE_PROJECT skips redundant template installation when WinUI is ready.
+- Runtime publish folders omit PDB files; source ZIPs still exclude generated
+  and publish directories.
+
+Remaining roadmap after fix38
+-----------------------------
+- Worker-specific structured alert events and JSON GUI events.
+- Bulk SOOP name refresh with preview, recent-recording history, structured
+  log search/filter/export, and responsive narrow-window layouts.
+- Protected Windows credential storage and automated regression tests.
+
+fix39 implemented changes
+-------------------------
+
+1. Channel command layout and visible save action
+- The long single-line toolbar is split into primary commands, a fixed-right
+  "변경 저장" action, selection controls, and raw-editor-only advanced tools.
+- Enable, disable, and delete commands now live under "선택 작업", reducing
+  clutter without removing functionality.
+- Search/filter and select-all controls have their own responsive row, so the
+  save action is no longer pushed outside the window.
+
+2. Compact navigation that remains readable
+- Dashboard, channel management, settings, and logs now have distinct icons.
+- Closing the navigation pane switches to a 52-pixel icon rail instead of
+  clipping portions of Korean menu labels. Each item keeps a tooltip and an
+  accessible name.
+
+3. Consistent action sizing
+- User-facing action buttons share a 34-pixel minimum height, predictable
+  horizontal padding, and role-based minimum widths.
+- The Settings save bar now stretches across the content area. Export/import
+  and discard/save use matched sizes, while "설정 저장" is the primary action.
+
+4. Watcher state reconciliation
+- Header, dashboard, and tray entry points continue to use the same backend
+  process service. A 250 ms UI reconciliation checks the real process state.
+- When backend activity proves Watcher is running, stale stopped text and a
+  disabled top-right stop button repair themselves automatically.
+- Reconciliation is suspended during a requested shutdown; only the actual
+  backend exit transitions the UI to the stopped state.
+
+Remaining roadmap after fix39
+-----------------------------
+- Worker-specific structured alert events and JSON GUI events.
+- Bulk SOOP name refresh with preview, recent-recording history, and structured
+  log search/filter/export.
+- Protected Windows credential storage and automated regression tests.
+
+fix40 implemented changes
+-------------------------
+
+1. Actionable Watcher startup failures
+- Header, dashboard, and tray starts now wait for a backend-ready signal,
+  immediate exit, or a bounded still-initializing result instead of treating
+  one fixed 300 ms sample as the complete startup result.
+- BackendProcessService publishes process ownership before launch completion,
+  preserves the latest redirected stdout/stderr lines, and retains the exit
+  code even when PowerShell exits immediately.
+- A failed start now shows the exit code and recent backend output. The same
+  details are appended to SOOPLiveWinUI_startup.log, and an empty exception can
+  no longer produce a blank dialog.
+- The normal dashboard reset may clear stale status rows, but it can no longer
+  destroy the separate startup diagnostic buffer.
+- A temporary initial SOOP login/network failure is now non-fatal. The Watcher
+  starts without login, records a warning, and can retry authentication later
+  when a channel actually requires it.
+
+2. Adaptive Settings layout
+- Settings cards now stretch to the available content width instead of being
+  fixed to a left-aligned 920-pixel column.
+- Text, password, quality, and path controls resize with their cards. Path rows
+  use star-sized fields with fixed action buttons, preventing wasted space and
+  reducing clipping at narrower widths.
+- Monitoring fields switch from two columns to one column below 620 pixels.
+- Horizontal scrolling is disabled so the page reflows inside the visible
+  viewport while retaining the fixed bottom save bar.
+
+Remaining roadmap after fix40
+-----------------------------
+- Worker-specific structured alert events and JSON GUI events.
+- Bulk SOOP name refresh with preview, recent-recording history, and structured
+  log search/filter/export.
+- Protected Windows credential storage and automated regression tests.
+
+GitHub and Codex cloud preparation
+----------------------------------
+- Generated projects, publish output, logs, runtime control files, local INI
+  credentials, and personal channel lists are excluded by .gitignore.
+- Commit the `.example` setting and channel files, never the corresponding
+  local runtime files without the `.example` suffix.
+- A clean clone seeds missing runtime files from the examples during prepare,
+  synchronization, and publish. Private values must be entered locally.
+- Codex cloud can edit and review this repository, but the final WinUI 3 build
+  and EXE test must run on Windows. See CLOUD_SETUP.md.

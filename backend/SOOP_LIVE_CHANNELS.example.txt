@@ -1,0 +1,2 @@
+# ENABLED|NAME|ACCOUNT|OUTDIR
+N|예시 채널|example_account|

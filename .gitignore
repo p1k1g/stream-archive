@@ -1,0 +1,31 @@
+# Generated WinUI projects and publish output
+.generated/
+publish/
+publish_selfcontained/
+bin/
+obj/
+
+# Local archives, diagnostics, and runtime state
+*.zip
+*.pdb
+*.log
+SOOPLiveWinUI_startup.log
+backend/logs/
+backend/control/
+backend/*.tmp
+backend/*.processing
+
+# Local settings, credentials, and personal channel data
+backend/SOOP_LIVE_SETTING.ini
+backend/SOOP_LIVE_SETTING.ini.bak
+backend/SOOP_LIVE_CHANNELS.txt
+backend/SOOP_LIVE_CHANNELS.txt.bak
+
+# IDE and OS metadata
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+.DS_Store

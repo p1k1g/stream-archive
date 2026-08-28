@@ -1,0 +1,100 @@
+현재 저장소는 Windows용 SOOP LIVE Downloader WinUI 3 프로젝트다.
+
+현재 기준선은:
+
+v1.2.0-preview1-fix36
+
+먼저 코드를 수정하지 말고 다음 파일을 순서대로 읽어라.
+
+1. AGENTS.md
+2. README_WINUI3.txt
+3. VERSION.txt
+4. PREPARE_PROJECT.ps1
+5. BUILD_EXE.bat
+6. overlay/MainWindow.xaml.cs
+7. overlay/BackendProcessService.cs
+8. overlay/Models.cs
+9. backend/SOOP_LIVE.ps1
+
+그 다음 저장소 전체 구조를 파악하고 현재 구현이 AGENTS.md의 규칙과 일치하는지 검토해라.
+
+특히 다음 영역을 집중적으로 검사해라.
+
+- WinUI 3 공식 템플릿 기반 구조가 유지되는지
+- unpackaged / framework-dependent compact publish 구조
+- publish/backend/SOOP_LIVE.ps1 배포 여부
+- GUI가 현재 배포본의 backend만 사용하는지
+- GUI-owned watcher process tree만 종료하는지
+- streamlink/python을 이름으로 전체 종료하는 코드가 없는지
+- Stop-ChannelRecording 실패 반환값이 무시되는 곳이 없는지
+- STOP_ONCE / RESUME_ONCE / SuppressedBno 동작
+- 채널별 progress가 반드시 같은 줄의 BJ명으로 매칭되는지
+- 동시 다중 녹화에서 progress가 서로 잘못 매칭될 가능성이 없는지
+- progress 업데이트 시 ListView collection 전체를 재생성하지 않는지
+- 파일크기/녹화시간/다운로드속도만 정상적으로 갱신되는지
+- PAUSED 상태가 노란색으로 정상 표시되는지
+- OFFLINE은 상단 카드 Flyout으로만 표시되는지
+- 디스크 요약이 실제 ● REC 채널만 사용하는지
+- GUI 로그가 progress로 flood되지 않는지
+- settings/channel atomic save가 유지되는지
+- 채널 파일 CRLF/LF/CR 파싱이 유지되는지
+- dead code 또는 dangling reference가 없는지
+- Regex 선언과 사용처가 모두 일치하는지
+
+중요:
+
+지금은 코드 수정부터 하지 마라.
+
+먼저 아래 형식으로 분석 결과를 보고해라.
+
+[현재 구조 요약]
+
+[발견한 잠재 버그]
+- 심각도 HIGH / MEDIUM / LOW
+- 관련 파일/함수
+- 발생 조건
+- 예상 영향
+
+[정리 가능한 dead code]
+
+[성능상 위험 요소]
+
+[프로세스/파일 race 가능성]
+
+[빌드 또는 배포상 위험 요소]
+
+[추천 수정사항]
+우선순위 순으로 제안
+
+분석 후 가능하면 현재 코드를 수정하지 않은 상태에서 BUILD_EXE.bat을 실행하여 baseline 빌드가 성공하는지 먼저 확인해라.
+
+빌드 시 WMC1509/WMC9999가 나오면 먼저 그보다 앞에 있는 C# 컴파일 오류가 있는지 확인해라.
+
+빌드 성공 후 다음 파일이 존재하는지 확인해라.
+
+publish\backend\SOOP_LIVE.ps1
+
+또한 작업 시작 전에:
+
+git status
+
+를 확인하고, 작업 완료 후에는 반드시:
+
+git status
+git diff
+
+를 확인해라.
+
+사용자가 수정 승인을 하기 전까지는 잠재 버그를 발견했다는 이유만으로 대규모 리팩터링을 하지 마라.
+
+수정할 때는 기존 기능을 보존하고, 하나의 문제를 수정하기 위해 관련 없는 구조를 바꾸지 마라.
+
+현재 프로젝트에서 특히 중요한 원칙은:
+
+1. 녹화 안정성
+2. 다른 프로세스에 영향 주지 않는 안전한 종료
+3. 다중 채널 progress 정확성
+4. 장시간 실행 시 GUI CPU/메모리 안정성
+5. 기존 기능 회귀 방지
+
+이다.
