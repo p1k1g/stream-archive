@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix46
+Version 1.2.0-preview1-fix47
 
 BUG FIX
 -------
@@ -1271,6 +1271,28 @@ fix46 implemented changes
   start proves that downloading resumed.
 - Only current REC items contribute to free-space and remaining-time summaries,
   so removed or stopped channels cannot leave stale drive estimates behind.
+
+fix47 implemented changes
+-------------------------
+
+1. Bounded backend-to-UI memory
+- Progress is coalesced by stable account on the producer thread before it can
+  enter the event queue, so a blocked UI retains only one sample per channel.
+- Routine backend events use a bounded 2,000-line queue. Old lines are released
+  under sustained overflow and a single dropped-line summary is shown, while
+  lifecycle/disk/stop events use a separate priority queue and are never dropped.
+
+2. Lower hot-path allocation and I/O
+- Parsed numeric transfer rates are retained on ChannelStatus and reused by the
+  disk estimator instead of parsing the formatted UI rate every refresh.
+- Alert-only count changes no longer trigger output-drive free-space queries.
+- GUI log lines are bounded, consecutive duplicates are skipped, and multiline
+  HTML/JSON fragments are excluded from the event-oriented log.
+
+3. Deterministic resource cleanup
+- Backend event subscriptions now use named handlers and are removed when the
+  window closes. Timers, bounded queues, progress samples, dashboard maps, and
+  log references are cleared without forcing GC or broad process termination.
 
 GitHub and Codex cloud preparation
 ----------------------------------

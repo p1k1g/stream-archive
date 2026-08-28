@@ -154,17 +154,21 @@ public sealed partial class MainWindow : Window
     bool trayReady = false;
     UiPreferences uiPreferences = UiPreferences.Load();
     readonly ConcurrentQueue<string> backendLineQueue = new();
-    readonly Queue<string> logLines = new();
-    bool logTextDirty = false;
-    readonly Dictionary<string, string> pendingProgressByChannel =
+    readonly ConcurrentQueue<string> priorityBackendLineQueue = new();
+    readonly ConcurrentDictionary<string, string> latestProgressByChannel =
         new(StringComparer.OrdinalIgnoreCase);
+    readonly Queue<string> logLines = new();
+    string lastGuiLogLine = "";
+    bool logTextDirty = false;
 
     DispatcherTimer? uiFlushTimer;
     long queuedBackendLines = 0;
     long flushedBackendLines = 0;
+    long droppedBackendLines = 0;
     DateTime lastUiFlush = DateTime.MinValue;
     DateTime lastDiskEstimateRefresh = DateTime.MinValue;
     const int MaxGuiLogLines = 50;
+    const int MaxQueuedBackendEvents = 2000;
     const int UiFlushMilliseconds = 250;
     static readonly string[] GuiLogTokens =
     {
@@ -322,8 +326,8 @@ public sealed partial class MainWindow : Window
         iniPath = Path.Combine(backendDir, "SOOP_LIVE_SETTING.ini");
         channelPath = Path.Combine(backendDir, "SOOP_LIVE_CHANNELS.txt");
 
-        backend.Output += line => EnqueueBackendLine(line);
-        backend.Exited += code => DispatcherQueue.TryEnqueue(() => OnBackendExited(code));
+        backend.Output += Backend_Output;
+        backend.Exited += Backend_Exited;
 
         ConfigureWindow();
         LoadStaticFiles();
@@ -365,7 +369,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix46",
+            Text = "WinUI 3 · v1.2.0-preview1-fix47",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -1624,6 +1628,22 @@ public sealed partial class MainWindow : Window
         }
         catch { }
 
+        backend.Output -= Backend_Output;
+        backend.Exited -= Backend_Exited;
+
+        while (backendLineQueue.TryDequeue(out _)) { }
+        while (priorityBackendLineQueue.TryDequeue(out _)) { }
+        latestProgressByChannel.Clear();
+        ResetBackendQueueCounters();
+        RecordingItems.Clear();
+        OfflineItems.Clear();
+        StoppedItems.Clear();
+        AlertItems.Clear();
+        statusMap.Clear();
+        alertMap.Clear();
+        logLines.Clear();
+        lastGuiLogLine = "";
+
         try
         {
             if (trayIcon != null)
@@ -1645,6 +1665,17 @@ public sealed partial class MainWindow : Window
 
         try { backend.Dispose(); } catch { }
     }
+
+    void ResetBackendQueueCounters()
+    {
+        Interlocked.Exchange(ref queuedBackendLines, 0);
+        Interlocked.Exchange(ref droppedBackendLines, 0);
+    }
+
+    void Backend_Output(string line) => EnqueueBackendLine(line);
+
+    void Backend_Exited(int code) =>
+        DispatcherQueue.TryEnqueue(() => OnBackendExited(code));
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -2007,9 +2038,13 @@ public sealed partial class MainWindow : Window
 
     void ResetDashboardState()
     {
-        while (backendLineQueue.TryDequeue(out _)) { }
-        Interlocked.Exchange(ref queuedBackendLines, 0);
-        pendingProgressByChannel.Clear();
+        while (backendLineQueue.TryDequeue(out _))
+            Interlocked.Decrement(ref queuedBackendLines);
+        while (priorityBackendLineQueue.TryDequeue(out _)) { }
+        if (Interlocked.Read(ref queuedBackendLines) < 0)
+            Interlocked.Exchange(ref queuedBackendLines, 0);
+        Interlocked.Exchange(ref droppedBackendLines, 0);
+        latestProgressByChannel.Clear();
         RecordingItems.Clear();
         OfflineItems.Clear();
         StoppedItems.Clear();
@@ -2063,15 +2098,45 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(line))
             return;
 
+        // Coalesce progress before it enters the event queue. This keeps only
+        // one producer-side sample per stable channel even if the UI thread is
+        // blocked, preventing progress output from causing unbounded memory.
+        var progress = CompactRecording.Match(line.Trim());
+        if (progress.Success)
+        {
+            var account = progress.Groups["account"].Value.Trim();
+            var name = progress.Groups["name"].Value.Trim();
+            var key = string.IsNullOrWhiteSpace(account)
+                ? "name:" + name
+                : "account:" + account;
+            if (!string.IsNullOrWhiteSpace(name))
+                latestProgressByChannel[key] = line;
+            return;
+        }
+
+        if (IsCriticalBackendEventLine(line))
+        {
+            priorityBackendLineQueue.Enqueue(line);
+            return;
+        }
+
         backendLineQueue.Enqueue(line);
-        Interlocked.Increment(ref queuedBackendLines);
+        var queued = Interlocked.Increment(ref queuedBackendLines);
+        while (queued > MaxQueuedBackendEvents && backendLineQueue.TryDequeue(out _))
+        {
+            Interlocked.Decrement(ref queuedBackendLines);
+            Interlocked.Increment(ref droppedBackendLines);
+            queued = Interlocked.Read(ref queuedBackendLines);
+        }
     }
 
     void FlushBackendUiQueue()
     {
         ReconcileWatcherRunningUiFix39();
 
-        if (backendLineQueue.IsEmpty)
+        if (priorityBackendLineQueue.IsEmpty &&
+            backendLineQueue.IsEmpty &&
+            latestProgressByChannel.IsEmpty)
             return;
 
         // Bound work per UI tick so a noisy backend can never monopolize
@@ -2079,69 +2144,55 @@ public sealed partial class MainWindow : Window
         const int maxLinesPerFlush = 400;
         int count = 0;
 
+        while (count < maxLinesPerFlush && priorityBackendLineQueue.TryDequeue(out var priorityLine))
+        {
+            ProcessBackendLine(priorityLine);
+            count++;
+        }
+
         while (count < maxLinesPerFlush && backendLineQueue.TryDequeue(out var line))
         {
-            ProcessBackendLine(line, deferProgressUi: true);
+            if (Interlocked.Decrement(ref queuedBackendLines) < 0)
+                Interlocked.Exchange(ref queuedBackendLines, 0);
+            ProcessBackendLine(line);
             count++;
         }
 
         flushedBackendLines += count;
-        Interlocked.Add(ref queuedBackendLines, -count);
 
-        // Progress can be very noisy. During one 250 ms window keep only
-        // the newest row per channel and update the UI once.
-        if (pendingProgressByChannel.Count > 0)
+        var dropped = Interlocked.Exchange(ref droppedBackendLines, 0);
+        if (dropped > 0)
+            AppendLog($"[WARN] GUI backend event queue overflow · 오래된 {dropped}줄 생략");
+
+        // Progress is already coalesced on the producer thread. Consume at
+        // most the current latest value for each channel during this UI tick.
+        if (!latestProgressByChannel.IsEmpty)
         {
-            var latest = pendingProgressByChannel.Values.ToArray();
-            pendingProgressByChannel.Clear();
-
-            foreach (var progressLine in latest)
-                ProcessBackendLine(progressLine, deferProgressUi: false);
+            foreach (var entry in latestProgressByChannel.ToArray())
+                if (latestProgressByChannel.TryRemove(entry.Key, out var progressLine))
+                    ProcessBackendLine(progressLine);
         }
 
         FlushLogText();
         lastUiFlush = DateTime.Now;
     }
 
-    void ProcessBackendLine(string line, bool deferProgressUi)
+    static bool IsCriticalBackendEventLine(string line) =>
+        line.Contains(" : RECORD FINISHED | ", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : CHANNEL REMOVED", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : CHANNEL DISABLED", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : CHANNEL STOP ", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : LOW DISK", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" : DISK SPACE UNKNOWN", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("WATCHER ERROR", StringComparison.OrdinalIgnoreCase);
+
+    void ProcessBackendLine(string line)
     {
         ReconcileWatcherRunningUiFix39();
         AppendLog(line);
 
         var text = line.Trim();
         if (text.Length == 0) return;
-
-        // Progress rows are the noisiest output. During queue draining,
-        // cache the newest line per channel and defer actual WinUI updates.
-        if (deferProgressUi)
-        {
-            // fix33 backend guarantees:
-            // [time] CHANNEL : RECORDING | [download] ...
-            // The channel key and the metrics now travel in the same line.
-            var queuedCompact = CompactRecording.Match(text);
-            if (queuedCompact.Success)
-            {
-                var channel = queuedCompact.Groups["name"].Value.Trim();
-                var account = queuedCompact.Groups["account"].Value.Trim();
-                var progressKey = string.IsNullOrWhiteSpace(account)
-                    ? "name:" + channel
-                    : "account:" + account;
-
-                if (!string.IsNullOrWhiteSpace(channel))
-                    pendingProgressByChannel[progressKey] = line;
-
-                return;
-            }
-
-            // Ignore untagged raw [download] lines for dashboard metrics.
-            // Guessing their channel from a previous console line is unsafe
-            // when several recorder processes are active concurrently.
-            if (DownloadProgressWithPath.IsMatch(text) ||
-                DownloadProgressNoPath.IsMatch(text))
-            {
-                return;
-            }
-        }
 
         var stopRequested = ChannelStopRequested.Match(text);
         if (stopRequested.Success)
@@ -2244,9 +2295,11 @@ public sealed partial class MainWindow : Window
                     health.Groups["name"].Value.Trim());
                 RecordingItems.Remove(failedItem);
                 failedItem.RateText = "-";
+                failedItem.RateBytesPerSecond = 0;
                 failedItem.DisplayDrive = "";
                 failedItem.Drive = "";
                 ClearPendingProgress(failedItem.Account, failedItem.Name);
+                RefreshDiskSummary();
             }
             SetDashboardAlert(
                 health.Groups["account"].Value.Trim(),
@@ -2320,6 +2373,7 @@ public sealed partial class MainWindow : Window
             item.SizeText = "-";
             item.ElapsedText = "-";
             item.RateText = "-";
+            item.RateBytesPerSecond = 0;
             item.FilePath = outputFile;
 
             if (!string.IsNullOrWhiteSpace(pendingRecordTitle))
@@ -2327,9 +2381,6 @@ public sealed partial class MainWindow : Window
 
             UpdateDrive(item, outputFile);
             MoveToRecording(item);
-
-            if (notifyStart && uiNotifyRecordStart)
-                ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
 
             if (notifyStart && uiNotifyRecordStart)
                 ShowGuiNotification("녹화 시작", $"{item.Name}\n{item.FileName}", FormsToolTipIcon.Info);
@@ -2358,6 +2409,7 @@ public sealed partial class MainWindow : Window
             item.SizeText = "-";
             item.ElapsedText = "-";
             item.RateText = "-";
+            item.RateBytesPerSecond = 0;
             item.FilePath = file;
             UpdateDrive(item, file);
             MoveToRecording(item);
@@ -2433,6 +2485,13 @@ public sealed partial class MainWindow : Window
         item.SizeText = progress.Groups["size"].Value.Trim();
         item.ElapsedText = progress.Groups["duration"].Value.Trim();
         item.RateText = progress.Groups["rate"].Value.Trim();
+        item.RateBytesPerSecond = ParseRateBytesPerSecond(item.RateText);
+
+        if ((DateTime.Now - lastDiskEstimateRefresh).TotalSeconds >= 5)
+        {
+            lastDiskEstimateRefresh = DateTime.Now;
+            RefreshDiskSummary();
+        }
 
         if ((DateTime.Now - lastDiskEstimateRefresh).TotalSeconds >= 5)
         {
@@ -2446,7 +2505,7 @@ public sealed partial class MainWindow : Window
         if (!RecordingItems.Contains(item))
             MoveToRecording(item);
         else if (alertCleared)
-            UpdateCounts();
+            UpdateCounts(refreshDisk: false);
     }
 
     void HandleRecordingFinished(
@@ -2463,6 +2522,7 @@ public sealed partial class MainWindow : Window
         var item = GetOrCreate(account, name);
         RecordingItems.Remove(item);
         item.RateText = "-";
+        item.RateBytesPerSecond = 0;
         item.DisplayDrive = "";
         item.Drive = "";
 
@@ -2499,9 +2559,9 @@ public sealed partial class MainWindow : Window
     void ClearPendingProgress(string? account, string name)
     {
         if (!string.IsNullOrWhiteSpace(account))
-            pendingProgressByChannel.Remove("account:" + account.Trim());
+            latestProgressByChannel.TryRemove("account:" + account.Trim(), out _);
         if (!string.IsNullOrWhiteSpace(name))
-            pendingProgressByChannel.Remove("name:" + name.Trim());
+            latestProgressByChannel.TryRemove("name:" + name.Trim(), out _);
     }
 
     void RemoveDashboardChannel(ChannelStatus item)
@@ -2631,7 +2691,7 @@ public sealed partial class MainWindow : Window
             ShowGuiNotification("녹화 확인 필요", $"{name}\n{detail}", FormsToolTipIcon.Warning);
         if (uiAutoFormat)
             SortDashboardItems();
-        UpdateCounts();
+        UpdateCounts(refreshDisk: false);
     }
 
     bool ClearDashboardAlert(string? account, string name, bool refresh = true)
@@ -2642,11 +2702,11 @@ public sealed partial class MainWindow : Window
 
         AlertItems.Remove(alert);
         if (refresh)
-            UpdateCounts();
+            UpdateCounts(refreshDisk: false);
         return true;
     }
 
-    void UpdateCounts()
+    void UpdateCounts(bool refreshDisk = true)
     {
         SetTextIfChangedFix38(
             RecordingCountText,
@@ -2654,7 +2714,8 @@ public sealed partial class MainWindow : Window
         SetTextIfChangedFix38(OfflineCountText, OfflineItems.Count.ToString());
         SetTextIfChangedFix38(StoppedCountText, StoppedItems.Count.ToString());
         SetTextIfChangedFix38(AlertCountText, AlertItems.Count.ToString());
-        RefreshDiskSummary();
+        if (refreshDisk)
+            RefreshDiskSummary();
         UpdateDashboardEmptyState();
     }
 
@@ -2750,7 +2811,7 @@ public sealed partial class MainWindow : Window
                     itemsByRoot[root] = rootItems;
                 }
                 rootItems.Add(item);
-                rateByRoot[root] = rateByRoot.GetValueOrDefault(root) + ParseRateBytesPerSecond(item.RateText);
+                rateByRoot[root] = rateByRoot.GetValueOrDefault(root) + item.RateBytesPerSecond;
             }
             catch { }
         }
@@ -4150,6 +4211,7 @@ public sealed partial class MainWindow : Window
     void ClearLog_Click(object sender, RoutedEventArgs e)
     {
         logLines.Clear();
+        lastGuiLogLine = "";
         LogBox.Text="";
     }
 
@@ -4169,6 +4231,8 @@ public sealed partial class MainWindow : Window
     {
         if (string.IsNullOrWhiteSpace(line)) return false;
         var text=line.Trim();
+        if (text.StartsWith('<') || text.StartsWith('"') ||
+            text is "{" or "}" or "[" or "]") return false;
         // The frequent dashboard/progress rows have stable text markers.
         // Avoid running four regular expressions for every such line.
         if (text.Contains(" : RECORDING | ", StringComparison.OrdinalIgnoreCase) ||
@@ -4183,6 +4247,13 @@ public sealed partial class MainWindow : Window
     void AppendLog(string line)
     {
         if (!IsGuiEventLogLine(line)) return;
+        line = line.Trim();
+        const int maxEventCharacters = 600;
+        if (line.Length > maxEventCharacters)
+            line = line[..maxEventCharacters] + " … [truncated]";
+        if (string.Equals(lastGuiLogLine, line, StringComparison.Ordinal))
+            return;
+        lastGuiLogLine = line;
         logLines.Enqueue(line);
         while(logLines.Count>MaxGuiLogLines) logLines.Dequeue();
         logTextDirty = true;

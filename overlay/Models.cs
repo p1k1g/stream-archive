@@ -25,6 +25,7 @@ public sealed class ChannelStatus : INotifyPropertyChanged
     string _sizeText = "-";
     string _elapsedText = "-";
     string _rateText = "-";
+    double _rateBytesPerSecond;
     bool _isSuspended;
 
     public string Time { get => _time; set { if (Equals(_time, value)) return; _time = value; OnChanged(); } }
@@ -92,6 +93,7 @@ public sealed class ChannelStatus : INotifyPropertyChanged
     public string SizeText { get => _sizeText; set { if (Equals(_sizeText, value)) return; _sizeText = value; OnChanged(); } }
     public string ElapsedText { get => _elapsedText; set { if (Equals(_elapsedText, value)) return; _elapsedText = value; OnChanged(); } }
     public string RateText { get => _rateText; set { if (Equals(_rateText, value)) return; _rateText = value; OnChanged(); } }
+    public double RateBytesPerSecond { get => _rateBytesPerSecond; set { if (Equals(_rateBytesPerSecond, value)) return; _rateBytesPerSecond = value; } }
     public bool IsSuspended { get => _isSuspended; set { if (Equals(_isSuspended, value)) return; _isSuspended = value; OnChanged(); } }
 
     public event PropertyChangedEventHandler? PropertyChanged;
