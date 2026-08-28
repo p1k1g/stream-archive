@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix40
+Version 1.2.0-preview1-fix50
 
 BUG FIX
 -------
@@ -1184,6 +1184,133 @@ Remaining roadmap after fix40
   log search/filter/export.
 - Protected Windows credential storage and automated regression tests.
 
+fix41 implemented changes
+-------------------------
+
+1. Watcher start reset reliability
+- Dashboard, header, and tray Watcher starts no longer mutate the SelectedItems
+  collection of single-selection recording lists during dashboard reset.
+- Reset now clears SelectedItem directly, preventing the WinRT illegal-method
+  exception that could stop startup before PowerShell was launched.
+- Empty startup exception messages now include the exception type and HRESULT,
+  while full details continue to be written to SOOPLiveWinUI_startup.log.
+
+fix42 implemented changes
+-------------------------
+
+1. Accurate Watcher stop state
+- A non-zero PowerShell exit code caused by terminating the GUI-owned process
+  tree is now shown as a normal stop when it follows an explicit user request.
+- Unexpected backend exits without a pending stop request still retain the
+  existing error-exit status and exit code.
+
+2. Typed numeric setting changes
+- NumberBox keyboard edits now mark Settings dirty immediately, enabling Save
+  before focus leaves the field. ValueChanged remains in place for committed,
+  spin-button, paste, and programmatic value changes.
+
+fix43 implemented changes
+-------------------------
+
+1. Verified Watcher termination
+- Backend process-tree termination now returns success/failure to the GUI.
+- The GUI reports a stop-confirmation warning when the exact owned process tree
+  could not be confirmed stopped instead of treating intent alone as success.
+
+2. Validated numeric settings
+- NumberBox dirty tracking now follows actual Text changes rather than every
+  KeyUp, covering paste and accessibility input without navigation-key noise.
+- Empty, invalid, and out-of-range numeric values are rejected before saving;
+  they are no longer silently replaced with defaults.
+- Numeric INI values are written with invariant-culture formatting.
+
+fix44 implemented changes
+-------------------------
+
+1. Open an active recording folder
+- Selecting a recording now enables a compact Folder Open action beside the
+  existing per-channel Stop action in the dashboard header.
+- The action uses the actual output file path reported by the backend, opens
+  only its existing parent directory, and shows a clear error when the path is
+  not available instead of creating or guessing a folder.
+
+fix45 implemented changes
+-------------------------
+
+1. Configurable tray notifications
+- Settings can independently enable recording-start, recording-finished, and
+  actionable warning notifications. Defaults avoid noisy start notifications
+  while retaining completion and important failure/disk/auth warnings.
+
+2. Recording card context actions
+- Right-clicking a recording card offers Folder Open, Select File, Copy Path,
+  and Stop Current Recording without adding permanent dashboard button clutter.
+- All path actions use the backend-reported output path.
+
+3. Conservative disk-time estimate
+- The disk summary combines actual free space with the summed real file-growth
+  rates of active REC items on each output drive.
+- It subtracts the configured minimum-free-space reserve and displays a stable
+  tier such as under one hour, approximate hours/days, or three days or more.
+- PAUSED and restart-waiting items remain excluded from disk calculations.
+
+fix46 implemented changes
+-------------------------
+
+1. Deterministic recording-finish lifecycle
+- The backend emits recording-finished and channel-removed/disabled events with
+  stable account IDs on one line so the GUI can safely correlate concurrent
+  recorder output.
+- Finished, removed, and disabled recordings are removed from the active REC
+  collection immediately; queued stale progress is discarded at the same time.
+
+2. Recoverable alerts and disk cleanup
+- Recorder exits, stalls, low disk, and restart failures remain visible under
+  Needs Attention while a retry is pending.
+- The alert is cleared as soon as deterministic progress or a new recording
+  start proves that downloading resumed.
+- Only current REC items contribute to free-space and remaining-time summaries,
+  so removed or stopped channels cannot leave stale drive estimates behind.
+
+fix47 implemented changes
+-------------------------
+
+1. Bounded backend-to-UI memory
+- Progress is coalesced by stable account on the producer thread before it can
+  enter the event queue, so a blocked UI retains only one sample per channel.
+- Routine backend events use a bounded 2,000-line queue. Old lines are released
+  under sustained overflow and a single dropped-line summary is shown, while
+  lifecycle/disk/stop events use a separate priority queue and are never dropped.
+
+2. Lower hot-path allocation and I/O
+- Parsed numeric transfer rates are retained on ChannelStatus and reused by the
+  disk estimator instead of parsing the formatted UI rate every refresh.
+- Alert-only count changes no longer trigger output-drive free-space queries.
+- GUI log lines are bounded, consecutive duplicates are skipped, and multiline
+  HTML/JSON fragments are excluded from the event-oriented log.
+
+3. Deterministic resource cleanup
+- Backend event subscriptions now use named handlers and are removed when the
+  window closes. Timers, bounded queues, progress samples, dashboard maps, and
+  log references are cleared without forcing GC or broad process termination.
+
+fix48 implemented changes
+-------------------------
+
+1. Worker endpoint circuit breaker
+- Two complete failed Worker request cycles open a shared endpoint circuit.
+- Cooldown grows through bounded 30, 60, 120, and 300 second tiers. Existing
+  recordings continue; only new playlist acquisition is delayed.
+- A successful probe or saved Worker URL/API-key change resets the circuit.
+
+2. Compact recovery diagnostics
+- External HTML/JSON errors are reduced to a whitespace-normalized 300-character
+  summary before reaching stdout and the GUI event log.
+- During an open circuit, each affected channel receives a stable account-tagged
+  WORKER COOLDOWN event and schedules its next check at the cooldown boundary.
+- Needs Attention shows Worker recovery wait and clears normally when a new
+  recording start/progress proves recovery.
+
 GitHub and Codex cloud preparation
 ----------------------------------
 - Generated projects, publish output, logs, runtime control files, local INI
@@ -1194,3 +1321,42 @@ GitHub and Codex cloud preparation
   synchronization, and publish. Private values must be entered locally.
 - Codex cloud can edit and review this repository, but the final WinUI 3 build
   and EXE test must run on Windows. See CLOUD_SETUP.md.
+
+fix49 implemented changes
+-------------------------
+
+1. Wildcard-safe recording growth watchdog
+- The watchdog and RECORD FINISHED size calculation now use PowerShell
+  `-LiteralPath` for the generated output filename.
+- Broadcast titles containing valid filename characters such as `[` and `]`
+  are no longer interpreted as wildcard patterns. Their real file growth is
+  detected instead of remaining at a false `0 B` and restarting every 90 seconds.
+- The configured 90-second genuine no-growth recovery, immediate LIVE recheck,
+  collision-safe naming, and exact owned-process termination remain unchanged.
+
+fix50 implemented changes
+-------------------------
+
+1. Versioned backend event protocol
+- Critical lifecycle events now emit `@@SOOP_EVENT@@` JSON version 1 records for
+  recording start/finish/stall, low disk, Worker cooldown, and channel removal
+  or disable. Human-readable lines remain for users and older GUI fallback.
+- `BackendEventParser` owns JSON and legacy text parsing, preserving Korean and
+  delimiter characters such as `[`, `]`, `|`, and `=` without correlation loss.
+- Structured lifecycle lines use the priority UI queue and recent-event
+  suppression prevents the paired legacy line from applying the same action twice.
+
+2. Automated protocol regressions
+- A dependency-free .NET 8 console test covers every introduced JSON event,
+  legacy fallback parsing, malformed/version-mismatched JSON, Korean text, and
+  special-character names, titles, and paths.
+- A PowerShell regression verifies literal-path size checks for wildcard-like
+  filenames and guards against reintroducing non-literal watchdog access.
+
+3. Bounded redacted recorder diagnostics
+- Unexpected recorder exits and genuine RECORD STALLED stops retain only the
+  final 50 stderr lines under `backend\logs\recorder-diagnostics`.
+- Authorization, cookie, password, API-key, AID, and token-shaped values are
+  redacted before writing; only the newest 20 diagnostic files are retained.
+- Normal recording completion, user stop, channel removal, and low-disk stops
+  continue deleting temporary recorder console files without diagnostic churn.
