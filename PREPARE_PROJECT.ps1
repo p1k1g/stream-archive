@@ -7,7 +7,7 @@ $overlayDir = Join-Path $root 'overlay'
 $backendDir = Join-Path $root 'backend'
 
 Write-Host '========================================'
-Write-Host ' SOOP LIVE WinUI 3 fix53 Project Prep'
+Write-Host ' SOOP LIVE WinUI 3 fix54 Project Prep'
 Write-Host ' UNPACKAGED / SINGLE PROJECT'
 Write-Host '========================================'
 Write-Host ''
@@ -17,9 +17,24 @@ if (-not (Get-Command dotnet.exe -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host '[1/5] Checking official WinUI template pack...'
-$templateList = (& dotnet new list winui 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0 -or $templateList -notmatch 'WinUI Blank App') {
-    dotnet new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates
+$templateProbeExitCode = 0
+$templateProbeOutput = @()
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    # A fresh SDK reports "No templates found" on stderr and exits non-zero.
+    # That is the expected signal to install the official template pack, not a
+    # fatal PowerShell error. Limit the relaxed policy to this probe only.
+    $ErrorActionPreference = 'Continue'
+    $templateProbeOutput = @(& dotnet.exe new list winui 2>&1)
+    $templateProbeExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+$templateList = ($templateProbeOutput | ForEach-Object { [string]$_ }) -join "`n"
+if ($templateProbeExitCode -ne 0 -or $templateList -notmatch 'WinUI Blank App') {
+    Write-Host '[INFO] Official WinUI template is not installed; installing it now...'
+    dotnet.exe new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates
     if ($LASTEXITCODE -ne 0) {
         throw 'Failed to install WinUI template pack.'
     }
@@ -35,7 +50,7 @@ if (Test-Path $generatedRoot) {
 New-Item -ItemType Directory -Path $generatedRoot -Force | Out-Null
 
 Write-Host '[3/5] Creating official SOOP WinUI base only...'
-dotnet new winui --dotnet-version net8.0 -n SOOPLiveWinUI -o $soopDir --force
+dotnet.exe new winui --dotnet-version net8.0 -n SOOPLiveWinUI -o $soopDir --force
 if ($LASTEXITCODE -ne 0) {
     throw 'SOOP generation failed.'
 }
@@ -58,8 +73,8 @@ function Set-ProjectProperties([string]$ProjectFile) {
     Set-Prop 'WindowsAppSDKSelfContained' 'false'
     Set-Prop 'PublishTrimmed' 'false'
     Set-Prop 'ApplicationIcon' 'Assets\SOOPLiveDownloader.ico'
-    Set-Prop 'Version' '1.2.0-preview1-fix53'
-    Set-Prop 'InformationalVersion' '1.2.0-preview1-fix53'
+    Set-Prop 'Version' '1.2.0-preview1-fix54'
+    Set-Prop 'InformationalVersion' '1.2.0-preview1-fix54'
 
     # Do NOT set UseWindowsForms=true in a WinUI project.
     # That imports WindowsDesktop/WPF XAML targets and causes App.xaml to be
