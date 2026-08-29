@@ -250,6 +250,10 @@ public sealed partial class MainWindow : Window
         @"RECORD FINISHED channel=(?<name>.+?) duration=(?<duration>\S+) size=(?<size>.+?) reason=(?<reason>.+?) file=(?<file>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    static readonly Regex RecordFinishedEvent = new(
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)\s+\[account=(?<account>[A-Za-z0-9_]+)\]\s*:\s*RECORD FINISHED\s*\|\s*duration=(?<duration>[^|]*)\|\s*size=(?<size>[^|]*)\|\s*reason=(?<reason>[^|]*)\|\s*file=(?<file>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     static readonly Regex ChannelStopRequested = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*CHANNEL STOP REQUESTED BNO=(?<bno>\S*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -264,6 +268,10 @@ public sealed partial class MainWindow : Window
 
     static readonly Regex ChannelResumeRequested = new(
         @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)(?:\s+\[account=(?<account>[A-Za-z0-9_]+)\])?\s*:\s*CHANNEL RESUME REQUESTED(?: BNO=(?<bno>\S*))?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    static readonly Regex ChannelRemovedOrDisabled = new(
+        @"^\[(?<time>\d{2}:\d{2}:\d{2})\]\s+(?<name>.+?)\s+\[account=(?<account>[A-Za-z0-9_]+)\]\s*:\s*CHANNEL\s+(?<action>REMOVED|DISABLED)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     static readonly Regex DashboardHealthState = new(
