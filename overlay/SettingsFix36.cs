@@ -163,16 +163,21 @@ public sealed partial class MainWindow
             var opening = advanced.Visibility != Visibility.Visible;
             advanced.Visibility = opening ? Visibility.Visible : Visibility.Collapsed;
             advancedToggle.Content = opening ? "고급 설정 접기" : "고급 설정 펼치기";
-            // NumberBox can commit its display Text while the previously
-            // collapsed panel is measured. Suppress those layout-only
-            // callbacks across two dispatcher turns, without discarding an
-            // already real user edit.
-            DispatcherQueue.TryEnqueue(() => DispatcherQueue.TryEnqueue(() =>
+            // NumberBox can commit its display Text asynchronously while the
+            // previously collapsed panel is first measured. Two dispatcher
+            // turns were not sufficient after Settings import/save, so keep a
+            // short, layout-only suppression window and preserve any dirty
+            // state that existed before the panel transition.
+            var settleTimer = DispatcherQueue.CreateTimer();
+            settleTimer.Interval = TimeSpan.FromMilliseconds(500);
+            settleTimer.IsRepeating = false;
+            settleTimer.Tick += (_, _) =>
             {
                 settingsUiTransitionDepth = Math.Max(0, settingsUiTransitionDepth - 1);
                 if (!wasDirty && settingsUiTransitionDepth == 0)
                     SetSettingsDirtyFix36(false);
-            }));
+            };
+            settleTimer.Start();
         };
 
         var cloudflare = SettingsCard(
@@ -601,7 +606,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix54",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix56",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });

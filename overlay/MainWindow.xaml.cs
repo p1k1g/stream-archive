@@ -369,7 +369,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix54",
+            Text = "WinUI 3 · v1.2.0-preview1-fix56",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -406,7 +406,7 @@ public sealed partial class MainWindow : Window
         Nav.MenuItems.Add(NavigationItemFix39("대시보드", "dashboard", Symbol.Home));
         Nav.MenuItems.Add(NavigationItemFix39("채널 관리", "channels", Symbol.People));
         Nav.MenuItems.Add(NavigationItemFix39("설정", "settings", Symbol.Setting));
-        Nav.MenuItems.Add(NavigationItemFix39("최근 녹화", "recent", Symbol.Document));
+        Nav.MenuItems.Add(NavigationItemFix39("최근 녹화", "recent", Symbol.Video));
         Nav.MenuItems.Add(NavigationItemFix39("로그", "logs", Symbol.Document));
         Nav.SelectionChanged += Nav_SelectionChanged;
 

@@ -742,7 +742,7 @@ public sealed partial class MainWindow
     {
         const string xaml = """
 <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
-  <Border Background="#20252C" CornerRadius="7" Padding="10" Margin="0,0,0,5">
+  <Border Background="{Binding CardBackground}" BorderBrush="{Binding CardBorder}" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,0,0,5" Opacity="{Binding RowOpacity}">
     <Grid ColumnSpacing="12">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="80"/>
@@ -750,8 +750,10 @@ public sealed partial class MainWindow
         <ColumnDefinition Width="220"/>
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
-      <TextBlock Grid.Column="0" Text="{Binding EnabledText}" Foreground="#AAB4C3"/>
-      <TextBlock Grid.Column="1" Text="{Binding Name}" Foreground="White" FontWeight="SemiBold"/>
+      <Border Grid.Column="0" Background="{Binding BadgeBackground}" CornerRadius="10" Padding="8,3" HorizontalAlignment="Left">
+        <TextBlock Text="{Binding EnabledText}" Foreground="{Binding StateForeground}" FontWeight="SemiBold"/>
+      </Border>
+      <TextBlock Grid.Column="1" Text="{Binding Name}" Foreground="{Binding NameForeground}" FontWeight="SemiBold"/>
       <TextBlock Grid.Column="2" Text="{Binding Account}" Foreground="#D7DEE8"/>
       <TextBlock Grid.Column="3" Text="{Binding OutputDisplay}" Foreground="#9AA5B4" TextTrimming="CharacterEllipsis"/>
     </Grid>

@@ -105,16 +105,32 @@ public sealed class ChannelStatus : INotifyPropertyChanged
 
 public sealed class EditableChannel : INotifyPropertyChanged
 {
+    static readonly SolidColorBrush EnabledForegroundBrush = new(Color.FromArgb(255, 76, 226, 145));
+    static readonly SolidColorBrush DisabledForegroundBrush = new(Color.FromArgb(255, 139, 148, 160));
+    static readonly SolidColorBrush EnabledCardBrush = new(Color.FromArgb(255, 28, 48, 43));
+    static readonly SolidColorBrush DisabledCardBrush = new(Color.FromArgb(255, 35, 39, 46));
+    static readonly SolidColorBrush EnabledBadgeBrush = new(Color.FromArgb(255, 27, 76, 57));
+    static readonly SolidColorBrush DisabledBadgeBrush = new(Color.FromArgb(255, 57, 62, 71));
+    static readonly SolidColorBrush EnabledBorderBrush = new(Color.FromArgb(255, 54, 138, 99));
+    static readonly SolidColorBrush DisabledBorderBrush = new(Color.FromArgb(255, 72, 78, 88));
+    static readonly SolidColorBrush EnabledNameBrush = new(Color.FromArgb(255, 255, 255, 255));
+    static readonly SolidColorBrush DisabledNameBrush = new(Color.FromArgb(255, 171, 179, 190));
     bool _enabled = true;
     string _name = "";
     string _account = "";
     string _outDir = "";
 
-    public bool Enabled { get => _enabled; set { if (Equals(_enabled, value)) return; _enabled = value; OnChanged(); OnChanged(nameof(EnabledText)); } }
+    public bool Enabled { get => _enabled; set { if (Equals(_enabled, value)) return; _enabled = value; OnChanged(); OnChanged(nameof(EnabledText)); OnChanged(nameof(StateForeground)); OnChanged(nameof(CardBackground)); OnChanged(nameof(BadgeBackground)); OnChanged(nameof(CardBorder)); OnChanged(nameof(NameForeground)); OnChanged(nameof(RowOpacity)); } }
     public string Name { get => _name; set { if (Equals(_name, value)) return; _name = value; OnChanged(); } }
     public string Account { get => _account; set { if (Equals(_account, value)) return; _account = value; OnChanged(); } }
     public string OutDir { get => _outDir; set { if (Equals(_outDir, value)) return; _outDir = value; OnChanged(); OnChanged(nameof(OutputDisplay)); } }
     public string EnabledText => Enabled ? "● 활성" : "○ 비활성";
+    public SolidColorBrush StateForeground => Enabled ? EnabledForegroundBrush : DisabledForegroundBrush;
+    public SolidColorBrush CardBackground => Enabled ? EnabledCardBrush : DisabledCardBrush;
+    public SolidColorBrush BadgeBackground => Enabled ? EnabledBadgeBrush : DisabledBadgeBrush;
+    public SolidColorBrush CardBorder => Enabled ? EnabledBorderBrush : DisabledBorderBrush;
+    public SolidColorBrush NameForeground => Enabled ? EnabledNameBrush : DisabledNameBrush;
+    public double RowOpacity => Enabled ? 1.0 : 0.72;
     public string OutputDisplay => string.IsNullOrWhiteSpace(OutDir) ? "기본 경로" : OutDir;
 
     public event PropertyChangedEventHandler? PropertyChanged;

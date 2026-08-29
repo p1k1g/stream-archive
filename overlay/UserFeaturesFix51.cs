@@ -258,7 +258,7 @@ public sealed partial class MainWindow
         try
         {
             var text = DiagnosticInfoService.CreateReport(
-                "1.2.0-preview1-fix54",
+                "1.2.0-preview1-fix56",
                 backend.IsRunning,
                 RecordingItems.Count,
                 OfflineItems.Count,
@@ -391,13 +391,15 @@ public sealed partial class MainWindow
         {
             Title = "채널명 일괄 새로고침 미리보기",
             Content = previewBox,
-            PrimaryButtonText = "변경을 목록에 반영",
+            PrimaryButtonText = "변경 사항 반영",
+            SecondaryButtonText = "확인",
             CloseButtonText = "취소",
             IsPrimaryButtonEnabled = changed.Count > 0,
-            DefaultButton = ContentDialogButton.Close,
+            DefaultButton = changed.Count > 0 ? ContentDialogButton.Primary : ContentDialogButton.Secondary,
             XamlRoot = Content is FrameworkElement fe ? fe.XamlRoot : null
         };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary) return;
 
         foreach (var entry in changed)
             entry.Channel.Name = entry.Lookup.Name;

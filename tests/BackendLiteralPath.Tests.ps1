@@ -6,7 +6,12 @@ try {
     # '[' and ']' are valid Windows filename characters but wildcard metacharacters
     # to PowerShell path cmdlets. Keep them for the LiteralPath regression while
     # avoiding characters such as '|' that Windows forbids before path handling.
-    $specialFileName = '녹화[테스트]=제목.ts'
+    # Build the Korean fixture from Unicode code points so this script remains
+    # ASCII-only and parses identically in Windows PowerShell 5.1 without BOM.
+    $specialFileName = -join ([char[]]@(
+        0xB179,0xD654,0x005B,0xD14C,0xC2A4,0xD2B8,0x005D,
+        0x003D,0xC81C,0xBAA9,0x002E,0x0074,0x0073
+    ))
     if ($specialFileName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
         throw 'Literal-path fixture contains a Windows-invalid filename character.'
     }
