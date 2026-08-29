@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix53
+Version 1.2.0-preview1-fix54
 
 BUG FIX
 -------
@@ -1439,3 +1439,15 @@ fix53 implemented changes
   to NORMAL, clears any stale channel alert, migrates matching recent-history
   reasons, and keeps non-zero exits actionable.
 - Parser regressions cover empty, zero, unavailable, and non-zero finish reasons.
+
+fix54 implemented changes
+-------------------------
+
+1. Fresh-machine WinUI template bootstrap
+- PREPARE_PROJECT now treats `dotnet new list winui` returning no templates as
+  an expected probe result even while the rest of the script remains fail-fast.
+- The probe captures native output/exit code under a narrowly scoped Continue
+  policy, restores ErrorActionPreference in finally, and then installs the
+  official Microsoft WinUI C# template pack.
+- A source regression protects the scoped error-policy restoration, native exit
+  capture, and official template installation fallback used by Windows CI.

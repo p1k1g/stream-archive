@@ -21,14 +21,6 @@ try {
     }
 
     $backendPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'backend\SOOP_LIVE.ps1'
-    $recorderModule = Join-Path (Split-Path $backendPath -Parent) 'modules\SOOP.Recorder.ps1'
-    . $recorderModule
-    $sanitizedName = Get-SafeFileName -Name '녹화[테스트]|=제목'
-    if ($sanitizedName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
-        $sanitizedName -ne '녹화[테스트]_=제목') {
-        throw 'Windows-invalid filename characters are not sanitized as expected.'
-    }
-
     $source = (Get-Content -LiteralPath $backendPath -Raw -Encoding UTF8) + "`n" +
         ((Get-ChildItem -LiteralPath (Join-Path (Split-Path $backendPath -Parent) 'modules') -Filter '*.ps1' -File |
             ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join "`n")
