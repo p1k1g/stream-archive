@@ -1,7 +1,7 @@
 ﻿SOOP LIVE Downloader
 GUI: WinUI 3
-Version: 1.2.0-preview1-fix55
-Feature: distinct channel states, preview actions, navigation icon, and settings dirty guard
+Version: 1.2.0-preview1-fix56
+Feature: Windows PowerShell 5.1-safe ASCII regression scripts
 Includes: all fix47/fix46/fix45 and earlier functionality
 Settings: fix36 path/auth/dependency tests, dirty save bar, defaults, and INI export/import
 Dashboard: Watcher-exit cleanup, stop ACK, stopped/resume flyout, alerts, natural empty states

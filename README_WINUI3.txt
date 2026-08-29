@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix55
+Version 1.2.0-preview1-fix56
 
 BUG FIX
 -------
@@ -1471,3 +1471,15 @@ fix55 implemented changes
   collapsed advanced panel is measured. A scoped 500 ms layout transition guard
   now absorbs those programmatic callbacks without clearing pre-existing edits.
 - Source regressions protect all four UI behaviors.
+
+fix56 implemented changes
+-------------------------
+
+1. Windows PowerShell 5.1-safe source regressions
+- PowerShell 5.1 reads BOM-less scripts through the active ANSI code page. Korean
+  regex literals in UserFeaturesSource.Tests could therefore become invalid
+  tokens before any assertion ran.
+- Korean UI labels are now reconstructed from Unicode code points inside an
+  ASCII-only test script; the recent-navigation assertion uses its stable tag.
+- The literal-path Korean filename fixture is also constructed from code points,
+  and SecurityAndModules.Tests rejects future non-ASCII PowerShell test sources.

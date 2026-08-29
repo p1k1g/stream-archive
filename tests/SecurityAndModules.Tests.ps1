@@ -12,6 +12,13 @@ $requiredModules = @(
     'SOOP.Recorder.ps1'
 )
 
+foreach ($testScript in Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File) {
+    $scriptText = [IO.File]::ReadAllText($testScript.FullName,[Text.Encoding]::UTF8)
+    if ($scriptText.ToCharArray() | Where-Object { [int]$_ -gt 127 } | Select-Object -First 1) {
+        throw "PowerShell 5.1-compatible source test contains non-ASCII text: $($testScript.Name)"
+    }
+}
+
 if ([regex]::IsMatch($main,'(?m)^function\s+')) {
     throw 'SOOP_LIVE.ps1 must remain orchestration-only; function definitions belong in modules.'
 }

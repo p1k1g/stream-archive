@@ -13,6 +13,10 @@ $recentStore = Get-Content -LiteralPath (Join-Path $root 'overlay\RecentRecordin
 $diagnostics = Get-Content -LiteralPath (Join-Path $root 'overlay\DiagnosticInfoService.cs') -Raw -Encoding UTF8
 $models = Get-Content -LiteralPath (Join-Path $root 'overlay\Models.cs') -Raw -Encoding UTF8
 
+function ConvertFrom-CodePoints([int[]]$CodePoints) {
+    return -join ($CodePoints | ForEach-Object { [char]$_ })
+}
+
 if ($backend -notmatch 'elseif\s*\(\$action\s+-eq\s+"RECHECK"\)') {
     throw 'Per-account RECHECK command handling is missing.'
 }
@@ -36,12 +40,18 @@ if ($models -notmatch 'CardBackground' -or $models -notmatch 'StateForeground' -
     $main -notmatch 'Foreground="\{Binding StateForeground\}"') {
     throw 'Enabled/disabled channel visual distinction is missing.'
 }
-if ($features -notmatch 'PrimaryButtonText\s*=\s*"변경 사항 반영"' -or
-    $features -notmatch 'SecondaryButtonText\s*=\s*"확인"' -or
-    $features -notmatch 'CloseButtonText\s*=\s*"취소"') {
+$applyLabel = ConvertFrom-CodePoints @(0xBCC0,0xACBD,0x20,0xC0AC,0xD56D,0x20,0xBC18,0xC601)
+$confirmLabel = ConvertFrom-CodePoints @(0xD655,0xC778)
+$cancelLabel = ConvertFrom-CodePoints @(0xCDE8,0xC18C)
+$applyPattern = 'PrimaryButtonText\s*=\s*"' + [regex]::Escape($applyLabel) + '"'
+$confirmPattern = 'SecondaryButtonText\s*=\s*"' + [regex]::Escape($confirmLabel) + '"'
+$cancelPattern = 'CloseButtonText\s*=\s*"' + [regex]::Escape($cancelLabel) + '"'
+if ($features -notmatch $applyPattern -or
+    $features -notmatch $confirmPattern -or
+    $features -notmatch $cancelPattern) {
     throw 'Channel-name preview apply/confirm/cancel actions are not distinct.'
 }
-if ($main -notmatch 'NavigationItemFix39\("최근 녹화",\s*"recent",\s*Symbol\.Video\)') {
+if ($main -notmatch 'NavigationItemFix39\("[^"]+",\s*"recent",\s*Symbol\.Video\)') {
     throw 'Recent-recordings navigation icon is not distinct from the log document icon.'
 }
 if ($settings -notmatch 'DispatcherQueue\.CreateTimer\(\)' -or
