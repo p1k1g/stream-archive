@@ -126,6 +126,7 @@ public sealed partial class MainWindow : Window
     bool channelChangesDirty = false;
     bool suppressChannelSelectionSync = false;
     bool suppressChannelCollectionRefresh = false;
+    Microsoft.UI.Dispatching.DispatcherQueueTimer? channelSearchDebounceTimer;
     bool suppressNavigationSelectionChanged = false;
     bool channelNavigationPromptOpen = false;
     bool dashboardWatcherRunning = false;
@@ -366,7 +367,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix57",
+            Text = "WinUI 3 · v1.2.0-preview1-fix58",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });

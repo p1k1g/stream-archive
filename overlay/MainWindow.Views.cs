@@ -646,8 +646,16 @@ public sealed partial class MainWindow
             ItemsSource = new[] { "전체 채널", "활성 채널", "비활성 채널", "개별 저장 경로" },
             SelectedIndex = 0
         };
-        ChannelSearchBox.TextChanged += (_, _) => RefreshChannelFilter();
-        ChannelFilterBox.SelectionChanged += (_, _) => RefreshChannelFilter();
+        channelSearchDebounceTimer = DispatcherQueue.CreateTimer();
+        channelSearchDebounceTimer.Interval = TimeSpan.FromMilliseconds(250);
+        channelSearchDebounceTimer.IsRepeating = false;
+        channelSearchDebounceTimer.Tick += (_, _) => RefreshChannelFilter();
+        ChannelSearchBox.TextChanged += (_, _) => ScheduleChannelFilterRefresh();
+        ChannelFilterBox.SelectionChanged += (_, _) =>
+        {
+            channelSearchDebounceTimer.Stop();
+            RefreshChannelFilter();
+        };
         ChannelItems.CollectionChanged += (_, _) =>
         {
             if (suppressChannelCollectionRefresh)

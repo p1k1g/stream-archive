@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix57
+Version 1.2.0-preview1-fix58
 
 BUG FIX
 -------
@@ -1508,3 +1508,21 @@ fix57 implemented changes
   for channel management, and Ctrl+S for Settings.
 - Source regressions protect design tokens, responsive templates, CommandBar,
   high-contrast, and accelerator wiring.
+
+fix58 implemented changes
+-------------------------
+
+1. Debounced channel search
+- Channel-name/account typing waits for a quiet 250 ms interval before applying
+  the filter. Filter dropdown changes remain immediate.
+
+2. Minimal visible-channel synchronization
+- Filtering no longer clears and rebuilds VisibleChannelItems. Removed rows are
+  deleted, new rows inserted, and retained rows moved only when their position
+  actually changes. Reapplying the same filter emits no collection mutations.
+- Retained selections are restored by stable account ID, and the first visible
+  row is used as a scroll anchor across filter updates.
+
+3. Large-list regression
+- A dependency-free 10,000-channel regression validates filtering, no-op refresh,
+  ordering, reference preservation, and move-only reordering behavior.

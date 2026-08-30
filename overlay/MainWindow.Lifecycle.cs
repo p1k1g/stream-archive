@@ -380,6 +380,7 @@ public sealed partial class MainWindow
             return;
 
         windowCleanupDone = true;
+        channelSearchDebounceTimer?.Stop();
 
         try
         {

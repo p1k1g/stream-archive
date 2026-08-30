@@ -7,6 +7,7 @@ static class BackendEventParserRegression
 
     static void Main()
     {
+        ChannelCollectionSynchronizerRegression.Run();
         JsonEvent("recording_started");
         JsonEvent("recording_finished");
         JsonEvent("recording_stalled");

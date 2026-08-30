@@ -407,6 +407,8 @@ public sealed partial class MainWindow
 
     void ChannelList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (suppressChannelSelectionSync)
+            return;
         UpdateChannelSelectionUi();
     }
 
@@ -484,6 +486,13 @@ public sealed partial class MainWindow
         }
     }
 
+    void ScheduleChannelFilterRefresh()
+    {
+        if (channelSearchDebounceTimer == null) return;
+        channelSearchDebounceTimer.Stop();
+        channelSearchDebounceTimer.Start();
+    }
+
     void RefreshChannelFilter()
     {
         if (ChannelList == null || ChannelSearchBox == null || ChannelFilterBox == null)
@@ -493,6 +502,7 @@ public sealed partial class MainWindow
             .OfType<EditableChannel>()
             .Select(x => x.Account)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var scrollAnchor = CaptureChannelScrollAnchor();
         var query = ChannelSearchBox.Text?.Trim() ?? "";
         var filter = ChannelFilterBox.SelectedItem?.ToString() ?? "전체 채널";
 
@@ -511,13 +521,42 @@ public sealed partial class MainWindow
             return searchMatch && filterMatch;
         }).ToList();
 
-        VisibleChannelItems.Clear();
-        foreach (var item in filtered)
-            VisibleChannelItems.Add(item);
+        suppressChannelSelectionSync = true;
+        try
+        {
+            ChannelCollectionSynchronizer.Synchronize(VisibleChannelItems, filtered);
+            foreach (var item in VisibleChannelItems.Where(x => selectedAccounts.Contains(x.Account)))
+            {
+                if (!ChannelList.SelectedItems.Contains(item))
+                    ChannelList.SelectedItems.Add(item);
+            }
+        }
+        finally
+        {
+            suppressChannelSelectionSync = false;
+        }
 
-        ChannelList.SelectedItems.Clear();
-        foreach (var item in VisibleChannelItems.Where(x => selectedAccounts.Contains(x.Account)))
-            ChannelList.SelectedItems.Add(item);
+        RestoreChannelScrollAnchor(scrollAnchor);
         UpdateChannelSelectionUi();
+    }
+
+    (EditableChannel? Item, int Index) CaptureChannelScrollAnchor()
+    {
+        var index = ChannelList.ItemsPanelRoot is ItemsStackPanel panel
+            ? Math.Max(0, panel.FirstVisibleIndex)
+            : 0;
+        return index < VisibleChannelItems.Count
+            ? (VisibleChannelItems[index], index)
+            : (null, index);
+    }
+
+    void RestoreChannelScrollAnchor((EditableChannel? Item, int Index) anchor)
+    {
+        if (VisibleChannelItems.Count == 0) return;
+        var target = anchor.Item != null && VisibleChannelItems.Contains(anchor.Item)
+            ? anchor.Item
+            : VisibleChannelItems[Math.Min(anchor.Index, VisibleChannelItems.Count - 1)];
+        DispatcherQueue.TryEnqueue(() =>
+            ChannelList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading));
     }
 }

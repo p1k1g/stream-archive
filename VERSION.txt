@@ -1,7 +1,7 @@
 ﻿SOOP LIVE Downloader
 GUI: WinUI 3
-Version: 1.2.0-preview1-fix57
-Feature: design tokens, responsive views, command bars, and accessibility
+Version: 1.2.0-preview1-fix58
+Feature: debounced channel search and minimal collection synchronization
 Includes: all fix47/fix46/fix45 and earlier functionality
 Settings: fix36 path/auth/dependency tests, dirty save bar, defaults, and INI export/import
 Dashboard: Watcher-exit cleanup, stop ACK, stopped/resume flyout, alerts, natural empty states
