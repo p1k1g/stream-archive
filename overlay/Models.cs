@@ -105,16 +105,16 @@ public sealed class ChannelStatus : INotifyPropertyChanged
 
 public sealed class EditableChannel : INotifyPropertyChanged
 {
-    static readonly SolidColorBrush EnabledForegroundBrush = new(Color.FromArgb(255, 76, 226, 145));
-    static readonly SolidColorBrush DisabledForegroundBrush = new(Color.FromArgb(255, 139, 148, 160));
-    static readonly SolidColorBrush EnabledCardBrush = new(Color.FromArgb(255, 28, 48, 43));
-    static readonly SolidColorBrush DisabledCardBrush = new(Color.FromArgb(255, 35, 39, 46));
-    static readonly SolidColorBrush EnabledBadgeBrush = new(Color.FromArgb(255, 27, 76, 57));
-    static readonly SolidColorBrush DisabledBadgeBrush = new(Color.FromArgb(255, 57, 62, 71));
-    static readonly SolidColorBrush EnabledBorderBrush = new(Color.FromArgb(255, 54, 138, 99));
-    static readonly SolidColorBrush DisabledBorderBrush = new(Color.FromArgb(255, 72, 78, 88));
-    static readonly SolidColorBrush EnabledNameBrush = new(Color.FromArgb(255, 255, 255, 255));
-    static readonly SolidColorBrush DisabledNameBrush = new(Color.FromArgb(255, 171, 179, 190));
+    static readonly SolidColorBrush EnabledForegroundBrush = DesignTokens.StateBrush(76, 226, 145, Windows.UI.ViewManagement.UIColorType.Accent);
+    static readonly SolidColorBrush DisabledForegroundBrush = DesignTokens.TextSecondary;
+    static readonly SolidColorBrush EnabledCardBrush = DesignTokens.StateBrush(28, 48, 43, Windows.UI.ViewManagement.UIColorType.Background);
+    static readonly SolidColorBrush DisabledCardBrush = DesignTokens.Surface;
+    static readonly SolidColorBrush EnabledBadgeBrush = DesignTokens.StateBrush(27, 76, 57, Windows.UI.ViewManagement.UIColorType.Background);
+    static readonly SolidColorBrush DisabledBadgeBrush = DesignTokens.SurfaceElevated;
+    static readonly SolidColorBrush EnabledBorderBrush = DesignTokens.StateBrush(54, 138, 99, Windows.UI.ViewManagement.UIColorType.Foreground);
+    static readonly SolidColorBrush DisabledBorderBrush = DesignTokens.Border;
+    static readonly SolidColorBrush EnabledNameBrush = DesignTokens.TextPrimary;
+    static readonly SolidColorBrush DisabledNameBrush = DesignTokens.TextSecondary;
     bool _enabled = true;
     string _name = "";
     string _account = "";
@@ -130,7 +130,7 @@ public sealed class EditableChannel : INotifyPropertyChanged
     public SolidColorBrush BadgeBackground => Enabled ? EnabledBadgeBrush : DisabledBadgeBrush;
     public SolidColorBrush CardBorder => Enabled ? EnabledBorderBrush : DisabledBorderBrush;
     public SolidColorBrush NameForeground => Enabled ? EnabledNameBrush : DisabledNameBrush;
-    public double RowOpacity => Enabled ? 1.0 : 0.72;
+    public double RowOpacity => DesignTokens.HighContrast || Enabled ? 1.0 : 0.72;
     public string OutputDisplay => string.IsNullOrWhiteSpace(OutDir) ? "기본 경로" : OutDir;
 
     public event PropertyChangedEventHandler? PropertyChanged;

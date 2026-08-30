@@ -12,6 +12,7 @@ $features = Get-Content -LiteralPath (Join-Path $root 'overlay\UserFeaturesFix51
 $recentStore = Get-Content -LiteralPath (Join-Path $root 'overlay\RecentRecordingStore.cs') -Raw -Encoding UTF8
 $diagnostics = Get-Content -LiteralPath (Join-Path $root 'overlay\DiagnosticInfoService.cs') -Raw -Encoding UTF8
 $models = Get-Content -LiteralPath (Join-Path $root 'overlay\Models.cs') -Raw -Encoding UTF8
+$design = Get-Content -LiteralPath (Join-Path $root 'overlay\DesignTokens.cs') -Raw -Encoding UTF8
 
 function ConvertFrom-CodePoints([int[]]$CodePoints) {
     return -join ($CodePoints | ForEach-Object { [char]$_ })
@@ -57,6 +58,16 @@ if ($main -notmatch 'NavigationItemFix39\("[^"]+",\s*"recent",\s*Symbol\.Video\)
 if ($settings -notmatch 'DispatcherQueue\.CreateTimer\(\)' -or
     $settings -notmatch 'settingsUiTransitionDepth\s*=\s*Math\.Max') {
     throw 'Advanced-settings deferred layout dirty guard is missing.'
+}
+if ($design -notmatch 'class\s+DesignTokens' -or
+    $design -notmatch 'AccessibilitySettings' -or
+    $design -notmatch 'AddAccelerator') {
+    throw 'Design tokens, high-contrast semantics, or keyboard accelerators are missing.'
+}
+if ($main -notmatch 'new\s+CommandBar' -or
+    $main -notmatch 'BuildChannelTemplate\(bool\s+compact\)' -or
+    $features -notmatch 'BuildRecentRecordingTemplateFix51\(bool\s+compact\)') {
+    throw 'Responsive channel/recent templates or command surfaces are missing.'
 }
 
 Write-Host 'User feature source invariants passed.'

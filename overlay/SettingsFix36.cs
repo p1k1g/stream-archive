@@ -50,7 +50,7 @@ public sealed partial class MainWindow
         };
         var stack = new StackPanel
         {
-            Padding = new Thickness(22),
+            Padding = DesignTokens.PagePadding,
             Spacing = 14,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
@@ -324,6 +324,10 @@ public sealed partial class MainWindow
             Foreground = MakeBrush("#102118")
         }, 104);
         SaveSettingsButton.Click += SaveSettings_Click;
+        DesignTokens.AddAccelerator(
+            SaveSettingsButton,
+            Windows.System.VirtualKey.S,
+            Windows.System.VirtualKeyModifiers.Control);
         saveActions.Children.Add(DiscardSettingsButton); saveActions.Children.Add(SaveSettingsButton);
         Grid.SetColumn(saveActions, 1); saveBarGrid.Children.Add(saveActions);
         var saveBar = new Border { Background = MakeBrush("#1B2026"), BorderBrush = MakeBrush("#3A414A"), BorderThickness = new Thickness(0, 1, 0, 0), Child = saveBarGrid };
@@ -335,8 +339,10 @@ public sealed partial class MainWindow
 
     static void AddSettingsCardFix36(Panel parent, StackPanel card) => parent.Children.Add(new Border
     {
-        Background = Card,
-        CornerRadius = new CornerRadius(10),
+        Background = DesignTokens.Surface,
+        BorderBrush = DesignTokens.Border,
+        BorderThickness = new Thickness(1),
+        CornerRadius = DesignTokens.CardRadius,
         HorizontalAlignment = HorizontalAlignment.Stretch,
         Child = card
     });
@@ -606,7 +612,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix56",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix57",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });

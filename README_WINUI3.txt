@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix56
+Version 1.2.0-preview1-fix57
 
 BUG FIX
 -------
@@ -1483,3 +1483,28 @@ fix56 implemented changes
   ASCII-only test script; the recent-navigation assertion uses its stable tag.
 - The literal-path Korean filename fixture is also constructed from code points,
   and SecurityAndModules.Tests rejects future non-ASCII PowerShell test sources.
+
+fix57 implemented changes
+-------------------------
+
+1. Modern design foundation
+- DesignTokens centralizes semantic surfaces, text, borders, status colors,
+  spacing, radii, control sizing, high-contrast fallbacks, command buttons,
+  and keyboard accelerators without changing the programmatic overlay model.
+- Watcher and Settings primary actions now share the common control treatment.
+
+2. Responsive channel and recent-recording views
+- Channel and recent-recording ListViews switch templates only when their host
+  crosses a compact/wide width threshold. Normal progress never rebuilds them.
+- Compact cards stack secondary metadata while wide cards retain column layouts.
+
+3. Command surfaces and accessibility
+- Channel management and recent recordings use CommandBar primary/overflow
+  actions instead of fixed horizontal button rows.
+- High-contrast mode avoids disabled-row opacity, recent cards use WinUI theme
+  resources, command items expose automation names/tooltips, and state badges
+  keep text labels in addition to color.
+- Keyboard access includes Ctrl+R/Ctrl+Shift+R for Watcher, Ctrl+N/Ctrl+S/Ctrl+F
+  for channel management, and Ctrl+S for Settings.
+- Source regressions protect design tokens, responsive templates, CommandBar,
+  high-contrast, and accelerator wiring.

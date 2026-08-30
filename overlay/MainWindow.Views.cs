@@ -22,6 +22,9 @@ namespace SOOPLiveWinUI;
 
 public sealed partial class MainWindow
 {
+    DataTemplate? channelWideTemplate;
+    DataTemplate? channelCompactTemplate;
+
     FrameworkElement BuildDashboard()
     {
         var scroll = new ScrollViewer
@@ -31,7 +34,7 @@ public sealed partial class MainWindow
 
         var stack = new StackPanel
         {
-            Padding = new Thickness(18),
+            Padding = DesignTokens.PagePadding,
             Spacing = 14
         };
 
@@ -509,7 +512,7 @@ public sealed partial class MainWindow
     {
         var root = new Grid
         {
-            Padding = new Thickness(20),
+            Padding = DesignTokens.PagePadding,
             Visibility = Visibility.Collapsed,
             RequestedTheme = ElementTheme.Dark
         };
@@ -557,14 +560,14 @@ public sealed partial class MainWindow
         };
         title.Children.Add(ChannelDirtyStateText);
 
-        AddChannelButton = ApplyButtonMetricsFix39(new Button { Content = "채널 추가" });
-        ImportChannelsButton = ApplyButtonMetricsFix39(new Button { Content = "채널 가져오기" }, 118);
-        var refreshChannelNamesButton = ApplyButtonMetricsFix39(new Button { Content = "채널명 일괄 확인" }, 132);
-        EditChannelButton = ApplyButtonMetricsFix39(new Button { Content = "수정" });
-        SelectedChannelActionsButton = ApplyButtonMetricsFix39(new Button { Content = "선택 작업 ▾", IsEnabled = false }, 108);
+        AddChannelButton = DesignTokens.Command("채널 추가", Symbol.Add);
+        ImportChannelsButton = DesignTokens.Command("채널 가져오기", Symbol.Import);
+        var refreshChannelNamesButton = DesignTokens.Command("채널명 일괄 확인", Symbol.Refresh);
+        EditChannelButton = DesignTokens.Command("수정", Symbol.Edit);
+        SelectedChannelActionsButton = DesignTokens.Command("선택 작업", Symbol.More, enabled: false);
         ApplyRawChannelsButton = ApplyButtonMetricsFix39(new Button { Content = "목록에 반영" }, 110);
         ReloadChannelsButton = ApplyButtonMetricsFix39(new Button { Content = "저장본 다시 읽기" }, 132);
-        SaveChannelsButton = ApplyButtonMetricsFix39(new Button { Content = "변경 저장", IsEnabled = false }, 108);
+        SaveChannelsButton = DesignTokens.Command("변경 저장", Symbol.Save, enabled: false);
 
         var selectedActionsFlyout = new MenuFlyout();
         EnableSelectedChannelsMenuItem = new MenuFlyoutItem { Text = "선택 채널 활성화", IsEnabled = false };
@@ -613,26 +616,20 @@ public sealed partial class MainWindow
             Margin = new Thickness(0, 0, 6, 0)
         };
 
-        var commandBar = new Grid
+        var commandBar = new CommandBar
         {
-            ColumnSpacing = 12,
-            Margin = new Thickness(0, 12, 0, 0)
+            Margin = new Thickness(0, DesignTokens.SpaceMd, 0, 0),
+            Background = DesignTokens.Surface,
+            DefaultLabelPosition = CommandBarDefaultLabelPosition.Right,
+            IsDynamicOverflowEnabled = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
-        commandBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        commandBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var primaryActions = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8
-        };
-        primaryActions.Children.Add(AddChannelButton);
-        primaryActions.Children.Add(ImportChannelsButton);
-        primaryActions.Children.Add(refreshChannelNamesButton);
-        primaryActions.Children.Add(EditChannelButton);
-        primaryActions.Children.Add(SelectedChannelActionsButton);
-        commandBar.Children.Add(primaryActions);
-        Grid.SetColumn(SaveChannelsButton, 1);
-        commandBar.Children.Add(SaveChannelsButton);
+        commandBar.PrimaryCommands.Add(AddChannelButton);
+        commandBar.PrimaryCommands.Add(SaveChannelsButton);
+        commandBar.PrimaryCommands.Add(SelectedChannelActionsButton);
+        commandBar.SecondaryCommands.Add(ImportChannelsButton);
+        commandBar.SecondaryCommands.Add(refreshChannelNamesButton);
+        commandBar.SecondaryCommands.Add(EditChannelButton);
         Grid.SetRow(commandBar, 1);
 
         header.Children.Add(title);
@@ -683,8 +680,24 @@ public sealed partial class MainWindow
             SelectionMode = ListViewSelectionMode.Multiple,
             Margin = new Thickness(0, 0, 0, 10)
         };
-        ChannelList.ItemTemplate = BuildChannelTemplate();
+        ChannelList.ItemTemplate = BuildChannelTemplate(compact: false);
         ChannelList.SelectionChanged += ChannelList_SelectionChanged;
+        var channelCompactLayout = false;
+        root.SizeChanged += (_, args) =>
+        {
+            var compact = args.NewSize.Width < DesignTokens.CompactChannelWidth;
+            if (compact == channelCompactLayout) return;
+            channelCompactLayout = compact;
+            ChannelList.ItemTemplate = BuildChannelTemplate(compact);
+        };
+
+        DesignTokens.AddAccelerator(AddChannelButton, Windows.System.VirtualKey.N, Windows.System.VirtualKeyModifiers.Control);
+        DesignTokens.AddAccelerator(SaveChannelsButton, Windows.System.VirtualKey.S, Windows.System.VirtualKeyModifiers.Control);
+        DesignTokens.AddAccelerator(
+            root,
+            Windows.System.VirtualKey.F,
+            Windows.System.VirtualKeyModifiers.Control,
+            () => ChannelSearchBox.Focus(FocusState.Keyboard));
 
         ChannelsText = new TextBox
         {
@@ -738,8 +751,35 @@ public sealed partial class MainWindow
         return root;
     }
 
-    DataTemplate BuildChannelTemplate()
+    DataTemplate BuildChannelTemplate(bool compact)
     {
+        var cached = compact ? channelCompactTemplate : channelWideTemplate;
+        if (cached != null) return cached;
+
+        if (compact)
+        {
+            const string compactXaml = """
+<DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+  <Border Background="{Binding CardBackground}" BorderBrush="{Binding CardBorder}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,7" Opacity="{Binding RowOpacity}">
+    <Grid ColumnSpacing="10" RowSpacing="5">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Border Grid.RowSpan="2" Background="{Binding BadgeBackground}" CornerRadius="999" Padding="8,3" VerticalAlignment="Top">
+        <TextBlock Text="{Binding EnabledText}" Foreground="{Binding StateForeground}" FontWeight="SemiBold" AutomationProperties.Name="{Binding EnabledText}"/>
+      </Border>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="{Binding Name}" Foreground="{Binding NameForeground}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+        <TextBlock Text="{Binding Account}" Foreground="#A7B0BE" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding OutputDisplay}" Foreground="#9AA5B4" FontSize="11" TextTrimming="CharacterEllipsis"/>
+    </Grid>
+  </Border>
+</DataTemplate>
+""";
+            return channelCompactTemplate =
+                (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(compactXaml);
+        }
+
         const string xaml = """
 <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
   <Border Background="{Binding CardBackground}" BorderBrush="{Binding CardBorder}" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,0,0,5" Opacity="{Binding RowOpacity}">
@@ -751,7 +791,7 @@ public sealed partial class MainWindow
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
       <Border Grid.Column="0" Background="{Binding BadgeBackground}" CornerRadius="10" Padding="8,3" HorizontalAlignment="Left">
-        <TextBlock Text="{Binding EnabledText}" Foreground="{Binding StateForeground}" FontWeight="SemiBold"/>
+        <TextBlock Text="{Binding EnabledText}" Foreground="{Binding StateForeground}" FontWeight="SemiBold" AutomationProperties.Name="{Binding EnabledText}"/>
       </Border>
       <TextBlock Grid.Column="1" Text="{Binding Name}" Foreground="{Binding NameForeground}" FontWeight="SemiBold"/>
       <TextBlock Grid.Column="2" Text="{Binding Account}" Foreground="#D7DEE8"/>
@@ -760,14 +800,15 @@ public sealed partial class MainWindow
   </Border>
 </DataTemplate>
 """;
-        return (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(xaml);
+        return channelWideTemplate =
+            (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(xaml);
     }
 
     FrameworkElement BuildLogsView()
     {
         var root = new Grid
         {
-            Padding = new Thickness(20),
+            Padding = DesignTokens.PagePadding,
             Visibility = Visibility.Collapsed,
             RequestedTheme = ElementTheme.Dark
         };

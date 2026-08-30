@@ -77,6 +77,7 @@ foreach ($name in @(
     'MainWindow.Channels.cs',
     'MainWindow.ChannelParsing.cs',
     'MainWindow.RecordingActions.cs',
+    'DesignTokens.cs',
     'RecentRecordingStore.cs',
     'DiagnosticInfoService.cs'
 )) {

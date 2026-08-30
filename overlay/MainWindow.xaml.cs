@@ -101,15 +101,15 @@ public sealed partial class MainWindow : Window
     CheckBox NotifyRecordFinishCheck = null!;
     CheckBox NotifyWarningCheck = null!;
 
-    Button SaveChannelsButton = null!;
+    AppBarButton SaveChannelsButton = null!;
     Button ReloadChannelsButton = null!;
-    Button AddChannelButton = null!;
-    Button ImportChannelsButton = null!;
-    Button SelectedChannelActionsButton = null!;
+    AppBarButton AddChannelButton = null!;
+    AppBarButton ImportChannelsButton = null!;
+    AppBarButton SelectedChannelActionsButton = null!;
     MenuFlyoutItem DeleteChannelMenuItem = null!;
     MenuFlyoutItem EnableSelectedChannelsMenuItem = null!;
     MenuFlyoutItem DisableSelectedChannelsMenuItem = null!;
-    Button EditChannelButton = null!;
+    AppBarButton EditChannelButton = null!;
     Button ApplyRawChannelsButton = null!;
     ListView ChannelList = null!;
     CheckBox SelectAllChannelsCheckBox = null!;
@@ -186,18 +186,15 @@ public sealed partial class MainWindow : Window
 
 
 
-    static readonly SolidColorBrush Bg = MakeBrush("#252A31");
-    static readonly SolidColorBrush Card = MakeBrush("#20252C");
-    static readonly SolidColorBrush White = MakeBrush("#FFFFFF");
-    static readonly SolidColorBrush Muted = MakeBrush("#A7B0BE");
-    static readonly SolidColorBrush Accent = MakeBrush("#42D987");
+    static readonly SolidColorBrush Bg = DesignTokens.AppBackground;
+    static readonly SolidColorBrush Card = DesignTokens.Surface;
+    static readonly SolidColorBrush White = DesignTokens.TextPrimary;
+    static readonly SolidColorBrush Muted = DesignTokens.TextSecondary;
+    static readonly SolidColorBrush Accent = DesignTokens.Accent;
 
     static Button ApplyButtonMetricsFix39(Button button, double minWidth = 92)
     {
-        button.MinHeight = 34;
-        button.MinWidth = minWidth;
-        button.Padding = new Thickness(14, 6, 14, 6);
-        return button;
+        return DesignTokens.StyleButton(button, minWidth);
     }
 
     static NavigationViewItem NavigationItemFix39(string text, string tag, Symbol symbol)
@@ -369,15 +366,27 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix56",
+            Text = "WinUI 3 · v1.2.0-preview1-fix57",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
 
-        StartButton = ApplyButtonMetricsFix39(new Button { Content = "▶ Watcher 시작" }, 126);
-        StopButton = ApplyButtonMetricsFix39(new Button { Content = "■ Watcher 중지", IsEnabled = false }, 126);
+        StartButton = DesignTokens.StyleButton(new Button { Content = "▶ Watcher 시작" }, 126, primary: true);
+        StopButton = DesignTokens.StyleButton(new Button
+        {
+            Content = "■ Watcher 중지",
+            IsEnabled = false,
+            Foreground = DesignTokens.Danger
+        }, 126);
+        AutomationProperties.SetName(StartButton, "Watcher 시작");
+        AutomationProperties.SetName(StopButton, "Watcher 중지");
         StartButton.Click += StartButton_Click;
         StopButton.Click += StopButton_Click;
+        DesignTokens.AddAccelerator(StartButton, Windows.System.VirtualKey.R, Windows.System.VirtualKeyModifiers.Control);
+        DesignTokens.AddAccelerator(
+            StopButton,
+            Windows.System.VirtualKey.R,
+            Windows.System.VirtualKeyModifiers.Control | Windows.System.VirtualKeyModifiers.Shift);
 
         var buttonStack = new StackPanel
         {

@@ -13,12 +13,14 @@ public sealed partial class MainWindow
     public ObservableCollection<RecentRecordingEntry> RecentRecordingItems { get; } = new();
     FrameworkElement RecentRecordingsView = null!;
     ListView RecentRecordingsList = null!;
-    Button RecentOpenFolderButton = null!;
-    Button RecentSelectFileButton = null!;
-    Button RecentCopyPathButton = null!;
+    AppBarButton RecentOpenFolderButton = null!;
+    AppBarButton RecentSelectFileButton = null!;
+    AppBarButton RecentCopyPathButton = null!;
     Button AlertRetryButton = null!;
     Button AlertFolderButton = null!;
     RecentRecordingStore? recentRecordingStore;
+    DataTemplate? recentWideTemplate;
+    DataTemplate? recentCompactTemplate;
 
     string RecentRecordingsPath => Path.Combine(backendDir, "history", "recent-recordings.json");
     RecentRecordingStore RecentStore =>
@@ -52,7 +54,7 @@ public sealed partial class MainWindow
     {
         var root = new Grid
         {
-            Padding = new Thickness(20),
+            Padding = DesignTokens.PagePadding,
             Visibility = Visibility.Collapsed,
             RequestedTheme = ElementTheme.Dark
         };
@@ -78,19 +80,24 @@ public sealed partial class MainWindow
         });
         header.Children.Add(title);
 
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        RecentOpenFolderButton = ApplyButtonMetricsFix39(new Button { Content = "폴더 열기", IsEnabled = false });
-        RecentSelectFileButton = ApplyButtonMetricsFix39(new Button { Content = "파일 선택", IsEnabled = false });
-        RecentCopyPathButton = ApplyButtonMetricsFix39(new Button { Content = "경로 복사", IsEnabled = false });
-        var clear = ApplyButtonMetricsFix39(new Button { Content = "내역 지우기" });
+        var actions = new CommandBar
+        {
+            Background = DesignTokens.Surface,
+            DefaultLabelPosition = CommandBarDefaultLabelPosition.Right,
+            IsDynamicOverflowEnabled = false
+        };
+        RecentOpenFolderButton = DesignTokens.Command("폴더 열기", Symbol.Folder, enabled: false);
+        RecentSelectFileButton = DesignTokens.Command("파일 선택", Symbol.OpenFile, enabled: false);
+        RecentCopyPathButton = DesignTokens.Command("경로 복사", Symbol.Copy, enabled: false);
+        var clear = DesignTokens.Command("내역 지우기", Symbol.Delete);
         RecentOpenFolderButton.Click += async (_, _) => await OpenRecentRecordingAsync(selectFile: false);
         RecentSelectFileButton.Click += async (_, _) => await OpenRecentRecordingAsync(selectFile: true);
         RecentCopyPathButton.Click += async (_, _) => await CopyRecentRecordingPathAsync();
         clear.Click += ClearRecentRecordings_ClickFix51;
-        actions.Children.Add(RecentOpenFolderButton);
-        actions.Children.Add(RecentSelectFileButton);
-        actions.Children.Add(RecentCopyPathButton);
-        actions.Children.Add(clear);
+        actions.PrimaryCommands.Add(RecentOpenFolderButton);
+        actions.PrimaryCommands.Add(RecentSelectFileButton);
+        actions.SecondaryCommands.Add(RecentCopyPathButton);
+        actions.SecondaryCommands.Add(clear);
         Grid.SetColumn(actions, 1);
         header.Children.Add(actions);
 
@@ -98,48 +105,91 @@ public sealed partial class MainWindow
         {
             ItemsSource = RecentRecordingItems,
             SelectionMode = ListViewSelectionMode.Single,
-            ItemTemplate = BuildRecentRecordingTemplateFix51()
+            ItemTemplate = BuildRecentRecordingTemplateFix51(compact: false)
         };
         RecentRecordingsList.SelectionChanged += (_, _) => UpdateRecentRecordingActionsFix51();
+        var recentCompactLayout = false;
+        root.SizeChanged += (_, args) =>
+        {
+            var compact = args.NewSize.Width < DesignTokens.CompactRecentWidth;
+            if (compact == recentCompactLayout) return;
+            recentCompactLayout = compact;
+            RecentRecordingsList.ItemTemplate = BuildRecentRecordingTemplateFix51(compact);
+        };
         Grid.SetRow(RecentRecordingsList, 1);
         root.Children.Add(header);
         root.Children.Add(RecentRecordingsList);
         return root;
     }
 
-    static DataTemplate BuildRecentRecordingTemplateFix51()
+    DataTemplate BuildRecentRecordingTemplateFix51(bool compact)
     {
+        var cached = compact ? recentCompactTemplate : recentWideTemplate;
+        if (cached != null) return cached;
+
+        if (compact)
+        {
+            const string compactXaml = """
+<DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+  <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,7">
+    <Grid RowSpacing="5">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Grid ColumnSpacing="8">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="{Binding Name}" Foreground="{ThemeResource TextFillColorPrimaryBrush}" FontWeight="SemiBold"/>
+          <TextBlock Text="{Binding Account}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="11"/>
+        </StackPanel>
+        <TextBlock Grid.Column="1" Text="{Binding EndedAtText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+      </Grid>
+      <StackPanel Grid.Row="1">
+        <TextBlock Text="{Binding Title}" Foreground="{ThemeResource TextFillColorPrimaryBrush}" TextTrimming="CharacterEllipsis"/>
+        <TextBlock Text="{Binding FileName}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+      <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10">
+        <TextBlock Text="{Binding Duration}"/><TextBlock Text="{Binding Size}"/>
+        <TextBlock Text="{Binding Reason}" Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold"/>
+      </StackPanel>
+    </Grid>
+  </Border>
+</DataTemplate>
+""";
+            return recentCompactTemplate =
+                (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(compactXaml);
+        }
+
         const string xaml = """
 <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
-  <Border Background="#20252C" CornerRadius="8" Padding="12" Margin="0,0,0,7">
+  <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,7">
     <Grid ColumnSpacing="12">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="150"/><ColumnDefinition Width="170"/>
         <ColumnDefinition Width="*"/><ColumnDefinition Width="100"/>
         <ColumnDefinition Width="110"/>
       </Grid.ColumnDefinitions>
-      <TextBlock Grid.Column="0" Text="{Binding EndedAtText}" Foreground="#A7B0BE"/>
+      <TextBlock Grid.Column="0" Text="{Binding EndedAtText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
       <StackPanel Grid.Column="1">
-        <TextBlock Text="{Binding Name}" Foreground="White" FontWeight="SemiBold"/>
-        <TextBlock Text="{Binding Account}" Foreground="#8E99A8" FontSize="11"/>
+        <TextBlock Text="{Binding Name}" Foreground="{ThemeResource TextFillColorPrimaryBrush}" FontWeight="SemiBold"/>
+        <TextBlock Text="{Binding Account}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="11"/>
       </StackPanel>
       <StackPanel Grid.Column="2">
-        <TextBlock Text="{Binding Title}" Foreground="#D7DEE8" TextTrimming="CharacterEllipsis"/>
-        <TextBlock Text="{Binding FileName}" Foreground="#8E99A8" FontSize="11" TextTrimming="CharacterEllipsis"/>
+        <TextBlock Text="{Binding Title}" Foreground="{ThemeResource TextFillColorPrimaryBrush}" TextTrimming="CharacterEllipsis"/>
+        <TextBlock Text="{Binding FileName}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
       </StackPanel>
       <StackPanel Grid.Column="3">
         <TextBlock Text="{Binding Duration}" Foreground="#D7DEE8"/>
         <TextBlock Text="{Binding Size}" Foreground="#8E99A8" FontSize="11"/>
       </StackPanel>
       <StackPanel Grid.Column="4">
-        <TextBlock Text="{Binding Reason}" Foreground="#F4C95D" TextTrimming="CharacterEllipsis"/>
+        <TextBlock Text="{Binding Reason}" Foreground="{ThemeResource SystemFillColorCautionBrush}" TextTrimming="CharacterEllipsis"/>
         <TextBlock Text="{Binding StateText}" Foreground="#8E99A8" FontSize="11"/>
       </StackPanel>
     </Grid>
   </Border>
 </DataTemplate>
 """;
-        return (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(xaml);
+        return recentWideTemplate =
+            (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(xaml);
     }
 
     void LoadRecentRecordingsFix51()
@@ -258,7 +308,7 @@ public sealed partial class MainWindow
         try
         {
             var text = DiagnosticInfoService.CreateReport(
-                "1.2.0-preview1-fix56",
+                "1.2.0-preview1-fix57",
                 backend.IsRunning,
                 RecordingItems.Count,
                 OfflineItems.Count,
