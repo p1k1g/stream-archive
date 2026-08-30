@@ -25,7 +25,12 @@ function ConvertFrom-CodePoints([int[]]$CodePoints) {
 if ($backend -notmatch 'elseif\s*\(\$action\s+-eq\s+"RECHECK"\)') {
     throw 'Per-account RECHECK command handling is missing.'
 }
-if ($recentStore -notmatch 'AtomicReplace\(json\)') {
+if ($recentStore -notmatch 'void\s+AtomicReplace\(string\s+content\)' -or
+    $recentStore -notmatch 'AtomicReplace\(content\)' -or
+    $recentStore -notmatch 'File\.WriteAllText\(temporary,\s*content' -or
+    $recentStore -notmatch 'JsonDocument\.Parse\(File\.ReadAllText\(temporary' -or
+    $recentStore -notmatch 'File\.Replace\(temporary,\s*path' -or
+    $recentStore -notmatch 'File\.Move\(temporary,\s*path') {
     throw 'Recent recording history is not using atomic replacement.'
 }
 if ($diagnostics -notmatch 'TakeLast\(50\)') {
