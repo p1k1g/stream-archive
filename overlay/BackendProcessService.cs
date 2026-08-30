@@ -156,20 +156,20 @@ public sealed class BackendProcessService : IDisposable
         return IsRunning ? StartupState.StillStarting : StartupState.Exited;
     }
 
-    public void StopNow()
+    public bool StopNow()
     {
         var proc=_process;
-        if(proc==null)return;
-        try{if(proc.HasExited)return;}catch{return;}
-        TryTerminateProcessTree(proc,7000);
+        if(proc==null)return true;
+        try{if(proc.HasExited)return true;}catch{return true;}
+        return TryTerminateProcessTree(proc,7000);
     }
 
-    public async Task StopAsync()
+    public async Task<bool> StopAsync()
     {
         var proc=_process;
-        if(proc==null)return;
-        try{if(proc.HasExited)return;}catch{return;}
-        await Task.Run(()=>TryTerminateProcessTree(proc,7000));
+        if(proc==null)return true;
+        try{if(proc.HasExited)return true;}catch{return true;}
+        return await Task.Run(()=>TryTerminateProcessTree(proc,7000));
     }
 
     static bool TryTerminateProcessTree(Process proc,int timeoutMs)

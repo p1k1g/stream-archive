@@ -1,0 +1,73 @@
+$ErrorActionPreference = 'Stop'
+
+$root = Split-Path $PSScriptRoot -Parent
+$backendDir = Join-Path $root 'backend'
+$backend = (Get-Content -LiteralPath (Join-Path $backendDir 'SOOP_LIVE.ps1') -Raw -Encoding UTF8) + "`n" +
+    ((Get-ChildItem -LiteralPath (Join-Path $backendDir 'modules') -Filter '*.ps1' -File |
+        ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join "`n")
+$main = (Get-ChildItem -LiteralPath (Join-Path $root 'overlay') -Filter 'MainWindow*.cs' -File |
+    ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join "`n"
+$settings = Get-Content -LiteralPath (Join-Path $root 'overlay\SettingsFix36.cs') -Raw -Encoding UTF8
+$features = Get-Content -LiteralPath (Join-Path $root 'overlay\UserFeaturesFix51.cs') -Raw -Encoding UTF8
+$recentStore = Get-Content -LiteralPath (Join-Path $root 'overlay\RecentRecordingStore.cs') -Raw -Encoding UTF8
+$diagnostics = Get-Content -LiteralPath (Join-Path $root 'overlay\DiagnosticInfoService.cs') -Raw -Encoding UTF8
+$models = Get-Content -LiteralPath (Join-Path $root 'overlay\Models.cs') -Raw -Encoding UTF8
+$design = Get-Content -LiteralPath (Join-Path $root 'overlay\DesignTokens.cs') -Raw -Encoding UTF8
+
+function ConvertFrom-CodePoints([int[]]$CodePoints) {
+    return -join ($CodePoints | ForEach-Object { [char]$_ })
+}
+
+if ($backend -notmatch 'elseif\s*\(\$action\s+-eq\s+"RECHECK"\)') {
+    throw 'Per-account RECHECK command handling is missing.'
+}
+if ($recentStore -notmatch 'AtomicReplace\(json\)') {
+    throw 'Recent recording history is not using atomic replacement.'
+}
+if ($diagnostics -notmatch 'TakeLast\(50\)') {
+    throw 'Diagnostic copy is not bounded to the latest 50 GUI events.'
+}
+if ($diagnostics -notmatch 'worker_api_key\|password\|passwd') {
+    throw 'Diagnostic token redaction guard is missing.'
+}
+if ($settings -notmatch 'settingsUiTransitionDepth\s*==\s*0') {
+    throw 'Advanced-settings transition dirty guard is missing.'
+}
+if ($main -notmatch 'RefreshChannelNamesPreviewFix51_Click') {
+    throw 'Channel-name refresh preview action is not wired.'
+}
+if ($models -notmatch 'CardBackground' -or $models -notmatch 'StateForeground' -or
+    $main -notmatch 'Background="\{Binding CardBackground\}"' -or
+    $main -notmatch 'Foreground="\{Binding StateForeground\}"') {
+    throw 'Enabled/disabled channel visual distinction is missing.'
+}
+$applyLabel = ConvertFrom-CodePoints @(0xBCC0,0xACBD,0x20,0xC0AC,0xD56D,0x20,0xBC18,0xC601)
+$confirmLabel = ConvertFrom-CodePoints @(0xD655,0xC778)
+$cancelLabel = ConvertFrom-CodePoints @(0xCDE8,0xC18C)
+$applyPattern = 'PrimaryButtonText\s*=\s*"' + [regex]::Escape($applyLabel) + '"'
+$confirmPattern = 'SecondaryButtonText\s*=\s*"' + [regex]::Escape($confirmLabel) + '"'
+$cancelPattern = 'CloseButtonText\s*=\s*"' + [regex]::Escape($cancelLabel) + '"'
+if ($features -notmatch $applyPattern -or
+    $features -notmatch $confirmPattern -or
+    $features -notmatch $cancelPattern) {
+    throw 'Channel-name preview apply/confirm/cancel actions are not distinct.'
+}
+if ($main -notmatch 'NavigationItemFix39\("[^"]+",\s*"recent",\s*Symbol\.Video\)') {
+    throw 'Recent-recordings navigation icon is not distinct from the log document icon.'
+}
+if ($settings -notmatch 'DispatcherQueue\.CreateTimer\(\)' -or
+    $settings -notmatch 'settingsUiTransitionDepth\s*=\s*Math\.Max') {
+    throw 'Advanced-settings deferred layout dirty guard is missing.'
+}
+if ($design -notmatch 'class\s+DesignTokens' -or
+    $design -notmatch 'AccessibilitySettings' -or
+    $design -notmatch 'AddAccelerator') {
+    throw 'Design tokens, high-contrast semantics, or keyboard accelerators are missing.'
+}
+if ($main -notmatch 'new\s+CommandBar' -or
+    $main -notmatch 'BuildChannelTemplate\(bool\s+compact\)' -or
+    $features -notmatch 'BuildRecentRecordingTemplateFix51\(bool\s+compact\)') {
+    throw 'Responsive channel/recent templates or command surfaces are missing.'
+}
+
+Write-Host 'User feature source invariants passed.'
