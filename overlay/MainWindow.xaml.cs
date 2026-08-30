@@ -118,6 +118,7 @@ public sealed partial class MainWindow : Window
     TextBlock ChannelDirtyStateText = null!;
     TextBox ChannelSearchBox = null!;
     ComboBox ChannelFilterBox = null!;
+    ComboBox UiDensityBox = null!;
     bool rawChannelTextDirty = false;
     bool suppressRawChannelTextChanged = false;
     string lastProgrammaticRawChannelText = "";
@@ -154,6 +155,7 @@ public sealed partial class MainWindow : Window
     FormsNotifyIcon? trayIcon;
     bool trayReady = false;
     UiPreferences uiPreferences = UiPreferences.Load();
+    Microsoft.UI.Dispatching.DispatcherQueueTimer? uiPreferencesSaveTimer;
     readonly ConcurrentQueue<string> backendLineQueue = new();
     readonly ConcurrentQueue<string> priorityBackendLineQueue = new();
     readonly ConcurrentDictionary<string, string> latestProgressByChannel =
@@ -284,6 +286,8 @@ public sealed partial class MainWindow : Window
     {
         WriteStartupLog("MainWindow constructor entered");
 
+        DesignTokens.ApplyDensity(uiPreferences.UiDensity);
+
         try
         {
             // This is Microsoft's untouched official MainWindow.xaml.
@@ -333,8 +337,7 @@ public sealed partial class MainWindow : Window
         HookAppWindowClosing();
         InitializeUiFlushTimer();
 
-        Nav.SelectedItem = Nav.MenuItems[0];
-        ShowView("dashboard");
+        RestoreInitialViewFix59();
 
         Closed += MainWindow_Closed;
 
@@ -367,7 +370,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix58",
+            Text = "WinUI 3 · v1.2.0-preview1-fix59",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -500,6 +503,8 @@ public sealed partial class MainWindow : Window
 
         currentViewTag = tag;
         ShowView(tag);
+        uiPreferences.LastView = tag;
+        ScheduleUiPreferencesSaveFix59();
     }
 
     void RestoreNavigationSelection()
@@ -532,6 +537,25 @@ public sealed partial class MainWindow : Window
 
         if (tag is "channels" or "settings")
             LoadStaticFiles();
+    }
+
+    void RestoreInitialViewFix59()
+    {
+        currentViewTag = uiPreferences.LastView;
+        var item = Nav.MenuItems.OfType<NavigationViewItem>()
+            .FirstOrDefault(candidate => string.Equals(
+                candidate.Tag as string,
+                currentViewTag,
+                StringComparison.Ordinal));
+        if (item == null)
+        {
+            currentViewTag = "dashboard";
+            item = Nav.MenuItems.OfType<NavigationViewItem>().First();
+        }
+        suppressNavigationSelectionChanged = true;
+        try { Nav.SelectedItem = item; }
+        finally { suppressNavigationSelectionChanged = false; }
+        ShowView(currentViewTag);
     }
 
     string? ValidateBeforeStart()

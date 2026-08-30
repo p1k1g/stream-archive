@@ -23,8 +23,15 @@ public sealed partial class MainWindow
     DataTemplate? recentCompactTemplate;
 
     string RecentRecordingsPath => Path.Combine(backendDir, "history", "recent-recordings.json");
-    RecentRecordingStore RecentStore =>
-        recentRecordingStore ??= new RecentRecordingStore(RecentRecordingsPath, MaxRecentRecordings);
+    RecentRecordingStore RecentStore => recentRecordingStore ??= CreateRecentStoreFix59();
+
+    RecentRecordingStore CreateRecentStoreFix59()
+    {
+        var store = new RecentRecordingStore(RecentRecordingsPath, MaxRecentRecordings);
+        store.SaveFailed += ex => DispatcherQueue.TryEnqueue(() =>
+            AppendLog("[WARN] 최근 녹화 내역 저장 실패: " + ex.Message));
+        return store;
+    }
 
     static DataTemplate BuildAlertFlyoutTemplateFix51()
     {
@@ -240,14 +247,7 @@ public sealed partial class MainWindow
 
     void SaveRecentRecordingsFix51()
     {
-        try
-        {
-            RecentStore.Save(RecentRecordingItems);
-        }
-        catch (Exception ex)
-        {
-            AppendLog("[WARN] 최근 녹화 내역 저장 실패: " + ex.Message);
-        }
+        RecentStore.Save(RecentRecordingItems.ToArray());
     }
 
     async void ClearRecentRecordings_ClickFix51(object sender, RoutedEventArgs e)
@@ -308,7 +308,7 @@ public sealed partial class MainWindow
         try
         {
             var text = DiagnosticInfoService.CreateReport(
-                "1.2.0-preview1-fix58",
+                "1.2.0-preview1-fix59",
                 backend.IsRunning,
                 RecordingItems.Count,
                 OfflineItems.Count,

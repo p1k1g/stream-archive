@@ -30,14 +30,23 @@ internal static class DesignTokens
     internal const double SpaceMd = 12;
     internal const double SpaceLg = 16;
     internal const double SpaceXl = 22;
-    internal const double ControlHeight = 36;
+    internal static double DensityScale { get; private set; } = 1;
+    internal static double ControlHeight => 36 * DensityScale;
     internal const double CompactChannelWidth = 900;
     internal const double CompactRecentWidth = 1050;
 
     internal static readonly CornerRadius CardRadius = new(10);
     internal static readonly CornerRadius BadgeRadius = new(999);
-    internal static readonly Thickness CardPadding = new(SpaceMd);
-    internal static readonly Thickness PagePadding = new(SpaceXl);
+    internal static Thickness CardPadding => new(SpaceMd * DensityScale);
+    internal static Thickness PagePadding => new(SpaceXl * DensityScale);
+
+    internal static void ApplyDensity(string? density) => DensityScale =
+        density?.ToUpperInvariant() switch
+        {
+            "COMPACT" => 0.82,
+            "COMFORTABLE" => 1.15,
+            _ => 1
+        };
 
     internal static Button StyleButton(Button button, double minWidth = 92, bool primary = false)
     {

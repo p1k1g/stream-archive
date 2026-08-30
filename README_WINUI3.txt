@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix58
+Version 1.2.0-preview1-fix59
 
 BUG FIX
 -------
@@ -1526,3 +1526,28 @@ fix58 implemented changes
 3. Large-list regression
 - A dependency-free 10,000-channel regression validates filtering, no-op refresh,
   ordering, reference preservation, and move-only reordering behavior.
+
+fix59 implemented changes
+-------------------------
+
+1. Snapshot-based Settings dirty state
+- Settings controls are normalized into a deterministic snapshot after load and
+  save. Dirty state now means the current snapshot actually differs, so changing
+  a value back to its saved value clears the Save prompt automatically.
+- Secret replacement/deletion intent and invalid in-progress NumberBox text are
+  included without exposing stored secrets.
+
+2. Atomic per-user UI state
+- Close behavior, last tab, window size, and UI density now live under LocalAppData
+  instead of the publish directory. Writes use validated temporary JSON followed
+  by atomic replacement, with one-time migration from the legacy adjacent file.
+- Window resize writes are debounced, and the last tab and valid saved dimensions
+  are restored at startup. Compact, normal, and comfortable density are available
+  in Settings and apply to design-token spacing on the next full UI construction.
+
+3. Background recent-history coalescing
+- Recent-recording snapshots are copied on the UI thread, coalesced for 250 ms,
+  and atomically written by one background worker. Shutdown unsubscribes backend
+  events and flushes the newest pending snapshot before clearing UI collections.
+- Automated regressions cover deterministic Settings snapshots, LocalAppData
+  placement, and a 100-update burst collapsing into one physical history write.

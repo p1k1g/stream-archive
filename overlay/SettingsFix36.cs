@@ -26,6 +26,7 @@ public sealed partial class MainWindow
     int settingsUiTransitionDepth;
     bool clearSoopPassword;
     bool clearCloudflareApiKey;
+    string savedSettingsSnapshot = "";
 
     static readonly HttpClient SettingsTestClient = new()
     {
@@ -68,6 +69,29 @@ public sealed partial class MainWindow
             Foreground = Muted,
             TextWrapping = TextWrapping.Wrap
         });
+
+        var interfaceCard = SettingsCard(
+            "화면 밀도",
+            "이 선택은 Windows 사용자별 LocalAppData에 저장되며 다음 실행부터 전체 간격에 적용됩니다.");
+        UiDensityBox = new ComboBox
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ItemsSource = new[] { "조밀하게", "기본", "여유롭게" },
+            SelectedIndex = uiPreferences.UiDensity switch
+            {
+                "COMPACT" => 0,
+                "COMFORTABLE" => 2,
+                _ => 1
+            }
+        };
+        UiDensityBox.SelectionChanged += (_, _) =>
+        {
+            CaptureUiPreferencesFix59();
+            DesignTokens.ApplyDensity(uiPreferences.UiDensity);
+            ScheduleUiPreferencesSaveFix59();
+        };
+        interfaceCard.Children.Add(UiDensityBox);
+        AddSettingsCardFix36(stack, interfaceCard);
 
         var recording = SettingsCard(
             "녹화",
@@ -175,7 +199,7 @@ public sealed partial class MainWindow
             {
                 settingsUiTransitionDepth = Math.Max(0, settingsUiTransitionDepth - 1);
                 if (!wasDirty && settingsUiTransitionDepth == 0)
-                    SetSettingsDirtyFix36(false);
+                    EvaluateSettingsDirtyFix59();
             };
             settleTimer.Start();
         };
@@ -420,7 +444,68 @@ public sealed partial class MainWindow
     void MarkSettingsDirtyFix36()
     {
         if (!settingsLoading && settingsUiTransitionDepth == 0)
-            SetSettingsDirtyFix36(true);
+            EvaluateSettingsDirtyFix59();
+    }
+
+    void AcceptSettingsSnapshotFix59()
+    {
+        savedSettingsSnapshot = CaptureSettingsSnapshotFix59();
+        SetSettingsDirtyFix36(false);
+    }
+
+    void EvaluateSettingsDirtyFix59() =>
+        SetSettingsDirtyFix36(!string.Equals(
+            savedSettingsSnapshot,
+            CaptureSettingsSnapshotFix59(),
+            StringComparison.Ordinal));
+
+    string CaptureSettingsSnapshotFix59()
+    {
+        static string Number(NumberBox box)
+        {
+            var text = box.Text?.Trim() ?? "";
+            if (text.Length == 0 && !double.IsNaN(box.Value))
+                return box.Value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+            if (double.TryParse(text, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.CurrentCulture, out var current) ||
+                double.TryParse(text, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out current))
+                return current.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+            return "invalid:" + text;
+        }
+        static string Check(CheckBox box) => box.IsChecked == true ? "Y" : "N";
+        return SettingsSnapshot.Create(new Dictionary<string, string?>
+        {
+            ["output"] = OutputDirBox.Text,
+            ["quality"] = QualityBox.SelectedIndex.ToString(),
+            ["pattern"] = FileNamePatternBox.SelectedIndex.ToString(),
+            ["disk"] = Number(MinDiskBox),
+            ["username"] = SoopUsernameBox.Text,
+            ["password"] = SoopPasswordBox.Password,
+            ["passwordClear"] = clearSoopPassword.ToString(),
+            ["purge"] = Check(SoopPurgeCredentialsCheck),
+            ["workerUrl"] = CloudflareWorkerUrlBox.Text,
+            ["workerKey"] = CloudflareApiKeyBox.Password,
+            ["workerKeyClear"] = clearCloudflareApiKey.ToString(),
+            ["masterQuality"] = MasterQualityBox.SelectedIndex.ToString(),
+            ["streamlink"] = StreamlinkPathBox.Text,
+            ["streamlinkFallback"] = StreamlinkFallbackBox.Text,
+            ["checkInterval"] = Number(CheckIntervalBox),
+            ["reloadInterval"] = Number(ChannelReloadIntervalBox),
+            ["retryInterval"] = Number(RecordRetryIntervalBox),
+            ["stallTimeout"] = Number(RecordStallTimeoutBox),
+            ["monitorInterval"] = Number(RecordMonitorIntervalBox),
+            ["workerRetry"] = Number(WorkerMaxRetryBox),
+            ["logEnabled"] = Check(LogEnabledCheck),
+            ["logDir"] = LogDirBox.Text,
+            ["logRetention"] = Number(LogRetentionDaysBox),
+            ["autoFormat"] = Check(ConsoleAutoFormatCheck),
+            ["consoleColor"] = Check(ConsoleColorCheck),
+            ["showPath"] = Check(ConsoleShowPathCheck),
+            ["notifyStart"] = Check(NotifyRecordStartCheck),
+            ["notifyFinish"] = Check(NotifyRecordFinishCheck),
+            ["notifyWarning"] = Check(NotifyWarningCheck)
+        });
     }
 
     void SetSettingsDirtyFix36(bool dirty)
@@ -466,7 +551,7 @@ public sealed partial class MainWindow
     {
         if (soop) { clearSoopPassword = true; SoopPasswordBox.Password = ""; }
         else { clearCloudflareApiKey = true; CloudflareApiKeyBox.Password = ""; }
-        SetSettingsDirtyFix36(true);
+        MarkSettingsDirtyFix36();
         UpdateSecretStatusFix36();
     }
 
@@ -612,7 +697,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix58",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix59",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });
@@ -881,7 +966,7 @@ public sealed partial class MainWindow
             clearCloudflareApiKey = false;
             settingsLoading = false;
             UpdateSecretStatusFix36(IniService.Read(iniPath));
-            SetSettingsDirtyFix36(false);
+            AcceptSettingsSnapshotFix59();
 
             await ShowDialogAsync(
                 "설정 저장 완료",

@@ -381,6 +381,9 @@ public sealed partial class MainWindow
 
         windowCleanupDone = true;
         channelSearchDebounceTimer?.Stop();
+        uiPreferencesSaveTimer?.Stop();
+        CaptureUiPreferencesFix59();
+        uiPreferences.Save();
 
         try
         {
@@ -391,6 +394,7 @@ public sealed partial class MainWindow
 
         backend.Output -= Backend_Output;
         backend.Exited -= Backend_Exited;
+        try { RecentStore.FlushAsync().GetAwaiter().GetResult(); } catch { }
 
         while (backendLineQueue.TryDequeue(out _)) { }
         while (priorityBackendLineQueue.TryDequeue(out _)) { }
@@ -452,13 +456,50 @@ public sealed partial class MainWindow
             var hwnd = WindowNative.GetWindowHandle(this);
             var id = Win32Interop.GetWindowIdFromWindow(hwnd);
             var appWindow = AppWindow.GetFromWindowId(id);
-            appWindow.Resize(new Windows.Graphics.SizeInt32(1280, 820));
+            appWindow.Resize(new Windows.Graphics.SizeInt32(
+                uiPreferences.WindowWidth,
+                uiPreferences.WindowHeight));
+            uiPreferencesSaveTimer = DispatcherQueue.CreateTimer();
+            uiPreferencesSaveTimer.Interval = TimeSpan.FromMilliseconds(500);
+            uiPreferencesSaveTimer.IsRepeating = false;
+            uiPreferencesSaveTimer.Tick += (_, _) =>
+            {
+                CaptureUiPreferencesFix59();
+                uiPreferences.Save();
+            };
+            appWindow.Changed += (_, _) =>
+            {
+                var size = appWindow.Size;
+                if (size.Width == uiPreferences.WindowWidth && size.Height == uiPreferences.WindowHeight)
+                    return;
+                uiPreferences.WindowWidth = size.Width;
+                uiPreferences.WindowHeight = size.Height;
+                ScheduleUiPreferencesSaveFix59();
+            };
 
             var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "SOOPLiveDownloader.ico");
             if (File.Exists(iconPath))
                 appWindow.SetIcon(iconPath);
         }
         catch { }
+    }
+
+    void ScheduleUiPreferencesSaveFix59()
+    {
+        if (uiPreferencesSaveTimer == null) return;
+        uiPreferencesSaveTimer.Stop();
+        uiPreferencesSaveTimer.Start();
+    }
+
+    void CaptureUiPreferencesFix59()
+    {
+        uiPreferences.LastView = currentViewTag;
+        uiPreferences.UiDensity = UiDensityBox?.SelectedIndex switch
+        {
+            0 => "COMPACT",
+            2 => "COMFORTABLE",
+            _ => "NORMAL"
+        };
     }
 
     static string ResolveBackendDirectory()
@@ -596,7 +637,7 @@ public sealed partial class MainWindow
         RefreshPathStatusFix36();
         RefreshLogPathStatusFix36();
         settingsLoading = false;
-        SetSettingsDirtyFix36(false);
+        AcceptSettingsSnapshotFix59();
     }
 
     async void StartButton_Click(object sender, RoutedEventArgs e)

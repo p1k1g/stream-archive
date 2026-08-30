@@ -15,6 +15,8 @@ $models = Get-Content -LiteralPath (Join-Path $root 'overlay\Models.cs') -Raw -E
 $design = Get-Content -LiteralPath (Join-Path $root 'overlay\DesignTokens.cs') -Raw -Encoding UTF8
 $channelSync = Get-Content -LiteralPath (Join-Path $root 'overlay\ChannelCollectionSynchronizer.cs') -Raw -Encoding UTF8
 $channelPerfTest = Get-Content -LiteralPath (Join-Path $root 'tests\ChannelCollectionSynchronizerRegression.cs') -Raw -Encoding UTF8
+$uiPreferences = Get-Content -LiteralPath (Join-Path $root 'overlay\UiPreferences.cs') -Raw -Encoding UTF8
+$recentRecordingStore = Get-Content -LiteralPath (Join-Path $root 'overlay\RecentRecordingStore.cs') -Raw -Encoding UTF8
 
 function ConvertFrom-CodePoints([int[]]$CodePoints) {
     return -join ($CodePoints | ForEach-Object { [char]$_ })
@@ -23,7 +25,12 @@ function ConvertFrom-CodePoints([int[]]$CodePoints) {
 if ($backend -notmatch 'elseif\s*\(\$action\s+-eq\s+"RECHECK"\)') {
     throw 'Per-account RECHECK command handling is missing.'
 }
-if ($recentStore -notmatch 'AtomicReplace\(json\)') {
+if ($recentStore -notmatch 'void\s+AtomicReplace\(string\s+content\)' -or
+    $recentStore -notmatch 'AtomicReplace\(content\)' -or
+    $recentStore -notmatch 'File\.WriteAllText\(temporary,\s*content' -or
+    $recentStore -notmatch 'JsonDocument\.Parse\(File\.ReadAllText\(temporary' -or
+    $recentStore -notmatch 'File\.Replace\(temporary,\s*path' -or
+    $recentStore -notmatch 'File\.Move\(temporary,\s*path') {
     throw 'Recent recording history is not using atomic replacement.'
 }
 if ($diagnostics -notmatch 'TakeLast\(50\)') {
@@ -83,6 +90,24 @@ if ($channelSync -notmatch 'ObservableCollection<T>' -or
     $channelPerfTest -notmatch '10_000' -or
     $channelPerfTest -notmatch 'TotalChanges\s*==\s*0') {
     throw 'Minimal channel collection synchronization or large-list regression coverage is missing.'
+}
+if ($settings -notmatch 'CaptureSettingsSnapshotFix59' -or
+    $settings -notmatch 'savedSettingsSnapshot' -or
+    $settings -notmatch 'SettingsSnapshot\.Create') {
+    throw 'Snapshot-based settings dirty tracking is missing.'
+}
+if ($uiPreferences -notmatch 'LocalApplicationData' -or
+    $uiPreferences -notmatch 'File\.Replace' -or
+    $uiPreferences -notmatch 'LastView' -or
+    $uiPreferences -notmatch 'WindowWidth' -or
+    $uiPreferences -notmatch 'UiDensity') {
+    throw 'Atomic LocalAppData UI state persistence is incomplete.'
+}
+if ($recentRecordingStore -notmatch 'pendingEntries' -or
+    $recentRecordingStore -notmatch 'Task\.Run\(ProcessPendingSavesAsync\)' -or
+    $recentRecordingStore -notmatch 'Task\.Delay\(250\)' -or
+    $recentRecordingStore -notmatch 'FlushAsync') {
+    throw 'Background-coalesced recent recording persistence is missing.'
 }
 
 Write-Host 'User feature source invariants passed.'

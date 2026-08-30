@@ -78,6 +78,8 @@ foreach ($name in @(
     'MainWindow.ChannelParsing.cs',
     'MainWindow.RecordingActions.cs',
     'DesignTokens.cs',
+    'SettingsSnapshot.cs',
+    'UiPreferences.cs',
     'RecentRecordingStore.cs',
     'DiagnosticInfoService.cs'
 )) {

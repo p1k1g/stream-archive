@@ -7,6 +7,13 @@ internal sealed class RecentRecordingStore
 {
     readonly string path;
     readonly int limit;
+    readonly object saveGate = new();
+    RecentRecordingEntry[]? pendingEntries;
+    Task? saveWorker;
+    int completedWriteCount;
+
+    internal event Action<Exception>? SaveFailed;
+    internal int CompletedWriteCount => Volatile.Read(ref completedWriteCount);
 
     internal RecentRecordingStore(string path, int limit)
     {
@@ -27,10 +34,57 @@ internal sealed class RecentRecordingStore
 
     internal void Save(IEnumerable<RecentRecordingEntry> entries)
     {
-        var json = JsonSerializer.Serialize(
-            entries.Take(limit).ToArray(),
-            new JsonSerializerOptions { WriteIndented = true });
-        AtomicReplace(json);
+        // Materialize the bounded collection on the UI thread; JSON encoding and
+        // disk I/O are both performed by the single coalescing worker.
+        var snapshot = entries.Take(limit).ToArray();
+        lock (saveGate)
+        {
+            pendingEntries = snapshot;
+            saveWorker ??= Task.Run(ProcessPendingSavesAsync);
+        }
+    }
+
+    internal async Task FlushAsync()
+    {
+        while (true)
+        {
+            Task? worker;
+            lock (saveGate) worker = saveWorker;
+            if (worker == null) return;
+            await worker.ConfigureAwait(false);
+        }
+    }
+
+    async Task ProcessPendingSavesAsync()
+    {
+        while (true)
+        {
+            await Task.Delay(250).ConfigureAwait(false);
+            RecentRecordingEntry[]? entries;
+            lock (saveGate)
+            {
+                entries = pendingEntries;
+                pendingEntries = null;
+            }
+            if (entries != null)
+            {
+                try
+                {
+                    var content = JsonSerializer.Serialize(
+                        entries,
+                        new JsonSerializerOptions { WriteIndented = true });
+                    AtomicReplace(content);
+                    Interlocked.Increment(ref completedWriteCount);
+                }
+                catch (Exception ex) { SaveFailed?.Invoke(ex); }
+            }
+            lock (saveGate)
+            {
+                if (pendingEntries != null) continue;
+                saveWorker = null;
+                return;
+            }
+        }
     }
 
     void AtomicReplace(string content)

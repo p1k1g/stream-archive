@@ -9,5 +9,8 @@
     <Compile Include="..\overlay\BackendEventParser.cs" Link="BackendEventParser.cs" />
     <Compile Include="..\overlay\SecretProtectionService.cs" Link="SecretProtectionService.cs" />
     <Compile Include="..\overlay\ChannelCollectionSynchronizer.cs" Link="ChannelCollectionSynchronizer.cs" />
+    <Compile Include="..\overlay\SettingsSnapshot.cs" Link="SettingsSnapshot.cs" />
+    <Compile Include="..\overlay\UiPreferences.cs" Link="UiPreferences.cs" />
+    <Compile Include="..\overlay\RecentRecordingStore.cs" Link="RecentRecordingStore.cs" />
   </ItemGroup>
 </Project>
