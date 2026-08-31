@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix40
+Version 1.2.0-preview1-fix62
 
 BUG FIX
 -------
@@ -1184,6 +1184,133 @@ Remaining roadmap after fix40
   log search/filter/export.
 - Protected Windows credential storage and automated regression tests.
 
+fix41 implemented changes
+-------------------------
+
+1. Watcher start reset reliability
+- Dashboard, header, and tray Watcher starts no longer mutate the SelectedItems
+  collection of single-selection recording lists during dashboard reset.
+- Reset now clears SelectedItem directly, preventing the WinRT illegal-method
+  exception that could stop startup before PowerShell was launched.
+- Empty startup exception messages now include the exception type and HRESULT,
+  while full details continue to be written to SOOPLiveWinUI_startup.log.
+
+fix42 implemented changes
+-------------------------
+
+1. Accurate Watcher stop state
+- A non-zero PowerShell exit code caused by terminating the GUI-owned process
+  tree is now shown as a normal stop when it follows an explicit user request.
+- Unexpected backend exits without a pending stop request still retain the
+  existing error-exit status and exit code.
+
+2. Typed numeric setting changes
+- NumberBox keyboard edits now mark Settings dirty immediately, enabling Save
+  before focus leaves the field. ValueChanged remains in place for committed,
+  spin-button, paste, and programmatic value changes.
+
+fix43 implemented changes
+-------------------------
+
+1. Verified Watcher termination
+- Backend process-tree termination now returns success/failure to the GUI.
+- The GUI reports a stop-confirmation warning when the exact owned process tree
+  could not be confirmed stopped instead of treating intent alone as success.
+
+2. Validated numeric settings
+- NumberBox dirty tracking now follows actual Text changes rather than every
+  KeyUp, covering paste and accessibility input without navigation-key noise.
+- Empty, invalid, and out-of-range numeric values are rejected before saving;
+  they are no longer silently replaced with defaults.
+- Numeric INI values are written with invariant-culture formatting.
+
+fix44 implemented changes
+-------------------------
+
+1. Open an active recording folder
+- Selecting a recording now enables a compact Folder Open action beside the
+  existing per-channel Stop action in the dashboard header.
+- The action uses the actual output file path reported by the backend, opens
+  only its existing parent directory, and shows a clear error when the path is
+  not available instead of creating or guessing a folder.
+
+fix45 implemented changes
+-------------------------
+
+1. Configurable tray notifications
+- Settings can independently enable recording-start, recording-finished, and
+  actionable warning notifications. Defaults avoid noisy start notifications
+  while retaining completion and important failure/disk/auth warnings.
+
+2. Recording card context actions
+- Right-clicking a recording card offers Folder Open, Select File, Copy Path,
+  and Stop Current Recording without adding permanent dashboard button clutter.
+- All path actions use the backend-reported output path.
+
+3. Conservative disk-time estimate
+- The disk summary combines actual free space with the summed real file-growth
+  rates of active REC items on each output drive.
+- It subtracts the configured minimum-free-space reserve and displays a stable
+  tier such as under one hour, approximate hours/days, or three days or more.
+- PAUSED and restart-waiting items remain excluded from disk calculations.
+
+fix46 implemented changes
+-------------------------
+
+1. Deterministic recording-finish lifecycle
+- The backend emits recording-finished and channel-removed/disabled events with
+  stable account IDs on one line so the GUI can safely correlate concurrent
+  recorder output.
+- Finished, removed, and disabled recordings are removed from the active REC
+  collection immediately; queued stale progress is discarded at the same time.
+
+2. Recoverable alerts and disk cleanup
+- Recorder exits, stalls, low disk, and restart failures remain visible under
+  Needs Attention while a retry is pending.
+- The alert is cleared as soon as deterministic progress or a new recording
+  start proves that downloading resumed.
+- Only current REC items contribute to free-space and remaining-time summaries,
+  so removed or stopped channels cannot leave stale drive estimates behind.
+
+fix47 implemented changes
+-------------------------
+
+1. Bounded backend-to-UI memory
+- Progress is coalesced by stable account on the producer thread before it can
+  enter the event queue, so a blocked UI retains only one sample per channel.
+- Routine backend events use a bounded 2,000-line queue. Old lines are released
+  under sustained overflow and a single dropped-line summary is shown, while
+  lifecycle/disk/stop events use a separate priority queue and are never dropped.
+
+2. Lower hot-path allocation and I/O
+- Parsed numeric transfer rates are retained on ChannelStatus and reused by the
+  disk estimator instead of parsing the formatted UI rate every refresh.
+- Alert-only count changes no longer trigger output-drive free-space queries.
+- GUI log lines are bounded, consecutive duplicates are skipped, and multiline
+  HTML/JSON fragments are excluded from the event-oriented log.
+
+3. Deterministic resource cleanup
+- Backend event subscriptions now use named handlers and are removed when the
+  window closes. Timers, bounded queues, progress samples, dashboard maps, and
+  log references are cleared without forcing GC or broad process termination.
+
+fix48 implemented changes
+-------------------------
+
+1. Worker endpoint circuit breaker
+- Two complete failed Worker request cycles open a shared endpoint circuit.
+- Cooldown grows through bounded 30, 60, 120, and 300 second tiers. Existing
+  recordings continue; only new playlist acquisition is delayed.
+- A successful probe or saved Worker URL/API-key change resets the circuit.
+
+2. Compact recovery diagnostics
+- External HTML/JSON errors are reduced to a whitespace-normalized 300-character
+  summary before reaching stdout and the GUI event log.
+- During an open circuit, each affected channel receives a stable account-tagged
+  WORKER COOLDOWN event and schedules its next check at the cooldown boundary.
+- Needs Attention shows Worker recovery wait and clears normally when a new
+  recording start/progress proves recovery.
+
 GitHub and Codex cloud preparation
 ----------------------------------
 - Generated projects, publish output, logs, runtime control files, local INI
@@ -1194,3 +1321,316 @@ GitHub and Codex cloud preparation
   synchronization, and publish. Private values must be entered locally.
 - Codex cloud can edit and review this repository, but the final WinUI 3 build
   and EXE test must run on Windows. See CLOUD_SETUP.md.
+
+fix49 implemented changes
+-------------------------
+
+1. Wildcard-safe recording growth watchdog
+- The watchdog and RECORD FINISHED size calculation now use PowerShell
+  `-LiteralPath` for the generated output filename.
+- Broadcast titles containing valid filename characters such as `[` and `]`
+  are no longer interpreted as wildcard patterns. Their real file growth is
+  detected instead of remaining at a false `0 B` and restarting every 90 seconds.
+- The configured 90-second genuine no-growth recovery, immediate LIVE recheck,
+  collision-safe naming, and exact owned-process termination remain unchanged.
+
+fix50 implemented changes
+-------------------------
+
+1. Versioned backend event protocol
+- Critical lifecycle events now emit `@@SOOP_EVENT@@` JSON version 1 records for
+  recording start/finish/stall, low disk, Worker cooldown, and channel removal
+  or disable. Human-readable lines remain for users and older GUI fallback.
+- `BackendEventParser` owns JSON and legacy text parsing, preserving Korean and
+  delimiter characters such as `[`, `]`, `|`, and `=` without correlation loss.
+- Structured lifecycle lines use the priority UI queue and recent-event
+  suppression prevents the paired legacy line from applying the same action twice.
+
+2. Automated protocol regressions
+- A dependency-free .NET 8 console test covers every introduced JSON event,
+  legacy fallback parsing, malformed/version-mismatched JSON, Korean text, and
+  special-character names, titles, and paths.
+- A PowerShell regression verifies literal-path size checks for wildcard-like
+  filenames and guards against reintroducing non-literal watchdog access.
+
+3. Bounded redacted recorder diagnostics
+- Unexpected recorder exits and genuine RECORD STALLED stops retain only the
+  final 50 stderr lines under `backend\logs\recorder-diagnostics`.
+- Authorization, cookie, password, API-key, AID, and token-shaped values are
+  redacted before writing; only the newest 20 diagnostic files are retained.
+- Normal recording completion, user stop, channel removal, and low-disk stops
+  continue deleting temporary recorder console files without diagnostic churn.
+
+fix51 implemented changes
+-------------------------
+
+1. Recent recording history
+- A dedicated Recent Recordings page keeps the newest 200 completed/interrupted
+  recordings in an atomically replaced local JSON file under `backend\history`.
+- Users can open the folder, select an existing file, copy its path, or clear
+  history without deleting any recording file.
+
+2. Actionable Needs Attention cards
+- Alert cards now show a timestamp, structured status/detail, and a recommended
+  action. Selected alerts offer immediate recheck, recording-folder, Settings,
+  and Logs shortcuts.
+- RECHECK uses the existing GUID temporary-command-to-`.cmd` claim protocol and
+  only schedules that exact account for an immediate LIVE check.
+
+3. Safe diagnostics and channel-name preview
+- Logs now provides one-click diagnostic copy with app/runtime/watcher state and
+  the bounded GUI event tail, after credential and token-shaped values are redacted.
+- Channel Management can check selected channels (or all when none are selected)
+  in bounded batches, preview old/new names and failures, and stage confirmed
+  changes without saving until the existing atomic Save action is used.
+
+4. Advanced-settings dirty-state correction
+- Expanding or collapsing Advanced Settings suppresses NumberBox layout/format
+  callbacks across the UI transition. An existing real edit remains dirty, while
+  opening an untouched panel no longer asks the user to save unchanged settings.
+
+fix52 implemented changes
+-------------------------
+
+1. Windows DPAPI credential protection
+- New Settings saves protect SOOP_PASSWORD and CLOUDFLARE_API_KEY with Windows
+  DPAPI CurrentUser scope and an application-specific entropy value. INI files
+  contain only `dpapi:v1:` ciphertext; secret fields remain blank in the GUI.
+- Legacy plaintext remains readable for one-way migration on the next explicit
+  save/import. The watcher decrypts only in memory and fails safely when another
+  Windows user or damaged ciphertext cannot be unprotected.
+- Settings backups created during GUI or CLI writes are also migrated to DPAPI,
+  so a legacy plaintext value is not retained in the newly written .bak file.
+- Shared exports exclude secrets by default; optional full exports contain only
+  current-user DPAPI ciphertext and imports re-protect secrets before file write.
+
+2. Completed role boundaries
+- MainWindow remains programmatic WinUI composition and thin event coordination;
+  backend event parsing/process ownership, Settings, imports, recent-history
+  persistence, diagnostics construction, and DPAPI are isolated in dedicated files.
+- Recent history validation/atomic replacement and diagnostic redaction no longer
+  live in the Window partial, reducing UI lifecycle coupling and test surface.
+
+3. Feature-based PowerShell modules
+- SOOP_LIVE.ps1 is now orchestration-only and fail-fast dot-sources Security,
+  Core/config, Network/auth/Worker, and Recorder/control modules.
+- Generated-project synchronization now recursively copies backend modules and
+  hash-verifies every required file. Compact/self-contained builds verify the
+  main watcher and all modules without broad process or path fallback changes.
+
+4. Windows build and publish CI
+- A windows-latest workflow runs parser/DPAPI and PowerShell regressions, prepares
+  the official WinUI template, invokes BUILD_EXE.bat, verifies unpackaged compact
+  properties and publish/backend modules, and uploads the win-x64 artifact.
+
+fix53 implemented changes
+-------------------------
+
+1. Windows source-test CRLF correction
+- The distributed-secret invariant now requires a real non-line-ending character
+  after `=`. Empty SOOP_PASSWORD/CLOUDFLARE_API_KEY defaults no longer become
+  false positives because `.` consumed the CR in Windows CRLF files.
+
+2. Normal recorder-exit classification
+- Recorder processes are given a final WaitForExit/Refresh before reading the
+  exit code. Code 0 and the Windows/PowerShell unavailable-code case are emitted
+  as NORMAL; known non-zero codes retain diagnostics and confirmation alerts.
+- The GUI also normalizes legacy `RECORDER EXIT CODE=` and code 0 finish events
+  to NORMAL, clears any stale channel alert, migrates matching recent-history
+  reasons, and keeps non-zero exits actionable.
+- Parser regressions cover empty, zero, unavailable, and non-zero finish reasons.
+
+fix54 implemented changes
+-------------------------
+
+1. Fresh-machine WinUI template bootstrap
+- PREPARE_PROJECT now treats `dotnet new list winui` returning no templates as
+  an expected probe result even while the rest of the script remains fail-fast.
+- The probe captures native output/exit code under a narrowly scoped Continue
+  policy, restores ErrorActionPreference in finally, and then installs the
+  official Microsoft WinUI C# template pack.
+- A source regression protects the scoped error-policy restoration, native exit
+  capture, and official template installation fallback used by Windows CI.
+
+fix55 implemented changes
+-------------------------
+
+1. Clear channel enabled/disabled visuals
+- Channel rows now use separate green/neutral badges, card backgrounds, borders,
+  name colors, and opacity so disabled entries are distinguishable at a glance.
+
+2. Channel-name preview actions
+- The bulk name lookup preview now exposes three explicit choices: apply changes,
+  acknowledge the result without applying, or cancel.
+
+3. Distinct recent-recordings navigation
+- Recent recordings now uses the Video symbol while Logs retains Document.
+
+4. Advanced Settings dirty stabilization
+- First-time NumberBox formatting after import/save can be deferred until the
+  collapsed advanced panel is measured. A scoped 500 ms layout transition guard
+  now absorbs those programmatic callbacks without clearing pre-existing edits.
+- Source regressions protect all four UI behaviors.
+
+fix56 implemented changes
+-------------------------
+
+1. Windows PowerShell 5.1-safe source regressions
+- PowerShell 5.1 reads BOM-less scripts through the active ANSI code page. Korean
+  regex literals in UserFeaturesSource.Tests could therefore become invalid
+  tokens before any assertion ran.
+- Korean UI labels are now reconstructed from Unicode code points inside an
+  ASCII-only test script; the recent-navigation assertion uses its stable tag.
+- The literal-path Korean filename fixture is also constructed from code points,
+  and SecurityAndModules.Tests rejects future non-ASCII PowerShell test sources.
+
+fix57 implemented changes
+-------------------------
+
+1. Modern design foundation
+- DesignTokens centralizes semantic surfaces, text, borders, status colors,
+  spacing, radii, control sizing, high-contrast fallbacks, command buttons,
+  and keyboard accelerators without changing the programmatic overlay model.
+- Watcher and Settings primary actions now share the common control treatment.
+
+2. Responsive channel and recent-recording views
+- Channel and recent-recording ListViews switch templates only when their host
+  crosses a compact/wide width threshold. Normal progress never rebuilds them.
+- Compact cards stack secondary metadata while wide cards retain column layouts.
+
+3. Command surfaces and accessibility
+- Channel management and recent recordings use CommandBar primary/overflow
+  actions instead of fixed horizontal button rows.
+- High-contrast mode avoids disabled-row opacity, recent cards use WinUI theme
+  resources, command items expose automation names/tooltips, and state badges
+  keep text labels in addition to color.
+- Keyboard access includes Ctrl+R/Ctrl+Shift+R for Watcher, Ctrl+N/Ctrl+S/Ctrl+F
+  for channel management, and Ctrl+S for Settings.
+- Source regressions protect design tokens, responsive templates, CommandBar,
+  high-contrast, and accelerator wiring.
+
+fix58 implemented changes
+-------------------------
+
+1. Debounced channel search
+- Channel-name/account typing waits for a quiet 250 ms interval before applying
+  the filter. Filter dropdown changes remain immediate.
+
+2. Minimal visible-channel synchronization
+- Filtering no longer clears and rebuilds VisibleChannelItems. Removed rows are
+  deleted, new rows inserted, and retained rows moved only when their position
+  actually changes. Reapplying the same filter emits no collection mutations.
+- Retained selections are restored by stable account ID, and the first visible
+  row is used as a scroll anchor across filter updates.
+
+3. Large-list regression
+- A dependency-free 10,000-channel regression validates filtering, no-op refresh,
+  ordering, reference preservation, and move-only reordering behavior.
+
+fix59 implemented changes
+-------------------------
+
+1. Snapshot-based Settings dirty state
+- Settings controls are normalized into a deterministic snapshot after load and
+  save. Dirty state now means the current snapshot actually differs, so changing
+  a value back to its saved value clears the Save prompt automatically.
+- Secret replacement/deletion intent and invalid in-progress NumberBox text are
+  included without exposing stored secrets.
+
+2. Atomic per-user UI state
+- Close behavior, last tab, window size, and UI density now live under LocalAppData
+  instead of the publish directory. Writes use validated temporary JSON followed
+  by atomic replacement, with one-time migration from the legacy adjacent file.
+- Window resize writes are debounced, and the last tab and valid saved dimensions
+  are restored at startup. Compact, normal, and comfortable density are available
+  in Settings and apply to design-token spacing on the next full UI construction.
+
+3. Background recent-history coalescing
+- Recent-recording snapshots are copied on the UI thread, coalesced for 250 ms,
+  and atomically written by one background worker. Shutdown unsubscribes backend
+  events and flushes the newest pending snapshot before clearing UI collections.
+- Automated regressions cover deterministic Settings snapshots, LocalAppData
+  placement, and a 100-update burst collapsing into one physical history write.
+
+fix60 implemented changes
+-------------------------
+
+1. Bounded priority and warning paths
+- Critical backend events now use a newest-retaining priority queue capped at
+  512 entries. Overflow is counted and reported instead of growing indefinitely.
+- Identical non-critical warning/retry lines are deduplicated for 30 seconds
+  after timestamp normalization, with a merged-line summary in the GUI log.
+
+2. Lower-allocation progress snapshots
+- Producer-side progress parsing now stores a small value-type snapshot containing
+  only account, name, size, duration, and rate. UI flushing no longer creates a
+  ConcurrentDictionary ToArray snapshot or reparses the original console line.
+- At most 200 channel progress snapshots are applied per dispatcher tick.
+
+3. Cached drive information
+- Available-space queries are cached per output root for five seconds, including
+  safe negative results. Recording cards and the disk estimate reuse that cache.
+- Cache and deduplication state are cleared on Watcher reset and window shutdown.
+
+4. Virtual long-duration soak regression
+- A dependency-free virtual 24-hour/64-channel test exercises 86,400 progress and
+  warning ticks, four output roots, and a 100,000-event priority burst. It asserts
+  hard queue bounds, warning suppression, channel-bounded progress, and reduced
+  drive queries.
+
+fix61 implemented changes
+-------------------------
+
+1. Isolated VOD pipeline
+- Added a non-interactive, request-file-driven VOD backend under backend/vod.
+  Core, authenticated-cookie, yt-dlp download/resume, and ffmpeg concat logic
+  are separate modules and are never loaded by the LIVE watcher bootstrap.
+- VOD temporary cookies and concat metadata live in a per-job LocalAppData
+  directory and are removed after completion. Authentication output and URL
+  query strings are redacted from failure events.
+
+2. WinUI VOD workspace
+- Added a dedicated VOD navigation page with URL/output/PART/cookie controls,
+  structured version-1 VOD event parsing, progress display, and cancellation.
+- VOD uses its own process service and exact owned process-tree termination;
+  Watcher start/stop remains connected only to the existing LIVE service.
+- VOD settings use validated atomic LocalAppData JSON and do not participate in
+  SOOP_LIVE_SETTING.ini hot reload or Settings dirty tracking.
+- Completed VOD jobs are retained in a separate bounded, atomically replaced
+  LocalAppData history without storing cookie contents or authentication data.
+
+3. Packaging and regressions
+- Prepare, sync, compact/self-contained publish, and Windows CI now verify the
+  VOD entry script and all required modules in addition to the LIVE backend.
+- Dependency-free regressions cover PART ranges, malformed/versioned JSON,
+  Korean/special-character fields, module isolation, literal paths, redaction,
+  resume flags, and exact process ownership.
+
+fix62 implemented changes
+-------------------------
+
+1. Stored SOOP login for VOD
+- VOD now defaults to a stored-login mode that reads SOOP_USERNAME and the
+  DPAPI-protected SOOP_PASSWORD from SOOP_LIVE_SETTING.ini inside the isolated
+  VOD process. Credentials, DPAPI ciphertext, and cookie values are never added
+  to the GUI request JSON.
+- The VOD process creates and verifies its own HttpClient/CookieContainer login
+  session, exports only SOOP-domain cookies to a per-job Netscape cookie file,
+  and never shares the LIVE process or its in-memory CookieContainer.
+- FILE and BROWSER cookie modes remain available as explicit fallbacks.
+
+2. Short-lived subscription authorization renewal
+- private_auth.php is called inside every PART download attempt, so each retry
+  obtains a fresh short-lived authorization cookie before yt-dlp resumes its
+  existing partial download.
+- On retries, stored-login mode first creates a new independent SOOP login
+  session; browser mode re-exports the browser cookie. Exponential backoff is
+  bounded and failures preserve the partial download for yt-dlp continuation.
+- Per-job cookies are deleted on success, failure, cancellation, and window
+  shutdown together with the private job directory.
+
+3. UI and regressions
+- The VOD page shows stored SOOP login as the default mode, hides irrelevant
+  cookie-path controls, and reports whether Settings contains both login fields.
+- Regressions assert DPAPI credential resolution, independent login, Netscape
+  export, request secrecy, retry-loop authorization refresh, and cleanup.
