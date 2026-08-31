@@ -121,7 +121,8 @@ if ($pipelineDefense -notmatch 'BoundedConcurrentQueue<T>' -or
 }
 if ($pipelineSoak -notmatch '24\s*\*\s*60\s*\*\s*60' -or
     $pipelineSoak -notmatch '100_000' -or
-    $pipelineSoak -notmatch 'progress\.Count\s*==\s*64') {
+    $pipelineSoak -notmatch 'progress\.Count\s*==\s*64' -or
+    $pipelineSoak -notmatch 'DriveCacheHonorsTtl') {
     throw 'Long-running multi-channel event pipeline soak coverage is missing.'
 }
 

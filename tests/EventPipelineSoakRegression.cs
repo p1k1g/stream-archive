@@ -6,8 +6,32 @@ static class EventPipelineSoakRegression
     internal static void Run()
     {
         PriorityQueueStaysBounded();
+        DriveCacheHonorsTtl();
         VirtualMultiChannelSoakStaysBounded();
         Console.WriteLine("Event pipeline 24-hour virtual soak tests passed.");
+    }
+
+    static void DriveCacheHonorsTtl()
+    {
+        var now = new DateTime(2026, 8, 31, 0, 0, 0, DateTimeKind.Utc);
+        var queries = 0;
+        var cache = new DriveSpaceCache(
+            TimeSpan.FromSeconds(5),
+            _ => { queries++; return (true, 123L); },
+            () => now);
+
+        Check(cache.TryGetAvailableBytes("C:\\", out var first) && first == 123L,
+            "first drive lookup must query the provider");
+        for (var repeat = 0; repeat < 100; repeat++)
+            Check(cache.TryGetAvailableBytes("C:\\", out _), "cached drive lookup failed");
+        Check(queries == 1, "same-root lookups inside TTL must use one provider query");
+
+        now = now.AddMilliseconds(4_999);
+        cache.TryGetAvailableBytes("C:\\", out _);
+        Check(queries == 1, "drive cache expired before its TTL");
+        now = now.AddMilliseconds(1);
+        cache.TryGetAvailableBytes("C:\\", out _);
+        Check(queries == 2, "drive cache did not refresh at TTL expiry");
     }
 
     static void PriorityQueueStaysBounded()
@@ -49,7 +73,9 @@ static class EventPipelineSoakRegression
         Check(progress.Count == 64, "progress snapshots grew beyond channel cardinality");
         Check(emittedWarnings <= 2_881, "warning deduplication did not bound repeated output");
         Check(warnings.TakeSuppressedCount() >= 80_000, "warning deduplication suppressed too few repeats");
-        Check(driveQueries <= 18_000, "drive cache did not reduce repeated drive queries");
+        Check(cache.Count == roots.Length, "drive cache grew beyond output-root cardinality");
+        Check(driveQueries < 24 * 60 * 60,
+            $"drive cache did not reduce repeated drive queries (queries={driveQueries})");
     }
 
     static void Check(bool condition, string message)

@@ -128,6 +128,8 @@ internal sealed class DriveSpaceCache
         this.clock = clock ?? (() => DateTime.UtcNow);
     }
 
+    internal int Count => entries.Count;
+
     internal bool TryGetAvailableBytes(string root, out long availableBytes)
     {
         var key = root.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
