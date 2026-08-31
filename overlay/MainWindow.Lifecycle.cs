@@ -432,6 +432,14 @@ public sealed partial class MainWindow
         catch { }
 
         try { backend.Dispose(); } catch { }
+        try
+        {
+            vodBackend.Output -= VodBackend_Output;
+            vodBackend.Exited -= VodBackend_Exited;
+            vodBackend.Dispose();
+            CleanupVodJobDirectory();
+        }
+        catch { }
     }
 
     void ResetBackendQueueCounters()

@@ -77,7 +77,12 @@ foreach ($requiredBackendFile in @(
     'modules\SOOP.Security.ps1',
     'modules\SOOP.Core.ps1',
     'modules\SOOP.Network.ps1',
-    'modules\SOOP.Recorder.ps1'
+    'modules\SOOP.Recorder.ps1',
+    'vod\SOOP_VOD.ps1',
+    'vod\modules\SOOP.Vod.Core.ps1',
+    'vod\modules\SOOP.Vod.Auth.ps1',
+    'vod\modules\SOOP.Vod.Download.ps1',
+    'vod\modules\SOOP.Vod.Merge.ps1'
 )) {
     $source = Join-Path $backend $requiredBackendFile
     $target = Join-Path $backendTarget $requiredBackendFile

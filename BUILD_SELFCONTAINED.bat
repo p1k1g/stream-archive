@@ -51,6 +51,16 @@ for %%M in (SOOP.Security.ps1 SOOP.Core.ps1 SOOP.Network.ps1 SOOP.Recorder.ps1) 
     exit /b 1
   )
 )
+if not exist ".\publish_selfcontained\backend\vod\SOOP_VOD.ps1" (
+  echo [ERROR] self-contained VOD backend missing.
+  exit /b 1
+)
+for %%M in (SOOP.Vod.Core.ps1 SOOP.Vod.Auth.ps1 SOOP.Vod.Download.ps1 SOOP.Vod.Merge.ps1) do (
+  if not exist ".\publish_selfcontained\backend\vod\modules\%%M" (
+    echo [ERROR] self-contained VOD backend module missing: %%M
+    exit /b 1
+  )
+)
 
 echo.
 echo ========================================

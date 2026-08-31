@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix60
+Version 1.2.0-preview1-fix61
 
 BUG FIX
 -------
@@ -1577,3 +1577,31 @@ fix60 implemented changes
   warning ticks, four output roots, and a 100,000-event priority burst. It asserts
   hard queue bounds, warning suppression, channel-bounded progress, and reduced
   drive queries.
+
+fix61 implemented changes
+-------------------------
+
+1. Isolated VOD pipeline
+- Added a non-interactive, request-file-driven VOD backend under backend/vod.
+  Core, authenticated-cookie, yt-dlp download/resume, and ffmpeg concat logic
+  are separate modules and are never loaded by the LIVE watcher bootstrap.
+- VOD temporary cookies and concat metadata live in a per-job LocalAppData
+  directory and are removed after completion. Authentication output and URL
+  query strings are redacted from failure events.
+
+2. WinUI VOD workspace
+- Added a dedicated VOD navigation page with URL/output/PART/cookie controls,
+  structured version-1 VOD event parsing, progress display, and cancellation.
+- VOD uses its own process service and exact owned process-tree termination;
+  Watcher start/stop remains connected only to the existing LIVE service.
+- VOD settings use validated atomic LocalAppData JSON and do not participate in
+  SOOP_LIVE_SETTING.ini hot reload or Settings dirty tracking.
+- Completed VOD jobs are retained in a separate bounded, atomically replaced
+  LocalAppData history without storing cookie contents or authentication data.
+
+3. Packaging and regressions
+- Prepare, sync, compact/self-contained publish, and Windows CI now verify the
+  VOD entry script and all required modules in addition to the LIVE backend.
+- Dependency-free regressions cover PART ranges, malformed/versioned JSON,
+  Korean/special-character fields, module isolation, literal paths, redaction,
+  resume flags, and exact process ownership.

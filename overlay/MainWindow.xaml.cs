@@ -141,6 +141,7 @@ public sealed partial class MainWindow : Window
     FrameworkElement DashboardView = null!;
     FrameworkElement ChannelsView = null!;
     FrameworkElement SettingsView = null!;
+    FrameworkElement VodViewHost = null!;
     FrameworkElement LogsView = null!;
 
     bool uiAutoFormat = true;
@@ -385,7 +386,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix60",
+            Text = "WinUI 3 · v1.2.0-preview1-fix61",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -435,6 +436,7 @@ public sealed partial class MainWindow : Window
         Nav.MenuItems.Add(NavigationItemFix39("채널 관리", "channels", Symbol.People));
         Nav.MenuItems.Add(NavigationItemFix39("설정", "settings", Symbol.Setting));
         Nav.MenuItems.Add(NavigationItemFix39("최근 녹화", "recent", Symbol.Video));
+        Nav.MenuItems.Add(NavigationItemFix39("VOD 다운로드", "vod", Symbol.Download));
         Nav.MenuItems.Add(NavigationItemFix39("로그", "logs", Symbol.Document));
         Nav.SelectionChanged += Nav_SelectionChanged;
 
@@ -443,12 +445,14 @@ public sealed partial class MainWindow : Window
         ChannelsView = BuildChannelsView();
         SettingsView = BuildSettingsViewFix36();
         RecentRecordingsView = BuildRecentRecordingsViewFix51();
+        VodViewHost = BuildVodView();
         LogsView = BuildLogsView();
 
         contentRoot.Children.Add(DashboardView);
         contentRoot.Children.Add(ChannelsView);
         contentRoot.Children.Add(SettingsView);
         contentRoot.Children.Add(RecentRecordingsView);
+        contentRoot.Children.Add(VodViewHost);
         contentRoot.Children.Add(LogsView);
 
         Nav.Content = contentRoot;
@@ -548,6 +552,7 @@ public sealed partial class MainWindow : Window
         ChannelsView.Visibility = tag == "channels" ? Visibility.Visible : Visibility.Collapsed;
         SettingsView.Visibility = tag == "settings" ? Visibility.Visible : Visibility.Collapsed;
         RecentRecordingsView.Visibility = tag == "recent" ? Visibility.Visible : Visibility.Collapsed;
+        VodViewHost.Visibility = tag == "vod" ? Visibility.Visible : Visibility.Collapsed;
         LogsView.Visibility = tag == "logs" ? Visibility.Visible : Visibility.Collapsed;
 
         if (tag is "channels" or "settings")

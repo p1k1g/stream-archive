@@ -13,5 +13,10 @@
     <Compile Include="..\overlay\UiPreferences.cs" Link="UiPreferences.cs" />
     <Compile Include="..\overlay\RecentRecordingStore.cs" Link="RecentRecordingStore.cs" />
     <Compile Include="..\overlay\EventPipelineDefense.cs" Link="EventPipelineDefense.cs" />
+    <Compile Include="..\overlay\VodModels.cs" Link="VodModels.cs" />
+    <Compile Include="..\overlay\VodSelectionParser.cs" Link="VodSelectionParser.cs" />
+    <Compile Include="..\overlay\VodEventParser.cs" Link="VodEventParser.cs" />
+    <Compile Include="..\overlay\VodSettingsStore.cs" Link="VodSettingsStore.cs" />
+    <Compile Include="..\overlay\VodHistoryStore.cs" Link="VodHistoryStore.cs" />
   </ItemGroup>
 </Project>

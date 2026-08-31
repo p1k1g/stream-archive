@@ -79,7 +79,7 @@ public sealed class UiPreferences
     {
         if (WindowWidth is < 800 or > 7680) WindowWidth = 1280;
         if (WindowHeight is < 600 or > 4320) WindowHeight = 820;
-        if (LastView is not ("dashboard" or "channels" or "settings" or "recent" or "logs"))
+        if (LastView is not ("dashboard" or "channels" or "settings" or "recent" or "vod" or "logs"))
             LastView = "dashboard";
         var density = (UiDensity ?? "").ToUpperInvariant();
         UiDensity = density is "COMPACT" or "COMFORTABLE"

@@ -11,6 +11,7 @@ static class BackendEventParserRegression
         UiStateRegression.Run();
         RecentRecordingStoreRegression.Run();
         EventPipelineSoakRegression.Run();
+        VodFeatureRegression.Run();
         JsonEvent("recording_started");
         JsonEvent("recording_finished");
         JsonEvent("recording_stalled");
