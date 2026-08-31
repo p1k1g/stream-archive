@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix63
+Version 1.2.0-preview1-fix64
 
 BUG FIX
 -------
@@ -1651,3 +1651,37 @@ fix63 implemented changes
 - The guard runs before the behavioral Netscape-cookie regression in Windows CI,
   so an encoding or syntax regression fails with the exact affected file and
   first parser message.
+
+fix64 implemented changes
+-------------------------
+
+1. End-to-end UTF-8 VOD subprocess contract
+- VodProcessService now configures UTF-8 input/output inside Windows PowerShell,
+  decodes redirected stdout/stderr as UTF-8, and sets Python/yt-dlp UTF-8
+  environment variables. The VOD entry script repeats the console contract as a
+  defensive fallback.
+- A Windows-only regression launches Windows PowerShell from a Korean and
+  wildcard-containing path and verifies Korean structured stdout, Korean stderr,
+  and secret redaction round-trip through VodProcessService.
+
+2. Actionable Cookie/auth failures
+- yt-dlp flat-playlist metadata can omit the top-level uploader_id. VOD now
+  falls back to the first PART uploader_id/uploader/upload_date before calling
+  private_auth; an empty strm_id had caused both stored-login and FILE-cookie
+  authorization to fail even when their cookies were valid.
+- FILE mode validates that the supplied file contains a real seven-field
+  Netscape cookie row and reports how to obtain a compatible cookies.txt instead
+  of failing later with a generic exit code.
+- private_auth failures retain a bounded redacted response/exit summary, and the
+  VOD page now preserves the structured failure or redacted stderr tail beside
+  the exit code instead of replacing it with only "VOD job exited (1)".
+
+3. Isolated yt-dlp diagnostics and locale-safe progress
+- Metadata JSON stdout is no longer merged with stderr. Per-operation stderr is
+  kept in the private job directory, reduced to a redacted tail for errors, and
+  deleted immediately after use (or with the job directory on cancellation).
+- PART stderr is likewise separated from progress stdout. Percentage values are
+  parsed with invariant culture before they enter versioned JSON events.
+- Source and behavior regressions cover the UTF-8 process boundary, JSON/stderr
+  separation, invariant parsing, valid FILE cookies, and malformed-cookie
+  rejection.

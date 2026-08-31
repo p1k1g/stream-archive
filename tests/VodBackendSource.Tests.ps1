@@ -41,6 +41,22 @@ if ($download -notmatch 'Renew-VodBaseCookie' -or
     $download -notmatch 'for \(\$attempt') {
     throw 'Short-lived subscription authorization is not refreshed inside the retry loop.'
 }
+$processService = Get-Content -LiteralPath (Join-Path $root 'overlay/VodProcessService.cs') -Raw
+if ($processService -notmatch 'StandardOutputEncoding\s*=\s*new UTF8Encoding' -or
+    $processService -notmatch 'StandardErrorEncoding\s*=\s*new UTF8Encoding' -or
+    $processService -notmatch '\[Console\]::OutputEncoding' -or
+    $processService -notmatch '\$OutputEncoding=') {
+    throw 'VOD PowerShell UTF-8 process boundary is incomplete.'
+}
+if ($download -match '--dump-single-json''.*2>&1' -or
+    $download -notmatch 'yt-dlp-metadata\.stderr\.log' -or
+    $download -notmatch 'CultureInfo\]::InvariantCulture') {
+    throw 'VOD metadata stderr separation or invariant progress parsing is missing.'
+}
+if ($download -notmatch '\$entries\[0\]\.uploader_id' -or
+    $download -notmatch 'VOD BJ ID') {
+    throw 'VOD metadata does not fall back to the first PART uploader ID required by private_auth.'
+}
 if ((Get-Content -LiteralPath (Join-Path $root 'backend/SOOP_LIVE.ps1') -Raw) -match 'SOOP_VOD|SOOP\.Vod') { throw 'LIVE bootstrap must not load VOD modules.' }
 $models = Get-Content -LiteralPath (Join-Path $root 'overlay/VodModels.cs') -Raw
 if ($models -match 'SoopPassword|SOOP_PASSWORD|Dpapi|AuthCookie') { throw 'VOD request model must not contain credentials or cookie values.' }
@@ -50,6 +66,6 @@ if ($vodUi -notmatch 'cookieMode == "SOOP_LOGIN"' -or
     $vodUi -notmatch 'browserName = ""') {
     throw 'Stored-login request does not clear fallback cookie/browser fields.'
 }
-$service = Get-Content -LiteralPath (Join-Path $root 'overlay/VodProcessService.cs') -Raw
+$service = $processService
 if ($service -notmatch '"/PID"' -or $service -notmatch 'Kill\(entireProcessTree: true\)' -or $service -match 'taskkill.+/IM') { throw 'VOD exact process-tree ownership guard is missing.' }
 Write-Host 'VOD backend source invariants passed.'

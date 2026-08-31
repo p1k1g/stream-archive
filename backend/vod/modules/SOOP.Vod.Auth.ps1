@@ -146,6 +146,21 @@ function New-VodSoopLoginCookie {
     }
 }
 
+function Test-VodNetscapeCookieFile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'VOD Cookie 파일이 생성되지 않았습니다.' }
+    $dataLine = Get-Content -LiteralPath $Path -ErrorAction Stop |
+        Where-Object {
+            $line = ([string]$_).Trim()
+            $line.Length -gt 0 -and (-not $line.StartsWith('#') -or $line.StartsWith('#HttpOnly_'))
+        } |
+        Select-Object -First 1
+    $fields = @(([string]$dataLine) -split "`t", 7)
+    if ([string]::IsNullOrWhiteSpace([string]$dataLine) -or $fields.Count -ne 7) {
+        throw 'Cookie 파일이 Netscape 형식이 아닙니다. 브라우저 확장이나 yt-dlp로 내보낸 cookies.txt를 사용해 주세요.'
+    }
+}
+
 function Initialize-VodCookie {
     param($Request, [string]$JobDirectory, [string]$YtDlp, [string]$BackendRoot)
     $mode = ([string]$Request.CookieMode).ToUpperInvariant()
@@ -165,6 +180,7 @@ function Initialize-VodCookie {
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $temporary -PathType Leaf)) { throw '브라우저 Cookie 추출에 실패했습니다.' }
     }
     else { throw "지원하지 않는 Cookie 모드입니다: $mode" }
+    Test-VodNetscapeCookieFile -Path $temporary
     return [pscustomobject]@{ Path = $temporary; Mode = $mode; BackendRoot = $BackendRoot; JobDirectory = $JobDirectory; YtDlp = $YtDlp }
 }
 
@@ -184,8 +200,18 @@ function Renew-VodBaseCookie {
 function Refresh-VodAuthorization {
     param($Request, [string]$CookieFile, [string]$StreamerId, [string]$Url, [int]$Attempt)
     Write-VodEvent -Type 'auth_refreshing' -Message ("구독 VOD 단기 인증 Cookie 발급 중 ({0}/{1})" -f $Attempt, [int]$Request.MaxRetries)
+    $script:LastVodAuthError = ''
     $response = & curl.exe '-sS' '-b' $CookieFile '-c' $CookieFile '-e' ([string]$Request.VodUrl) '-H' 'Origin: https://vod.sooplive.com' '--data-urlencode' 'type=vod' '--data-urlencode' ("strm_id=$StreamerId") '--data-urlencode' ("title_no=" + ([regex]::Match([string]$Request.VodUrl, '/player/(\d+)').Groups[1].Value)) '--data-urlencode' ("url=$Url") 'https://live.sooplive.com/api/private_auth.php' 2>&1
-    return ($LASTEXITCODE -eq 0 -and (($response -join "`n") -match '"result"\s*:\s*1'))
+    $curlExitCode = $LASTEXITCODE
+    $responseText = ($response -join ' ').Trim()
+    $success = ($curlExitCode -eq 0 -and $responseText -match '"result"\s*:\s*1')
+    if (-not $success) {
+        $detail = Get-RedactedVodText -Text $responseText
+        if ($detail.Length -gt 300) { $detail = $detail.Substring(0, 300) }
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = "curl exit code $curlExitCode" }
+        $script:LastVodAuthError = $detail
+    }
+    return $success
 }
 
 function Remove-VodTemporarySecrets {

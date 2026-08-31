@@ -18,5 +18,7 @@
     <Compile Include="..\overlay\VodEventParser.cs" Link="VodEventParser.cs" />
     <Compile Include="..\overlay\VodSettingsStore.cs" Link="VodSettingsStore.cs" />
     <Compile Include="..\overlay\VodHistoryStore.cs" Link="VodHistoryStore.cs" />
+    <Compile Include="..\overlay\VodProcessService.cs" Link="VodProcessService.cs" />
+    <Compile Include="..\overlay\DiagnosticInfoService.cs" Link="DiagnosticInfoService.cs" />
   </ItemGroup>
 </Project>

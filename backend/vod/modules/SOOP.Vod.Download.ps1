@@ -24,18 +24,51 @@ function Resolve-VodTools {
     return [pscustomobject]@{ YtDlp = $yt; Ffmpeg = $ff }
 }
 
+function Get-VodExternalErrorTail {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
+    try {
+        $tail = @(Get-Content -LiteralPath $Path -Tail 20 -ErrorAction Stop)
+        return Get-RedactedVodText -Text (($tail | ForEach-Object { [string]$_ }) -join ' | ')
+    }
+    catch { return '' }
+}
+
 function Get-VodMetadata {
-    param($Request, [string]$YtDlp, [string]$CookieFile)
-    $json = & $YtDlp '--cookies' $CookieFile '--flat-playlist' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2>&1
-    if ($LASTEXITCODE -ne 0) { throw ('VOD 분석 실패: ' + (Get-RedactedVodText (($json | Select-Object -Last 5) -join ' '))) }
-    try { $info = ($json -join [Environment]::NewLine) | ConvertFrom-Json }
-    catch { throw 'VOD JSON 파싱에 실패했습니다.' }
+    param($Request, [string]$YtDlp, [string]$CookieFile, [string]$JobDirectory)
+    $stderrFile = Join-Path $JobDirectory 'yt-dlp-metadata.stderr.log'
+    try {
+        $json = @(& $YtDlp '--cookies' $CookieFile '--flat-playlist' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2> $stderrFile)
+        $exitCode = $LASTEXITCODE
+        $errorTail = Get-VodExternalErrorTail -Path $stderrFile
+        if ($exitCode -ne 0) {
+            if ([string]::IsNullOrWhiteSpace($errorTail)) { $errorTail = "yt-dlp exit code $exitCode" }
+            throw "VOD 분석 실패: $errorTail"
+        }
+        try { $info = ($json -join [Environment]::NewLine) | ConvertFrom-Json }
+        catch {
+            $detail = if ([string]::IsNullOrWhiteSpace($errorTail)) { $_.Exception.Message } else { $errorTail }
+            throw "VOD JSON 파싱 실패: $(Get-RedactedVodText -Text $detail)"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
+    }
     $entries = @($info.entries)
     if ($entries.Count -eq 0) { throw 'VOD PART를 찾지 못했습니다.' }
-    $streamer = if ([string]::IsNullOrWhiteSpace([string]$info.uploader)) { [string]$info.uploader_id } else { [string]$info.uploader }
+    $streamerId = [string]$info.uploader_id
+    if ([string]::IsNullOrWhiteSpace($streamerId)) { $streamerId = [string]$entries[0].uploader_id }
+    if ([string]::IsNullOrWhiteSpace($streamerId)) { throw 'VOD BJ ID를 찾지 못해 구독 인증을 요청할 수 없습니다.' }
+    $streamer = [string]$info.uploader
+    if ([string]::IsNullOrWhiteSpace($streamer)) { $streamer = [string]$entries[0].uploader }
+    if ([string]::IsNullOrWhiteSpace($streamer)) { $streamer = $streamerId }
     $date = [string]$info.upload_date
+    if ([string]::IsNullOrWhiteSpace($date)) { $date = [string]$entries[0].upload_date }
+    if ([string]::IsNullOrWhiteSpace($date) -and [string]$entries[0].id -match '^(\d{8})_') { $date = $matches[1] }
     if ($date -notmatch '^\d{8}$') { $date = Get-Date -Format 'yyyyMMdd' }
-    return [pscustomobject]@{ Title = [string]$info.title; Streamer = $streamer; StreamerId = [string]$info.uploader_id; Date = $date.Substring(2, 6); Entries = $entries }
+    $title = [string]$info.title
+    if ([string]::IsNullOrWhiteSpace($title)) { $title = [string]$entries[0].title }
+    return [pscustomobject]@{ Title = $title; Streamer = $streamer; StreamerId = $streamerId; Date = $date.Substring(2, 6); Entries = $entries }
 }
 
 function Invoke-VodDownloads {
@@ -61,17 +94,37 @@ function Invoke-VodDownloads {
                 Renew-VodBaseCookie -Request $Request -Cookie $Cookie -Attempt $attempt
             }
             if (-not (Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $Metadata.StreamerId -Url $url -Attempt $attempt)) {
-                Write-VodEvent -Type 'auth_retrying' -Message ("구독 VOD 인증 재시도 ({0}/{1})" -f $attempt, [int]$Request.MaxRetries) -Part $part
+                $authDetail = if ([string]::IsNullOrWhiteSpace([string]$script:LastVodAuthError)) { 'private_auth 응답이 인증 성공을 반환하지 않았습니다.' } else { [string]$script:LastVodAuthError }
+                Write-VodEvent -Type 'auth_retrying' -Message ("구독 VOD 인증 재시도 ({0}/{1}) · {2}" -f $attempt, [int]$Request.MaxRetries, $authDetail) -Part $part
                 Start-Sleep -Seconds ([Math]::Min(16, [Math]::Pow(2, $attempt - 1))); continue
             }
             $args = @('--cookies', $Cookie.Path, '--referer', [string]$Request.VodUrl, '--continue', '--fragment-retries', '2', '--retries', '2', '--abort-on-unavailable-fragments', '--no-overwrites', '--merge-output-format', 'mp4', '--newline', '-o', $path)
             if (-not [string]::IsNullOrWhiteSpace([string]$Tools.Ffmpeg)) { $args += @('--ffmpeg-location', [string]$Tools.Ffmpeg) }
             $args += $url
-            & $Tools.YtDlp @args 2>&1 | ForEach-Object {
-                if ($_ -match '(?<percent>\d+(?:\.\d+)?)%') { Write-VodEvent -Type 'part_progress' -Message ("PART {0}: {1}%" -f $part, $matches.percent) -Part $part -PartCount $Metadata.Entries.Count -Percent ([double]$matches.percent) }
+            $stderrFile = Join-Path $JobDirectory ("yt-dlp-part-{0:D4}-attempt-{1:D2}.stderr.log" -f $part, $attempt)
+            try {
+                & $Tools.YtDlp @args 2> $stderrFile | ForEach-Object {
+                    if ($_ -match '(?<percent>\d+(?:\.\d+)?)%') {
+                        $percent = 0.0
+                        if ([double]::TryParse(
+                            $matches.percent,
+                            [Globalization.NumberStyles]::Float,
+                            [Globalization.CultureInfo]::InvariantCulture,
+                            [ref]$percent
+                        )) {
+                            Write-VodEvent -Type 'part_progress' -Message ("PART {0}: {1}%" -f $part, $matches.percent) -Part $part -PartCount $Metadata.Entries.Count -Percent $percent
+                        }
+                    }
+                }
+                $downloadExitCode = $LASTEXITCODE
+                if ($downloadExitCode -eq 0 -and (Test-Path -LiteralPath $path -PathType Leaf)) { $complete = $true; break }
+                $errorTail = Get-VodExternalErrorTail -Path $stderrFile
+                if ([string]::IsNullOrWhiteSpace($errorTail)) { $errorTail = "yt-dlp exit code $downloadExitCode" }
+                Write-VodEvent -Type 'part_retrying' -Message ("PART {0} 재시도 ({1}/{2}) · {3}" -f $part, $attempt, [int]$Request.MaxRetries, $errorTail) -Part $part
             }
-            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $path -PathType Leaf)) { $complete = $true; break }
-            Write-VodEvent -Type 'part_retrying' -Message ("PART {0} 재시도 ({1}/{2})" -f $part, $attempt, [int]$Request.MaxRetries) -Part $part
+            finally {
+                Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
+            }
             Start-Sleep -Seconds ([Math]::Min(16, [Math]::Pow(2, $attempt - 1)))
         }
         if (-not $complete) { throw "PART $part 다운로드에 실패했습니다." }

@@ -26,6 +26,7 @@ public sealed partial class MainWindow
     string activeVodTitle = "";
     string activeVodStreamer = "";
     string activeVodOutputFile = "";
+    string activeVodFailureDetail = "";
 
     FrameworkElement BuildVodView()
     {
@@ -112,6 +113,7 @@ public sealed partial class MainWindow
 
         var jobId = Guid.NewGuid().ToString("N");
         activeVodJobId = jobId;
+        activeVodFailureDetail = "";
         var jobDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SOOPLiveDownloader", "vod-jobs", jobId);
         Directory.CreateDirectory(jobDirectory);
         var requestPath = Path.Combine(jobDirectory, "request.json");
@@ -160,6 +162,7 @@ public sealed partial class MainWindow
                 if (!string.IsNullOrWhiteSpace(item.Title)) activeVodTitle = item.Title;
                 if (!string.IsNullOrWhiteSpace(item.Streamer)) activeVodStreamer = item.Streamer;
                 if (!string.IsNullOrWhiteSpace(item.OutputFile)) activeVodOutputFile = item.OutputFile;
+                if (item.Type == "failed") activeVodFailureDetail = item.Message;
                 if (item.Type == "completed")
                     vodHistory.Append(new VodHistoryEntry(activeVodJobId, DateTimeOffset.Now, VodUrlBox.Text.Trim(), activeVodTitle, activeVodStreamer, activeVodOutputFile, "COMPLETED"));
                 if (item.Percent > 0) { VodProgress.IsIndeterminate = false; VodProgress.Value = Math.Clamp(item.Percent, 0, 100); }
@@ -173,7 +176,15 @@ public sealed partial class MainWindow
         VodStartButton.IsEnabled = true;
         VodCancelButton.IsEnabled = false;
         VodProgress.IsIndeterminate = false;
-        if (code != 0 && !VodStatusText.Text.Contains("취소", StringComparison.Ordinal)) VodStatusText.Text = $"VOD 작업 오류 종료 ({code})";
+        if (code != 0 && !VodStatusText.Text.Contains("취소", StringComparison.Ordinal))
+        {
+            var detail = !string.IsNullOrWhiteSpace(activeVodFailureDetail)
+                ? activeVodFailureDetail
+                : vodBackend.LastErrorSummary;
+            VodStatusText.Text = string.IsNullOrWhiteSpace(detail)
+                ? $"VOD 작업 오류 종료 ({code})"
+                : $"VOD 작업 오류 종료 ({code}) · {detail}";
+        }
         CleanupVodJobDirectory();
     });
 

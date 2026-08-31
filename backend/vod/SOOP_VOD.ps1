@@ -4,6 +4,11 @@
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
 $script:VodExitCode = 0
 $script:VodRequest = $null
 $script:VodJobDirectory = $null
@@ -26,7 +31,7 @@ try {
     $tools = Resolve-VodTools -ScriptRoot $PSScriptRoot
     $backendRoot = Split-Path -Parent $PSScriptRoot
     $cookie = Initialize-VodCookie -Request $script:VodRequest -JobDirectory $script:VodJobDirectory -YtDlp $tools.YtDlp -BackendRoot $backendRoot
-    $metadata = Get-VodMetadata -Request $script:VodRequest -YtDlp $tools.YtDlp -CookieFile $cookie.Path
+    $metadata = Get-VodMetadata -Request $script:VodRequest -YtDlp $tools.YtDlp -CookieFile $cookie.Path -JobDirectory $script:VodJobDirectory
     $parts = Resolve-VodParts -RequestedParts @($script:VodRequest.Parts) -PartCount $metadata.Entries.Count
     Write-VodEvent -Type 'metadata_ready' -Message ("{0} · {1}개 PART" -f $metadata.Title, $metadata.Entries.Count) -Title $metadata.Title -Streamer $metadata.Streamer -PartCount $metadata.Entries.Count
 

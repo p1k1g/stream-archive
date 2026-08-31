@@ -7,7 +7,7 @@ $overlayDir = Join-Path $root 'overlay'
 $backendDir = Join-Path $root 'backend'
 
 Write-Host '========================================'
-Write-Host ' SOOP LIVE WinUI 3 fix63 Project Prep'
+Write-Host ' SOOP LIVE WinUI 3 fix64 Project Prep'
 Write-Host ' UNPACKAGED / SINGLE PROJECT'
 Write-Host '========================================'
 Write-Host ''
@@ -73,8 +73,8 @@ function Set-ProjectProperties([string]$ProjectFile) {
     Set-Prop 'WindowsAppSDKSelfContained' 'false'
     Set-Prop 'PublishTrimmed' 'false'
     Set-Prop 'ApplicationIcon' 'Assets\SOOPLiveDownloader.ico'
-    Set-Prop 'Version' '1.2.0-preview1-fix63'
-    Set-Prop 'InformationalVersion' '1.2.0-preview1-fix63'
+    Set-Prop 'Version' '1.2.0-preview1-fix64'
+    Set-Prop 'InformationalVersion' '1.2.0-preview1-fix64'
 
     # Do NOT set UseWindowsForms=true in a WinUI project.
     # That imports WindowsDesktop/WPF XAML targets and causes App.xaml to be

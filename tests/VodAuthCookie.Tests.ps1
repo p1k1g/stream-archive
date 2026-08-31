@@ -18,6 +18,20 @@ try {
     if ($fields.Count -ne 7 -or $fields[0] -ne '.sooplive.com' -or $fields[5] -ne 'AuthTicket') {
         throw 'Netscape cookie fields are invalid.'
     }
+    $request = [pscustomobject]@{ CookieMode = 'FILE'; CookieFile = $path; BrowserName = ''; VodUrl = 'https://vod.sooplive.com/player/1' }
+    $jobRoot = Join-Path $tempRoot 'job'
+    New-Item -ItemType Directory -Path $jobRoot -Force | Out-Null
+    $copied = Initialize-VodCookie -Request $request -JobDirectory $jobRoot -YtDlp 'unused.exe' -BackendRoot $root
+    if ($copied.Mode -ne 'FILE' -or -not (Test-Path -LiteralPath $copied.Path -PathType Leaf)) {
+        throw 'FILE cookie mode did not accept a valid Netscape cookie file.'
+    }
+    $invalid = Join-Path $tempRoot 'invalid.txt'
+    [IO.File]::WriteAllText($invalid, 'name=value', [Text.UTF8Encoding]::new($false))
+    $request.CookieFile = $invalid
+    $rejected = $false
+    try { [void](Initialize-VodCookie -Request $request -JobDirectory $jobRoot -YtDlp 'unused.exe' -BackendRoot $root) }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'Malformed FILE cookie input was accepted.' }
     Remove-VodTemporarySecrets -JobDirectory $tempRoot
     if (Test-Path -LiteralPath $path) { throw 'Temporary cookie cleanup failed.' }
 }
