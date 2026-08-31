@@ -41,12 +41,15 @@ static class VodFeatureRegression
         // verifies the records remain dependency-free and serializable in CI.
         if (!JsonSerializer.Serialize(state).Contains("MaxRetries", StringComparison.Ordinal))
             throw new InvalidOperationException("VOD settings are not serializable.");
-        var loginRequest = new VodJobRequest(1, "job", "https://vod.sooplive.com/player/1", [], @"C:\VOD", "SOOP_LOGIN", "", "", true, 5);
+        var loginRequest = new VodJobRequest(1, "job", "https://vod.sooplive.com/player/1", [], @"C:\VOD", "SOOP_LOGIN", "", "", @"C:\Tools\yt-dlp.exe", @"C:\Tools\ffmpeg.exe", true, 5);
         var requestJson = JsonSerializer.Serialize(loginRequest);
         if (requestJson.Contains("password", StringComparison.OrdinalIgnoreCase) ||
             requestJson.Contains("dpapi:", StringComparison.OrdinalIgnoreCase) ||
             requestJson.Contains("AuthTicket", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Stored-login VOD request leaked credentials or cookie values.");
+        if (!requestJson.Contains("yt-dlp.exe", StringComparison.Ordinal) ||
+            !requestJson.Contains("ffmpeg.exe", StringComparison.Ordinal))
+            throw new InvalidOperationException("VOD request did not preserve configured tool paths.");
         var directory = Path.Combine(Path.GetTempPath(), "soop-vod-history-" + Guid.NewGuid().ToString("N"));
         var historyPath = Path.Combine(directory, "history.json");
         try

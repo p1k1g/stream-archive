@@ -44,6 +44,8 @@ public static class VodSettingsStore
             _ => "SOOP_LOGIN"
         },
         MaxRetries = Math.Clamp(value.MaxRetries, 1, 20),
-        BrowserName = string.IsNullOrWhiteSpace(value.BrowserName) ? "firefox" : value.BrowserName.Trim()
+        BrowserName = string.IsNullOrWhiteSpace(value.BrowserName) ? "firefox" : value.BrowserName.Trim(),
+        YtDlpPath = (value.YtDlpPath ?? "").Trim(),
+        FfmpegPath = (value.FfmpegPath ?? "").Trim()
     };
 }

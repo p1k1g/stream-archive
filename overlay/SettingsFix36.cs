@@ -580,7 +580,9 @@ public sealed partial class MainWindow
         {
             if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("폴더 경로가 비어 있습니다.");
             Directory.CreateDirectory(path);
-            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+            var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            startInfo.ArgumentList.Add(Path.GetFullPath(path));
+            Process.Start(startInfo);
         }
         catch (Exception ex) { _ = ShowDialogAsync("폴더 열기 실패", ex.Message); }
     }
@@ -697,7 +699,7 @@ public sealed partial class MainWindow
 
             var picker = new Windows.Storage.Pickers.FileSavePicker
             {
-                SuggestedFileName = "SOOP_LIVE_SETTING_fix64",
+                SuggestedFileName = "SOOP_LIVE_SETTING_fix65",
                 SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary
             };
             picker.FileTypeChoices.Add("INI 설정", new List<string> { ".ini" });

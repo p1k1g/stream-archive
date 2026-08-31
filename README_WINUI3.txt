@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix64
+Version 1.2.0-preview1-fix65
 
 BUG FIX
 -------
@@ -1685,3 +1685,29 @@ fix64 implemented changes
 - Source and behavior regressions cover the UTF-8 process boundary, JSON/stderr
   separation, invariant parsing, valid FILE cookies, and malformed-cookie
   rejection.
+
+fix65 implemented changes
+-------------------------
+
+1. Configurable VOD tools and deterministic metadata
+- The VOD page now persists optional yt-dlp and ffmpeg executable paths and
+  passes only those non-secret paths to the isolated VOD request. Explicitly
+  configured missing executables fail with an actionable message; empty fields
+  retain the bundled/INI/PATH fallback order.
+- yt-dlp metadata stdout is separated from stderr, materialized as a UTF-8 JSON
+  file in the private per-job directory, read back explicitly as UTF-8, and
+  removed immediately after parsing.
+
+2. Unicode and external-tool path safety
+- Generated VOD names and ffmpeg concat entries are normalized to Unicode NFC.
+  Output paths are resolved to full paths and rejected above the conservative
+  240-character interoperability limit before yt-dlp or ffmpeg starts.
+- ffmpeg concat escaping is centralized and preserves Korean characters and
+  apostrophes. Explorer launches now pass paths through ProcessStartInfo
+  ArgumentList rather than hand-built quoted command strings.
+
+3. Locale and path regressions
+- Deterministic regressions cover ko-KR, en-US, and de-DE selection/event
+  parsing, decomposed Hangul normalization, Korean/apostrophe concat paths,
+  full-path rejection, configured tool-path serialization, and UTF-8 metadata
+  source invariants.

@@ -8,7 +8,7 @@
 }
 
 function Resolve-VodTools {
-    param([string]$ScriptRoot)
+    param($Request, [string]$ScriptRoot)
     $settingsPath = Join-Path $ScriptRoot 'SOOP_VOD_SETTING.ini'
     $settings = @{}
     if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
@@ -16,10 +16,20 @@ function Resolve-VodTools {
             if ($line -match '^\s*([^#;][^=]*)=(.*)$') { $settings[$matches[1].Trim()] = $matches[2].Trim() }
         }
     }
-    $yt = Resolve-VodExecutable -Configured $settings.YT_DLP_PATH -Local (Join-Path $ScriptRoot 'yt-dlp.exe') -Command 'yt-dlp.exe'
+    $requestedYtDlp = [string]$Request.YtDlpPath
+    if (-not [string]::IsNullOrWhiteSpace($requestedYtDlp) -and -not (Test-Path -LiteralPath $requestedYtDlp -PathType Leaf)) {
+        throw "설정한 yt-dlp 파일을 찾을 수 없습니다: $requestedYtDlp"
+    }
+    $ytConfiguration = if ([string]::IsNullOrWhiteSpace($requestedYtDlp)) { [string]$settings.YT_DLP_PATH } else { $requestedYtDlp }
+    $yt = Resolve-VodExecutable -Configured $ytConfiguration -Local (Join-Path $ScriptRoot 'yt-dlp.exe') -Command 'yt-dlp.exe'
     if ([string]::IsNullOrWhiteSpace($yt)) { $yt = (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue).Source }
     if ([string]::IsNullOrWhiteSpace($yt)) { throw 'yt-dlp를 찾을 수 없습니다.' }
-    $ff = Resolve-VodExecutable -Configured $settings.FFMPEG_PATH -Local (Join-Path $ScriptRoot 'ffmpeg.exe') -Command 'ffmpeg.exe'
+    $requestedFfmpeg = [string]$Request.FfmpegPath
+    if (-not [string]::IsNullOrWhiteSpace($requestedFfmpeg) -and -not (Test-Path -LiteralPath $requestedFfmpeg -PathType Leaf)) {
+        throw "설정한 ffmpeg 파일을 찾을 수 없습니다: $requestedFfmpeg"
+    }
+    $ffConfiguration = if ([string]::IsNullOrWhiteSpace($requestedFfmpeg)) { [string]$settings.FFMPEG_PATH } else { $requestedFfmpeg }
+    $ff = Resolve-VodExecutable -Configured $ffConfiguration -Local (Join-Path $ScriptRoot 'ffmpeg.exe') -Command 'ffmpeg.exe'
     if ([string]::IsNullOrWhiteSpace($ff)) { $command = Get-Command 'ffmpeg' -ErrorAction SilentlyContinue; if ($null -ne $command) { $ff = $command.Source } }
     return [pscustomobject]@{ YtDlp = $yt; Ffmpeg = $ff }
 }
@@ -37,6 +47,7 @@ function Get-VodExternalErrorTail {
 function Get-VodMetadata {
     param($Request, [string]$YtDlp, [string]$CookieFile, [string]$JobDirectory)
     $stderrFile = Join-Path $JobDirectory 'yt-dlp-metadata.stderr.log'
+    $metadataFile = Join-Path $JobDirectory 'yt-dlp-metadata.json'
     try {
         $json = @(& $YtDlp '--cookies' $CookieFile '--flat-playlist' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2> $stderrFile)
         $exitCode = $LASTEXITCODE
@@ -45,7 +56,12 @@ function Get-VodMetadata {
             if ([string]::IsNullOrWhiteSpace($errorTail)) { $errorTail = "yt-dlp exit code $exitCode" }
             throw "VOD 분석 실패: $errorTail"
         }
-        try { $info = ($json -join [Environment]::NewLine) | ConvertFrom-Json }
+        $jsonText = $json -join [Environment]::NewLine
+        [System.IO.File]::WriteAllText($metadataFile, $jsonText, [System.Text.UTF8Encoding]::new($false))
+        try {
+            $metadataText = [System.IO.File]::ReadAllText($metadataFile, [System.Text.Encoding]::UTF8)
+            $info = $metadataText | ConvertFrom-Json
+        }
         catch {
             $detail = if ([string]::IsNullOrWhiteSpace($errorTail)) { $_.Exception.Message } else { $errorTail }
             throw "VOD JSON 파싱 실패: $(Get-RedactedVodText -Text $detail)"
@@ -53,6 +69,7 @@ function Get-VodMetadata {
     }
     finally {
         Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $metadataFile -Force -ErrorAction SilentlyContinue
     }
     $entries = @($info.entries)
     if ($entries.Count -eq 0) { throw 'VOD PART를 찾지 못했습니다.' }
@@ -73,7 +90,7 @@ function Get-VodMetadata {
 
 function Invoke-VodDownloads {
     param($Request, $Metadata, [int[]]$SelectedParts, $Tools, $Cookie, [string]$JobDirectory)
-    $directory = [System.IO.Path]::GetFullPath([string]$Request.OutputDirectory)
+    $directory = [System.IO.Path]::GetFullPath([string]$Request.OutputDirectory).Normalize([System.Text.NormalizationForm]::FormC)
     [System.IO.Directory]::CreateDirectory($directory) | Out-Null
     $streamer = Get-SafeVodFileName $Metadata.Streamer
     $files = @()

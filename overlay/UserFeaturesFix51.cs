@@ -288,8 +288,7 @@ public sealed partial class MainWindow
             var info = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
             if (selectFile && File.Exists(fullPath))
             {
-                info.ArgumentList.Add("/select,");
-                info.ArgumentList.Add(fullPath);
+                info.ArgumentList.Add("/select," + fullPath);
             }
             else info.ArgumentList.Add(directory);
             Process.Start(info);
@@ -308,7 +307,7 @@ public sealed partial class MainWindow
         try
         {
             var text = DiagnosticInfoService.CreateReport(
-                "1.2.0-preview1-fix64",
+                "1.2.0-preview1-fix65",
                 backend.IsRunning,
                 RecordingItems.Count,
                 OfflineItems.Count,

@@ -26,6 +26,7 @@ foreach ($path in $vodPowerShellFiles) {
 $core = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Core.ps1') -Raw
 $auth = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Auth.ps1') -Raw
 $download = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Download.ps1') -Raw
+$merge = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Merge.ps1') -Raw
 if ($core -notmatch 'Get-CollisionSafeVodPath' -or $core -notmatch 'Test-Path -LiteralPath') { throw 'VOD collision/literal-path protection is missing.' }
 if ($core -notmatch 'Get-RedactedVodText' -or $auth -match 'Write-(Host|Output)\s+\$response') { throw 'VOD authentication output is not safely redacted.' }
 if ($download -notmatch '--abort-on-unavailable-fragments' -or $download -notmatch '--continue') { throw 'VOD resume/fragment safeguards are missing.' }
@@ -57,14 +58,32 @@ if ($download -notmatch '\$entries\[0\]\.uploader_id' -or
     $download -notmatch 'VOD BJ ID') {
     throw 'VOD metadata does not fall back to the first PART uploader ID required by private_auth.'
 }
+if ($download -notmatch '\$Request\.YtDlpPath' -or
+    $download -notmatch 'yt-dlp-metadata\.json' -or
+    $download -notmatch 'WriteAllText\(\$metadataFile' -or
+    $core -notmatch 'NormalizationForm\]::FormC' -or
+    $core -notmatch 'Assert-VodFullPath' -or
+    $merge -notmatch 'ConvertTo-VodFfmpegConcatLine') {
+    throw 'VOD tool path, UTF-8 metadata, Unicode, path-length, or concat safeguards are incomplete.'
+}
 if ((Get-Content -LiteralPath (Join-Path $root 'backend/SOOP_LIVE.ps1') -Raw) -match 'SOOP_VOD|SOOP\.Vod') { throw 'LIVE bootstrap must not load VOD modules.' }
 $models = Get-Content -LiteralPath (Join-Path $root 'overlay/VodModels.cs') -Raw
 if ($models -match 'SoopPassword|SOOP_PASSWORD|Dpapi|AuthCookie') { throw 'VOD request model must not contain credentials or cookie values.' }
+if ($models -notmatch 'string YtDlpPath' -or $models -notmatch 'string FfmpegPath') {
+    throw 'VOD request model does not carry the non-secret tool paths.'
+}
 $vodUi = Get-Content -LiteralPath (Join-Path $root 'overlay/MainWindow.Vod.cs') -Raw
 if ($vodUi -notmatch 'cookieMode == "SOOP_LOGIN"' -or
     $vodUi -notmatch 'cookieFile = ""' -or
     $vodUi -notmatch 'browserName = ""') {
     throw 'Stored-login request does not clear fallback cookie/browser fields.'
+}
+$explorerSources = Get-ChildItem -LiteralPath (Join-Path $root 'overlay') -Filter '*.cs' |
+    ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }
+$explorerText = $explorerSources -join "`n"
+if ($explorerText -match 'ProcessStartInfo\("explorer\.exe",' -or
+    $explorerText -notmatch 'ArgumentList\.Add') {
+    throw 'Explorer paths must be passed through ProcessStartInfo.ArgumentList.'
 }
 $service = $processService
 if ($service -notmatch '"/PID"' -or $service -notmatch 'Kill\(entireProcessTree: true\)' -or $service -match 'taskkill.+/IM') { throw 'VOD exact process-tree ownership guard is missing.' }

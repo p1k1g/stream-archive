@@ -115,8 +115,7 @@ public sealed partial class MainWindow
             };
             if (selectFile && File.Exists(fullPath))
             {
-                startInfo.ArgumentList.Add("/select,");
-                startInfo.ArgumentList.Add(fullPath);
+                startInfo.ArgumentList.Add("/select," + fullPath);
             }
             else
             {

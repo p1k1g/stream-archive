@@ -12,6 +12,8 @@ public sealed partial class MainWindow
     TextBox VodUrlBox = null!;
     TextBox VodOutputBox = null!;
     TextBox VodPartsBox = null!;
+    TextBox VodYtDlpPathBox = null!;
+    TextBox VodFfmpegPathBox = null!;
     ComboBox VodCookieModeBox = null!;
     TextBox VodCookieSourceBox = null!;
     TextBlock VodLoginStatusText = null!;
@@ -38,6 +40,18 @@ public sealed partial class MainWindow
         VodUrlBox = new TextBox { Header = "VOD URL", PlaceholderText = "https://vod.sooplive.com/player/204952073" };
         VodOutputBox = new TextBox { Header = "출력 폴더", Text = vodSettings.OutputDirectory, PlaceholderText = @"C:\Videos" };
         VodPartsBox = new TextBox { Header = "PART 선택", PlaceholderText = "비워 두면 전체 · 예: 1-5,8,10-12" };
+        VodYtDlpPathBox = new TextBox
+        {
+            Header = "yt-dlp 경로 (선택)",
+            Text = vodSettings.YtDlpPath,
+            PlaceholderText = @"예: C:\Tools\yt-dlp.exe · 비워 두면 자동 검색"
+        };
+        VodFfmpegPathBox = new TextBox
+        {
+            Header = "ffmpeg 경로 (선택)",
+            Text = vodSettings.FfmpegPath,
+            PlaceholderText = @"예: C:\Tools\ffmpeg.exe · 비워 두면 자동 검색"
+        };
         VodCookieModeBox = new ComboBox { Header = "Cookie 방식", HorizontalAlignment = HorizontalAlignment.Stretch };
         VodCookieModeBox.Items.Add(new ComboBoxItem { Content = "저장된 SOOP 로그인 (권장)", Tag = "SOOP_LOGIN" });
         VodCookieModeBox.Items.Add(new ComboBoxItem { Content = "Cookie 파일", Tag = "FILE" });
@@ -66,6 +80,8 @@ public sealed partial class MainWindow
         stack.Children.Add(VodUrlBox);
         stack.Children.Add(VodOutputBox);
         stack.Children.Add(VodPartsBox);
+        stack.Children.Add(VodYtDlpPathBox);
+        stack.Children.Add(VodFfmpegPathBox);
         stack.Children.Add(VodCookieModeBox);
         stack.Children.Add(VodCookieSourceBox);
         stack.Children.Add(VodLoginStatusText);
@@ -127,9 +143,18 @@ public sealed partial class MainWindow
             browserName = "";
         }
         var request = new VodJobRequest(1, jobId, VodUrlBox.Text.Trim(), parts, output,
-            cookieMode, cookieFile, browserName, vodSettings.Merge, vodSettings.MaxRetries);
+            cookieMode, cookieFile, browserName, VodYtDlpPathBox.Text.Trim(), VodFfmpegPathBox.Text.Trim(),
+            vodSettings.Merge, vodSettings.MaxRetries);
         WriteJsonAtomically(requestPath, request);
-        vodSettings = vodSettings with { OutputDirectory = output, CookieMode = cookieMode, CookieFile = cookieFile, BrowserName = browserName };
+        vodSettings = vodSettings with
+        {
+            OutputDirectory = output,
+            CookieMode = cookieMode,
+            CookieFile = cookieFile,
+            BrowserName = browserName,
+            YtDlpPath = VodYtDlpPathBox.Text.Trim(),
+            FfmpegPath = VodFfmpegPathBox.Text.Trim()
+        };
         VodSettingsStore.Save(vodSettings);
 
         try

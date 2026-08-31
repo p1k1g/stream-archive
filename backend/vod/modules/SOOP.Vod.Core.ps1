@@ -26,7 +26,8 @@ function Resolve-VodParts {
 function Get-SafeVodFileName {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { return 'UNKNOWN' }
-    $safe = [Regex]::Replace($Name, '[\x00-\x1f\\/:*?"<>|]', '_').Trim().TrimEnd('.', ' ')
+    $normalized = $Name.Normalize([System.Text.NormalizationForm]::FormC)
+    $safe = [Regex]::Replace($normalized, '[\x00-\x1f\\/:*?"<>|]', '_').Trim().TrimEnd('.', ' ')
     if ($safe -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)') { $safe = '_' + $safe }
     if ($safe.Length -gt 100) { $safe = $safe.Substring(0, 100).TrimEnd('.', ' ') }
     if ([string]::IsNullOrWhiteSpace($safe)) { return 'UNKNOWN' }
@@ -35,13 +36,22 @@ function Get-SafeVodFileName {
 
 function Get-CollisionSafeVodPath {
     param([string]$Directory, [string]$BaseName, [string]$Extension)
-    $candidate = Join-Path $Directory ($BaseName + $Extension)
+    $candidate = Assert-VodFullPath -Path (Join-Path $Directory ($BaseName + $Extension))
     if (-not (Test-Path -LiteralPath $candidate)) { return $candidate }
     for ($suffix = 1; $suffix -le 9999; $suffix++) {
-        $candidate = Join-Path $Directory ("{0}_{1:D3}{2}" -f $BaseName, $suffix, $Extension)
+        $candidate = Assert-VodFullPath -Path (Join-Path $Directory ("{0}_{1:D3}{2}" -f $BaseName, $suffix, $Extension))
         if (-not (Test-Path -LiteralPath $candidate)) { return $candidate }
     }
     throw '충돌 없는 VOD 출력 파일명을 만들지 못했습니다.'
+}
+
+function Assert-VodFullPath {
+    param([string]$Path, [int]$MaximumLength = 240)
+    $fullPath = [System.IO.Path]::GetFullPath($Path).Normalize([System.Text.NormalizationForm]::FormC)
+    if ($fullPath.Length -gt $MaximumLength) {
+        throw "VOD 전체 출력 경로가 안전 제한을 초과했습니다 ($($fullPath.Length)/$MaximumLength). 출력 폴더 또는 파일명을 줄여 주세요."
+    }
+    return $fullPath
 }
 
 function Get-RedactedVodText {

@@ -366,10 +366,9 @@ public sealed partial class MainWindow
             if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
                 return;
 
-            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"")
-            {
-                UseShellExecute = true
-            });
+            var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            startInfo.ArgumentList.Add(Path.GetFullPath(dir));
+            Process.Start(startInfo);
         }
         catch { }
     }

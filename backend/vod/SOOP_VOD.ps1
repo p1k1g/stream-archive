@@ -28,7 +28,7 @@ try {
     Test-VodRequest -Request $script:VodRequest
     Write-VodEvent -Type 'analysis_started' -Message 'VOD 분석 중…'
 
-    $tools = Resolve-VodTools -ScriptRoot $PSScriptRoot
+    $tools = Resolve-VodTools -Request $script:VodRequest -ScriptRoot $PSScriptRoot
     $backendRoot = Split-Path -Parent $PSScriptRoot
     $cookie = Initialize-VodCookie -Request $script:VodRequest -JobDirectory $script:VodJobDirectory -YtDlp $tools.YtDlp -BackendRoot $backendRoot
     $metadata = Get-VodMetadata -Request $script:VodRequest -YtDlp $tools.YtDlp -CookieFile $cookie.Path -JobDirectory $script:VodJobDirectory

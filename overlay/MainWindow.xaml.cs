@@ -387,7 +387,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix64",
+            Text = "WinUI 3 · v1.2.0-preview1-fix65",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -700,10 +700,9 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", backendDir)
-            {
-                UseShellExecute = true
-            });
+            var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            startInfo.ArgumentList.Add(Path.GetFullPath(backendDir));
+            Process.Start(startInfo);
         }
         catch { }
     }

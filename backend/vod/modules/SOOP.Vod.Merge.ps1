@@ -1,10 +1,16 @@
-﻿function Merge-VodParts {
+﻿function ConvertTo-VodFfmpegConcatLine {
+    param([string]$Path)
+    $fullPath = [System.IO.Path]::GetFullPath($Path).Normalize([System.Text.NormalizationForm]::FormC)
+    return "file '" + ($fullPath.Replace('\', '/').Replace("'", "'\''")) + "'"
+}
+
+function Merge-VodParts {
     param($Request, $Metadata, [string[]]$PartFiles, [string]$Ffmpeg, [string]$JobDirectory)
     if ([string]::IsNullOrWhiteSpace($Ffmpeg) -or -not (Test-Path -LiteralPath $Ffmpeg -PathType Leaf)) { throw 'ffmpeg를 찾을 수 없어 PART를 병합할 수 없습니다.' }
     $list = Join-Path $JobDirectory 'concat.txt'
     $lines = foreach ($file in $PartFiles) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "병합할 PART 파일이 없습니다: $file" }
-        "file '" + ($file.Replace('\', '/').Replace("'", "'\''")) + "'"
+        ConvertTo-VodFfmpegConcatLine -Path $file
     }
     [IO.File]::WriteAllLines($list, $lines, [Text.UTF8Encoding]::new($false))
     $directory = Split-Path -Parent $PartFiles[0]

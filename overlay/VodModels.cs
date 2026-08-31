@@ -15,6 +15,8 @@ public sealed record VodJobRequest(
     string CookieMode,
     string CookieFile,
     string BrowserName,
+    string YtDlpPath,
+    string FfmpegPath,
     bool Merge,
     int MaxRetries);
 

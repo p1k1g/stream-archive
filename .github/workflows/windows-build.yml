@@ -29,6 +29,7 @@ jobs:
           ./tests/SecurityAndModules.Tests.ps1
           ./tests/VodBackendSource.Tests.ps1
           ./tests/VodAuthCookie.Tests.ps1
+          ./tests/VodPathAndConcat.Tests.ps1
 
       - name: Prepare official WinUI template project
         shell: powershell
