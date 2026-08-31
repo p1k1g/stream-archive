@@ -1,4 +1,4 @@
-function Merge-VodParts {
+﻿function Merge-VodParts {
     param($Request, $Metadata, [string[]]$PartFiles, [string]$Ffmpeg, [string]$JobDirectory)
     if ([string]::IsNullOrWhiteSpace($Ffmpeg) -or -not (Test-Path -LiteralPath $Ffmpeg -PathType Leaf)) { throw 'ffmpeg를 찾을 수 없어 PART를 병합할 수 없습니다.' }
     $list = Join-Path $JobDirectory 'concat.txt'

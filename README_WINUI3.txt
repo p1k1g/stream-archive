@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix61
+Version 1.2.0-preview1-fix63
 
 BUG FIX
 -------
@@ -1605,3 +1605,49 @@ fix61 implemented changes
 - Dependency-free regressions cover PART ranges, malformed/versioned JSON,
   Korean/special-character fields, module isolation, literal paths, redaction,
   resume flags, and exact process ownership.
+
+fix62 implemented changes
+-------------------------
+
+1. Stored SOOP login for VOD
+- VOD now defaults to a stored-login mode that reads SOOP_USERNAME and the
+  DPAPI-protected SOOP_PASSWORD from SOOP_LIVE_SETTING.ini inside the isolated
+  VOD process. Credentials, DPAPI ciphertext, and cookie values are never added
+  to the GUI request JSON.
+- The VOD process creates and verifies its own HttpClient/CookieContainer login
+  session, exports only SOOP-domain cookies to a per-job Netscape cookie file,
+  and never shares the LIVE process or its in-memory CookieContainer.
+- FILE and BROWSER cookie modes remain available as explicit fallbacks.
+
+2. Short-lived subscription authorization renewal
+- private_auth.php is called inside every PART download attempt, so each retry
+  obtains a fresh short-lived authorization cookie before yt-dlp resumes its
+  existing partial download.
+- On retries, stored-login mode first creates a new independent SOOP login
+  session; browser mode re-exports the browser cookie. Exponential backoff is
+  bounded and failures preserve the partial download for yt-dlp continuation.
+- Per-job cookies are deleted on success, failure, cancellation, and window
+  shutdown together with the private job directory.
+
+3. UI and regressions
+- The VOD page shows stored SOOP login as the default mode, hides irrelevant
+  cookie-path controls, and reports whether Settings contains both login fields.
+- Regressions assert DPAPI credential resolution, independent login, Netscape
+  export, request secrecy, retry-loop authorization refresh, and cleanup.
+
+fix63 implemented changes
+-------------------------
+
+1. Windows PowerShell 5.1 VOD encoding fix
+- Every VOD PowerShell entry/module file that contains Korean UI or diagnostic
+  text is now stored as UTF-8 with BOM. Windows PowerShell 5.1 therefore no
+  longer decodes those files through the active ANSI code page and corrupts
+  quoted strings into cascading parser errors.
+
+2. Encoding and parser regression guard
+- The VOD source regression now reads the raw bytes of the entry script and all
+  four modules, requires the EF BB BF UTF-8 BOM, and invokes the native
+  System.Management.Automation parser for every file before other assertions.
+- The guard runs before the behavioral Netscape-cookie regression in Windows CI,
+  so an encoding or syntax regression fails with the exact affected file and
+  first parser message.

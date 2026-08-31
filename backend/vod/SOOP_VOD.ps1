@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$RequestFile
 )
@@ -24,7 +24,8 @@ try {
     Write-VodEvent -Type 'analysis_started' -Message 'VOD 분석 중…'
 
     $tools = Resolve-VodTools -ScriptRoot $PSScriptRoot
-    $cookie = Initialize-VodCookie -Request $script:VodRequest -JobDirectory $script:VodJobDirectory -YtDlp $tools.YtDlp
+    $backendRoot = Split-Path -Parent $PSScriptRoot
+    $cookie = Initialize-VodCookie -Request $script:VodRequest -JobDirectory $script:VodJobDirectory -YtDlp $tools.YtDlp -BackendRoot $backendRoot
     $metadata = Get-VodMetadata -Request $script:VodRequest -YtDlp $tools.YtDlp -CookieFile $cookie.Path
     $parts = Resolve-VodParts -RequestedParts @($script:VodRequest.Parts) -PartCount $metadata.Entries.Count
     Write-VodEvent -Type 'metadata_ready' -Message ("{0} · {1}개 PART" -f $metadata.Title, $metadata.Entries.Count) -Title $metadata.Title -Streamer $metadata.Streamer -PartCount $metadata.Entries.Count

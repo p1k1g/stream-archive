@@ -33,11 +33,20 @@ static class VodFeatureRegression
         if (VodEventParser.TryParse(VodEventParser.Prefix + "{\"version\":2,\"type\":\"completed\"}", out _))
             throw new InvalidOperationException("Unknown VOD event version was accepted.");
 
+        var defaultState = new VodSettings();
+        if (defaultState.CookieMode != "SOOP_LOGIN")
+            throw new InvalidOperationException("Stored SOOP login must be the default VOD cookie mode.");
         var state = new VodSettings(MaxRetries: 100, CookieMode: "browser", BrowserName: "");
         // Store normalization is covered by source-level atomic-write checks; this
         // verifies the records remain dependency-free and serializable in CI.
         if (!JsonSerializer.Serialize(state).Contains("MaxRetries", StringComparison.Ordinal))
             throw new InvalidOperationException("VOD settings are not serializable.");
+        var loginRequest = new VodJobRequest(1, "job", "https://vod.sooplive.com/player/1", [], @"C:\VOD", "SOOP_LOGIN", "", "", true, 5);
+        var requestJson = JsonSerializer.Serialize(loginRequest);
+        if (requestJson.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+            requestJson.Contains("dpapi:", StringComparison.OrdinalIgnoreCase) ||
+            requestJson.Contains("AuthTicket", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Stored-login VOD request leaked credentials or cookie values.");
         var directory = Path.Combine(Path.GetTempPath(), "soop-vod-history-" + Guid.NewGuid().ToString("N"));
         var historyPath = Path.Combine(directory, "history.json");
         try

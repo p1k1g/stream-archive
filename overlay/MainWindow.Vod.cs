@@ -14,6 +14,7 @@ public sealed partial class MainWindow
     TextBox VodPartsBox = null!;
     ComboBox VodCookieModeBox = null!;
     TextBox VodCookieSourceBox = null!;
+    TextBlock VodLoginStatusText = null!;
     TextBlock VodStatusText = null!;
     ProgressBar VodProgress = null!;
     AppBarButton VodStartButton = null!;
@@ -37,25 +38,38 @@ public sealed partial class MainWindow
         VodOutputBox = new TextBox { Header = "출력 폴더", Text = vodSettings.OutputDirectory, PlaceholderText = @"C:\Videos" };
         VodPartsBox = new TextBox { Header = "PART 선택", PlaceholderText = "비워 두면 전체 · 예: 1-5,8,10-12" };
         VodCookieModeBox = new ComboBox { Header = "Cookie 방식", HorizontalAlignment = HorizontalAlignment.Stretch };
-        VodCookieModeBox.Items.Add("FILE");
-        VodCookieModeBox.Items.Add("BROWSER");
-        VodCookieModeBox.SelectedItem = vodSettings.CookieMode;
+        VodCookieModeBox.Items.Add(new ComboBoxItem { Content = "저장된 SOOP 로그인 (권장)", Tag = "SOOP_LOGIN" });
+        VodCookieModeBox.Items.Add(new ComboBoxItem { Content = "Cookie 파일", Tag = "FILE" });
+        VodCookieModeBox.Items.Add(new ComboBoxItem { Content = "브라우저 Cookie", Tag = "BROWSER" });
+        VodCookieModeBox.SelectedItem = VodCookieModeBox.Items.OfType<ComboBoxItem>()
+            .First(item => string.Equals(item.Tag as string, vodSettings.CookieMode, StringComparison.Ordinal));
         VodCookieSourceBox = new TextBox
         {
             Header = "Cookie 파일 경로 또는 브라우저 이름",
             Text = vodSettings.CookieMode == "BROWSER" ? vodSettings.BrowserName : vodSettings.CookieFile,
             PlaceholderText = "FILE: cookies.txt 전체 경로 · BROWSER: firefox 또는 chrome"
         };
+        VodLoginStatusText = new TextBlock
+        {
+            Text = "저장된 SOOP 로그인은 설정 탭의 DPAPI 보호 자격증명을 사용합니다.",
+            Foreground = Muted,
+            TextWrapping = TextWrapping.Wrap
+        };
         VodCookieModeBox.SelectionChanged += (_, _) =>
         {
-            var browser = (VodCookieModeBox.SelectedItem as string) == "BROWSER";
-            VodCookieSourceBox.Text = browser ? vodSettings.BrowserName : vodSettings.CookieFile;
+            var mode = SelectedVodCookieMode();
+            VodCookieSourceBox.Visibility = mode == "SOOP_LOGIN" ? Visibility.Collapsed : Visibility.Visible;
+            VodLoginStatusText.Visibility = mode == "SOOP_LOGIN" ? Visibility.Visible : Visibility.Collapsed;
+            VodCookieSourceBox.Text = mode == "BROWSER" ? vodSettings.BrowserName : vodSettings.CookieFile;
         };
         stack.Children.Add(VodUrlBox);
         stack.Children.Add(VodOutputBox);
         stack.Children.Add(VodPartsBox);
         stack.Children.Add(VodCookieModeBox);
         stack.Children.Add(VodCookieSourceBox);
+        stack.Children.Add(VodLoginStatusText);
+        VodCookieSourceBox.Visibility = vodSettings.CookieMode == "SOOP_LOGIN" ? Visibility.Collapsed : Visibility.Visible;
+        VodLoginStatusText.Visibility = vodSettings.CookieMode == "SOOP_LOGIN" ? Visibility.Visible : Visibility.Collapsed;
 
         VodStartButton = DesignTokens.Command("분석 및 다운로드", Symbol.Download);
         VodCancelButton = DesignTokens.Command("취소", Symbol.Cancel, enabled: false);
@@ -101,10 +115,15 @@ public sealed partial class MainWindow
         var jobDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SOOPLiveDownloader", "vod-jobs", jobId);
         Directory.CreateDirectory(jobDirectory);
         var requestPath = Path.Combine(jobDirectory, "request.json");
-        var cookieMode = VodCookieModeBox.SelectedItem as string ?? "FILE";
+        var cookieMode = SelectedVodCookieMode();
         var cookieSource = VodCookieSourceBox.Text.Trim();
         var cookieFile = cookieMode == "FILE" ? cookieSource : vodSettings.CookieFile;
         var browserName = cookieMode == "BROWSER" ? cookieSource : vodSettings.BrowserName;
+        if (cookieMode == "SOOP_LOGIN")
+        {
+            cookieFile = "";
+            browserName = "";
+        }
         var request = new VodJobRequest(1, jobId, VodUrlBox.Text.Trim(), parts, output,
             cookieMode, cookieFile, browserName, vodSettings.Merge, vodSettings.MaxRetries);
         WriteJsonAtomically(requestPath, request);
@@ -172,5 +191,28 @@ public sealed partial class MainWindow
         activeVodJobDirectory = null;
         if (string.IsNullOrWhiteSpace(directory)) return;
         try { Directory.Delete(directory, true); } catch { }
+    }
+
+    string SelectedVodCookieMode() =>
+        (VodCookieModeBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "SOOP_LOGIN";
+
+    void RefreshVodLoginAvailability()
+    {
+        if (VodLoginStatusText == null) return;
+        try
+        {
+            var config = IniService.Read(iniPath);
+            var hasUser = config.TryGetValue("SOOP_USERNAME", out var username) && !string.IsNullOrWhiteSpace(username);
+            var hasPassword = config.TryGetValue("SOOP_PASSWORD", out var password) && !string.IsNullOrWhiteSpace(password);
+            VodLoginStatusText.Text = hasUser && hasPassword
+                ? "✓ 설정 탭의 SOOP 로그인 사용 · 비밀번호는 요청 JSON에 포함되지 않습니다."
+                : "⚠ 설정 탭에 SOOP 아이디와 비밀번호를 먼저 저장해 주세요.";
+            VodLoginStatusText.Foreground = hasUser && hasPassword ? Accent : DesignTokens.Warning;
+        }
+        catch
+        {
+            VodLoginStatusText.Text = "⚠ SOOP 로그인 설정 상태를 확인하지 못했습니다.";
+            VodLoginStatusText.Foreground = DesignTokens.Warning;
+        }
     }
 }

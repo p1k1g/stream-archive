@@ -37,7 +37,12 @@ public static class VodSettingsStore
 
     static VodSettings Normalize(VodSettings value) => value with
     {
-        CookieMode = value.CookieMode.Equals("BROWSER", StringComparison.OrdinalIgnoreCase) ? "BROWSER" : "FILE",
+        CookieMode = (value.CookieMode ?? "").ToUpperInvariant() switch
+        {
+            "FILE" => "FILE",
+            "BROWSER" => "BROWSER",
+            _ => "SOOP_LOGIN"
+        },
         MaxRetries = Math.Clamp(value.MaxRetries, 1, 20),
         BrowserName = string.IsNullOrWhiteSpace(value.BrowserName) ? "firefox" : value.BrowserName.Trim()
     };

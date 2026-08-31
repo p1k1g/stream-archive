@@ -1,4 +1,4 @@
-function Resolve-VodExecutable {
+﻿function Resolve-VodExecutable {
     param([string]$Configured, [string]$Local, [string]$Command)
     if (-not [string]::IsNullOrWhiteSpace($Configured) -and (Test-Path -LiteralPath $Configured -PathType Leaf)) { return [System.IO.Path]::GetFullPath($Configured) }
     if (Test-Path -LiteralPath $Local -PathType Leaf) { return [System.IO.Path]::GetFullPath($Local) }
@@ -53,7 +53,15 @@ function Invoke-VodDownloads {
         Write-VodEvent -Type 'part_started' -Message ("PART {0}/{1} 다운로드 중…" -f $part, $Metadata.Entries.Count) -Part $part -PartCount $Metadata.Entries.Count
         $complete = $false
         for ($attempt = 1; $attempt -le [int]$Request.MaxRetries; $attempt++) {
+            # Subscription VOD authorization values are deliberately short-lived.
+            # private_auth.php is called for every attempt. On a retry, rebuild
+            # the independent SOOP/browser base session first so an expired login
+            # session cannot prevent issuance of a fresh CloudFront cookie.
+            if ($attempt -gt 1) {
+                Renew-VodBaseCookie -Request $Request -Cookie $Cookie -Attempt $attempt
+            }
             if (-not (Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $Metadata.StreamerId -Url $url -Attempt $attempt)) {
+                Write-VodEvent -Type 'auth_retrying' -Message ("구독 VOD 인증 재시도 ({0}/{1})" -f $attempt, [int]$Request.MaxRetries) -Part $part
                 Start-Sleep -Seconds ([Math]::Min(16, [Math]::Pow(2, $attempt - 1))); continue
             }
             $args = @('--cookies', $Cookie.Path, '--referer', [string]$Request.VodUrl, '--continue', '--fragment-retries', '2', '--retries', '2', '--abort-on-unavailable-fragments', '--no-overwrites', '--merge-output-format', 'mp4', '--newline', '-o', $path)

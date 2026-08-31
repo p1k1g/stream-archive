@@ -348,6 +348,7 @@ public sealed partial class MainWindow : Window
 
         ConfigureWindow();
         LoadStaticFiles();
+        RefreshVodLoginAvailability();
         LoadRecentRecordingsFix51();
         InitializeTrayIcon();
         HookAppWindowClosing();
@@ -386,7 +387,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix61",
+            Text = "WinUI 3 · v1.2.0-preview1-fix63",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });
@@ -557,6 +558,8 @@ public sealed partial class MainWindow : Window
 
         if (tag is "channels" or "settings")
             LoadStaticFiles();
+        if (tag == "vod")
+            RefreshVodLoginAvailability();
     }
 
     void RestoreInitialViewFix59()

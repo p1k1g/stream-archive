@@ -34,7 +34,7 @@ public sealed record VodSettings(
     string OutputDirectory = "",
     string YtDlpPath = "",
     string FfmpegPath = "",
-    string CookieMode = "FILE",
+    string CookieMode = "SOOP_LOGIN",
     string CookieFile = "",
     string BrowserName = "firefox",
     int MaxRetries = 5,
