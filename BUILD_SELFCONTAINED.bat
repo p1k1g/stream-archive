@@ -41,6 +41,17 @@ if not exist ".\publish_selfcontained\backend\SOOP_LIVE_SETTING.ini" copy /Y ".\
 if not exist ".\publish_selfcontained\backend\SOOP_LIVE_CHANNELS.txt" copy /Y ".\publish_selfcontained\backend\SOOP_LIVE_CHANNELS.example.txt" ".\publish_selfcontained\backend\SOOP_LIVE_CHANNELS.txt" >nul
 del /q ".\publish_selfcontained\*.pdb" 2>nul
 
+if not exist ".\publish_selfcontained\backend\SOOP_LIVE.ps1" (
+  echo [ERROR] self-contained publish backend missing.
+  exit /b 1
+)
+for %%M in (SOOP.Security.ps1 SOOP.Core.ps1 SOOP.Network.ps1 SOOP.Recorder.ps1) do (
+  if not exist ".\publish_selfcontained\backend\modules\%%M" (
+    echo [ERROR] self-contained backend module missing: %%M
+    exit /b 1
+  )
+)
+
 echo.
 echo ========================================
 echo  SELF-CONTAINED PUBLISH COMPLETE
