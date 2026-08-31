@@ -1,4 +1,4 @@
-function Write-VodEvent {
+﻿function Write-VodEvent {
     param([string]$Type, [string]$Message = '', [string]$Title = '', [string]$Streamer = '', [int]$Part = 0, [int]$PartCount = 0, [double]$Percent = 0, [string]$OutputFile = '')
     $event = [ordered]@{ version = 1; type = $Type; jobId = [string]$script:VodRequest.JobId; timestamp = [DateTimeOffset]::Now.ToString('o'); message = $Message; title = $Title; streamer = $Streamer; part = $Part; partCount = $PartCount; percent = $Percent; outputFile = $OutputFile }
     Write-Output ('@@SOOP_VOD_EVENT@@' + ($event | ConvertTo-Json -Compress -Depth 5))

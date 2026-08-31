@@ -1,4 +1,4 @@
-function Read-VodLoginConfig {
+﻿function Read-VodLoginConfig {
     param([string]$BackendRoot)
     $settingsPath = Join-Path $BackendRoot 'SOOP_LIVE_SETTING.ini'
     if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {

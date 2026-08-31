@@ -10,6 +10,19 @@ foreach ($module in $modules) {
     $path = Join-Path $root "backend/vod/modules/$module"
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "VOD module is missing: $module" }
 }
+$vodPowerShellFiles = @($entry) + @($modules | ForEach-Object { Join-Path $root "backend/vod/modules/$_" })
+foreach ($path in $vodPowerShellFiles) {
+    $bytes = [IO.File]::ReadAllBytes($path)
+    if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+        throw "VOD PowerShell file must use UTF-8 BOM for Windows PowerShell 5.1: $path"
+    }
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "VOD PowerShell parser error: $path - $($parseErrors[0].Message)"
+    }
+}
 $core = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Core.ps1') -Raw
 $auth = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Auth.ps1') -Raw
 $download = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Download.ps1') -Raw

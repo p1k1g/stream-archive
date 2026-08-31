@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix62
+Version 1.2.0-preview1-fix63
 
 BUG FIX
 -------
@@ -1634,3 +1634,20 @@ fix62 implemented changes
   cookie-path controls, and reports whether Settings contains both login fields.
 - Regressions assert DPAPI credential resolution, independent login, Netscape
   export, request secrecy, retry-loop authorization refresh, and cleanup.
+
+fix63 implemented changes
+-------------------------
+
+1. Windows PowerShell 5.1 VOD encoding fix
+- Every VOD PowerShell entry/module file that contains Korean UI or diagnostic
+  text is now stored as UTF-8 with BOM. Windows PowerShell 5.1 therefore no
+  longer decodes those files through the active ANSI code page and corrupts
+  quoted strings into cascading parser errors.
+
+2. Encoding and parser regression guard
+- The VOD source regression now reads the raw bytes of the entry script and all
+  four modules, requires the EF BB BF UTF-8 BOM, and invokes the native
+  System.Management.Automation parser for every file before other assertions.
+- The guard runs before the behavioral Netscape-cookie regression in Windows CI,
+  so an encoding or syntax regression fails with the exact affected file and
+  first parser message.

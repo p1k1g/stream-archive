@@ -1,4 +1,4 @@
-function Resolve-VodExecutable {
+﻿function Resolve-VodExecutable {
     param([string]$Configured, [string]$Local, [string]$Command)
     if (-not [string]::IsNullOrWhiteSpace($Configured) -and (Test-Path -LiteralPath $Configured -PathType Leaf)) { return [System.IO.Path]::GetFullPath($Configured) }
     if (Test-Path -LiteralPath $Local -PathType Leaf) { return [System.IO.Path]::GetFullPath($Local) }
