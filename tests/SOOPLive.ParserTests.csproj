@@ -12,5 +12,6 @@
     <Compile Include="..\overlay\SettingsSnapshot.cs" Link="SettingsSnapshot.cs" />
     <Compile Include="..\overlay\UiPreferences.cs" Link="UiPreferences.cs" />
     <Compile Include="..\overlay\RecentRecordingStore.cs" Link="RecentRecordingStore.cs" />
+    <Compile Include="..\overlay\EventPipelineDefense.cs" Link="EventPipelineDefense.cs" />
   </ItemGroup>
 </Project>

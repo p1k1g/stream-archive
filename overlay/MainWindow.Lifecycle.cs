@@ -397,8 +397,10 @@ public sealed partial class MainWindow
         try { RecentStore.FlushAsync().GetAwaiter().GetResult(); } catch { }
 
         while (backendLineQueue.TryDequeue(out _)) { }
-        while (priorityBackendLineQueue.TryDequeue(out _)) { }
+        priorityBackendLineQueue.Clear();
         latestProgressByChannel.Clear();
+        backendWarningDeduplicator.Clear();
+        driveSpaceCache.Clear();
         recentStructuredEvents.Clear();
         ResetBackendQueueCounters();
         RecordingItems.Clear();
@@ -436,6 +438,8 @@ public sealed partial class MainWindow
     {
         Interlocked.Exchange(ref queuedBackendLines, 0);
         Interlocked.Exchange(ref droppedBackendLines, 0);
+        Interlocked.Exchange(ref pendingSuppressedWarningLines, 0);
+        lastWarningDedupReport = DateTime.MinValue;
     }
 
     void Backend_Output(string line) => EnqueueBackendLine(line);
@@ -843,11 +847,15 @@ public sealed partial class MainWindow
     {
         while (backendLineQueue.TryDequeue(out _))
             Interlocked.Decrement(ref queuedBackendLines);
-        while (priorityBackendLineQueue.TryDequeue(out _)) { }
+        priorityBackendLineQueue.Clear();
         if (Interlocked.Read(ref queuedBackendLines) < 0)
             Interlocked.Exchange(ref queuedBackendLines, 0);
         Interlocked.Exchange(ref droppedBackendLines, 0);
         latestProgressByChannel.Clear();
+        backendWarningDeduplicator.Clear();
+        driveSpaceCache.Clear();
+        Interlocked.Exchange(ref pendingSuppressedWarningLines, 0);
+        lastWarningDedupReport = DateTime.MinValue;
         recentStructuredEvents.Clear();
         RecordingItems.Clear();
         OfflineItems.Clear();

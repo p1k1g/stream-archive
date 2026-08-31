@@ -17,6 +17,8 @@ $channelSync = Get-Content -LiteralPath (Join-Path $root 'overlay\ChannelCollect
 $channelPerfTest = Get-Content -LiteralPath (Join-Path $root 'tests\ChannelCollectionSynchronizerRegression.cs') -Raw -Encoding UTF8
 $uiPreferences = Get-Content -LiteralPath (Join-Path $root 'overlay\UiPreferences.cs') -Raw -Encoding UTF8
 $recentRecordingStore = Get-Content -LiteralPath (Join-Path $root 'overlay\RecentRecordingStore.cs') -Raw -Encoding UTF8
+$pipelineDefense = Get-Content -LiteralPath (Join-Path $root 'overlay\EventPipelineDefense.cs') -Raw -Encoding UTF8
+$pipelineSoak = Get-Content -LiteralPath (Join-Path $root 'tests\EventPipelineSoakRegression.cs') -Raw -Encoding UTF8
 
 function ConvertFrom-CodePoints([int[]]$CodePoints) {
     return -join ($CodePoints | ForEach-Object { [char]$_ })
@@ -108,6 +110,20 @@ if ($recentRecordingStore -notmatch 'pendingEntries' -or
     $recentRecordingStore -notmatch 'Task\.Delay\(250\)' -or
     $recentRecordingStore -notmatch 'FlushAsync') {
     throw 'Background-coalesced recent recording persistence is missing.'
+}
+if ($pipelineDefense -notmatch 'BoundedConcurrentQueue<T>' -or
+    $pipelineDefense -notmatch 'WarningDeduplicator' -or
+    $pipelineDefense -notmatch 'DriveSpaceCache' -or
+    $pipelineDefense -notmatch 'ProgressSnapshot' -or
+    $main -notmatch 'MaxQueuedPriorityEvents\s*=\s*512' -or
+    $main -match 'latestProgressByChannel\.ToArray\(\)') {
+    throw 'Event pipeline bounds, deduplication, caching, or allocation guards are missing.'
+}
+if ($pipelineSoak -notmatch '24\s*\*\s*60\s*\*\s*60' -or
+    $pipelineSoak -notmatch '100_000' -or
+    $pipelineSoak -notmatch 'progress\.Count\s*==\s*64' -or
+    $pipelineSoak -notmatch 'DriveCacheHonorsTtl') {
+    throw 'Long-running multi-channel event pipeline soak coverage is missing.'
 }
 
 Write-Host 'User feature source invariants passed.'

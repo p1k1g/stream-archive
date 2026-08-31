@@ -157,9 +157,21 @@ public sealed partial class MainWindow : Window
     UiPreferences uiPreferences = UiPreferences.Load();
     Microsoft.UI.Dispatching.DispatcherQueueTimer? uiPreferencesSaveTimer;
     readonly ConcurrentQueue<string> backendLineQueue = new();
-    readonly ConcurrentQueue<string> priorityBackendLineQueue = new();
-    readonly ConcurrentDictionary<string, string> latestProgressByChannel =
+    readonly BoundedConcurrentQueue<string> priorityBackendLineQueue = new(MaxQueuedPriorityEvents);
+    readonly ConcurrentDictionary<string, ProgressSnapshot> latestProgressByChannel =
         new(StringComparer.OrdinalIgnoreCase);
+    readonly WarningDeduplicator backendWarningDeduplicator = new(TimeSpan.FromSeconds(30));
+    readonly DriveSpaceCache driveSpaceCache = new(
+        TimeSpan.FromSeconds(5),
+        root =>
+        {
+            try
+            {
+                var drive = new DriveInfo(root);
+                return drive.IsReady ? (true, drive.AvailableFreeSpace) : (false, 0L);
+            }
+            catch { return (false, 0L); }
+        });
     readonly Queue<string> logLines = new();
     readonly Dictionary<string, DateTime> recentStructuredEvents =
         new(StringComparer.OrdinalIgnoreCase);
@@ -170,10 +182,13 @@ public sealed partial class MainWindow : Window
     long queuedBackendLines = 0;
     long flushedBackendLines = 0;
     long droppedBackendLines = 0;
+    long pendingSuppressedWarningLines = 0;
     DateTime lastUiFlush = DateTime.MinValue;
     DateTime lastDiskEstimateRefresh = DateTime.MinValue;
+    DateTime lastWarningDedupReport = DateTime.MinValue;
     const int MaxGuiLogLines = 50;
     const int MaxQueuedBackendEvents = 2000;
+    const int MaxQueuedPriorityEvents = 512;
     const int UiFlushMilliseconds = 250;
     static readonly string[] GuiLogTokens =
     {
@@ -370,7 +385,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix59",
+            Text = "WinUI 3 · v1.2.0-preview1-fix60",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });

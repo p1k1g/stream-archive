@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix59
+Version 1.2.0-preview1-fix60
 
 BUG FIX
 -------
@@ -1551,3 +1551,29 @@ fix59 implemented changes
   events and flushes the newest pending snapshot before clearing UI collections.
 - Automated regressions cover deterministic Settings snapshots, LocalAppData
   placement, and a 100-update burst collapsing into one physical history write.
+
+fix60 implemented changes
+-------------------------
+
+1. Bounded priority and warning paths
+- Critical backend events now use a newest-retaining priority queue capped at
+  512 entries. Overflow is counted and reported instead of growing indefinitely.
+- Identical non-critical warning/retry lines are deduplicated for 30 seconds
+  after timestamp normalization, with a merged-line summary in the GUI log.
+
+2. Lower-allocation progress snapshots
+- Producer-side progress parsing now stores a small value-type snapshot containing
+  only account, name, size, duration, and rate. UI flushing no longer creates a
+  ConcurrentDictionary ToArray snapshot or reparses the original console line.
+- At most 200 channel progress snapshots are applied per dispatcher tick.
+
+3. Cached drive information
+- Available-space queries are cached per output root for five seconds, including
+  safe negative results. Recording cards and the disk estimate reuse that cache.
+- Cache and deduplication state are cleared on Watcher reset and window shutdown.
+
+4. Virtual long-duration soak regression
+- A dependency-free virtual 24-hour/64-channel test exercises 86,400 progress and
+  warning ticks, four output roots, and a 100,000-event priority burst. It asserts
+  hard queue bounds, warning suppression, channel-bounded progress, and reduced
+  drive queries.

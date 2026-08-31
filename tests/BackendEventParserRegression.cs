@@ -10,6 +10,7 @@ static class BackendEventParserRegression
         ChannelCollectionSynchronizerRegression.Run();
         UiStateRegression.Run();
         RecentRecordingStoreRegression.Run();
+        EventPipelineSoakRegression.Run();
         JsonEvent("recording_started");
         JsonEvent("recording_finished");
         JsonEvent("recording_stalled");

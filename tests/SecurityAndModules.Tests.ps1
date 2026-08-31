@@ -80,6 +80,7 @@ foreach ($name in @(
     'DesignTokens.cs',
     'SettingsSnapshot.cs',
     'UiPreferences.cs',
+    'EventPipelineDefense.cs',
     'RecentRecordingStore.cs',
     'DiagnosticInfoService.cs'
 )) {

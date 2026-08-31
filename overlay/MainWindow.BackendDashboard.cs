@@ -22,6 +22,10 @@ namespace SOOPLiveWinUI;
 
 public sealed partial class MainWindow
 {
+    static readonly Regex CompactProgressMetrics = new(
+        @"^\[download\]\s+Written\s+(?<size>.+?)(?:\s+to\s+.+?)?\s+\((?<duration>\d{2}:\d{2}:\d{2})\s+@\s+(?<rate>.+?)\)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     void InitializeUiFlushTimer()
     {
         uiFlushTimer = new DispatcherTimer
@@ -49,12 +53,23 @@ public sealed partial class MainWindow
             var key = string.IsNullOrWhiteSpace(account)
                 ? "name:" + name
                 : "account:" + account;
-            if (!string.IsNullOrWhiteSpace(name))
-                latestProgressByChannel[key] = line;
+            var metrics = CompactProgressMetrics.Match(progress.Groups["progress"].Value);
+            if (!string.IsNullOrWhiteSpace(name) && metrics.Success)
+                latestProgressByChannel[key] = new ProgressSnapshot(
+                    account,
+                    name,
+                    metrics.Groups["size"].Value.Trim(),
+                    metrics.Groups["duration"].Value.Trim(),
+                    metrics.Groups["rate"].Value.Trim());
             return;
         }
 
-        if (IsCriticalBackendEventLine(line))
+        var critical = IsCriticalBackendEventLine(line);
+        if (!critical && IsRepeatableWarningLine(line) &&
+            backendWarningDeduplicator.ShouldSuppress(line, DateTime.UtcNow))
+            return;
+
+        if (critical)
         {
             priorityBackendLineQueue.Enqueue(line);
             return;
@@ -73,11 +88,27 @@ public sealed partial class MainWindow
     void FlushBackendUiQueue()
     {
         ReconcileWatcherRunningUiFix39();
+        Interlocked.Add(
+            ref pendingSuppressedWarningLines,
+            backendWarningDeduplicator.TakeSuppressedCount());
+        var warningReportDue =
+            (DateTime.UtcNow - lastWarningDedupReport).TotalSeconds >= 10;
+        var suppressedWarnings = warningReportDue
+            ? Interlocked.Exchange(ref pendingSuppressedWarningLines, 0)
+            : 0;
 
         if (priorityBackendLineQueue.IsEmpty &&
             backendLineQueue.IsEmpty &&
             latestProgressByChannel.IsEmpty)
+        {
+            if (suppressedWarnings > 0)
+            {
+                AppendLog($"[WARN] 반복 backend 경고 {suppressedWarnings}줄 병합");
+                FlushLogText();
+                lastWarningDedupReport = DateTime.UtcNow;
+            }
             return;
+        }
 
         // Bound work per UI tick so a noisy backend can never monopolize
         // the WinUI dispatcher indefinitely.
@@ -103,14 +134,30 @@ public sealed partial class MainWindow
         var dropped = Interlocked.Exchange(ref droppedBackendLines, 0);
         if (dropped > 0)
             AppendLog($"[WARN] GUI backend event queue overflow · 오래된 {dropped}줄 생략");
+        var droppedPriority = priorityBackendLineQueue.TakeDroppedCount();
+        if (droppedPriority > 0)
+            AppendLog($"[WARN] GUI priority event queue overflow · 오래된 {droppedPriority}줄 생략");
+        if (suppressedWarnings > 0)
+        {
+            AppendLog($"[WARN] 반복 backend 경고 {suppressedWarnings}줄 병합");
+            lastWarningDedupReport = DateTime.UtcNow;
+        }
 
         // Progress is already coalesced on the producer thread. Consume at
         // most the current latest value for each channel during this UI tick.
         if (!latestProgressByChannel.IsEmpty)
         {
-            foreach (var entry in latestProgressByChannel.ToArray())
-                if (latestProgressByChannel.TryRemove(entry.Key, out var progressLine))
-                    ProcessBackendLine(progressLine);
+            const int maxProgressPerFlush = 200;
+            var progressCount = 0;
+            foreach (var entry in latestProgressByChannel)
+            {
+                if (progressCount >= maxProgressPerFlush) break;
+                if (latestProgressByChannel.TryRemove(entry.Key, out var snapshot))
+                {
+                    ApplyProgress(snapshot);
+                    progressCount++;
+                }
+            }
         }
 
         FlushLogText();
@@ -127,6 +174,12 @@ public sealed partial class MainWindow
         line.Contains(" : DISK SPACE UNKNOWN", StringComparison.OrdinalIgnoreCase) ||
         line.Contains(" : WORKER COOLDOWN", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("WATCHER ERROR", StringComparison.OrdinalIgnoreCase);
+
+    static bool IsRepeatableWarningLine(string line) =>
+        line.Contains("[WARN]", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" WARNING", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains(" retry ", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("failed; retry", StringComparison.OrdinalIgnoreCase);
 
     void ProcessBackendLine(string line)
     {
@@ -486,6 +539,27 @@ public sealed partial class MainWindow
             UpdateCounts(refreshDisk: false);
     }
 
+    void ApplyProgress(ProgressSnapshot progress)
+    {
+        if (string.IsNullOrWhiteSpace(progress.Name)) return;
+        var item = GetOrCreate(progress.Account, progress.Name);
+        if (item.Status != "● REC") item.Status = "● REC";
+        if (item.Detail != "녹화 중") item.Detail = "녹화 중";
+        if (item.IsSuspended) item.IsSuspended = false;
+        item.SizeText = progress.Size;
+        item.ElapsedText = progress.Duration;
+        item.RateText = progress.Rate;
+        item.RateBytesPerSecond = ParseRateBytesPerSecond(progress.Rate);
+        if ((DateTime.Now - lastDiskEstimateRefresh).TotalSeconds >= 5)
+        {
+            lastDiskEstimateRefresh = DateTime.Now;
+            RefreshDiskSummary();
+        }
+        var alertCleared = ClearDashboardAlert(item.Account, item.Name, refresh: false);
+        if (!RecordingItems.Contains(item)) MoveToRecording(item);
+        else if (alertCleared) UpdateCounts(refreshDisk: false);
+    }
+
     void HandleRecordingFinished(
         string account,
         string name,
@@ -771,10 +845,9 @@ public sealed partial class MainWindow
         {
             var root=Path.GetPathRoot(Path.GetFullPath(file));
             if (string.IsNullOrWhiteSpace(root)) return;
-            var drive=new DriveInfo(root);
-            if (!drive.IsReady) return;
-            var free=drive.AvailableFreeSpace/1024d/1024d/1024d;
-            item.Drive=$"{drive.Name.TrimEnd('\\')} {free:N1} GB";
+            if (!driveSpaceCache.TryGetAvailableBytes(root, out var availableBytes)) return;
+            var free=availableBytes/1024d/1024d/1024d;
+            item.Drive=$"{root.TrimEnd('\\')} {free:N1} GB";
             RefreshDiskSummary();
         }
         catch { }
@@ -829,11 +902,10 @@ public sealed partial class MainWindow
         {
             try
             {
-                var drive = new DriveInfo(entry.Key);
-                if (!drive.IsReady)
+                if (!driveSpaceCache.TryGetAvailableBytes(entry.Key, out var availableBytes))
                     continue;
 
-                var freeBytes = (double)drive.AvailableFreeSpace;
+                var freeBytes = (double)availableBytes;
                 var freeGb = freeBytes / 1024d / 1024d / 1024d;
                 var configuredReserveGb = MinDiskBox?.Value;
                 var reserveGb = configuredReserveGb is double value && !double.IsNaN(value)
@@ -842,7 +914,7 @@ public sealed partial class MainWindow
                 var usableBytes = Math.Max(0d, freeBytes - reserveGb * 1024d * 1024d * 1024d);
                 var rate = rateByRoot.GetValueOrDefault(entry.Key);
                 var estimate = FormatDiskTimeEstimate(usableBytes, rate);
-                var display = $"{drive.Name.TrimEnd('\\')} {freeGb:N1} GB";
+                var display = $"{entry.Key.TrimEnd('\\')} {freeGb:N1} GB";
                 if (!string.IsNullOrWhiteSpace(estimate))
                     display += $" · {estimate}";
                 summaries.Add(display);
