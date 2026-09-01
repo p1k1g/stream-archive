@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix65
+Version 1.2.0-preview1-fix67
 
 BUG FIX
 -------
@@ -1711,3 +1711,52 @@ fix65 implemented changes
   parsing, decomposed Hangul normalization, Korean/apostrophe concat paths,
   full-path rejection, configured tool-path serialization, and UTF-8 metadata
   source invariants.
+
+fix66 implemented changes
+-------------------------
+
+1. Native executable browsing
+- The optional yt-dlp and ffmpeg fields now include accessible Windows file
+  picker buttons filtered to .exe files. The selected full path is retained by
+  the existing atomic VOD settings store; manual input and automatic lookup
+  remain available.
+
+2. Subscription VOD 403 recovery
+- Analysis showed that the previous retry loop renewed the SOOP login and
+  private_auth cookie but kept using the m3u8 URL captured before the first
+  attempt. That URL can expire independently for subscriber-only VODs.
+- Every PART attempt now re-runs authenticated VOD metadata analysis to obtain
+  its current URL, then calls private_auth.php with that URL immediately before
+  yt-dlp. Retries also create a fresh isolated base session where applicable.
+  This covers later PARTs whose URLs expire while earlier PARTs download.
+- yt-dlp receives the same browser User-Agent, VOD Origin, Referer, and updated
+  Netscape cookie jar. A manifest 403 is classified as authorization expiry so
+  the UI explains that the login session, URL, and short-lived cookie are being
+  renewed rather than showing only a generic downloader error.
+
+3. Isolation and regression coverage
+- The retry implementation remains wholly under backend/vod and does not load
+  into or share state with SOOP_LIVE.ps1. Credentials and cookies remain outside
+  request JSON and are deleted with the private job directory.
+- A Windows PowerShell regression uses a deterministic fake yt-dlp 403 and
+  verifies that the second attempt renews the base session, metadata URL, and
+  private authorization. Source regression also guards picker and header wiring.
+
+fix67 implemented changes
+-------------------------
+
+1. Windows PowerShell 5.1 native stderr retry fix
+- The fix66 regression exposed that Windows PowerShell 5.1 can convert native
+  yt-dlp stderr into a terminating NativeCommandError while the VOD entry script
+  uses ErrorActionPreference=Stop. The exception bypassed exit-code inspection,
+  403 classification, and the intended second authorization attempt.
+- Metadata yt-dlp, download yt-dlp, and private_auth curl calls now use Continue
+  only inside their native process boundary, capture the native exit code and
+  redirected diagnostics, and restore the caller's error preference in finally.
+  PowerShell errors outside those narrow native boundaries still fail fast.
+
+2. Deterministic retry regression cleanup
+- Mock counters no longer leak post-increment values into the PowerShell output
+  pipeline, so the refreshed metadata object remains the only function result.
+- Failure output now includes the observed failed/base/metadata/authorization
+  counters, making any future Windows CI regression immediately diagnosable.

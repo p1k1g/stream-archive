@@ -201,8 +201,15 @@ function Refresh-VodAuthorization {
     param($Request, [string]$CookieFile, [string]$StreamerId, [string]$Url, [int]$Attempt)
     Write-VodEvent -Type 'auth_refreshing' -Message ("구독 VOD 단기 인증 Cookie 발급 중 ({0}/{1})" -f $Attempt, [int]$Request.MaxRetries)
     $script:LastVodAuthError = ''
-    $response = & curl.exe '-sS' '-b' $CookieFile '-c' $CookieFile '-e' ([string]$Request.VodUrl) '-H' 'Origin: https://vod.sooplive.com' '--data-urlencode' 'type=vod' '--data-urlencode' ("strm_id=$StreamerId") '--data-urlencode' ("title_no=" + ([regex]::Match([string]$Request.VodUrl, '/player/(\d+)').Groups[1].Value)) '--data-urlencode' ("url=$Url") 'https://live.sooplive.com/api/private_auth.php' 2>&1
-    $curlExitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $response = & curl.exe '-sS' '-L' '-b' $CookieFile '-c' $CookieFile '-A' 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36' '-e' ([string]$Request.VodUrl) '-H' 'Origin: https://vod.sooplive.com' '-H' 'Accept: application/json, text/plain, */*' '--data-urlencode' 'type=vod' '--data-urlencode' ("strm_id=$StreamerId") '--data-urlencode' ("title_no=" + ([regex]::Match([string]$Request.VodUrl, '/player/(\d+)').Groups[1].Value)) '--data-urlencode' ("url=$Url") 'https://live.sooplive.com/api/private_auth.php' 2>&1
+        $curlExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     $responseText = ($response -join ' ').Trim()
     $success = ($curlExitCode -eq 0 -and $responseText -match '"result"\s*:\s*1')
     if (-not $success) {
@@ -211,6 +218,7 @@ function Refresh-VodAuthorization {
         if ([string]::IsNullOrWhiteSpace($detail)) { $detail = "curl exit code $curlExitCode" }
         $script:LastVodAuthError = $detail
     }
+    if ($success) { Test-VodNetscapeCookieFile -Path $CookieFile }
     return $success
 }
 

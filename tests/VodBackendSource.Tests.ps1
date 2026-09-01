@@ -39,8 +39,13 @@ if ($auth -notmatch '\$mode -eq ''SOOP_LOGIN''' -or
 }
 if ($download -notmatch 'Renew-VodBaseCookie' -or
     ([regex]::Matches($download, 'Refresh-VodAuthorization')).Count -lt 1 -or
-    $download -notmatch 'for \(\$attempt') {
-    throw 'Short-lived subscription authorization is not refreshed inside the retry loop.'
+    $download -notmatch 'for \(\$attempt' -or
+    ([regex]::Matches($download, 'Get-VodMetadata')).Count -lt 2 -or
+    $download -notmatch 'authorization_expired' -or
+    $download -notmatch 'Origin:https://vod\.sooplive\.com' -or
+    $download -notmatch '\$ErrorActionPreference = ''Continue''' -or
+    $download -notmatch '\$ErrorActionPreference = \$previousErrorActionPreference') {
+    throw 'Short-lived subscription authorization, metadata URL, or request headers are not refreshed inside the retry loop.'
 }
 $processService = Get-Content -LiteralPath (Join-Path $root 'overlay/VodProcessService.cs') -Raw
 if ($processService -notmatch 'StandardOutputEncoding\s*=\s*new UTF8Encoding' -or
@@ -77,6 +82,11 @@ if ($vodUi -notmatch 'cookieMode == "SOOP_LOGIN"' -or
     $vodUi -notmatch 'cookieFile = ""' -or
     $vodUi -notmatch 'browserName = ""') {
     throw 'Stored-login request does not clear fallback cookie/browser fields.'
+}
+if ($vodUi -notmatch 'FileOpenPicker' -or
+    $vodUi -notmatch 'FileTypeFilter\.Add\("\.exe"\)' -or
+    $vodUi -notmatch 'PickVodExecutableAsync') {
+    throw 'VOD executable paths cannot be selected with the Windows file picker.'
 }
 $explorerSources = Get-ChildItem -LiteralPath (Join-Path $root 'overlay') -Filter '*.cs' |
     ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }

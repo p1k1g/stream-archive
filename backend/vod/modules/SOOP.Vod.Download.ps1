@@ -49,8 +49,15 @@ function Get-VodMetadata {
     $stderrFile = Join-Path $JobDirectory 'yt-dlp-metadata.stderr.log'
     $metadataFile = Join-Path $JobDirectory 'yt-dlp-metadata.json'
     try {
-        $json = @(& $YtDlp '--cookies' $CookieFile '--flat-playlist' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2> $stderrFile)
-        $exitCode = $LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $json = @(& $YtDlp '--cookies' $CookieFile '--flat-playlist' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2> $stderrFile)
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
         $errorTail = Get-VodExternalErrorTail -Path $stderrFile
         if ($exitCode -ne 0) {
             if ([string]::IsNullOrWhiteSpace($errorTail)) { $errorTail = "yt-dlp exit code $exitCode" }
@@ -102,6 +109,7 @@ function Invoke-VodDownloads {
         $path = Get-CollisionSafeVodPath -Directory $directory -BaseName $base -Extension '.mp4'
         Write-VodEvent -Type 'part_started' -Message ("PART {0}/{1} 다운로드 중…" -f $part, $Metadata.Entries.Count) -Part $part -PartCount $Metadata.Entries.Count
         $complete = $false
+        $streamerId = [string]$Metadata.StreamerId
         for ($attempt = 1; $attempt -le [int]$Request.MaxRetries; $attempt++) {
             # Subscription VOD authorization values are deliberately short-lived.
             # private_auth.php is called for every attempt. On a retry, rebuild
@@ -110,34 +118,59 @@ function Invoke-VodDownloads {
             if ($attempt -gt 1) {
                 Renew-VodBaseCookie -Request $Request -Cookie $Cookie -Attempt $attempt
             }
-            if (-not (Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $Metadata.StreamerId -Url $url -Attempt $attempt)) {
+            # Refresh metadata before every PART attempt, not only after a 403.
+            # A later selected PART may start hours after the initial analysis,
+            # by which time its manifest URL can already be expired.
+            Write-VodEvent -Type 'metadata_refreshing' -Message ("PART {0} 최신 VOD URL 분석 중 ({1}/{2})" -f $part, $attempt, [int]$Request.MaxRetries) -Part $part
+            $refreshedMetadata = Get-VodMetadata -Request $Request -YtDlp $Tools.YtDlp -CookieFile $Cookie.Path -JobDirectory $JobDirectory
+            if ($part -gt $refreshedMetadata.Entries.Count) { throw "새 VOD 정보에서 PART $part 를 찾지 못했습니다." }
+            $url = [string]$refreshedMetadata.Entries[$part - 1].url
+            $streamerId = [string]$refreshedMetadata.StreamerId
+            if ([string]::IsNullOrWhiteSpace($url)) { throw "새 VOD 정보에 PART $part URL이 없습니다." }
+            if (-not (Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $streamerId -Url $url -Attempt $attempt)) {
                 $authDetail = if ([string]::IsNullOrWhiteSpace([string]$script:LastVodAuthError)) { 'private_auth 응답이 인증 성공을 반환하지 않았습니다.' } else { [string]$script:LastVodAuthError }
                 Write-VodEvent -Type 'auth_retrying' -Message ("구독 VOD 인증 재시도 ({0}/{1}) · {2}" -f $attempt, [int]$Request.MaxRetries, $authDetail) -Part $part
                 Start-Sleep -Seconds ([Math]::Min(16, [Math]::Pow(2, $attempt - 1))); continue
             }
-            $args = @('--cookies', $Cookie.Path, '--referer', [string]$Request.VodUrl, '--continue', '--fragment-retries', '2', '--retries', '2', '--abort-on-unavailable-fragments', '--no-overwrites', '--merge-output-format', 'mp4', '--newline', '-o', $path)
+            $args = @('--cookies', $Cookie.Path, '--referer', [string]$Request.VodUrl, '--add-header', 'Origin:https://vod.sooplive.com', '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36', '--continue', '--fragment-retries', '1', '--retries', '1', '--abort-on-unavailable-fragments', '--no-overwrites', '--merge-output-format', 'mp4', '--newline', '-o', $path)
             if (-not [string]::IsNullOrWhiteSpace([string]$Tools.Ffmpeg)) { $args += @('--ffmpeg-location', [string]$Tools.Ffmpeg) }
             $args += $url
             $stderrFile = Join-Path $JobDirectory ("yt-dlp-part-{0:D4}-attempt-{1:D2}.stderr.log" -f $part, $attempt)
             try {
-                & $Tools.YtDlp @args 2> $stderrFile | ForEach-Object {
-                    if ($_ -match '(?<percent>\d+(?:\.\d+)?)%') {
-                        $percent = 0.0
-                        if ([double]::TryParse(
-                            $matches.percent,
-                            [Globalization.NumberStyles]::Float,
-                            [Globalization.CultureInfo]::InvariantCulture,
-                            [ref]$percent
-                        )) {
-                            Write-VodEvent -Type 'part_progress' -Message ("PART {0}: {1}%" -f $part, $matches.percent) -Part $part -PartCount $Metadata.Entries.Count -Percent $percent
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    # Windows PowerShell 5.1 can promote native stderr to a
+                    # terminating NativeCommandError when the script preference
+                    # is Stop. Keep stderr redirected and classify the exit code
+                    # ourselves so a 403 reaches the authorization retry path.
+                    $ErrorActionPreference = 'Continue'
+                    & $Tools.YtDlp @args 2> $stderrFile | ForEach-Object {
+                        if ($_ -match '(?<percent>\d+(?:\.\d+)?)%') {
+                            $percent = 0.0
+                            if ([double]::TryParse(
+                                $matches.percent,
+                                [Globalization.NumberStyles]::Float,
+                                [Globalization.CultureInfo]::InvariantCulture,
+                                [ref]$percent
+                            )) {
+                                Write-VodEvent -Type 'part_progress' -Message ("PART {0}: {1}%" -f $part, $matches.percent) -Part $part -PartCount $Metadata.Entries.Count -Percent $percent
+                            }
                         }
                     }
+                    $downloadExitCode = $LASTEXITCODE
                 }
-                $downloadExitCode = $LASTEXITCODE
+                finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
                 if ($downloadExitCode -eq 0 -and (Test-Path -LiteralPath $path -PathType Leaf)) { $complete = $true; break }
                 $errorTail = Get-VodExternalErrorTail -Path $stderrFile
                 if ([string]::IsNullOrWhiteSpace($errorTail)) { $errorTail = "yt-dlp exit code $downloadExitCode" }
-                Write-VodEvent -Type 'part_retrying' -Message ("PART {0} 재시도 ({1}/{2}) · {3}" -f $part, $attempt, [int]$Request.MaxRetries, $errorTail) -Part $part
+                $retryType = if ($errorTail -match '(?i)(HTTP Error 403|Forbidden)') { 'authorization_expired' } else { 'part_retrying' }
+                $retryMessage = if ($retryType -eq 'authorization_expired') {
+                    "PART $part 단기 인증 만료(403) · 로그인 세션, VOD URL, 인증 Cookie를 새로 발급합니다."
+                }
+                else { "PART $part 재시도 ($attempt/$([int]$Request.MaxRetries)) · $errorTail" }
+                Write-VodEvent -Type $retryType -Message $retryMessage -Part $part
             }
             finally {
                 Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue

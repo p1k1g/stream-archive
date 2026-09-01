@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using System.Text;
 using System.Text.Json;
+using WinRT.Interop;
 
 namespace SOOPLiveWinUI;
 
@@ -80,8 +81,8 @@ public sealed partial class MainWindow
         stack.Children.Add(VodUrlBox);
         stack.Children.Add(VodOutputBox);
         stack.Children.Add(VodPartsBox);
-        stack.Children.Add(VodYtDlpPathBox);
-        stack.Children.Add(VodFfmpegPathBox);
+        stack.Children.Add(BuildVodExecutablePicker(VodYtDlpPathBox, "yt-dlp.exe 선택", "yt-dlp.exe"));
+        stack.Children.Add(BuildVodExecutablePicker(VodFfmpegPathBox, "ffmpeg.exe 선택", "ffmpeg.exe"));
         stack.Children.Add(VodCookieModeBox);
         stack.Children.Add(VodCookieSourceBox);
         stack.Children.Add(VodLoginStatusText);
@@ -108,6 +109,43 @@ public sealed partial class MainWindow
         vodBackend.Output += VodBackend_Output;
         vodBackend.Exited += VodBackend_Exited;
         return root;
+    }
+
+    FrameworkElement BuildVodExecutablePicker(TextBox target, string accessibleName, string expectedFileName)
+    {
+        var grid = new Grid { ColumnSpacing = DesignTokens.SpaceSm };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(target);
+
+        var browse = new Button
+        {
+            Content = new SymbolIcon(Symbol.OpenFile),
+            VerticalAlignment = VerticalAlignment.Bottom,
+            MinWidth = 44,
+            Height = 34
+        };
+        AutomationProperties.SetName(browse, accessibleName);
+        ToolTipService.SetToolTip(browse, accessibleName);
+        browse.Click += async (_, _) => await PickVodExecutableAsync(target, expectedFileName);
+        Grid.SetColumn(browse, 1);
+        grid.Children.Add(browse);
+        return grid;
+    }
+
+    async Task PickVodExecutableAsync(TextBox target, string expectedFileName)
+    {
+        var picker = new Windows.Storage.Pickers.FileOpenPicker
+        {
+            SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.Downloads
+        };
+        picker.FileTypeFilter.Add(".exe");
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+        var file = await picker.PickSingleFileAsync();
+        if (file == null) return;
+        target.Text = file.Path;
+        if (!string.Equals(file.Name, expectedFileName, StringComparison.OrdinalIgnoreCase))
+            VodStatusText.Text = $"선택한 파일명이 {expectedFileName}이 아닙니다. 실행 파일을 다시 확인해 주세요.";
     }
 
     async void VodStartButton_Click(object sender, RoutedEventArgs e)
