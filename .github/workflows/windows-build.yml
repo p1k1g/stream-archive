@@ -1,0 +1,78 @@
+name: Windows WinUI build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compact-publish:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Parser regression tests
+        run: dotnet run --project tests/SOOPLive.ParserTests.csproj --configuration Release
+
+      - name: PowerShell source regressions
+        shell: powershell
+        run: |
+          ./tests/BackendLiteralPath.Tests.ps1
+          ./tests/RecorderExit.Tests.ps1
+          ./tests/PrepareProjectSource.Tests.ps1
+          ./tests/UserFeaturesSource.Tests.ps1
+          ./tests/SecurityAndModules.Tests.ps1
+          ./tests/VodBackendSource.Tests.ps1
+          ./tests/VodAuthCookie.Tests.ps1
+          ./tests/VodPathAndConcat.Tests.ps1
+          ./tests/VodAuthorizationRetry.Tests.ps1
+
+      - name: Prepare official WinUI template project
+        shell: powershell
+        run: ./PREPARE_PROJECT.ps1
+
+      - name: Compact publish through primary build
+        shell: cmd
+        run: 'echo.|BUILD_EXE.bat'
+
+      - name: Validate unpackaged publish and backend bundle
+        shell: powershell
+        run: |
+          $project = '.generated\SOOPLiveWinUI\SOOPLiveWinUI.csproj'
+          [xml]$xml = Get-Content -LiteralPath $project -Raw
+          $values = @{}
+          foreach ($group in $xml.Project.PropertyGroup) {
+            foreach ($name in 'WindowsPackageType','EnableWinAppRunSupport','WindowsAppSDKSelfContained') {
+              if ($null -ne $group.$name) { $values[$name] = [string]$group.$name }
+            }
+          }
+          if ($values.WindowsPackageType -ne 'None') { throw 'WindowsPackageType regression.' }
+          if ($values.EnableWinAppRunSupport -ne 'false') { throw 'EnableWinAppRunSupport regression.' }
+          if ($values.WindowsAppSDKSelfContained -ne 'false') { throw 'Compact build self-contained regression.' }
+          $required = @(
+            'publish\SOOPLiveWinUI.exe',
+            'publish\backend\SOOP_LIVE.ps1',
+            'publish\backend\modules\SOOP.Security.ps1',
+            'publish\backend\modules\SOOP.Core.ps1',
+            'publish\backend\modules\SOOP.Network.ps1',
+            'publish\backend\modules\SOOP.Recorder.ps1',
+            'publish\backend\vod\SOOP_VOD.ps1',
+            'publish\backend\vod\modules\SOOP.Vod.Core.ps1',
+            'publish\backend\vod\modules\SOOP.Vod.Auth.ps1',
+            'publish\backend\vod\modules\SOOP.Vod.Download.ps1',
+            'publish\backend\vod\modules\SOOP.Vod.Merge.ps1'
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing publish artifact: $path" }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SOOP-LIVE-compact-win-x64
+          path: publish/
+          if-no-files-found: error
