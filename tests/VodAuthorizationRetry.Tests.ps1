@@ -48,4 +48,8 @@ try {
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+# The fake native downloader intentionally exits with 1. GitHub Actions'
+# PowerShell wrapper propagates a lingering LASTEXITCODE even after every
+# assertion succeeds, so clear only that expected native test result.
+$global:LASTEXITCODE = 0
 Write-Host 'VOD authorization retry regression tests passed.'
