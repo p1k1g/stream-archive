@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix67
+Version 1.2.0-preview1-fix68
 
 BUG FIX
 -------
@@ -1760,3 +1760,23 @@ fix67 implemented changes
   pipeline, so the refreshed metadata object remains the only function result.
 - Failure output now includes the observed failed/base/metadata/authorization
   counters, making any future Windows CI regression immediately diagnosable.
+
+fix68 implemented changes
+-------------------------
+
+1. Stored-login VOD session warm-up
+- The isolated SOOP_LOGIN CookieContainer previously performed login and account
+  verification, then exported immediately. Unlike a browser session, it had not
+  visited the requested VOD player before private_auth and could omit session
+  state established by the player flow.
+- The isolated HttpClient now validates and opens the requested HTTPS SOOP VOD
+  URL after login verification and before Netscape export. Every base-session
+  renewal repeats that player warm-up. The session remains VOD-job-local and is
+  never shared with LIVE.
+
+2. Actionable final download failure
+- Per-attempt private_auth and yt-dlp details are retained in redacted form.
+  Exhausting retries now reports the last real diagnostic after the PART number
+  instead of replacing it with only "PART download failed".
+- The deterministic 403 regression now requires the final exception to retain
+  the 403 diagnostic as well as verifying all renewal counters.

@@ -38,11 +38,12 @@ try {
     $tools = [pscustomobject]@{ YtDlp = $fakeYtDlp; Ffmpeg = '' }
     $cookie = [pscustomobject]@{ Path = $cookiePath; Mode = 'FILE' }
     $failed = $false
+    $failureMessage = ''
     try { [void](Invoke-VodDownloads -Request $request -Metadata $metadata -SelectedParts @(1) -Tools $tools -Cookie $cookie -JobDirectory $tempRoot) }
-    catch { $failed = $true }
+    catch { $failed = $true; $failureMessage = $_.Exception.Message }
 
-    if (-not $failed -or $script:baseRenewals -ne 1 -or $script:metadataRefreshes -ne 2 -or $script:authorizationRefreshes -ne 2) {
-        throw ("A 403 retry did not renew every layer. failed={0}, base={1}, metadata={2}, authorization={3}" -f $failed, $script:baseRenewals, $script:metadataRefreshes, $script:authorizationRefreshes)
+    if (-not $failed -or $failureMessage -notmatch '403' -or $script:baseRenewals -ne 1 -or $script:metadataRefreshes -ne 2 -or $script:authorizationRefreshes -ne 2) {
+        throw ("A 403 retry did not renew every layer or retain its diagnostic. failed={0}, base={1}, metadata={2}, authorization={3}, message={4}" -f $failed, $script:baseRenewals, $script:metadataRefreshes, $script:authorizationRefreshes, $failureMessage)
     }
 }
 finally {

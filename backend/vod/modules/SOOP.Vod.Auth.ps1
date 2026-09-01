@@ -69,7 +69,7 @@ function Export-VodNetscapeCookies {
 }
 
 function New-VodSoopLoginCookie {
-    param([string]$BackendRoot, [string]$Destination)
+    param([string]$BackendRoot, [string]$Destination, [string]$VodUrl)
     $config = Read-VodLoginConfig -BackendRoot $BackendRoot
     $username = [string]$config['SOOP_USERNAME']
     $password = [string]$config['SOOP_PASSWORD']
@@ -136,6 +136,30 @@ function New-VodSoopLoginCookie {
         }
         finally { $verifyRequest.Dispose() }
 
+        # A browser-backed cookie file has already visited the VOD player.
+        # Do the same for the isolated credential login before exporting its
+        # CookieContainer so player-scoped session cookies are not omitted.
+        $vodUri = $null
+        if (-not [Uri]::TryCreate($VodUrl, [UriKind]::Absolute, [ref]$vodUri) -or
+            $vodUri.Scheme -ne 'https' -or
+            -not $vodUri.Host.EndsWith('sooplive.com', [StringComparison]::OrdinalIgnoreCase)) {
+            throw '로그인 세션을 준비할 VOD URL이 올바르지 않습니다.'
+        }
+        $vodRequest = New-Object System.Net.Http.HttpRequestMessage(
+            [System.Net.Http.HttpMethod]::Get,
+            $vodUri
+        )
+        $vodRequest.Headers.Referrer = [Uri]'https://vod.sooplive.com/'
+        try {
+            $vodResponse = $client.SendAsync($vodRequest).GetAwaiter().GetResult()
+            try {
+                $vodResponse.EnsureSuccessStatusCode() | Out-Null
+                [void]$vodResponse.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+            }
+            finally { if ($null -ne $vodResponse) { $vodResponse.Dispose() } }
+        }
+        finally { $vodRequest.Dispose() }
+
         $count = Export-VodNetscapeCookies -CookieContainer $container -Destination $Destination
         Write-VodEvent -Type 'auth_session_ready' -Message ("저장된 SOOP 로그인 세션 준비 완료 (Cookie {0}개)" -f $count)
     }
@@ -166,7 +190,7 @@ function Initialize-VodCookie {
     $mode = ([string]$Request.CookieMode).ToUpperInvariant()
     $temporary = Join-Path $JobDirectory 'cookies.txt'
     if ($mode -eq 'SOOP_LOGIN') {
-        New-VodSoopLoginCookie -BackendRoot $BackendRoot -Destination $temporary
+        New-VodSoopLoginCookie -BackendRoot $BackendRoot -Destination $temporary -VodUrl ([string]$Request.VodUrl)
     }
     elseif ($mode -eq 'FILE') {
         $source = [string]$Request.CookieFile
@@ -188,7 +212,7 @@ function Renew-VodBaseCookie {
     param($Request, $Cookie, [int]$Attempt)
     if ($Cookie.Mode -eq 'SOOP_LOGIN') {
         Write-VodEvent -Type 'auth_session_refreshing' -Message ("SOOP 로그인 세션 재발급 중 ({0}/{1})" -f $Attempt, [int]$Request.MaxRetries)
-        New-VodSoopLoginCookie -BackendRoot $Cookie.BackendRoot -Destination $Cookie.Path
+        New-VodSoopLoginCookie -BackendRoot $Cookie.BackendRoot -Destination $Cookie.Path -VodUrl ([string]$Request.VodUrl)
     }
     elseif ($Cookie.Mode -eq 'BROWSER') {
         Write-VodEvent -Type 'auth_session_refreshing' -Message ("브라우저 Cookie 다시 가져오는 중 ({0}/{1})" -f $Attempt, [int]$Request.MaxRetries)

@@ -109,6 +109,7 @@ function Invoke-VodDownloads {
         $path = Get-CollisionSafeVodPath -Directory $directory -BaseName $base -Extension '.mp4'
         Write-VodEvent -Type 'part_started' -Message ("PART {0}/{1} 다운로드 중…" -f $part, $Metadata.Entries.Count) -Part $part -PartCount $Metadata.Entries.Count
         $complete = $false
+        $lastFailureDetail = ''
         $streamerId = [string]$Metadata.StreamerId
         for ($attempt = 1; $attempt -le [int]$Request.MaxRetries; $attempt++) {
             # Subscription VOD authorization values are deliberately short-lived.
@@ -129,6 +130,7 @@ function Invoke-VodDownloads {
             if ([string]::IsNullOrWhiteSpace($url)) { throw "새 VOD 정보에 PART $part URL이 없습니다." }
             if (-not (Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $streamerId -Url $url -Attempt $attempt)) {
                 $authDetail = if ([string]::IsNullOrWhiteSpace([string]$script:LastVodAuthError)) { 'private_auth 응답이 인증 성공을 반환하지 않았습니다.' } else { [string]$script:LastVodAuthError }
+                $lastFailureDetail = $authDetail
                 Write-VodEvent -Type 'auth_retrying' -Message ("구독 VOD 인증 재시도 ({0}/{1}) · {2}" -f $attempt, [int]$Request.MaxRetries, $authDetail) -Part $part
                 Start-Sleep -Seconds ([Math]::Min(16, [Math]::Pow(2, $attempt - 1))); continue
             }
@@ -165,6 +167,7 @@ function Invoke-VodDownloads {
                 if ($downloadExitCode -eq 0 -and (Test-Path -LiteralPath $path -PathType Leaf)) { $complete = $true; break }
                 $errorTail = Get-VodExternalErrorTail -Path $stderrFile
                 if ([string]::IsNullOrWhiteSpace($errorTail)) { $errorTail = "yt-dlp exit code $downloadExitCode" }
+                $lastFailureDetail = $errorTail
                 $retryType = if ($errorTail -match '(?i)(HTTP Error 403|Forbidden)') { 'authorization_expired' } else { 'part_retrying' }
                 $retryMessage = if ($retryType -eq 'authorization_expired') {
                     "PART $part 단기 인증 만료(403) · 로그인 세션, VOD URL, 인증 Cookie를 새로 발급합니다."
@@ -177,7 +180,10 @@ function Invoke-VodDownloads {
             }
             Start-Sleep -Seconds ([Math]::Min(16, [Math]::Pow(2, $attempt - 1)))
         }
-        if (-not $complete) { throw "PART $part 다운로드에 실패했습니다." }
+        if (-not $complete) {
+            if ([string]::IsNullOrWhiteSpace($lastFailureDetail)) { $lastFailureDetail = '상세 오류를 확인하지 못했습니다.' }
+            throw "PART $part 다운로드 실패: $lastFailureDetail"
+        }
         $files += $path
     }
     return @($files)

@@ -33,6 +33,8 @@ if ($download -notmatch '--abort-on-unavailable-fragments' -or $download -notmat
 if ($auth -notmatch '\$mode -eq ''SOOP_LOGIN''' -or
     $auth -notmatch 'Resolve-ProtectedConfigSecrets' -or
     $auth -notmatch 'LoginAction\.php' -or
+    $auth -notmatch 'ReadAsByteArrayAsync' -or
+    $auth -notmatch 'New-VodSoopLoginCookie.+VodUrl' -or
     $auth -notmatch 'Export-VodNetscapeCookies' -or
     $auth -notmatch "@\('cookies\.txt', 'concat\.txt'\)") {
     throw 'Stored SOOP login, Netscape export, or temporary secret cleanup is missing.'
@@ -44,7 +46,8 @@ if ($download -notmatch 'Renew-VodBaseCookie' -or
     $download -notmatch 'authorization_expired' -or
     $download -notmatch 'Origin:https://vod\.sooplive\.com' -or
     $download -notmatch '\$ErrorActionPreference = ''Continue''' -or
-    $download -notmatch '\$ErrorActionPreference = \$previousErrorActionPreference') {
+    $download -notmatch '\$ErrorActionPreference = \$previousErrorActionPreference' -or
+    $download -notmatch 'throw "PART \$part [^"]*: \$lastFailureDetail"') {
     throw 'Short-lived subscription authorization, metadata URL, or request headers are not refreshed inside the retry loop.'
 }
 $processService = Get-Content -LiteralPath (Join-Path $root 'overlay/VodProcessService.cs') -Raw
