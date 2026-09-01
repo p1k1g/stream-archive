@@ -18,11 +18,13 @@ try {
     if ($fields.Count -ne 7 -or $fields[0] -ne '.sooplive.com' -or $fields[5] -ne 'AuthTicket') {
         throw 'Netscape cookie fields are invalid.'
     }
+    $policyJson = '{"Statement":[{"Resource":"https://cdn.example.test/*"}]}'
+    $policyValue = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($policyJson)).Replace('+', '-').Replace('=', '_').Replace('/', '~')
     Add-Content -LiteralPath $path -Encoding UTF8 -Value @(
         "cdn.example.test`tFALSE`t/`tTRUE`t0`tCloudFront-Policy`tstale-policy",
         "cdn.example.test`tFALSE`t/`tTRUE`t0`tCloudFront-Signature`tstale-signature",
         "cdn.example.test`tFALSE`t/`tTRUE`t0`tCloudFront-Key-Pair-Id`tstale-key",
-        ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Policy`tpolicy",
+        ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Policy`t$policyValue",
         ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Signature`tsignature",
         ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Key-Pair-Id`tkey"
     )
@@ -34,6 +36,15 @@ try {
     $allSigned = Get-Content -LiteralPath $path -Encoding UTF8 | Where-Object { $_ -match "`tCloudFront-(?:Policy|Signature|Key-Pair-Id)`t" }
     if (@($allSigned).Count -ne 3 -or ($allSigned -join "`n") -match 'stale-') {
         throw 'Stale duplicate CloudFront cookies were retained.'
+    }
+    if ((Get-VodCloudFrontPolicyResource -CookieFile $path) -ne 'https://cdn.example.test/*') {
+        throw 'CloudFront policy resource was not decoded.'
+    }
+    $curlConfig = Join-Path $tempRoot 'cloudfront.curl-config'
+    New-VodCloudFrontCurlConfig -CookieFile $path -Destination $curlConfig
+    $curlConfigText = [IO.File]::ReadAllText($curlConfig, [Text.Encoding]::UTF8)
+    if ($curlConfigText -notmatch 'CloudFront-Key-Pair-Id=.*CloudFront-Policy=.*CloudFront-Signature=') {
+        throw 'Explicit CloudFront Cookie header config was not generated.'
     }
     $master = Join-Path $tempRoot 'master.m3u8'
     [IO.File]::WriteAllLines($master, @(
@@ -56,6 +67,13 @@ try {
     }
     if (-not $copied.HasCloudFrontAuthorization -or -not $copied.HasSoopLoginCookies) {
         throw 'Cookie capabilities did not recognize signed and login cookies.'
+    }
+    if ($copied.PolicyResource -ne 'https://cdn.example.test/*') {
+        throw 'FILE cookie mode did not retain its decoded policy resource.'
+    }
+    $copiedSigned = Get-Content -LiteralPath $copied.Path -Encoding UTF8 | Where-Object { $_ -match "`tCloudFront-(?:Policy|Signature|Key-Pair-Id)`t" }
+    if (@($copiedSigned).Count -ne 3 -or @($copiedSigned | Where-Object { $_ -notlike "cdn.example.test`t*" }).Count -ne 0) {
+        throw 'FILE cookie mode did not scope the signed policy before metadata extraction.'
     }
     $invalid = Join-Path $tempRoot 'invalid.txt'
     [IO.File]::WriteAllText($invalid, 'name=value', [Text.UTF8Encoding]::new($false))

@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix71
+Version 1.2.0-preview1-fix72
 
 BUG FIX
 -------
@@ -1862,3 +1862,24 @@ fix71 implemented changes
 - Cookie tests now inject stale exact-host values plus fresh parent-domain values
   and require the resulting jar to contain only the fresh canonical triplet.
 - The authorization regression verifies manifest_url fallback behavior.
+
+
+fix72 implemented changes
+-------------------------
+
+1. Cookie-file bootstrap ordering
+- CloudFront-Policy is decoded before yt-dlp metadata extraction. Its signed CDN
+  resource is used to scope the three Cookie values before the first protected
+  m3u8 request, eliminating the previous URL-before-auth circular dependency.
+- An exact non-wildcard policy resource can also serve as the first PART manifest
+  fallback when yt-dlp omits every URL field.
+
+2. Exact CloudFront preflight
+- Manifest preflight sends exactly Key-Pair-Id, Policy, and Signature through a
+  temporary curl config instead of relying on Netscape domain matching. The
+  config is deleted immediately and Cookie values remain out of request JSON,
+  events, logs, and the process command line.
+
+3. Regression coverage
+- Tests validate CloudFront-safe base64 Policy decoding, pre-metadata FILE scope,
+  explicit three-Cookie curl configuration, and PolicyResource propagation.

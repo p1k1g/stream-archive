@@ -198,6 +198,50 @@ function Get-VodCookieCapabilities {
     return [pscustomobject]@{ HasCloudFrontAuthorization = [bool]$hasSigned; HasSoopLoginCookies = ($null -ne $hasLogin) }
 }
 
+function Get-VodCloudFrontCookieValues {
+    param([string]$Path)
+    $requiredNames = @('CloudFront-Key-Pair-Id', 'CloudFront-Policy', 'CloudFront-Signature')
+    $values = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($line) -or ($line.StartsWith('#') -and -not $line.StartsWith('#HttpOnly_'))) { continue }
+        $fields = @($line -split "`t", 7)
+        if ($fields.Count -eq 7 -and $requiredNames -contains $fields[5]) { $values[$fields[5]] = [string]$fields[6] }
+    }
+    foreach ($name in $requiredNames) {
+        if (-not $values.ContainsKey($name) -or [string]::IsNullOrWhiteSpace([string]$values[$name])) { return $null }
+    }
+    return $values
+}
+
+function Get-VodCloudFrontPolicyResource {
+    param([string]$CookieFile)
+    $values = Get-VodCloudFrontCookieValues -Path $CookieFile
+    if ($null -eq $values) { return '' }
+    try {
+        # CloudFront uses its URL-safe substitutions: +=-, ==_, /=~.
+        $encoded = ([string]$values['CloudFront-Policy']).Replace('-', '+').Replace('_', '=').Replace('~', '/')
+        while (($encoded.Length % 4) -ne 0) { $encoded += '=' }
+        $policyText = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+        $policy = $policyText | ConvertFrom-Json
+        $statement = @($policy.Statement) | Select-Object -First 1
+        $resource = [string]$statement.Resource
+        $resourceUri = $null
+        if ([Uri]::TryCreate($resource, [UriKind]::Absolute, [ref]$resourceUri) -and $resourceUri.Scheme -eq 'https') { return $resource }
+    }
+    catch { }
+    return ''
+}
+
+function New-VodCloudFrontCurlConfig {
+    param([string]$CookieFile, [string]$Destination)
+    $values = Get-VodCloudFrontCookieValues -Path $CookieFile
+    if ($null -eq $values) { throw 'CloudFront 인증 Cookie 3종을 읽을 수 없습니다.' }
+    $header = 'Cookie: CloudFront-Key-Pair-Id={0}; CloudFront-Policy={1}; CloudFront-Signature={2}' -f
+        $values['CloudFront-Key-Pair-Id'], $values['CloudFront-Policy'], $values['CloudFront-Signature']
+    $escaped = $header.Replace('\', '\\').Replace('"', '\"')
+    [System.IO.File]::WriteAllText($Destination, ('header = "{0}"' -f $escaped), [System.Text.UTF8Encoding]::new($false))
+}
+
 function Repair-VodCloudFrontCookieScope {
     param([string]$CookieFile, [string]$ResourceUrl)
     $resourceUri = $null
@@ -265,14 +309,17 @@ function Get-VodManifestQualityOptions {
 function Test-VodManifestAuthorization {
     param($Request, [string]$CookieFile, [string]$Url, [string]$ProbeFile)
     Remove-Item -LiteralPath $ProbeFile -Force -ErrorAction SilentlyContinue
+    $curlConfig = $ProbeFile + '.curl-config'
+    New-VodCloudFrontCurlConfig -CookieFile $CookieFile -Destination $curlConfig
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        $statusOutput = & curl.exe '-sS' '-L' '-b' $CookieFile '-A' 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36' '-e' ([string]$Request.VodUrl) '-H' 'Origin: https://vod.sooplive.com' '-o' $ProbeFile '-w' '%{http_code}' $Url 2>&1
+        $statusOutput = & curl.exe '-sS' '-L' '--config' $curlConfig '-A' 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36' '-e' ([string]$Request.VodUrl) '-H' 'Origin: https://vod.sooplive.com' '-o' $ProbeFile '-w' '%{http_code}' $Url 2>&1
         $probeExitCode = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
+        Remove-Item -LiteralPath $curlConfig -Force -ErrorAction SilentlyContinue
     }
     $statusText = ($statusOutput -join ' ').Trim()
     $statusMatch = [regex]::Match($statusText, '(\d{3})\s*$')
@@ -310,7 +357,17 @@ function Initialize-VodCookie {
     else { throw "지원하지 않는 Cookie 모드입니다: $mode" }
     Test-VodNetscapeCookieFile -Path $temporary
     $capabilities = Get-VodCookieCapabilities -Path $temporary
-    return [pscustomobject]@{ Path = $temporary; Mode = $mode; BackendRoot = $BackendRoot; JobDirectory = $JobDirectory; YtDlp = $YtDlp; HasCloudFrontAuthorization = $capabilities.HasCloudFrontAuthorization; HasSoopLoginCookies = $capabilities.HasSoopLoginCookies }
+    $policyResource = ''
+    if ($capabilities.HasCloudFrontAuthorization) {
+        # FILE mode needs the CDN scope before yt-dlp metadata extraction. The
+        # signed policy carries that resource even when yt-dlp cannot yet expose
+        # entry.url because opening the protected m3u8 would return 403.
+        $policyResource = Get-VodCloudFrontPolicyResource -CookieFile $temporary
+        if (-not [string]::IsNullOrWhiteSpace($policyResource)) {
+            [void](Repair-VodCloudFrontCookieScope -CookieFile $temporary -ResourceUrl $policyResource)
+        }
+    }
+    return [pscustomobject]@{ Path = $temporary; Mode = $mode; BackendRoot = $BackendRoot; JobDirectory = $JobDirectory; YtDlp = $YtDlp; HasCloudFrontAuthorization = $capabilities.HasCloudFrontAuthorization; HasSoopLoginCookies = $capabilities.HasSoopLoginCookies; PolicyResource = $policyResource }
 }
 
 function Renew-VodBaseCookie {

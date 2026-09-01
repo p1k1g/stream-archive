@@ -172,6 +172,11 @@ function Complete-VodManifestUrlsFromApi {
 function Get-VodAnalysisQualities {
     param($Request, $Metadata, $Tools, $Cookie, [string]$JobDirectory)
     $url = Get-VodEntryManifestUrl -Entry $Metadata.Entries[0]
+    if ([string]::IsNullOrWhiteSpace($url) -and
+        -not [string]::IsNullOrWhiteSpace([string]$Cookie.PolicyResource) -and
+        ([string]$Cookie.PolicyResource).IndexOf('*') -lt 0) {
+        $url = [string]$Cookie.PolicyResource
+    }
     if ([string]::IsNullOrWhiteSpace($url)) { throw '첫 번째 PART manifest URL이 없습니다.' }
     $authorized = $false
     $usedExistingSignedCookie = $false

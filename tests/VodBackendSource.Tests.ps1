@@ -39,8 +39,11 @@ if ($auth -notmatch '\$mode -eq ''SOOP_LOGIN''' -or
     $auth -notmatch 'Repair-VodCloudFrontCookieScope' -or
     $auth -notmatch 'Retain only the last value curl wrote' -or
     $auth -notmatch 'Get-VodCookieCapabilities' -or
+    $auth -notmatch 'Get-VodCloudFrontPolicyResource' -or
+    $auth -notmatch 'New-VodCloudFrontCurlConfig' -or
     $auth -notmatch 'Remove-VodCloudFrontCookies' -or
     $auth -notmatch 'Test-VodManifestAuthorization' -or
+    $auth -notmatch '--config.+\$curlConfig' -or
     $auth -notmatch 'Get-VodManifestQualityOptions' -or
     $auth -notmatch 'manifest-probe-\*' -or
     $auth -notmatch 'Export-VodNetscapeCookies' -or
@@ -56,6 +59,7 @@ if ($download -notmatch 'Renew-VodBaseCookie' -or
     $download -notmatch '--ignore-no-formats-error' -or
     $download -notmatch 'Get-VodAnalysisQualities' -or
     $download -notmatch 'usedExistingSignedCookie' -or
+    $download -notmatch '\$Cookie\.PolicyResource' -or
     $download -notmatch 'Get-VodEntryManifestUrl' -or
     $download -notmatch 'Complete-VodManifestUrlsFromApi' -or
     $download -notmatch 'api\.m\.sooplive\.co\.kr/station/video/a/view' -or
