@@ -27,6 +27,7 @@ $core = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.
 $auth = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Auth.ps1') -Raw
 $download = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Download.ps1') -Raw
 $merge = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Merge.ps1') -Raw
+if ($auth -match '(?im)^\s*\$host\s*=') { throw 'VOD auth must not assign the read-only PowerShell Host automatic variable.' }
 if ($core -notmatch 'Get-CollisionSafeVodPath' -or $core -notmatch 'Test-Path -LiteralPath') { throw 'VOD collision/literal-path protection is missing.' }
 if ($core -notmatch 'Get-RedactedVodText' -or $auth -match 'Write-(Host|Output)\s+\$response') { throw 'VOD authentication output is not safely redacted.' }
 if ($download -notmatch '--abort-on-unavailable-fragments' -or $download -notmatch '--continue') { throw 'VOD resume/fragment safeguards are missing.' }

@@ -200,12 +200,12 @@ function Repair-VodCloudFrontCookieScope {
         if ($fields.Count -ne 7 -or $signedNames -notcontains $fields[5]) { continue }
         $domain = $fields[0] -replace '^#HttpOnly_', ''
         $normalizedDomain = $domain.TrimStart('.').ToLowerInvariant()
-        $host = $resourceUri.Host.ToLowerInvariant()
-        $matchesResource = $host -eq $normalizedDomain -or ($fields[1] -eq 'TRUE' -and $host.EndsWith('.' + $normalizedDomain))
+        $manifestHost = $resourceUri.Host.ToLowerInvariant()
+        $matchesResource = $manifestHost -eq $normalizedDomain -or ($fields[1] -eq 'TRUE' -and $manifestHost.EndsWith('.' + $normalizedDomain))
         if ($matchesResource) { continue }
-        if ($lines -match ('^(?:#HttpOnly_)?' + [regex]::Escape($host) + "`t.*`t" + [regex]::Escape($fields[5]) + "`t")) { continue }
-        if ($aliases | Where-Object { $_ -like ("$host`t*$($fields[5])`t*") }) { continue }
-        $aliases.Add(("{0}`tFALSE`t/`tTRUE`t{1}`t{2}`t{3}" -f $host, $fields[4], $fields[5], $fields[6]))
+        if ($lines -match ('^(?:#HttpOnly_)?' + [regex]::Escape($manifestHost) + "`t.*`t" + [regex]::Escape($fields[5]) + "`t")) { continue }
+        if ($aliases | Where-Object { $_ -like ("$manifestHost`t*$($fields[5])`t*") }) { continue }
+        $aliases.Add(("{0}`tFALSE`t/`tTRUE`t{1}`t{2}`t{3}" -f $manifestHost, $fields[4], $fields[5], $fields[6]))
     }
     if ($aliases.Count -gt 0) {
         [System.IO.File]::WriteAllLines($CookieFile, [string[]](@($lines) + @($aliases)), [System.Text.UTF8Encoding]::new($false))
@@ -230,8 +230,8 @@ function Test-VodManifestAuthorization {
     $httpStatus = if ($statusMatch.Success) { [int]$statusMatch.Groups[1].Value } else { 0 }
     Remove-Item -LiteralPath $ProbeFile -Force -ErrorAction SilentlyContinue
     if ($probeExitCode -eq 0 -and $httpStatus -ge 200 -and $httpStatus -lt 300) { return $true }
-    $host = ([Uri]$Url).Host
-    $script:LastVodAuthError = "manifest authorization check failed: HTTP $httpStatus, curl $probeExitCode, host=$host"
+    $manifestHost = ([Uri]$Url).Host
+    $script:LastVodAuthError = "manifest authorization check failed: HTTP $httpStatus, curl $probeExitCode, host=$manifestHost"
     return $false
 }
 
