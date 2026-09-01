@@ -42,7 +42,9 @@ if ($download -notmatch 'Renew-VodBaseCookie' -or
     $download -notmatch 'for \(\$attempt' -or
     ([regex]::Matches($download, 'Get-VodMetadata')).Count -lt 2 -or
     $download -notmatch 'authorization_expired' -or
-    $download -notmatch 'Origin:https://vod\.sooplive\.com') {
+    $download -notmatch 'Origin:https://vod\.sooplive\.com' -or
+    $download -notmatch '\$ErrorActionPreference = ''Continue''' -or
+    $download -notmatch '\$ErrorActionPreference = \$previousErrorActionPreference') {
     throw 'Short-lived subscription authorization, metadata URL, or request headers are not refreshed inside the retry loop.'
 }
 $processService = Get-Content -LiteralPath (Join-Path $root 'overlay/VodProcessService.cs') -Raw

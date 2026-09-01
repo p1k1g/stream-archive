@@ -49,8 +49,15 @@ function Get-VodMetadata {
     $stderrFile = Join-Path $JobDirectory 'yt-dlp-metadata.stderr.log'
     $metadataFile = Join-Path $JobDirectory 'yt-dlp-metadata.json'
     try {
-        $json = @(& $YtDlp '--cookies' $CookieFile '--flat-playlist' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2> $stderrFile)
-        $exitCode = $LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $json = @(& $YtDlp '--cookies' $CookieFile '--flat-playlist' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2> $stderrFile)
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
         $errorTail = Get-VodExternalErrorTail -Path $stderrFile
         if ($exitCode -ne 0) {
             if ([string]::IsNullOrWhiteSpace($errorTail)) { $errorTail = "yt-dlp exit code $exitCode" }
@@ -130,20 +137,31 @@ function Invoke-VodDownloads {
             $args += $url
             $stderrFile = Join-Path $JobDirectory ("yt-dlp-part-{0:D4}-attempt-{1:D2}.stderr.log" -f $part, $attempt)
             try {
-                & $Tools.YtDlp @args 2> $stderrFile | ForEach-Object {
-                    if ($_ -match '(?<percent>\d+(?:\.\d+)?)%') {
-                        $percent = 0.0
-                        if ([double]::TryParse(
-                            $matches.percent,
-                            [Globalization.NumberStyles]::Float,
-                            [Globalization.CultureInfo]::InvariantCulture,
-                            [ref]$percent
-                        )) {
-                            Write-VodEvent -Type 'part_progress' -Message ("PART {0}: {1}%" -f $part, $matches.percent) -Part $part -PartCount $Metadata.Entries.Count -Percent $percent
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    # Windows PowerShell 5.1 can promote native stderr to a
+                    # terminating NativeCommandError when the script preference
+                    # is Stop. Keep stderr redirected and classify the exit code
+                    # ourselves so a 403 reaches the authorization retry path.
+                    $ErrorActionPreference = 'Continue'
+                    & $Tools.YtDlp @args 2> $stderrFile | ForEach-Object {
+                        if ($_ -match '(?<percent>\d+(?:\.\d+)?)%') {
+                            $percent = 0.0
+                            if ([double]::TryParse(
+                                $matches.percent,
+                                [Globalization.NumberStyles]::Float,
+                                [Globalization.CultureInfo]::InvariantCulture,
+                                [ref]$percent
+                            )) {
+                                Write-VodEvent -Type 'part_progress' -Message ("PART {0}: {1}%" -f $part, $matches.percent) -Part $part -PartCount $Metadata.Entries.Count -Percent $percent
+                            }
                         }
                     }
+                    $downloadExitCode = $LASTEXITCODE
                 }
-                $downloadExitCode = $LASTEXITCODE
+                finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
                 if ($downloadExitCode -eq 0 -and (Test-Path -LiteralPath $path -PathType Leaf)) { $complete = $true; break }
                 $errorTail = Get-VodExternalErrorTail -Path $stderrFile
                 if ([string]::IsNullOrWhiteSpace($errorTail)) { $errorTail = "yt-dlp exit code $downloadExitCode" }

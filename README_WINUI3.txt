@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix66
+Version 1.2.0-preview1-fix67
 
 BUG FIX
 -------
@@ -1741,3 +1741,22 @@ fix66 implemented changes
 - A Windows PowerShell regression uses a deterministic fake yt-dlp 403 and
   verifies that the second attempt renews the base session, metadata URL, and
   private authorization. Source regression also guards picker and header wiring.
+
+fix67 implemented changes
+-------------------------
+
+1. Windows PowerShell 5.1 native stderr retry fix
+- The fix66 regression exposed that Windows PowerShell 5.1 can convert native
+  yt-dlp stderr into a terminating NativeCommandError while the VOD entry script
+  uses ErrorActionPreference=Stop. The exception bypassed exit-code inspection,
+  403 classification, and the intended second authorization attempt.
+- Metadata yt-dlp, download yt-dlp, and private_auth curl calls now use Continue
+  only inside their native process boundary, capture the native exit code and
+  redirected diagnostics, and restore the caller's error preference in finally.
+  PowerShell errors outside those narrow native boundaries still fail fast.
+
+2. Deterministic retry regression cleanup
+- Mock counters no longer leak post-increment values into the PowerShell output
+  pipeline, so the refreshed metadata object remains the only function result.
+- Failure output now includes the observed failed/base/metadata/authorization
+  counters, making any future Windows CI regression immediately diagnosable.

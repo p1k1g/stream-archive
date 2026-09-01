@@ -16,14 +16,14 @@ try {
     $script:baseRenewals = 0
     $script:authorizationRefreshes = 0
     function Get-VodMetadata {
-        $script:metadataRefreshes++
+        [void]($script:metadataRefreshes++)
         return [pscustomobject]@{
             StreamerId = 'account';
             Entries = @([pscustomobject]@{ url = 'https://vod.sooplive.com/refreshed.m3u8' })
         }
     }
-    function Renew-VodBaseCookie { $script:baseRenewals++ }
-    function Refresh-VodAuthorization { $script:authorizationRefreshes++; return $true }
+    function Renew-VodBaseCookie { [void]($script:baseRenewals++) }
+    function Refresh-VodAuthorization { [void]($script:authorizationRefreshes++); return $true }
     function Start-Sleep { }
 
     $request = [pscustomobject]@{
@@ -42,7 +42,7 @@ try {
     catch { $failed = $true }
 
     if (-not $failed -or $script:baseRenewals -ne 1 -or $script:metadataRefreshes -ne 2 -or $script:authorizationRefreshes -ne 2) {
-        throw 'A 403 retry did not renew the base session, metadata URL, and subscription authorization.'
+        throw ("A 403 retry did not renew every layer. failed={0}, base={1}, metadata={2}, authorization={3}" -f $failed, $script:baseRenewals, $script:metadataRefreshes, $script:authorizationRefreshes)
     }
 }
 finally {
