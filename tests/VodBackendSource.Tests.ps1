@@ -47,7 +47,7 @@ if ($download -notmatch 'Renew-VodBaseCookie' -or
     $download -notmatch 'Origin:https://vod\.sooplive\.com' -or
     $download -notmatch '\$ErrorActionPreference = ''Continue''' -or
     $download -notmatch '\$ErrorActionPreference = \$previousErrorActionPreference' -or
-    $download -notmatch 'PART \$part 다운로드 실패: \$lastFailureDetail') {
+    $download -notmatch 'throw "PART \$part [^"]*: \$lastFailureDetail"') {
     throw 'Short-lived subscription authorization, metadata URL, or request headers are not refreshed inside the retry loop.'
 }
 $processService = Get-Content -LiteralPath (Join-Path $root 'overlay/VodProcessService.cs') -Raw
