@@ -1,8 +1,8 @@
 ﻿SOOP LIVE Downloader
 GUI: WinUI 3
-Version: 1.2.0-preview1-fix40
-Feature: actionable Watcher startup diagnostics and adaptive Settings layout
-Includes: all fix39/fix38/fix37 and earlier functionality
+Version: 1.2.0-preview1-fix72
+Feature: policy-first CloudFront scope and exact signed-cookie preflight
+Includes: all fix47/fix46/fix45 and earlier functionality
 Settings: fix36 path/auth/dependency tests, dirty save bar, defaults, and INI export/import
 Dashboard: Watcher-exit cleanup, stop ACK, stopped/resume flyout, alerts, natural empty states
 Channels: saved-snapshot dirty tracking, account/name search, filters, natural labels, collapsed raw editor
@@ -10,6 +10,6 @@ Import: file validation, exact line errors, preview, add/update duplicate policy
 Optimization: automatic source sync, reduced polling/I/O/UI churn, cached brushes, smaller publish output
 
 Next planned roadmap (not implemented):
-- Worker-specific structured alerts and machine-readable JSON backend events.
-- Channel name bulk refresh preview, recent recordings, and structured log filters.
-- Protected Windows credential storage and automated regression tests.
+- Structured log filters and a user-facing recorder-diagnostic viewer.
+- Optional recent-history export and richer disk/recording statistics.
+- Credential Manager opt-in and signed release packaging/release automation.
