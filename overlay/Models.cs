@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Xaml.Media;
+using System.Text.Json.Serialization;
 using Windows.UI;
 
 namespace SOOPLiveWinUI;
@@ -25,6 +26,7 @@ public sealed class ChannelStatus : INotifyPropertyChanged
     string _sizeText = "-";
     string _elapsedText = "-";
     string _rateText = "-";
+    double _rateBytesPerSecond;
     bool _isSuspended;
 
     public string Time { get => _time; set { if (Equals(_time, value)) return; _time = value; OnChanged(); } }
@@ -92,6 +94,7 @@ public sealed class ChannelStatus : INotifyPropertyChanged
     public string SizeText { get => _sizeText; set { if (Equals(_sizeText, value)) return; _sizeText = value; OnChanged(); } }
     public string ElapsedText { get => _elapsedText; set { if (Equals(_elapsedText, value)) return; _elapsedText = value; OnChanged(); } }
     public string RateText { get => _rateText; set { if (Equals(_rateText, value)) return; _rateText = value; OnChanged(); } }
+    public double RateBytesPerSecond { get => _rateBytesPerSecond; set { if (Equals(_rateBytesPerSecond, value)) return; _rateBytesPerSecond = value; } }
     public bool IsSuspended { get => _isSuspended; set { if (Equals(_isSuspended, value)) return; _isSuspended = value; OnChanged(); } }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -102,19 +105,54 @@ public sealed class ChannelStatus : INotifyPropertyChanged
 
 public sealed class EditableChannel : INotifyPropertyChanged
 {
+    static readonly SolidColorBrush EnabledForegroundBrush = DesignTokens.StateBrush(76, 226, 145, Windows.UI.ViewManagement.UIColorType.Accent);
+    static readonly SolidColorBrush DisabledForegroundBrush = DesignTokens.TextSecondary;
+    static readonly SolidColorBrush EnabledCardBrush = DesignTokens.StateBrush(28, 48, 43, Windows.UI.ViewManagement.UIColorType.Background);
+    static readonly SolidColorBrush DisabledCardBrush = DesignTokens.Surface;
+    static readonly SolidColorBrush EnabledBadgeBrush = DesignTokens.StateBrush(27, 76, 57, Windows.UI.ViewManagement.UIColorType.Background);
+    static readonly SolidColorBrush DisabledBadgeBrush = DesignTokens.SurfaceElevated;
+    static readonly SolidColorBrush EnabledBorderBrush = DesignTokens.StateBrush(54, 138, 99, Windows.UI.ViewManagement.UIColorType.Foreground);
+    static readonly SolidColorBrush DisabledBorderBrush = DesignTokens.Border;
+    static readonly SolidColorBrush EnabledNameBrush = DesignTokens.TextPrimary;
+    static readonly SolidColorBrush DisabledNameBrush = DesignTokens.TextSecondary;
     bool _enabled = true;
     string _name = "";
     string _account = "";
     string _outDir = "";
 
-    public bool Enabled { get => _enabled; set { if (Equals(_enabled, value)) return; _enabled = value; OnChanged(); OnChanged(nameof(EnabledText)); } }
+    public bool Enabled { get => _enabled; set { if (Equals(_enabled, value)) return; _enabled = value; OnChanged(); OnChanged(nameof(EnabledText)); OnChanged(nameof(StateForeground)); OnChanged(nameof(CardBackground)); OnChanged(nameof(BadgeBackground)); OnChanged(nameof(CardBorder)); OnChanged(nameof(NameForeground)); OnChanged(nameof(RowOpacity)); } }
     public string Name { get => _name; set { if (Equals(_name, value)) return; _name = value; OnChanged(); } }
     public string Account { get => _account; set { if (Equals(_account, value)) return; _account = value; OnChanged(); } }
     public string OutDir { get => _outDir; set { if (Equals(_outDir, value)) return; _outDir = value; OnChanged(); OnChanged(nameof(OutputDisplay)); } }
     public string EnabledText => Enabled ? "● 활성" : "○ 비활성";
+    public SolidColorBrush StateForeground => Enabled ? EnabledForegroundBrush : DisabledForegroundBrush;
+    public SolidColorBrush CardBackground => Enabled ? EnabledCardBrush : DisabledCardBrush;
+    public SolidColorBrush BadgeBackground => Enabled ? EnabledBadgeBrush : DisabledBadgeBrush;
+    public SolidColorBrush CardBorder => Enabled ? EnabledBorderBrush : DisabledBorderBrush;
+    public SolidColorBrush NameForeground => Enabled ? EnabledNameBrush : DisabledNameBrush;
+    public double RowOpacity => DesignTokens.HighContrast || Enabled ? 1.0 : 0.72;
     public string OutputDisplay => string.IsNullOrWhiteSpace(OutDir) ? "기본 경로" : OutDir;
 
     public event PropertyChangedEventHandler? PropertyChanged;
     void OnChanged([CallerMemberName] string? n = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+}
+
+public sealed class RecentRecordingEntry
+{
+    public DateTime EndedAt { get; set; }
+    public string Account { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string File { get; set; } = "";
+    public string Duration { get; set; } = "";
+    public string Size { get; set; } = "";
+    public string Reason { get; set; } = "";
+
+    [JsonIgnore] public string EndedAtText => EndedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    [JsonIgnore] public string FileName
+    {
+        get { try { return Path.GetFileName(File); } catch { return File; } }
+    }
+    [JsonIgnore] public string StateText => System.IO.File.Exists(File) ? "파일 있음" : "파일 없음";
 }
