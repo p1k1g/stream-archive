@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix69
+Version 1.2.0-preview1-fix70
 
 BUG FIX
 -------
@@ -1807,3 +1807,31 @@ fix69 implemented changes
   aliased to a manifest host. The deterministic 403 test stubs the preflight so
   it continues to isolate the retry state machine, and source tests require the
   scope repair and preflight wiring.
+
+fix70 implemented changes
+-------------------------
+
+1. Signed-cookie FILE mode
+- A cookies.txt containing only CloudFront-Key-Pair-Id, CloudFront-Policy, and
+  CloudFront-Signature is now recognized as a pre-authorized CDN cookie set,
+  not mistaken for a SOOP login session.
+- Metadata discovery uses yt-dlp ignore-no-formats-error so the title, uploader,
+  PART count, and source manifest URLs can be returned before the protected
+  manifest is opened. The signed cookies are then scoped to the manifest host
+  and preflighted directly. If a signed-only file expires, the UI asks for a
+  fresh three-cookie export because it cannot renew without login cookies.
+
+2. Two-phase VOD workflow
+- The first action analyzes the VOD only. PART and quality controls remain
+  disabled until the backend reports the title, streamer, actual PART count,
+  and authorized master-manifest variants.
+- After analysis, the PART field is validated against the discovered count and
+  the action changes to download. Changing the URL, cookie mode/source, or
+  yt-dlp path invalidates the analysis and requires a fresh check.
+
+3. Quality selection
+- The authorized master m3u8 preflight parses EXT-X-STREAM-INF resolution
+  heights and returns highest-quality automatic plus available resolution
+  choices. The selected format expression is passed to yt-dlp for every PART.
+- Structured VOD events now carry a quality array; no Cookie value, password,
+  DPAPI ciphertext, or signed URL is added to the GUI request/event protocol.

@@ -19,7 +19,7 @@ public static class VodEventParser
             if (string.IsNullOrWhiteSpace(type)) return false;
             value = new VodBackendEvent(1, type, GetString(root, "jobId"), GetString(root, "message"),
                 GetString(root, "title"), GetString(root, "streamer"), GetInt(root, "part"),
-                GetInt(root, "partCount"), GetDouble(root, "percent"), GetString(root, "outputFile"));
+                GetInt(root, "partCount"), GetDouble(root, "percent"), GetString(root, "outputFile"), GetStrings(root, "qualities"));
             return true;
         }
         catch (JsonException) { return false; }
@@ -31,4 +31,8 @@ public static class VodEventParser
         root.TryGetProperty(name, out var value) && value.TryGetInt32(out var number) ? number : 0;
     static double GetDouble(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.TryGetDouble(out var number) ? number : 0;
+    static IReadOnlyList<string> GetStrings(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
+            ? value.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString() ?? "").Where(item => item.Length > 0).ToArray()
+            : Array.Empty<string>();
 }

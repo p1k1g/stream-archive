@@ -52,7 +52,7 @@ function Get-VodMetadata {
         $previousErrorActionPreference = $ErrorActionPreference
         try {
             $ErrorActionPreference = 'Continue'
-            $json = @(& $YtDlp '--cookies' $CookieFile '--flat-playlist' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2> $stderrFile)
+            $json = @(& $YtDlp '--cookies' $CookieFile '--flat-playlist' '--ignore-no-formats-error' '--dump-single-json' '--no-warnings' ([string]$Request.VodUrl) 2> $stderrFile)
             $exitCode = $LASTEXITCODE
         }
         finally {
@@ -95,6 +95,29 @@ function Get-VodMetadata {
     return [pscustomobject]@{ Title = $title; Streamer = $streamer; StreamerId = $streamerId; Date = $date.Substring(2, 6); Entries = $entries }
 }
 
+function Get-VodAnalysisQualities {
+    param($Request, $Metadata, $Tools, $Cookie, [string]$JobDirectory)
+    $url = [string]$Metadata.Entries[0].url
+    if ([string]::IsNullOrWhiteSpace($url)) { throw '첫 번째 PART manifest URL이 없습니다.' }
+    $authorized = $false
+    if ([bool]$Cookie.HasCloudFrontAuthorization) {
+        [void](Repair-VodCloudFrontCookieScope -CookieFile $Cookie.Path -ResourceUrl $url)
+        $authorized = $true
+    }
+    else {
+        $authorized = Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId ([string]$Metadata.StreamerId) -Url $url -Attempt 1
+    }
+    if ($authorized) {
+        $probeFile = Join-Path $JobDirectory 'manifest-probe-analysis.m3u8'
+        $authorized = Test-VodManifestAuthorization -Request $Request -CookieFile $Cookie.Path -Url $url -ProbeFile $probeFile
+    }
+    if (-not $authorized) {
+        $detail = if ([string]::IsNullOrWhiteSpace([string]$script:LastVodAuthError)) { 'manifest 인증 확인 실패' } else { [string]$script:LastVodAuthError }
+        throw "VOD 화질 분석 실패: $detail"
+    }
+    return @($script:LastVodQualities)
+}
+
 function Invoke-VodDownloads {
     param($Request, $Metadata, [int[]]$SelectedParts, $Tools, $Cookie, [string]$JobDirectory)
     $directory = [System.IO.Path]::GetFullPath([string]$Request.OutputDirectory).Normalize([System.Text.NormalizationForm]::FormC)
@@ -128,7 +151,18 @@ function Invoke-VodDownloads {
             $url = [string]$refreshedMetadata.Entries[$part - 1].url
             $streamerId = [string]$refreshedMetadata.StreamerId
             if ([string]::IsNullOrWhiteSpace($url)) { throw "새 VOD 정보에 PART $part URL이 없습니다." }
-            $authorized = Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $streamerId -Url $url -Attempt $attempt
+            $authorized = $false
+            if ($attempt -eq 1 -and [bool]$Cookie.HasCloudFrontAuthorization) {
+                [void](Repair-VodCloudFrontCookieScope -CookieFile $Cookie.Path -ResourceUrl $url)
+                $authorized = $true
+            }
+            else {
+                if ($Cookie.Mode -eq 'FILE' -and -not [bool]$Cookie.HasSoopLoginCookies) {
+                    $lastFailureDetail = 'CloudFront Cookie가 만료되었습니다. 새 Key-Pair-Id, Policy, Signature Cookie 파일이 필요합니다.'
+                    break
+                }
+                $authorized = Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $streamerId -Url $url -Attempt $attempt
+            }
             if ($authorized) {
                 $probeFile = Join-Path $JobDirectory ("manifest-probe-{0:D4}-{1:D2}.m3u8" -f $part, $attempt)
                 $authorized = Test-VodManifestAuthorization -Request $Request -CookieFile $Cookie.Path -Url $url -ProbeFile $probeFile
@@ -139,7 +173,8 @@ function Invoke-VodDownloads {
                 Write-VodEvent -Type 'auth_retrying' -Message ("구독 VOD 인증 재시도 ({0}/{1}) · {2}" -f $attempt, [int]$Request.MaxRetries, $authDetail) -Part $part
                 Start-Sleep -Seconds ([Math]::Min(16, [Math]::Pow(2, $attempt - 1))); continue
             }
-            $args = @('--cookies', $Cookie.Path, '--referer', [string]$Request.VodUrl, '--add-header', 'Origin:https://vod.sooplive.com', '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36', '--continue', '--fragment-retries', '1', '--retries', '1', '--abort-on-unavailable-fragments', '--no-overwrites', '--merge-output-format', 'mp4', '--newline', '-o', $path)
+            $quality = if ([string]::IsNullOrWhiteSpace([string]$Request.Quality)) { 'best' } else { [string]$Request.Quality }
+            $args = @('--cookies', $Cookie.Path, '--referer', [string]$Request.VodUrl, '--add-header', 'Origin:https://vod.sooplive.com', '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36', '-f', $quality, '--continue', '--fragment-retries', '1', '--retries', '1', '--abort-on-unavailable-fragments', '--no-overwrites', '--merge-output-format', 'mp4', '--newline', '-o', $path)
             if (-not [string]::IsNullOrWhiteSpace([string]$Tools.Ffmpeg)) { $args += @('--ffmpeg-location', [string]$Tools.Ffmpeg) }
             $args += $url
             $stderrFile = Join-Path $JobDirectory ("yt-dlp-part-{0:D4}-attempt-{1:D2}.stderr.log" -f $part, $attempt)

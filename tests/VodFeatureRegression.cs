@@ -23,10 +23,11 @@ static class VodFeatureRegression
             part = 2,
             partCount = 10,
             percent = 42.5,
+            qualities = new[] { "best|최고 화질", "best[height<=1080]|1080p" },
             outputFile = @"C:\VOD[한글]\제목|=.mp4"
         });
         if (!VodEventParser.TryParse(line, out var parsed) || parsed == null ||
-            parsed.Percent != 42.5 || parsed.OutputFile != @"C:\VOD[한글]\제목|=.mp4")
+            parsed.Percent != 42.5 || parsed.OutputFile != @"C:\VOD[한글]\제목|=.mp4" || parsed.Qualities.Count != 2)
             throw new InvalidOperationException("VOD JSON event special-character regression.");
         if (VodEventParser.TryParse(VodEventParser.Prefix + "{bad", out _))
             throw new InvalidOperationException("Malformed VOD JSON event was accepted.");
@@ -41,7 +42,7 @@ static class VodFeatureRegression
         // verifies the records remain dependency-free and serializable in CI.
         if (!JsonSerializer.Serialize(state).Contains("MaxRetries", StringComparison.Ordinal))
             throw new InvalidOperationException("VOD settings are not serializable.");
-        var loginRequest = new VodJobRequest(1, "job", "https://vod.sooplive.com/player/1", [], @"C:\VOD", "SOOP_LOGIN", "", "", @"C:\Tools\yt-dlp.exe", @"C:\Tools\ffmpeg.exe", true, 5);
+        var loginRequest = new VodJobRequest(1, "job", "https://vod.sooplive.com/player/1", [], @"C:\VOD", "SOOP_LOGIN", "", "", @"C:\Tools\yt-dlp.exe", @"C:\Tools\ffmpeg.exe", "best", false, true, 5);
         var requestJson = JsonSerializer.Serialize(loginRequest);
         if (requestJson.Contains("password", StringComparison.OrdinalIgnoreCase) ||
             requestJson.Contains("dpapi:", StringComparison.OrdinalIgnoreCase) ||

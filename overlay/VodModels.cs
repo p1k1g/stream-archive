@@ -17,6 +17,8 @@ public sealed record VodJobRequest(
     string BrowserName,
     string YtDlpPath,
     string FfmpegPath,
+    string Quality,
+    bool AnalyzeOnly,
     bool Merge,
     int MaxRetries);
 
@@ -30,7 +32,8 @@ public sealed record VodBackendEvent(
     int Part,
     int PartCount,
     double Percent,
-    string OutputFile);
+    string OutputFile,
+    IReadOnlyList<string> Qualities);
 
 public sealed record VodSettings(
     string OutputDirectory = "",

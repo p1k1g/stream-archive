@@ -1,6 +1,6 @@
 ﻿function Write-VodEvent {
-    param([string]$Type, [string]$Message = '', [string]$Title = '', [string]$Streamer = '', [int]$Part = 0, [int]$PartCount = 0, [double]$Percent = 0, [string]$OutputFile = '')
-    $event = [ordered]@{ version = 1; type = $Type; jobId = [string]$script:VodRequest.JobId; timestamp = [DateTimeOffset]::Now.ToString('o'); message = $Message; title = $Title; streamer = $Streamer; part = $Part; partCount = $PartCount; percent = $Percent; outputFile = $OutputFile }
+    param([string]$Type, [string]$Message = '', [string]$Title = '', [string]$Streamer = '', [int]$Part = 0, [int]$PartCount = 0, [double]$Percent = 0, [string]$OutputFile = '', [string[]]$Qualities = @())
+    $event = [ordered]@{ version = 1; type = $Type; jobId = [string]$script:VodRequest.JobId; timestamp = [DateTimeOffset]::Now.ToString('o'); message = $Message; title = $Title; streamer = $Streamer; part = $Part; partCount = $PartCount; percent = $Percent; outputFile = $OutputFile; qualities = @($Qualities) }
     Write-Output ('@@SOOP_VOD_EVENT@@' + ($event | ConvertTo-Json -Compress -Depth 5))
 }
 
@@ -12,6 +12,10 @@ function Test-VodRequest {
     if (-not [Uri]::TryCreate([string]$Request.VodUrl, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https' -or -not $uri.Host.EndsWith('sooplive.com', [StringComparison]::OrdinalIgnoreCase) -or $uri.AbsolutePath -notmatch '/player/\d+') { throw '올바른 SOOP VOD HTTPS URL이 아닙니다.' }
     if ([string]::IsNullOrWhiteSpace([string]$Request.OutputDirectory)) { throw 'VOD 출력 폴더가 비어 있습니다.' }
     if ([int]$Request.MaxRetries -lt 1 -or [int]$Request.MaxRetries -gt 20) { throw 'MAX_RETRY must be between 1 and 20.' }
+    $quality = [string]$Request.Quality
+    if (-not [string]::IsNullOrWhiteSpace($quality) -and $quality -notmatch '^best(?:\[height<=\d+\])?$') {
+        throw '지원하지 않는 VOD 화질 선택입니다.'
+    }
 }
 
 function Resolve-VodParts {

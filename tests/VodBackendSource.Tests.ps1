@@ -37,7 +37,9 @@ if ($auth -notmatch '\$mode -eq ''SOOP_LOGIN''' -or
     $auth -notmatch 'ReadAsByteArrayAsync' -or
     $auth -notmatch 'New-VodSoopLoginCookie.+VodUrl' -or
     $auth -notmatch 'Repair-VodCloudFrontCookieScope' -or
+    $auth -notmatch 'Get-VodCookieCapabilities' -or
     $auth -notmatch 'Test-VodManifestAuthorization' -or
+    $auth -notmatch 'Get-VodManifestQualityOptions' -or
     $auth -notmatch 'manifest-probe-\*' -or
     $auth -notmatch 'Export-VodNetscapeCookies' -or
     $auth -notmatch "@\('cookies\.txt', 'concat\.txt'\)") {
@@ -49,11 +51,18 @@ if ($download -notmatch 'Renew-VodBaseCookie' -or
     ([regex]::Matches($download, 'Get-VodMetadata')).Count -lt 2 -or
     $download -notmatch 'authorization_expired' -or
     $download -notmatch 'manifest-probe-' -or
+    $download -notmatch '--ignore-no-formats-error' -or
+    $download -notmatch 'Get-VodAnalysisQualities' -or
+    $download -notmatch '\$Request\.Quality' -or
     $download -notmatch 'Origin:https://vod\.sooplive\.com' -or
     $download -notmatch '\$ErrorActionPreference = ''Continue''' -or
     $download -notmatch '\$ErrorActionPreference = \$previousErrorActionPreference' -or
     $download -notmatch 'throw "PART \$part [^"]*: \$lastFailureDetail"') {
     throw 'Short-lived subscription authorization, metadata URL, or request headers are not refreshed inside the retry loop.'
+}
+$entrySource = Get-Content -LiteralPath $entry -Raw
+if ($entrySource -notmatch '\$script:VodRequest\.AnalyzeOnly' -or $entrySource -notmatch '-Qualities \$qualities') {
+    throw 'VOD analysis and download phases are not separated.'
 }
 $processService = Get-Content -LiteralPath (Join-Path $root 'overlay/VodProcessService.cs') -Raw
 if ($processService -notmatch 'StandardOutputEncoding\s*=\s*new UTF8Encoding' -or
@@ -95,6 +104,9 @@ if ($vodUi -notmatch 'FileOpenPicker' -or
     $vodUi -notmatch 'FileTypeFilter\.Add\("\.exe"\)' -or
     $vodUi -notmatch 'PickVodExecutableAsync') {
     throw 'VOD executable paths cannot be selected with the Windows file picker.'
+}
+if ($vodUi -notmatch 'ApplyVodAnalysis' -or $vodUi -notmatch 'VodQualityBox' -or $vodUi -notmatch 'analyzedVodPartCount') {
+    throw 'VOD UI does not wait for analysis before PART and quality selection.'
 }
 $explorerSources = Get-ChildItem -LiteralPath (Join-Path $root 'overlay') -Filter '*.cs' |
     ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }

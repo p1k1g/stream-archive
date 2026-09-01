@@ -28,12 +28,27 @@ try {
     if ($aliasCount -ne 3 -or @($aliased).Count -ne 3) {
         throw 'CloudFront signed cookies were not scoped to the manifest host.'
     }
+    $master = Join-Path $tempRoot 'master.m3u8'
+    [IO.File]::WriteAllLines($master, @(
+        '#EXTM3U',
+        '#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080',
+        '1080.m3u8',
+        '#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720',
+        '720.m3u8'
+    ), [Text.UTF8Encoding]::new($false))
+    $qualities = @(Get-VodManifestQualityOptions -Path $master)
+    if ($qualities.Count -ne 3 -or $qualities[1] -notmatch '1080' -or $qualities[2] -notmatch '720') {
+        throw 'Master manifest qualities were not sorted or exposed.'
+    }
     $request = [pscustomobject]@{ CookieMode = 'FILE'; CookieFile = $path; BrowserName = ''; VodUrl = 'https://vod.sooplive.com/player/1' }
     $jobRoot = Join-Path $tempRoot 'job'
     New-Item -ItemType Directory -Path $jobRoot -Force | Out-Null
     $copied = Initialize-VodCookie -Request $request -JobDirectory $jobRoot -YtDlp 'unused.exe' -BackendRoot $root
     if ($copied.Mode -ne 'FILE' -or -not (Test-Path -LiteralPath $copied.Path -PathType Leaf)) {
         throw 'FILE cookie mode did not accept a valid Netscape cookie file.'
+    }
+    if (-not $copied.HasCloudFrontAuthorization -or -not $copied.HasSoopLoginCookies) {
+        throw 'Cookie capabilities did not recognize signed and login cookies.'
     }
     $invalid = Join-Path $tempRoot 'invalid.txt'
     [IO.File]::WriteAllText($invalid, 'name=value', [Text.UTF8Encoding]::new($false))

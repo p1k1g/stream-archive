@@ -13,6 +13,8 @@ public sealed partial class MainWindow
     TextBox VodUrlBox = null!;
     TextBox VodOutputBox = null!;
     TextBox VodPartsBox = null!;
+    ComboBox VodQualityBox = null!;
+    TextBlock VodAnalysisInfoText = null!;
     TextBox VodYtDlpPathBox = null!;
     TextBox VodFfmpegPathBox = null!;
     ComboBox VodCookieModeBox = null!;
@@ -30,6 +32,10 @@ public sealed partial class MainWindow
     string activeVodStreamer = "";
     string activeVodOutputFile = "";
     string activeVodFailureDetail = "";
+    bool activeVodAnalyzeOnly;
+    bool vodAnalysisReady;
+    int analyzedVodPartCount;
+    string analyzedVodFingerprint = "";
 
     FrameworkElement BuildVodView()
     {
@@ -40,7 +46,9 @@ public sealed partial class MainWindow
 
         VodUrlBox = new TextBox { Header = "VOD URL", PlaceholderText = "https://vod.sooplive.com/player/204952073" };
         VodOutputBox = new TextBox { Header = "출력 폴더", Text = vodSettings.OutputDirectory, PlaceholderText = @"C:\Videos" };
-        VodPartsBox = new TextBox { Header = "PART 선택", PlaceholderText = "비워 두면 전체 · 예: 1-5,8,10-12" };
+        VodAnalysisInfoText = new TextBlock { Text = "먼저 VOD를 분석하면 방송 정보, PART 수와 화질을 선택할 수 있습니다.", Foreground = Muted, TextWrapping = TextWrapping.Wrap };
+        VodPartsBox = new TextBox { Header = "PART 선택", PlaceholderText = "분석 후 입력 · 비워 두면 전체", IsEnabled = false };
+        VodQualityBox = new ComboBox { Header = "화질", HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = false };
         VodYtDlpPathBox = new TextBox
         {
             Header = "yt-dlp 경로 (선택)",
@@ -77,10 +85,13 @@ public sealed partial class MainWindow
             VodCookieSourceBox.Visibility = mode == "SOOP_LOGIN" ? Visibility.Collapsed : Visibility.Visible;
             VodLoginStatusText.Visibility = mode == "SOOP_LOGIN" ? Visibility.Visible : Visibility.Collapsed;
             VodCookieSourceBox.Text = mode == "BROWSER" ? vodSettings.BrowserName : vodSettings.CookieFile;
+            InvalidateVodAnalysis();
         };
         stack.Children.Add(VodUrlBox);
         stack.Children.Add(VodOutputBox);
+        stack.Children.Add(VodAnalysisInfoText);
         stack.Children.Add(VodPartsBox);
+        stack.Children.Add(VodQualityBox);
         stack.Children.Add(BuildVodExecutablePicker(VodYtDlpPathBox, "yt-dlp.exe 선택", "yt-dlp.exe"));
         stack.Children.Add(BuildVodExecutablePicker(VodFfmpegPathBox, "ffmpeg.exe 선택", "ffmpeg.exe"));
         stack.Children.Add(VodCookieModeBox);
@@ -88,8 +99,11 @@ public sealed partial class MainWindow
         stack.Children.Add(VodLoginStatusText);
         VodCookieSourceBox.Visibility = vodSettings.CookieMode == "SOOP_LOGIN" ? Visibility.Collapsed : Visibility.Visible;
         VodLoginStatusText.Visibility = vodSettings.CookieMode == "SOOP_LOGIN" ? Visibility.Visible : Visibility.Collapsed;
+        VodUrlBox.TextChanged += (_, _) => InvalidateVodAnalysis();
+        VodCookieSourceBox.TextChanged += (_, _) => InvalidateVodAnalysis();
+        VodYtDlpPathBox.TextChanged += (_, _) => InvalidateVodAnalysis();
 
-        VodStartButton = DesignTokens.Command("분석 및 다운로드", Symbol.Download);
+        VodStartButton = DesignTokens.Command("VOD 분석", Symbol.Find);
         VodCancelButton = DesignTokens.Command("취소", Symbol.Cancel, enabled: false);
         VodStartButton.Click += VodStartButton_Click;
         VodCancelButton.Click += VodCancelButton_Click;
@@ -161,8 +175,10 @@ public sealed partial class MainWindow
         var output = VodOutputBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(output)) { VodStatusText.Text = "출력 폴더를 입력하세요."; return; }
 
+        var fingerprint = CurrentVodAnalysisFingerprint();
+        var analyzeOnly = !vodAnalysisReady || !string.Equals(analyzedVodFingerprint, fingerprint, StringComparison.Ordinal);
         IReadOnlyList<int> parts;
-        try { parts = string.IsNullOrWhiteSpace(VodPartsBox.Text) ? Array.Empty<int>() : VodSelectionParser.Parse(VodPartsBox.Text, 10000); }
+        try { parts = analyzeOnly || string.IsNullOrWhiteSpace(VodPartsBox.Text) ? Array.Empty<int>() : VodSelectionParser.Parse(VodPartsBox.Text, analyzedVodPartCount); }
         catch (Exception ex) { VodStatusText.Text = ex.Message; return; }
 
         var jobId = Guid.NewGuid().ToString("N");
@@ -180,9 +196,10 @@ public sealed partial class MainWindow
             cookieFile = "";
             browserName = "";
         }
+        var quality = (VodQualityBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "best";
         var request = new VodJobRequest(1, jobId, VodUrlBox.Text.Trim(), parts, output,
             cookieMode, cookieFile, browserName, VodYtDlpPathBox.Text.Trim(), VodFfmpegPathBox.Text.Trim(),
-            vodSettings.Merge, vodSettings.MaxRetries);
+            quality, analyzeOnly, vodSettings.Merge, vodSettings.MaxRetries);
         WriteJsonAtomically(requestPath, request);
         vodSettings = vodSettings with
         {
@@ -198,11 +215,13 @@ public sealed partial class MainWindow
         try
         {
             activeVodJobDirectory = jobDirectory;
+            activeVodAnalyzeOnly = analyzeOnly;
+            if (analyzeOnly) { vodAnalysisReady = false; VodPartsBox.IsEnabled = false; VodQualityBox.IsEnabled = false; }
             vodBackend.Start(Path.Combine(backendDir, "vod", "SOOP_VOD.ps1"), requestPath);
             VodStartButton.IsEnabled = false;
             VodCancelButton.IsEnabled = true;
             VodProgress.IsIndeterminate = true;
-            VodStatusText.Text = "VOD 분석 중…";
+            VodStatusText.Text = analyzeOnly ? "VOD 방송 정보와 화질 분석 중…" : "VOD 다운로드 준비 중…";
         }
         catch (Exception ex) { VodStatusText.Text = ex.Message; CleanupVodJobDirectory(); }
         await Task.CompletedTask;
@@ -225,6 +244,7 @@ public sealed partial class MainWindow
                 if (!string.IsNullOrWhiteSpace(item.Title)) activeVodTitle = item.Title;
                 if (!string.IsNullOrWhiteSpace(item.Streamer)) activeVodStreamer = item.Streamer;
                 if (!string.IsNullOrWhiteSpace(item.OutputFile)) activeVodOutputFile = item.OutputFile;
+                if (item.Type == "metadata_ready" || item.Type == "analysis_completed") ApplyVodAnalysis(item);
                 if (item.Type == "failed") activeVodFailureDetail = item.Message;
                 if (item.Type == "completed")
                     vodHistory.Append(new VodHistoryEntry(activeVodJobId, DateTimeOffset.Now, VodUrlBox.Text.Trim(), activeVodTitle, activeVodStreamer, activeVodOutputFile, "COMPLETED"));
@@ -239,6 +259,11 @@ public sealed partial class MainWindow
         VodStartButton.IsEnabled = true;
         VodCancelButton.IsEnabled = false;
         VodProgress.IsIndeterminate = false;
+        if (code == 0 && activeVodAnalyzeOnly && vodAnalysisReady)
+        {
+            VodStartButton.Label = "선택 항목 다운로드";
+            VodStatusText.Text = $"분석 완료 · {analyzedVodPartCount}개 PART · PART와 화질을 선택하세요.";
+        }
         if (code != 0 && !VodStatusText.Text.Contains("취소", StringComparison.Ordinal))
         {
             var detail = !string.IsNullOrWhiteSpace(activeVodFailureDetail)
@@ -250,6 +275,38 @@ public sealed partial class MainWindow
         }
         CleanupVodJobDirectory();
     });
+
+    void ApplyVodAnalysis(VodBackendEvent item)
+    {
+        if (item.PartCount < 1) return;
+        analyzedVodPartCount = item.PartCount;
+        analyzedVodFingerprint = CurrentVodAnalysisFingerprint();
+        vodAnalysisReady = true;
+        VodPartsBox.IsEnabled = true;
+        VodPartsBox.PlaceholderText = $"1-{item.PartCount} · 예: 1-5,8 · 비우면 전체";
+        VodQualityBox.Items.Clear();
+        foreach (var encoded in item.Qualities.Count > 0 ? item.Qualities : new[] { "best|최고 화질 (자동)" })
+        {
+            var split = encoded.Split(new[] { '|' }, 2);
+            VodQualityBox.Items.Add(new ComboBoxItem { Tag = split[0], Content = split.Length > 1 ? split[1] : split[0] });
+        }
+        VodQualityBox.SelectedIndex = 0;
+        VodQualityBox.IsEnabled = true;
+        VodAnalysisInfoText.Text = $"{item.Streamer} · {item.Title} · PART {item.PartCount}개";
+    }
+
+    void InvalidateVodAnalysis()
+    {
+        if (VodPartsBox == null || VodQualityBox == null) return;
+        vodAnalysisReady = false;
+        analyzedVodPartCount = 0;
+        VodPartsBox.IsEnabled = false;
+        VodQualityBox.IsEnabled = false;
+        if (VodStartButton != null) VodStartButton.Label = "VOD 분석";
+    }
+
+    string CurrentVodAnalysisFingerprint() => string.Join("\n", VodUrlBox.Text.Trim(), SelectedVodCookieMode(),
+        VodCookieSourceBox.Text.Trim(), VodYtDlpPathBox.Text.Trim());
 
     static void WriteJsonAtomically<T>(string path, T value)
     {

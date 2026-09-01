@@ -37,7 +37,7 @@ try {
         Entries = @([pscustomobject]@{ url = 'https://vod.sooplive.com/expired.m3u8' })
     }
     $tools = [pscustomobject]@{ YtDlp = $fakeYtDlp; Ffmpeg = '' }
-    $cookie = [pscustomobject]@{ Path = $cookiePath; Mode = 'FILE' }
+    $cookie = [pscustomobject]@{ Path = $cookiePath; Mode = 'FILE'; HasCloudFrontAuthorization = $false; HasSoopLoginCookies = $true }
     $failed = $false
     $failureMessage = ''
     try { [void](Invoke-VodDownloads -Request $request -Metadata $metadata -SelectedParts @(1) -Tools $tools -Cookie $cookie -JobDirectory $tempRoot) }

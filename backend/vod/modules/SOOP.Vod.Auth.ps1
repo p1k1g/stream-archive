@@ -185,6 +185,19 @@ function Test-VodNetscapeCookieFile {
     }
 }
 
+function Get-VodCookieCapabilities {
+    param([string]$Path)
+    $names = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($line) -or ($line.StartsWith('#') -and -not $line.StartsWith('#HttpOnly_'))) { continue }
+        $fields = @($line -split "`t", 7)
+        if ($fields.Count -eq 7) { $names[$fields[5]] = $true }
+    }
+    $hasSigned = $names.ContainsKey('CloudFront-Key-Pair-Id') -and $names.ContainsKey('CloudFront-Policy') -and $names.ContainsKey('CloudFront-Signature')
+    $hasLogin = @('AuthTicket', 'BbsTicket', 'UserTicket', 'RDB', 'PdboxTicket') | Where-Object { $names.ContainsKey($_) } | Select-Object -First 1
+    return [pscustomobject]@{ HasCloudFrontAuthorization = [bool]$hasSigned; HasSoopLoginCookies = ($null -ne $hasLogin) }
+}
+
 function Repair-VodCloudFrontCookieScope {
     param([string]$CookieFile, [string]$ResourceUrl)
     $resourceUri = $null
@@ -213,6 +226,17 @@ function Repair-VodCloudFrontCookieScope {
     return $aliases.Count
 }
 
+function Get-VodManifestQualityOptions {
+    param([string]$Path)
+    $result = @('best|최고 화질 (자동)')
+    $heights = @([System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8) | ForEach-Object {
+        $match = [regex]::Match([string]$_, 'RESOLUTION=\d+x(?<height>\d+)')
+        if ($match.Success) { [int]$match.Groups['height'].Value }
+    } | Sort-Object -Descending -Unique)
+    foreach ($height in $heights) { $result += "best[height<=$height]|${height}p" }
+    return @($result)
+}
+
 function Test-VodManifestAuthorization {
     param($Request, [string]$CookieFile, [string]$Url, [string]$ProbeFile)
     Remove-Item -LiteralPath $ProbeFile -Force -ErrorAction SilentlyContinue
@@ -228,8 +252,13 @@ function Test-VodManifestAuthorization {
     $statusText = ($statusOutput -join ' ').Trim()
     $statusMatch = [regex]::Match($statusText, '(\d{3})\s*$')
     $httpStatus = if ($statusMatch.Success) { [int]$statusMatch.Groups[1].Value } else { 0 }
+    $script:LastVodQualities = @('best|최고 화질 (자동)')
+    if ($probeExitCode -eq 0 -and $httpStatus -ge 200 -and $httpStatus -lt 300) {
+        $script:LastVodQualities = @(Get-VodManifestQualityOptions -Path $ProbeFile)
+        Remove-Item -LiteralPath $ProbeFile -Force -ErrorAction SilentlyContinue
+        return $true
+    }
     Remove-Item -LiteralPath $ProbeFile -Force -ErrorAction SilentlyContinue
-    if ($probeExitCode -eq 0 -and $httpStatus -ge 200 -and $httpStatus -lt 300) { return $true }
     $manifestHost = ([Uri]$Url).Host
     $script:LastVodAuthError = "manifest authorization check failed: HTTP $httpStatus, curl $probeExitCode, host=$manifestHost"
     return $false
@@ -255,7 +284,8 @@ function Initialize-VodCookie {
     }
     else { throw "지원하지 않는 Cookie 모드입니다: $mode" }
     Test-VodNetscapeCookieFile -Path $temporary
-    return [pscustomobject]@{ Path = $temporary; Mode = $mode; BackendRoot = $BackendRoot; JobDirectory = $JobDirectory; YtDlp = $YtDlp }
+    $capabilities = Get-VodCookieCapabilities -Path $temporary
+    return [pscustomobject]@{ Path = $temporary; Mode = $mode; BackendRoot = $BackendRoot; JobDirectory = $JobDirectory; YtDlp = $YtDlp; HasCloudFrontAuthorization = $capabilities.HasCloudFrontAuthorization; HasSoopLoginCookies = $capabilities.HasSoopLoginCookies }
 }
 
 function Renew-VodBaseCookie {
