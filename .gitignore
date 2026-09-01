@@ -12,6 +12,7 @@ obj/
 SOOPLiveWinUI_startup.log
 backend/logs/
 backend/control/
+backend/history/
 backend/*.tmp
 backend/*.processing
 
