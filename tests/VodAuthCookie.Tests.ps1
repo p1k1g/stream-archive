@@ -46,6 +46,20 @@ try {
     if ($curlConfigText -notmatch 'CloudFront-Key-Pair-Id=.*CloudFront-Policy=.*CloudFront-Signature=') {
         throw 'Explicit CloudFront Cookie header config was not generated.'
     }
+    $headerJar = Join-Path $tempRoot 'header-cookies.txt'
+    [IO.File]::WriteAllText($headerJar, "# Netscape HTTP Cookie File`r`n.sooplive.com`tTRUE`t/`tTRUE`t0`tAuthTicket`tlogin`r`n", [Text.UTF8Encoding]::new($false))
+    $headerFile = Join-Path $tempRoot 'private-auth.headers'
+    [IO.File]::WriteAllLines($headerFile, @(
+        'HTTP/1.1 200 OK',
+        'Set-Cookie: CloudFront-Key-Pair-Id=header-key; Path=/; Secure',
+        "Set-Cookie: CloudFront-Policy=$policyValue; Path=/; Secure",
+        'Set-Cookie: CloudFront-Signature=header-signature; Path=/; Secure'
+    ), [Text.UTF8Encoding]::new($false))
+    $imported = Import-VodCloudFrontSetCookieHeaders -HeaderFile $headerFile -CookieFile $headerJar -ResourceUrl 'https://cdn.example.test/master.m3u8'
+    $headerValues = Get-VodCloudFrontCookieValues -Path $headerJar
+    if ($imported -ne 3 -or $null -eq $headerValues -or $headerValues['CloudFront-Key-Pair-Id'] -ne 'header-key') {
+        throw 'private_auth Set-Cookie headers were not imported into the VOD jar.'
+    }
     $master = Join-Path $tempRoot 'master.m3u8'
     [IO.File]::WriteAllLines($master, @(
         '#EXTM3U',

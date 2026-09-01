@@ -1,7 +1,7 @@
 ﻿SOOP LIVE Downloader
 GUI: WinUI 3
-Version: 1.2.0-preview1-fix72
-Feature: policy-first CloudFront scope and exact signed-cookie preflight
+Version: 1.2.0-preview1-fix73
+Feature: resilient multi-PART URLs and stored-login Set-Cookie capture
 Includes: all fix47/fix46/fix45 and earlier functionality
 Settings: fix36 path/auth/dependency tests, dirty save bar, defaults, and INI export/import
 Dashboard: Watcher-exit cleanup, stop ACK, stopped/resume flyout, alerts, natural empty states

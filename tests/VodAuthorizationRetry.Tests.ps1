@@ -18,6 +18,12 @@ try {
     if ((Get-VodApiFileUrl -File $apiFile) -ne $apiFile.file) {
         throw 'SOOP VOD API file URL fallback was not recognized.'
     }
+    $originalEntry = [pscustomobject]@{ url = 'https://cdn.example.test/original-part-2.m3u8' }
+    $missingRefresh = @([pscustomobject]@{ url = 'https://cdn.example.test/part-1.m3u8' }, [pscustomobject]@{ url = '' })
+    $resolvedFallback = Resolve-VodAttemptManifestUrl -OriginalEntry $originalEntry -RefreshedEntries $missingRefresh -Part 2
+    if (-not $resolvedFallback.UsedOriginal -or $resolvedFallback.Url -ne $originalEntry.url) {
+        throw 'A missing refreshed PART URL did not preserve the initial analysis URL.'
+    }
     $fakeYtDlp = Join-Path $tempRoot 'fake-yt-dlp.cmd'
     [IO.File]::WriteAllText($fakeYtDlp, "@echo ERROR: HTTP Error 403: Forbidden 1>&2`r`n@exit /b 1`r`n", [Text.Encoding]::ASCII)
     $cookiePath = Join-Path $tempRoot 'cookies.txt'

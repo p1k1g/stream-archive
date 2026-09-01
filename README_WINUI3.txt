@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix72
+Version 1.2.0-preview1-fix73
 
 BUG FIX
 -------
@@ -1883,3 +1883,24 @@ fix72 implemented changes
 3. Regression coverage
 - Tests validate CloudFront-safe base64 Policy decoding, pre-metadata FILE scope,
   explicit three-Cookie curl configuration, and PolicyResource propagation.
+
+
+fix73 implemented changes
+-------------------------
+
+1. Multi-PART URL retention
+- Per-attempt metadata still prefers a newly returned manifest URL, but an empty
+  or shortened refresh can no longer erase the valid URL from initial analysis.
+- This specifically allows PART 2 and later to continue when yt-dlp returns all
+  URLs during analysis but omits a later entry after PART 1 completes.
+
+2. Stored-login authorization capture
+- Stored-login initialization removes incidental player-page CloudFront cookies
+  so private_auth.php is always called for the actual extracted PART URL.
+- private_auth response headers are captured and all three CloudFront Set-Cookie
+  values are imported into the isolated job jar even when curl rejects their CDN
+  domain for normal cookie-jar processing. Header files are deleted immediately.
+
+3. Regression coverage
+- Tests require initial PART URL preservation and deterministic Set-Cookie import
+  for Key-Pair-Id, Policy, and Signature without exposing their real values.

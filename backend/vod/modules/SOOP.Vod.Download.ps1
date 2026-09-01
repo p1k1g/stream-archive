@@ -124,6 +124,18 @@ function Get-VodEntryManifestUrl {
     return ''
 }
 
+function Resolve-VodAttemptManifestUrl {
+    param($OriginalEntry, [object[]]$RefreshedEntries, [int]$Part)
+    if ($Part -ge 1 -and $Part -le $RefreshedEntries.Count) {
+        $refreshedUrl = Get-VodEntryManifestUrl -Entry $RefreshedEntries[$Part - 1]
+        if (-not [string]::IsNullOrWhiteSpace($refreshedUrl)) {
+            return [pscustomobject]@{ Url = $refreshedUrl; UsedOriginal = $false }
+        }
+    }
+    $originalUrl = Get-VodEntryManifestUrl -Entry $OriginalEntry
+    return [pscustomobject]@{ Url = $originalUrl; UsedOriginal = $true }
+}
+
 function Get-VodApiFileUrl {
     param($File)
     if ($null -eq $File) { return '' }
@@ -241,10 +253,13 @@ function Invoke-VodDownloads {
             # by which time its manifest URL can already be expired.
             Write-VodEvent -Type 'metadata_refreshing' -Message ("PART {0} 최신 VOD URL 분석 중 ({1}/{2})" -f $part, $attempt, [int]$Request.MaxRetries) -Part $part
             $refreshedMetadata = Get-VodMetadata -Request $Request -YtDlp $Tools.YtDlp -CookieFile $Cookie.Path -JobDirectory $JobDirectory
-            if ($part -gt $refreshedMetadata.Entries.Count) { throw "새 VOD 정보에서 PART $part 를 찾지 못했습니다." }
-            $url = Get-VodEntryManifestUrl -Entry $refreshedMetadata.Entries[$part - 1]
+            $resolvedUrl = Resolve-VodAttemptManifestUrl -OriginalEntry $entry -RefreshedEntries @($refreshedMetadata.Entries) -Part $part
+            $url = [string]$resolvedUrl.Url
             $streamerId = [string]$refreshedMetadata.StreamerId
-            if ([string]::IsNullOrWhiteSpace($url)) { throw "새 VOD 정보에 PART $part URL이 없습니다." }
+            if ([string]::IsNullOrWhiteSpace($url)) { throw "초기 및 새 VOD 정보에 PART $part URL이 없습니다." }
+            if ([bool]$resolvedUrl.UsedOriginal) {
+                Write-VodEvent -Type 'metadata_url_fallback' -Message ("PART {0} 새 URL 누락 · 최초 분석 URL을 유지합니다." -f $part) -Part $part
+            }
             $authorized = $false
             if ($attempt -eq 1 -and [bool]$Cookie.HasCloudFrontAuthorization) {
                 [void](Repair-VodCloudFrontCookieScope -CookieFile $Cookie.Path -ResourceUrl $url)

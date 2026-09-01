@@ -242,6 +242,27 @@ function New-VodCloudFrontCurlConfig {
     [System.IO.File]::WriteAllText($Destination, ('header = "{0}"' -f $escaped), [System.Text.UTF8Encoding]::new($false))
 }
 
+function Import-VodCloudFrontSetCookieHeaders {
+    param([string]$HeaderFile, [string]$CookieFile, [string]$ResourceUrl)
+    if (-not (Test-Path -LiteralPath $HeaderFile -PathType Leaf)) { return 0 }
+    $values = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($HeaderFile, [System.Text.Encoding]::UTF8)) {
+        $match = [regex]::Match([string]$line, '(?i)^\s*Set-Cookie:\s*(?<name>CloudFront-(?:Key-Pair-Id|Policy|Signature))=(?<value>[^;\r\n]+)')
+        if ($match.Success) { $values[$match.Groups['name'].Value] = $match.Groups['value'].Value.Trim('"') }
+    }
+    if ($values.Count -lt 3) { return 0 }
+    $resourceUri = $null
+    if (-not [Uri]::TryCreate($ResourceUrl, [UriKind]::Absolute, [ref]$resourceUri) -or $resourceUri.Scheme -ne 'https') { return 0 }
+    Remove-VodCloudFrontCookies -CookieFile $CookieFile
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in [System.IO.File]::ReadAllLines($CookieFile, [System.Text.Encoding]::UTF8)) { $lines.Add($line) }
+    foreach ($name in @('CloudFront-Key-Pair-Id', 'CloudFront-Policy', 'CloudFront-Signature')) {
+        $lines.Add(("{0}`tFALSE`t/`tTRUE`t0`t{1}`t{2}" -f $resourceUri.Host.ToLowerInvariant(), $name, $values[$name]))
+    }
+    [System.IO.File]::WriteAllLines($CookieFile, [string[]]$lines, [System.Text.UTF8Encoding]::new($false))
+    return 3
+}
+
 function Repair-VodCloudFrontCookieScope {
     param([string]$CookieFile, [string]$ResourceUrl)
     $resourceUri = $null
@@ -356,6 +377,13 @@ function Initialize-VodCookie {
     }
     else { throw "지원하지 않는 Cookie 모드입니다: $mode" }
     Test-VodNetscapeCookieFile -Path $temporary
+    if ($mode -eq 'SOOP_LOGIN') {
+        # Visiting the player can leave an incomplete or page-scoped signed
+        # triplet in the login CookieContainer. Stored-login mode must always
+        # obtain a fresh authorization for the extracted PART URL instead of
+        # mistaking those incidental cookies for a ready CDN session.
+        Remove-VodCloudFrontCookies -CookieFile $temporary
+    }
     $capabilities = Get-VodCookieCapabilities -Path $temporary
     $policyResource = ''
     if ($capabilities.HasCloudFrontAuthorization) {
@@ -391,28 +419,32 @@ function Refresh-VodAuthorization {
     # importantly, this guarantees that curl's output jar contains only the
     # newly issued triplet, so an older exact-host alias cannot win by ordering.
     Remove-VodCloudFrontCookies -CookieFile $CookieFile
+    $headerFile = Join-Path (Split-Path -Parent $CookieFile) ("private-auth-{0:D2}.headers" -f $Attempt)
+    Remove-Item -LiteralPath $headerFile -Force -ErrorAction SilentlyContinue
     $previousErrorActionPreference = $ErrorActionPreference
     try {
-        $ErrorActionPreference = 'Continue'
-        $response = & curl.exe '-sS' '-L' '-b' $CookieFile '-c' $CookieFile '-A' 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36' '-e' ([string]$Request.VodUrl) '-H' 'Origin: https://vod.sooplive.com' '-H' 'Accept: application/json, text/plain, */*' '--data-urlencode' 'type=vod' '--data-urlencode' ("strm_id=$StreamerId") '--data-urlencode' ("title_no=" + ([regex]::Match([string]$Request.VodUrl, '/player/(\d+)').Groups[1].Value)) '--data-urlencode' ("url=$Url") 'https://live.sooplive.com/api/private_auth.php' 2>&1
-        $curlExitCode = $LASTEXITCODE
+        try {
+            $ErrorActionPreference = 'Continue'
+            $response = & curl.exe '-sS' '-L' '-D' $headerFile '-b' $CookieFile '-c' $CookieFile '-A' 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36' '-e' ([string]$Request.VodUrl) '-H' 'Origin: https://vod.sooplive.com' '-H' 'Accept: application/json, text/plain, */*' '--data-urlencode' 'type=vod' '--data-urlencode' ("strm_id=$StreamerId") '--data-urlencode' ("title_no=" + ([regex]::Match([string]$Request.VodUrl, '/player/(\d+)').Groups[1].Value)) '--data-urlencode' ("url=$Url") 'https://live.sooplive.com/api/private_auth.php' 2>&1
+            $curlExitCode = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $previousErrorActionPreference }
+        $responseText = ($response -join ' ').Trim()
+        $success = ($curlExitCode -eq 0 -and $responseText -match '"result"\s*:\s*1')
+        if (-not $success) {
+            $detail = Get-RedactedVodText -Text $responseText
+            if ($detail.Length -gt 300) { $detail = $detail.Substring(0, 300) }
+            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = "curl exit code $curlExitCode" }
+            $script:LastVodAuthError = $detail
+        }
+        if ($success) {
+            [void](Import-VodCloudFrontSetCookieHeaders -HeaderFile $headerFile -CookieFile $CookieFile -ResourceUrl $Url)
+            Test-VodNetscapeCookieFile -Path $CookieFile
+            [void](Repair-VodCloudFrontCookieScope -CookieFile $CookieFile -ResourceUrl $Url)
+        }
+        return $success
     }
-    finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
-    $responseText = ($response -join ' ').Trim()
-    $success = ($curlExitCode -eq 0 -and $responseText -match '"result"\s*:\s*1')
-    if (-not $success) {
-        $detail = Get-RedactedVodText -Text $responseText
-        if ($detail.Length -gt 300) { $detail = $detail.Substring(0, 300) }
-        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = "curl exit code $curlExitCode" }
-        $script:LastVodAuthError = $detail
-    }
-    if ($success) {
-        Test-VodNetscapeCookieFile -Path $CookieFile
-        [void](Repair-VodCloudFrontCookieScope -CookieFile $CookieFile -ResourceUrl $Url)
-    }
-    return $success
+    finally { Remove-Item -LiteralPath $headerFile -Force -ErrorAction SilentlyContinue }
 }
 
 function Remove-VodTemporarySecrets {
