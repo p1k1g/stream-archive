@@ -27,6 +27,7 @@ $core = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.
 $auth = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Auth.ps1') -Raw
 $download = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Download.ps1') -Raw
 $merge = Get-Content -LiteralPath (Join-Path $root 'backend/vod/modules/SOOP.Vod.Merge.ps1') -Raw
+if ($auth -match '(?im)^\s*\$host\s*=') { throw 'VOD auth must not assign the read-only PowerShell Host automatic variable.' }
 if ($core -notmatch 'Get-CollisionSafeVodPath' -or $core -notmatch 'Test-Path -LiteralPath') { throw 'VOD collision/literal-path protection is missing.' }
 if ($core -notmatch 'Get-RedactedVodText' -or $auth -match 'Write-(Host|Output)\s+\$response') { throw 'VOD authentication output is not safely redacted.' }
 if ($download -notmatch '--abort-on-unavailable-fragments' -or $download -notmatch '--continue') { throw 'VOD resume/fragment safeguards are missing.' }
@@ -35,6 +36,9 @@ if ($auth -notmatch '\$mode -eq ''SOOP_LOGIN''' -or
     $auth -notmatch 'LoginAction\.php' -or
     $auth -notmatch 'ReadAsByteArrayAsync' -or
     $auth -notmatch 'New-VodSoopLoginCookie.+VodUrl' -or
+    $auth -notmatch 'Repair-VodCloudFrontCookieScope' -or
+    $auth -notmatch 'Test-VodManifestAuthorization' -or
+    $auth -notmatch 'manifest-probe-\*' -or
     $auth -notmatch 'Export-VodNetscapeCookies' -or
     $auth -notmatch "@\('cookies\.txt', 'concat\.txt'\)") {
     throw 'Stored SOOP login, Netscape export, or temporary secret cleanup is missing.'
@@ -44,6 +48,7 @@ if ($download -notmatch 'Renew-VodBaseCookie' -or
     $download -notmatch 'for \(\$attempt' -or
     ([regex]::Matches($download, 'Get-VodMetadata')).Count -lt 2 -or
     $download -notmatch 'authorization_expired' -or
+    $download -notmatch 'manifest-probe-' -or
     $download -notmatch 'Origin:https://vod\.sooplive\.com' -or
     $download -notmatch '\$ErrorActionPreference = ''Continue''' -or
     $download -notmatch '\$ErrorActionPreference = \$previousErrorActionPreference' -or

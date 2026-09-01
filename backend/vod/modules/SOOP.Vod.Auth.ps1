@@ -185,6 +185,56 @@ function Test-VodNetscapeCookieFile {
     }
 }
 
+function Repair-VodCloudFrontCookieScope {
+    param([string]$CookieFile, [string]$ResourceUrl)
+    $resourceUri = $null
+    if (-not [Uri]::TryCreate($ResourceUrl, [UriKind]::Absolute, [ref]$resourceUri) -or $resourceUri.Scheme -ne 'https') {
+        throw 'CloudFront Cookie 범위를 설정할 manifest URL이 올바르지 않습니다.'
+    }
+    $lines = @([System.IO.File]::ReadAllLines($CookieFile, [System.Text.Encoding]::UTF8))
+    $signedNames = @('CloudFront-Policy', 'CloudFront-Signature', 'CloudFront-Key-Pair-Id', 'CloudFront-Expires')
+    $aliases = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line) -or ($line.StartsWith('#') -and -not $line.StartsWith('#HttpOnly_'))) { continue }
+        $fields = @($line -split "`t", 7)
+        if ($fields.Count -ne 7 -or $signedNames -notcontains $fields[5]) { continue }
+        $domain = $fields[0] -replace '^#HttpOnly_', ''
+        $normalizedDomain = $domain.TrimStart('.').ToLowerInvariant()
+        $manifestHost = $resourceUri.Host.ToLowerInvariant()
+        $matchesResource = $manifestHost -eq $normalizedDomain -or ($fields[1] -eq 'TRUE' -and $manifestHost.EndsWith('.' + $normalizedDomain))
+        if ($matchesResource) { continue }
+        if ($lines -match ('^(?:#HttpOnly_)?' + [regex]::Escape($manifestHost) + "`t.*`t" + [regex]::Escape($fields[5]) + "`t")) { continue }
+        if ($aliases | Where-Object { $_ -like ("$manifestHost`t*$($fields[5])`t*") }) { continue }
+        $aliases.Add(("{0}`tFALSE`t/`tTRUE`t{1}`t{2}`t{3}" -f $manifestHost, $fields[4], $fields[5], $fields[6]))
+    }
+    if ($aliases.Count -gt 0) {
+        [System.IO.File]::WriteAllLines($CookieFile, [string[]](@($lines) + @($aliases)), [System.Text.UTF8Encoding]::new($false))
+    }
+    return $aliases.Count
+}
+
+function Test-VodManifestAuthorization {
+    param($Request, [string]$CookieFile, [string]$Url, [string]$ProbeFile)
+    Remove-Item -LiteralPath $ProbeFile -Force -ErrorAction SilentlyContinue
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $statusOutput = & curl.exe '-sS' '-L' '-b' $CookieFile '-A' 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36' '-e' ([string]$Request.VodUrl) '-H' 'Origin: https://vod.sooplive.com' '-o' $ProbeFile '-w' '%{http_code}' $Url 2>&1
+        $probeExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    $statusText = ($statusOutput -join ' ').Trim()
+    $statusMatch = [regex]::Match($statusText, '(\d{3})\s*$')
+    $httpStatus = if ($statusMatch.Success) { [int]$statusMatch.Groups[1].Value } else { 0 }
+    Remove-Item -LiteralPath $ProbeFile -Force -ErrorAction SilentlyContinue
+    if ($probeExitCode -eq 0 -and $httpStatus -ge 200 -and $httpStatus -lt 300) { return $true }
+    $manifestHost = ([Uri]$Url).Host
+    $script:LastVodAuthError = "manifest authorization check failed: HTTP $httpStatus, curl $probeExitCode, host=$manifestHost"
+    return $false
+}
+
 function Initialize-VodCookie {
     param($Request, [string]$JobDirectory, [string]$YtDlp, [string]$BackendRoot)
     $mode = ([string]$Request.CookieMode).ToUpperInvariant()
@@ -242,7 +292,10 @@ function Refresh-VodAuthorization {
         if ([string]::IsNullOrWhiteSpace($detail)) { $detail = "curl exit code $curlExitCode" }
         $script:LastVodAuthError = $detail
     }
-    if ($success) { Test-VodNetscapeCookieFile -Path $CookieFile }
+    if ($success) {
+        Test-VodNetscapeCookieFile -Path $CookieFile
+        [void](Repair-VodCloudFrontCookieScope -CookieFile $CookieFile -ResourceUrl $Url)
+    }
     return $success
 }
 
@@ -253,4 +306,6 @@ function Remove-VodTemporarySecrets {
         $path = Join-Path $JobDirectory $name
         if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
     }
+    Get-ChildItem -LiteralPath $JobDirectory -Filter 'manifest-probe-*' -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 }

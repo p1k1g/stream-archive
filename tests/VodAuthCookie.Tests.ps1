@@ -18,6 +18,16 @@ try {
     if ($fields.Count -ne 7 -or $fields[0] -ne '.sooplive.com' -or $fields[5] -ne 'AuthTicket') {
         throw 'Netscape cookie fields are invalid.'
     }
+    Add-Content -LiteralPath $path -Encoding UTF8 -Value @(
+        ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Policy`tpolicy",
+        ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Signature`tsignature",
+        ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Key-Pair-Id`tkey"
+    )
+    $aliasCount = Repair-VodCloudFrontCookieScope -CookieFile $path -ResourceUrl 'https://cdn.example.test/master.m3u8'
+    $aliased = Get-Content -LiteralPath $path -Encoding UTF8 | Where-Object { $_ -like "cdn.example.test`t*" }
+    if ($aliasCount -ne 3 -or @($aliased).Count -ne 3) {
+        throw 'CloudFront signed cookies were not scoped to the manifest host.'
+    }
     $request = [pscustomobject]@{ CookieMode = 'FILE'; CookieFile = $path; BrowserName = ''; VodUrl = 'https://vod.sooplive.com/player/1' }
     $jobRoot = Join-Path $tempRoot 'job'
     New-Item -ItemType Directory -Path $jobRoot -Force | Out-Null

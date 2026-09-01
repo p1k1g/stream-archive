@@ -307,7 +307,7 @@ public sealed partial class MainWindow
         try
         {
             var text = DiagnosticInfoService.CreateReport(
-                "1.2.0-preview1-fix68",
+                "1.2.0-preview1-fix69",
                 backend.IsRunning,
                 RecordingItems.Count,
                 OfflineItems.Count,

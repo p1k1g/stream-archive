@@ -128,7 +128,12 @@ function Invoke-VodDownloads {
             $url = [string]$refreshedMetadata.Entries[$part - 1].url
             $streamerId = [string]$refreshedMetadata.StreamerId
             if ([string]::IsNullOrWhiteSpace($url)) { throw "새 VOD 정보에 PART $part URL이 없습니다." }
-            if (-not (Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $streamerId -Url $url -Attempt $attempt)) {
+            $authorized = Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId $streamerId -Url $url -Attempt $attempt
+            if ($authorized) {
+                $probeFile = Join-Path $JobDirectory ("manifest-probe-{0:D4}-{1:D2}.m3u8" -f $part, $attempt)
+                $authorized = Test-VodManifestAuthorization -Request $Request -CookieFile $Cookie.Path -Url $url -ProbeFile $probeFile
+            }
+            if (-not $authorized) {
                 $authDetail = if ([string]::IsNullOrWhiteSpace([string]$script:LastVodAuthError)) { 'private_auth 응답이 인증 성공을 반환하지 않았습니다.' } else { [string]$script:LastVodAuthError }
                 $lastFailureDetail = $authDetail
                 Write-VodEvent -Type 'auth_retrying' -Message ("구독 VOD 인증 재시도 ({0}/{1}) · {2}" -f $attempt, [int]$Request.MaxRetries, $authDetail) -Part $part

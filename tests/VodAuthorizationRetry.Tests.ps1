@@ -24,6 +24,7 @@ try {
     }
     function Renew-VodBaseCookie { [void]($script:baseRenewals++) }
     function Refresh-VodAuthorization { [void]($script:authorizationRefreshes++); return $true }
+    function Test-VodManifestAuthorization { return $true }
     function Start-Sleep { }
 
     $request = [pscustomobject]@{

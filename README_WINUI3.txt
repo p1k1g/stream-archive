@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix68
+Version 1.2.0-preview1-fix69
 
 BUG FIX
 -------
@@ -1780,3 +1780,30 @@ fix68 implemented changes
   instead of replacing it with only "PART download failed".
 - The deterministic 403 regression now requires the final exception to retain
   the 403 diagnostic as well as verifying all renewal counters.
+
+fix69 implemented changes
+-------------------------
+
+1. CloudFront cookie scope repair
+- The retained fix68 diagnostic confirmed that private_auth completed but the
+  generic m3u8 manifest request still received HTTP 403. A signed CloudFront
+  cookie can be present in the job jar yet remain scoped to a SOOP host instead
+  of the CDN host contained in the current manifest URL.
+- After each successful private_auth call, only CloudFront-Policy,
+  CloudFront-Signature, CloudFront-Key-Pair-Id, and CloudFront-Expires are copied
+  to an exact, secure cookie scope for the HTTPS manifest host when no matching
+  scope exists. Login cookies such as AuthTicket are never copied to the CDN.
+
+2. Manifest authorization preflight
+- Before starting yt-dlp, the backend now requests the current m3u8 with the
+  same job cookie jar, User-Agent, Referer, and Origin. A non-2xx response stays
+  inside the existing bounded renewal loop instead of spending a full yt-dlp
+  attempt with authorization that is already known to be unusable.
+- The redacted final diagnostic reports only HTTP status, curl exit code, and
+  manifest host. Cookie values and URL query strings are not emitted.
+
+3. Regression coverage
+- Cookie regressions verify that exactly the signed CloudFront cookies can be
+  aliased to a manifest host. The deterministic 403 test stubs the preflight so
+  it continues to isolate the retry state machine, and source tests require the
+  scope repair and preflight wiring.
