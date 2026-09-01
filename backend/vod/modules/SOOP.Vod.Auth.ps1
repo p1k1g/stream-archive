@@ -206,24 +206,49 @@ function Repair-VodCloudFrontCookieScope {
     }
     $lines = @([System.IO.File]::ReadAllLines($CookieFile, [System.Text.Encoding]::UTF8))
     $signedNames = @('CloudFront-Policy', 'CloudFront-Signature', 'CloudFront-Key-Pair-Id', 'CloudFront-Expires')
-    $aliases = New-Object 'System.Collections.Generic.List[string]'
+    $requiredNames = @('CloudFront-Key-Pair-Id', 'CloudFront-Policy', 'CloudFront-Signature')
+    $latest = @{}
+    $preserved = New-Object 'System.Collections.Generic.List[string]'
     foreach ($line in $lines) {
-        if ([string]::IsNullOrWhiteSpace($line) -or ($line.StartsWith('#') -and -not $line.StartsWith('#HttpOnly_'))) { continue }
+        if ([string]::IsNullOrWhiteSpace($line) -or ($line.StartsWith('#') -and -not $line.StartsWith('#HttpOnly_'))) {
+            $preserved.Add($line)
+            continue
+        }
         $fields = @($line -split "`t", 7)
-        if ($fields.Count -ne 7 -or $signedNames -notcontains $fields[5]) { continue }
-        $domain = $fields[0] -replace '^#HttpOnly_', ''
-        $normalizedDomain = $domain.TrimStart('.').ToLowerInvariant()
-        $manifestHost = $resourceUri.Host.ToLowerInvariant()
-        $matchesResource = $manifestHost -eq $normalizedDomain -or ($fields[1] -eq 'TRUE' -and $manifestHost.EndsWith('.' + $normalizedDomain))
-        if ($matchesResource) { continue }
-        if ($lines -match ('^(?:#HttpOnly_)?' + [regex]::Escape($manifestHost) + "`t.*`t" + [regex]::Escape($fields[5]) + "`t")) { continue }
-        if ($aliases | Where-Object { $_ -like ("$manifestHost`t*$($fields[5])`t*") }) { continue }
-        $aliases.Add(("{0}`tFALSE`t/`tTRUE`t{1}`t{2}`t{3}" -f $manifestHost, $fields[4], $fields[5], $fields[6]))
+        if ($fields.Count -eq 7 -and $signedNames -contains $fields[5]) {
+            # curl sends every domain-matching cookie with the same name. Keeping
+            # an old host alias alongside a newly issued parent-domain cookie can
+            # therefore send two Policy/Signature values and CloudFront rejects
+            # the request. Retain only the last value curl wrote for each name.
+            $latest[$fields[5]] = $fields
+            continue
+        }
+        $preserved.Add($line)
     }
-    if ($aliases.Count -gt 0) {
-        [System.IO.File]::WriteAllLines($CookieFile, [string[]](@($lines) + @($aliases)), [System.Text.UTF8Encoding]::new($false))
+    foreach ($name in $requiredNames) {
+        if (-not $latest.ContainsKey($name) -or [string]::IsNullOrWhiteSpace([string]$latest[$name][6])) {
+            throw "private_auth 응답에 $name Cookie가 없습니다."
+        }
     }
-    return $aliases.Count
+    $manifestHost = $resourceUri.Host.ToLowerInvariant()
+    foreach ($name in $signedNames) {
+        if (-not $latest.ContainsKey($name)) { continue }
+        $fields = $latest[$name]
+        $preserved.Add(("{0}`tFALSE`t/`tTRUE`t{1}`t{2}`t{3}" -f $manifestHost, $fields[4], $name, $fields[6]))
+    }
+    [System.IO.File]::WriteAllLines($CookieFile, [string[]]$preserved, [System.Text.UTF8Encoding]::new($false))
+    return @($latest.Keys).Count
+}
+
+function Remove-VodCloudFrontCookies {
+    param([string]$CookieFile)
+    $signedNames = @('CloudFront-Policy', 'CloudFront-Signature', 'CloudFront-Key-Pair-Id', 'CloudFront-Expires')
+    $preserved = @([System.IO.File]::ReadAllLines($CookieFile, [System.Text.Encoding]::UTF8) | Where-Object {
+        $line = [string]$_
+        $fields = @($line -split "`t", 7)
+        $fields.Count -ne 7 -or $signedNames -notcontains $fields[5]
+    })
+    [System.IO.File]::WriteAllLines($CookieFile, [string[]]$preserved, [System.Text.UTF8Encoding]::new($false))
 }
 
 function Get-VodManifestQualityOptions {
@@ -305,6 +330,10 @@ function Refresh-VodAuthorization {
     param($Request, [string]$CookieFile, [string]$StreamerId, [string]$Url, [int]$Attempt)
     Write-VodEvent -Type 'auth_refreshing' -Message ("구독 VOD 단기 인증 Cookie 발급 중 ({0}/{1})" -f $Attempt, [int]$Request.MaxRetries)
     $script:LastVodAuthError = ''
+    # Never send an expired CloudFront triplet back to private_auth.php. More
+    # importantly, this guarantees that curl's output jar contains only the
+    # newly issued triplet, so an older exact-host alias cannot win by ordering.
+    Remove-VodCloudFrontCookies -CookieFile $CookieFile
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'

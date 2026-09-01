@@ -92,17 +92,93 @@ function Get-VodMetadata {
     if ($date -notmatch '^\d{8}$') { $date = Get-Date -Format 'yyyyMMdd' }
     $title = [string]$info.title
     if ([string]::IsNullOrWhiteSpace($title)) { $title = [string]$entries[0].title }
+    $entries = @(Complete-VodManifestUrlsFromApi -Request $Request -CookieFile $CookieFile -Entries $entries -JobDirectory $JobDirectory)
     return [pscustomobject]@{ Title = $title; Streamer = $streamer; StreamerId = $streamerId; Date = $date.Substring(2, 6); Entries = $entries }
+}
+
+function Get-VodEntryManifestUrl {
+    param($Entry)
+    if ($null -eq $Entry) { return '' }
+    $candidates = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($name in @('url', 'manifest_url', 'manifestUrl', 'hls_url', 'hlsUrl')) {
+        $property = $Entry.PSObject.Properties[$name]
+        if ($null -ne $property) { $candidates.Add([string]$property.Value) }
+    }
+    foreach ($collectionName in @('formats', 'requested_formats')) {
+        $property = $Entry.PSObject.Properties[$collectionName]
+        if ($null -eq $property -or $null -eq $property.Value) { continue }
+        foreach ($format in @($property.Value)) {
+            foreach ($name in @('manifest_url', 'manifestUrl', 'url')) {
+                $formatProperty = $format.PSObject.Properties[$name]
+                if ($null -ne $formatProperty) { $candidates.Add([string]$formatProperty.Value) }
+            }
+        }
+    }
+    foreach ($candidate in $candidates) {
+        $uri = $null
+        if ([Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$uri) -and
+            $uri.Scheme -eq 'https' -and $uri.AbsolutePath -notmatch '^/player/') {
+            return $candidate
+        }
+    }
+    return ''
+}
+
+function Get-VodApiFileUrl {
+    param($File)
+    if ($null -eq $File) { return '' }
+    if ($File -is [string]) { return [string]$File }
+    foreach ($name in @('file', 'url', 'file_url', 'fileUrl')) {
+        $property = $File.PSObject.Properties[$name]
+        if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return [string]$property.Value
+        }
+    }
+    return ''
+}
+
+function Complete-VodManifestUrlsFromApi {
+    param($Request, [string]$CookieFile, [object[]]$Entries, [string]$JobDirectory)
+    $missing = @($Entries | Where-Object { [string]::IsNullOrWhiteSpace((Get-VodEntryManifestUrl -Entry $_)) })
+    if ($missing.Count -eq 0) { return @($Entries) }
+    $titleNo = [regex]::Match([string]$Request.VodUrl, '/player/(\d+)').Groups[1].Value
+    if ([string]::IsNullOrWhiteSpace($titleNo)) { return @($Entries) }
+    $stderrFile = Join-Path $JobDirectory 'soop-vod-api.stderr.log'
+    try {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $response = @(& curl.exe '-sS' '-L' '-b' $CookieFile '-A' 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36' '-e' ([string]$Request.VodUrl) '--data-urlencode' ("nTitleNo=$titleNo") '--data-urlencode' 'nApiLevel=10' 'https://api.m.sooplive.co.kr/station/video/a/view' 2> $stderrFile)
+            $exitCode = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $previousErrorActionPreference }
+        if ($exitCode -ne 0) { return @($Entries) }
+        try { $api = (($response -join [Environment]::NewLine) | ConvertFrom-Json) }
+        catch { return @($Entries) }
+        $files = @($api.data.files)
+        for ($index = 0; $index -lt $Entries.Count -and $index -lt $files.Count; $index++) {
+            if (-not [string]::IsNullOrWhiteSpace((Get-VodEntryManifestUrl -Entry $Entries[$index]))) { continue }
+            $fileUrl = Get-VodApiFileUrl -File $files[$index]
+            $uri = $null
+            if ([Uri]::TryCreate($fileUrl, [UriKind]::Absolute, [ref]$uri) -and $uri.Scheme -eq 'https') {
+                $Entries[$index] | Add-Member -NotePropertyName 'manifest_url' -NotePropertyValue $fileUrl -Force
+            }
+        }
+        return @($Entries)
+    }
+    finally { Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue }
 }
 
 function Get-VodAnalysisQualities {
     param($Request, $Metadata, $Tools, $Cookie, [string]$JobDirectory)
-    $url = [string]$Metadata.Entries[0].url
+    $url = Get-VodEntryManifestUrl -Entry $Metadata.Entries[0]
     if ([string]::IsNullOrWhiteSpace($url)) { throw '첫 번째 PART manifest URL이 없습니다.' }
     $authorized = $false
+    $usedExistingSignedCookie = $false
     if ([bool]$Cookie.HasCloudFrontAuthorization) {
         [void](Repair-VodCloudFrontCookieScope -CookieFile $Cookie.Path -ResourceUrl $url)
         $authorized = $true
+        $usedExistingSignedCookie = $true
     }
     else {
         $authorized = Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId ([string]$Metadata.StreamerId) -Url $url -Attempt 1
@@ -111,7 +187,20 @@ function Get-VodAnalysisQualities {
         $probeFile = Join-Path $JobDirectory 'manifest-probe-analysis.m3u8'
         $authorized = Test-VodManifestAuthorization -Request $Request -CookieFile $Cookie.Path -Url $url -ProbeFile $probeFile
     }
+    if (-not $authorized -and $usedExistingSignedCookie -and [bool]$Cookie.HasSoopLoginCookies) {
+        # A FILE/BROWSER jar may contain both a reusable SOOP login session and
+        # an already expired CloudFront triplet. Retry analysis once with a newly
+        # issued triplet instead of treating the stale CDN cookies as final.
+        $authorized = Refresh-VodAuthorization -Request $Request -CookieFile $Cookie.Path -StreamerId ([string]$Metadata.StreamerId) -Url $url -Attempt 1
+        if ($authorized) {
+            $probeFile = Join-Path $JobDirectory 'manifest-probe-analysis-refreshed.m3u8'
+            $authorized = Test-VodManifestAuthorization -Request $Request -CookieFile $Cookie.Path -Url $url -ProbeFile $probeFile
+        }
+    }
     if (-not $authorized) {
+        if ($usedExistingSignedCookie -and -not [bool]$Cookie.HasSoopLoginCookies) {
+            throw 'VOD 화질 분석 실패: CloudFront Cookie가 만료되었거나 manifest와 일치하지 않습니다. 새 Key-Pair-Id, Policy, Signature Cookie 파일을 내보내 주세요.'
+        }
         $detail = if ([string]::IsNullOrWhiteSpace([string]$script:LastVodAuthError)) { 'manifest 인증 확인 실패' } else { [string]$script:LastVodAuthError }
         throw "VOD 화질 분석 실패: $detail"
     }
@@ -126,7 +215,7 @@ function Invoke-VodDownloads {
     $files = @()
     foreach ($part in $SelectedParts) {
         $entry = $Metadata.Entries[$part - 1]
-        $url = [string]$entry.url
+        $url = Get-VodEntryManifestUrl -Entry $entry
         if ([string]::IsNullOrWhiteSpace($url)) { throw "PART $part URL이 없습니다." }
         $base = '{0}_{1}_{2:D2}' -f $Metadata.Date, $streamer, $part
         $path = Get-CollisionSafeVodPath -Directory $directory -BaseName $base -Extension '.mp4'
@@ -148,7 +237,7 @@ function Invoke-VodDownloads {
             Write-VodEvent -Type 'metadata_refreshing' -Message ("PART {0} 최신 VOD URL 분석 중 ({1}/{2})" -f $part, $attempt, [int]$Request.MaxRetries) -Part $part
             $refreshedMetadata = Get-VodMetadata -Request $Request -YtDlp $Tools.YtDlp -CookieFile $Cookie.Path -JobDirectory $JobDirectory
             if ($part -gt $refreshedMetadata.Entries.Count) { throw "새 VOD 정보에서 PART $part 를 찾지 못했습니다." }
-            $url = [string]$refreshedMetadata.Entries[$part - 1].url
+            $url = Get-VodEntryManifestUrl -Entry $refreshedMetadata.Entries[$part - 1]
             $streamerId = [string]$refreshedMetadata.StreamerId
             if ([string]::IsNullOrWhiteSpace($url)) { throw "새 VOD 정보에 PART $part URL이 없습니다." }
             $authorized = $false

@@ -7,6 +7,17 @@ $root = Split-Path -Parent $PSScriptRoot
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('soop-vod-retry-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 try {
+    $manifestEntry = [pscustomobject]@{
+        url = ''
+        manifest_url = 'https://vod-archive-sub-kr-cdn-z01.sooplive.com/master.m3u8'
+    }
+    if ((Get-VodEntryManifestUrl -Entry $manifestEntry) -ne $manifestEntry.manifest_url) {
+        throw 'Manifest URL fallback did not use yt-dlp manifest_url metadata.'
+    }
+    $apiFile = [pscustomobject]@{ file = 'https://vod-archive-sub-kr-cdn-z01.sooplive.com/api-master.m3u8' }
+    if ((Get-VodApiFileUrl -File $apiFile) -ne $apiFile.file) {
+        throw 'SOOP VOD API file URL fallback was not recognized.'
+    }
     $fakeYtDlp = Join-Path $tempRoot 'fake-yt-dlp.cmd'
     [IO.File]::WriteAllText($fakeYtDlp, "@echo ERROR: HTTP Error 403: Forbidden 1>&2`r`n@exit /b 1`r`n", [Text.Encoding]::ASCII)
     $cookiePath = Join-Path $tempRoot 'cookies.txt'

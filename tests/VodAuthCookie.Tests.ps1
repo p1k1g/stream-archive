@@ -19,6 +19,9 @@ try {
         throw 'Netscape cookie fields are invalid.'
     }
     Add-Content -LiteralPath $path -Encoding UTF8 -Value @(
+        "cdn.example.test`tFALSE`t/`tTRUE`t0`tCloudFront-Policy`tstale-policy",
+        "cdn.example.test`tFALSE`t/`tTRUE`t0`tCloudFront-Signature`tstale-signature",
+        "cdn.example.test`tFALSE`t/`tTRUE`t0`tCloudFront-Key-Pair-Id`tstale-key",
         ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Policy`tpolicy",
         ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Signature`tsignature",
         ".sooplive.com`tTRUE`t/`tTRUE`t0`tCloudFront-Key-Pair-Id`tkey"
@@ -27,6 +30,10 @@ try {
     $aliased = Get-Content -LiteralPath $path -Encoding UTF8 | Where-Object { $_ -like "cdn.example.test`t*" }
     if ($aliasCount -ne 3 -or @($aliased).Count -ne 3) {
         throw 'CloudFront signed cookies were not scoped to the manifest host.'
+    }
+    $allSigned = Get-Content -LiteralPath $path -Encoding UTF8 | Where-Object { $_ -match "`tCloudFront-(?:Policy|Signature|Key-Pair-Id)`t" }
+    if (@($allSigned).Count -ne 3 -or ($allSigned -join "`n") -match 'stale-') {
+        throw 'Stale duplicate CloudFront cookies were retained.'
     }
     $master = Join-Path $tempRoot 'master.m3u8'
     [IO.File]::WriteAllLines($master, @(

@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix70
+Version 1.2.0-preview1-fix71
 
 BUG FIX
 -------
@@ -1835,3 +1835,30 @@ fix70 implemented changes
   choices. The selected format expression is passed to yt-dlp for every PART.
 - Structured VOD events now carry a quality array; no Cookie value, password,
   DPAPI ciphertext, or signed URL is added to the GUI request/event protocol.
+
+
+fix71 implemented changes
+-------------------------
+
+1. CloudFront cookie canonicalization
+- Before private_auth.php renewal, expired CloudFront signed cookies are removed
+  while SOOP login cookies remain in the isolated VOD job jar.
+- After issuance, exactly one Key-Pair-Id, Policy, and Signature value is scoped
+  to the current manifest host. This prevents curl and yt-dlp from sending stale
+  and fresh cookies with the same name, which CloudFront rejects with HTTP 403.
+- A mixed FILE/BROWSER jar with SOOP login cookies can renew an expired signed
+  triplet during analysis; a signed-only jar instead reports that a fresh export
+  is required because it has no login session from which to renew authorization.
+
+2. yt-dlp metadata URL compatibility
+- Manifest URL resolution now checks url, manifest_url, manifestUrl, hls_url,
+  and format-level URL fields. This handles flat metadata where yt-dlp reports
+  the PART successfully but leaves the top-level entry URL empty.
+- If those fields are still empty, the authenticated SOOP mobile VOD metadata
+  endpoint supplies the ordered data.files URLs without opening the protected
+  m3u8. This avoids the metadata/authentication circular dependency.
+
+3. Regression coverage
+- Cookie tests now inject stale exact-host values plus fresh parent-domain values
+  and require the resulting jar to contain only the fresh canonical triplet.
+- The authorization regression verifies manifest_url fallback behavior.
