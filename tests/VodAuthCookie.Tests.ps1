@@ -8,15 +8,23 @@ try {
     $cookie = New-Object System.Net.Cookie('AuthTicket', 'test-value', '/', '.sooplive.com')
     $cookie.Secure = $true
     $jar.Add($cookie)
+    $parentWithoutDot = New-Object System.Net.Cookie('BbsTicket', 'parent-value', '/', 'sooplive.com')
+    $parentWithoutDot.Secure = $true
+    $jar.Add($parentWithoutDot)
     $path = Join-Path $tempRoot 'cookies.txt'
     $count = Export-VodNetscapeCookies -CookieContainer $jar -Destination $path
-    if ($count -ne 1 -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    if ($count -ne 2 -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw 'Netscape cookie export failed.'
     }
-    $dataLine = Get-Content -LiteralPath $path -Encoding UTF8 | Where-Object { -not $_.StartsWith('#') } | Select-Object -First 1
+    $dataLine = Get-Content -LiteralPath $path -Encoding UTF8 | Where-Object { $_ -match "`tAuthTicket`t" } | Select-Object -First 1
     $fields = $dataLine -split "`t", 7
     if ($fields.Count -ne 7 -or $fields[0] -ne '.sooplive.com' -or $fields[5] -ne 'AuthTicket') {
         throw 'Netscape cookie fields are invalid.'
+    }
+    $parentLine = Get-Content -LiteralPath $path -Encoding UTF8 | Where-Object { $_ -match "`tBbsTicket`t" } | Select-Object -First 1
+    $parentFields = $parentLine -split "`t", 7
+    if ($parentFields.Count -ne 7 -or $parentFields[0] -ne '.sooplive.com' -or $parentFields[1] -ne 'TRUE') {
+        throw 'SOOP parent-domain login cookie was not exported for subdomains.'
     }
     $policyJson = '{"Statement":[{"Resource":"https://cdn.example.test/*"}]}'
     $policyValue = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($policyJson)).Replace('+', '-').Replace('=', '_').Replace('/', '~')

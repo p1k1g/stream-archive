@@ -52,7 +52,13 @@ function Export-VodNetscapeCookies {
             $key = '{0}|{1}|{2}' -f $normalizedDomain, $path, $cookie.Name
             if ($seen.ContainsKey($key)) { continue }
             $seen[$key] = $true
-            $includeSubdomains = if ($domain.StartsWith('.')) { 'TRUE' } else { 'FALSE' }
+            # CookieContainer commonly returns the parent domain without its
+            # leading dot even when the login response issued a domain cookie.
+            # Netscape/curl would then treat it as host-only and omit it from
+            # live.sooplive.com/private_auth.php, which responds with code -12.
+            $isSoopParentDomain = $normalizedDomain -eq 'sooplive.com'
+            $outputDomain = if ($isSoopParentDomain) { '.sooplive.com' } else { $domain }
+            $includeSubdomains = if ($isSoopParentDomain -or $domain.StartsWith('.')) { 'TRUE' } else { 'FALSE' }
             $secure = if ($cookie.Secure) { 'TRUE' } else { 'FALSE' }
             $expires = [int64]0
             if ($cookie.Expires -ne [DateTime]::MinValue) {
@@ -60,7 +66,7 @@ function Export-VodNetscapeCookies {
             }
             $name = ([string]$cookie.Name) -replace '[\t\r\n]', ''
             $value = ([string]$cookie.Value) -replace '[\t\r\n]', ''
-            $lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f $domain, $includeSubdomains, $path, $secure, $expires, $name, $value))
+            $lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f $outputDomain, $includeSubdomains, $path, $secure, $expires, $name, $value))
         }
     }
     if ($lines.Count -le 2) { throw 'SOOP 로그인 Cookie를 발급받지 못했습니다.' }
@@ -460,7 +466,19 @@ function Refresh-VodAuthorization {
         $responseText = ($response -join ' ').Trim()
         $success = ($curlExitCode -eq 0 -and $responseText -match '"result"\s*:\s*1')
         if (-not $success) {
-            $detail = Get-RedactedVodText -Text $responseText
+            $detail = ''
+            try {
+                $failureJson = $responseText | ConvertFrom-Json
+                $failureCode = [string]$failureJson.data.code
+                $failureMessage = [string]$failureJson.data.message
+                if (-not [string]::IsNullOrWhiteSpace($failureMessage)) {
+                    # Delimit the variable before ':' for Windows PowerShell 5.1;
+                    # otherwise it parses $failureCode: as a scoped variable.
+                    $detail = if ([string]::IsNullOrWhiteSpace($failureCode)) { $failureMessage } else { "private_auth ${failureCode}: $failureMessage" }
+                }
+            }
+            catch { }
+            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = Get-RedactedVodText -Text $responseText }
             if ($detail.Length -gt 300) { $detail = $detail.Substring(0, 300) }
             if ([string]::IsNullOrWhiteSpace($detail)) { $detail = "curl exit code $curlExitCode" }
             $script:LastVodAuthError = $detail

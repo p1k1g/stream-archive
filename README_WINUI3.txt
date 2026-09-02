@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix76
+Version 1.2.0-preview1-fix78
 
 BUG FIX
 -------
@@ -1955,3 +1955,30 @@ fix76 implemented changes
 - Owned-output records use delimiter indexes and substrings only, avoiding both
   automatic match state and regex differences in Windows PowerShell 5.1.
 - Forced GUI cleanup applies the same exact-path-first policy.
+
+
+fix77 implemented changes
+-------------------------
+
+1. Stored-login subdomain authentication
+- CookieContainer parent-domain cookies are exported canonically as .sooplive.com
+  with Netscape include-subdomains enabled, so private_auth on live.sooplive.com
+  receives the same login tickets as a browser-exported Cookie file.
+- private_auth JSON failures are decoded to a readable code and message.
+
+2. Responsive VOD progress
+- The VOD progress bar stretches with the form while remaining capped at the same
+  980-pixel maximum width as the other VOD controls.
+
+3. Regression coverage
+- Cookie tests cover a parent domain returned without a leading dot, and source
+  checks enforce both cookie canonicalization and the progress width bound.
+
+
+fix78 implemented changes
+-------------------------
+
+1. Windows PowerShell 5.1 parser compatibility
+- Delimited the interpolated private_auth failure-code variable before its colon,
+  preventing PowerShell from interpreting it as an invalid scoped variable.
+- The VOD source regression now requires the parser-safe interpolation form.

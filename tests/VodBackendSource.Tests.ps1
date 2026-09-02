@@ -35,6 +35,8 @@ if ($auth -notmatch '\$mode -eq ''SOOP_LOGIN''' -or
     $auth -notmatch 'Resolve-ProtectedConfigSecrets' -or
     $auth -notmatch 'LoginAction\.php' -or
     $auth -notmatch 'ReadAsByteArrayAsync' -or
+    $auth -notmatch '\$isSoopParentDomain' -or
+    $auth -notmatch '\$\{failureCode\}:' -or
     $auth -notmatch 'New-VodSoopLoginCookie.+VodUrl' -or
     $auth -notmatch 'Repair-VodCloudFrontCookieScope' -or
     $auth -notmatch 'Retain only the last value curl wrote' -or
@@ -124,6 +126,11 @@ if ($vodUi -notmatch 'FileOpenPicker' -or
 }
 if ($vodUi -notmatch 'ApplyVodAnalysis' -or $vodUi -notmatch 'VodQualityBox' -or $vodUi -notmatch 'analyzedVodPartCount') {
     throw 'VOD UI does not wait for analysis before PART and quality selection.'
+}
+if ($vodUi -notmatch 'VodProgress = new ProgressBar' -or
+    $vodUi -notmatch 'MaxWidth = 980' -or
+    $vodUi -notmatch 'HorizontalAlignment = HorizontalAlignment\.Stretch') {
+    throw 'VOD progress width is not bounded to the responsive form width.'
 }
 if ($vodUi -notmatch 'PickVodCookieFileAsync' -or
     $vodUi -notmatch 'FileTypeFilter\.Add\("\.txt"\)' -or

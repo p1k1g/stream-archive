@@ -120,7 +120,14 @@ public sealed partial class MainWindow
         commandBar.PrimaryCommands.Add(VodCancelButton);
         stack.Children.Add(commandBar);
 
-        VodProgress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0 };
+        VodProgress = new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = 0,
+            MaxWidth = 980,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
         VodStatusText = new TextBlock { Text = "대기 중", Foreground = Muted, TextWrapping = TextWrapping.Wrap };
         stack.Children.Add(VodProgress);
         stack.Children.Add(VodStatusText);
