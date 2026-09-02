@@ -54,6 +54,9 @@ catch {
     Write-Error $message
 }
 finally {
-    if ($null -ne $script:VodRequest) { Remove-VodTemporarySecrets -JobDirectory $script:VodJobDirectory }
+    if ($null -ne $script:VodRequest) {
+        Remove-VodIncompleteArtifacts -JobDirectory $script:VodJobDirectory
+        Remove-VodTemporarySecrets -JobDirectory $script:VodJobDirectory
+    }
 }
 exit $script:VodExitCode

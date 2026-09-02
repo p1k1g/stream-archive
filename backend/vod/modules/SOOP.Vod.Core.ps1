@@ -1,7 +1,72 @@
 ﻿function Write-VodEvent {
     param([string]$Type, [string]$Message = '', [string]$Title = '', [string]$Streamer = '', [int]$Part = 0, [int]$PartCount = 0, [double]$Percent = 0, [string]$OutputFile = '', [string[]]$Qualities = @())
     $event = [ordered]@{ version = 1; type = $Type; jobId = [string]$script:VodRequest.JobId; timestamp = [DateTimeOffset]::Now.ToString('o'); message = $Message; title = $Title; streamer = $Streamer; part = $Part; partCount = $PartCount; percent = $Percent; outputFile = $OutputFile; qualities = @($Qualities) }
-    Write-Output ('@@SOOP_VOD_EVENT@@' + ($event | ConvertTo-Json -Compress -Depth 5))
+    # Write directly to stdout instead of the success pipeline. Invoke-VodDownloads
+    # is assigned to $downloaded by the entry script; pipeline events would become
+    # fake PartFiles and later be handed to ffmpeg as file names.
+    [Console]::Out.WriteLine('@@SOOP_VOD_EVENT@@' + ($event | ConvertTo-Json -Compress -Depth 5))
+}
+
+function Register-VodOwnedOutputPath {
+    param([string]$JobDirectory, [string]$Path, [switch]$DeleteTargetOnCleanup)
+    $registry = Join-Path $JobDirectory 'owned-output-paths.txt'
+    $kind = if ($DeleteTargetOnCleanup) { 'DELETE' } else { 'KEEP' }
+    [System.IO.File]::AppendAllLines($registry, [string[]]@($kind + '|' + [System.IO.Path]::GetFullPath($Path)), [System.Text.UTF8Encoding]::new($false))
+}
+
+function Complete-VodOwnedOutputPath {
+    param([string]$JobDirectory, [string]$Path)
+    $registry = Join-Path $JobDirectory 'owned-output-paths.txt'
+    if (-not (Test-Path -LiteralPath $registry -PathType Leaf)) { return }
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $remaining = @([System.IO.File]::ReadAllLines($registry, [System.Text.Encoding]::UTF8) | Where-Object { $_ -ne ('DELETE|' + $fullPath) })
+    [System.IO.File]::WriteAllLines($registry, [string[]]$remaining, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Remove-VodIncompleteArtifacts {
+    param([string]$JobDirectory)
+    $registry = Join-Path $JobDirectory 'owned-output-paths.txt'
+    if (-not (Test-Path -LiteralPath $registry -PathType Leaf)) { return }
+    foreach ($record in [System.IO.File]::ReadAllLines($registry, [System.Text.Encoding]::UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($record)) { continue }
+        $separator = $record.IndexOf('|')
+        if ($separator -le 0 -or $separator -ge ($record.Length - 1)) { continue }
+        $kind = $record.Substring(0, $separator)
+        if ($kind -ne 'KEEP' -and $kind -ne 'DELETE') { continue }
+        $target = $record.Substring($separator + 1)
+        $directory = Split-Path -Parent $target
+        $leaf = Split-Path -Leaf $target
+        if ([string]::IsNullOrWhiteSpace($directory) -or -not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
+        $artifactPrefixes = @($leaf + '.part', $leaf + '.ytdl', $leaf + '.temp')
+        # Remove the standard yt-dlp names explicitly. This is the reliable path
+        # on Windows PowerShell 5.1 even when provider enumeration behaves
+        # differently for a directory containing a recently closed subprocess.
+        foreach ($suffix in @('.part', '.ytdl', '.temp')) {
+            $candidate = $target + $suffix
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $artifactPaths = @()
+        try { $artifactPaths = @([System.IO.Directory]::EnumerateFiles($directory)) }
+        catch { }
+        foreach ($artifactPath in $artifactPaths) {
+            $artifactName = [System.IO.Path]::GetFileName($artifactPath)
+            $removeArtifact = $false
+            foreach ($prefix in $artifactPrefixes) {
+                if ($artifactName.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    $removeArtifact = $true
+                    break
+                }
+            }
+            if ($removeArtifact) {
+                Remove-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+        if ($kind -eq 'DELETE' -and (Test-Path -LiteralPath $target -PathType Leaf)) {
+            Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Test-VodRequest {

@@ -236,7 +236,8 @@ function Invoke-VodDownloads {
         if ([string]::IsNullOrWhiteSpace($url)) { throw "PART $part URL이 없습니다." }
         $base = '{0}_{1}_{2:D2}' -f $Metadata.Date, $streamer, $part
         $path = Get-CollisionSafeVodPath -Directory $directory -BaseName $base -Extension '.mp4'
-        Write-VodEvent -Type 'part_started' -Message ("PART {0}/{1} 다운로드 중…" -f $part, $Metadata.Entries.Count) -Part $part -PartCount $Metadata.Entries.Count
+        Register-VodOwnedOutputPath -JobDirectory $JobDirectory -Path $path
+        Write-VodEvent -Type 'part_started' -Message ("PART {0}/{1} 다운로드 중…" -f $part, $Metadata.Entries.Count) -Part $part -PartCount $Metadata.Entries.Count -OutputFile $path
         $complete = $false
         $lastFailureDetail = ''
         $streamerId = [string]$Metadata.StreamerId

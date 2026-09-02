@@ -60,6 +60,14 @@ try {
     if ($imported -ne 3 -or $null -eq $headerValues -or $headerValues['CloudFront-Key-Pair-Id'] -ne 'header-key') {
         throw 'private_auth Set-Cookie headers were not imported into the VOD jar.'
     }
+    $jsonJar = Join-Path $tempRoot 'json-cookies.txt'
+    [IO.File]::WriteAllText($jsonJar, "# Netscape HTTP Cookie File`r`n.sooplive.com`tTRUE`t/`tTRUE`t0`tAuthTicket`tlogin`r`n", [Text.UTF8Encoding]::new($false))
+    $jsonResponse = '{"result":1,"data":{"key":"json-key","policy":"json-policy","signature":"json-signature"}}'
+    $jsonImported = Import-VodCloudFrontJsonResponse -JsonText $jsonResponse -CookieFile $jsonJar -ResourceUrl 'https://cdn.example.test/master.m3u8'
+    $jsonValues = Get-VodCloudFrontCookieValues -Path $jsonJar
+    if ($jsonImported -ne 3 -or $null -eq $jsonValues -or $jsonValues['CloudFront-Key-Pair-Id'] -ne 'json-key') {
+        throw 'private_auth JSON cookie values were not imported into the VOD jar.'
+    }
     $master = Join-Path $tempRoot 'master.m3u8'
     [IO.File]::WriteAllLines($master, @(
         '#EXTM3U',

@@ -42,6 +42,7 @@ if ($auth -notmatch '\$mode -eq ''SOOP_LOGIN''' -or
     $auth -notmatch 'Get-VodCloudFrontPolicyResource' -or
     $auth -notmatch 'New-VodCloudFrontCurlConfig' -or
     $auth -notmatch 'Import-VodCloudFrontSetCookieHeaders' -or
+    $auth -notmatch 'Import-VodCloudFrontJsonResponse' -or
     $auth -notmatch 'Remove-VodCloudFrontCookies' -or
     $auth -notmatch '(?s:\$mode -eq ''SOOP_LOGIN''.+Remove-VodCloudFrontCookies)' -or
     $auth -notmatch 'Test-VodManifestAuthorization' -or
@@ -75,7 +76,9 @@ if ($download -notmatch 'Renew-VodBaseCookie' -or
     throw 'Short-lived subscription authorization, metadata URL, or request headers are not refreshed inside the retry loop.'
 }
 $entrySource = Get-Content -LiteralPath $entry -Raw
-if ($entrySource -notmatch '\$script:VodRequest\.AnalyzeOnly' -or $entrySource -notmatch '-Qualities \$qualities') {
+if ($entrySource -notmatch '\$script:VodRequest\.AnalyzeOnly' -or
+    $entrySource -notmatch '-Qualities \$qualities' -or
+    $entrySource -notmatch 'Remove-VodIncompleteArtifacts') {
     throw 'VOD analysis and download phases are not separated.'
 }
 $processService = Get-Content -LiteralPath (Join-Path $root 'overlay/VodProcessService.cs') -Raw
@@ -121,6 +124,16 @@ if ($vodUi -notmatch 'FileOpenPicker' -or
 }
 if ($vodUi -notmatch 'ApplyVodAnalysis' -or $vodUi -notmatch 'VodQualityBox' -or $vodUi -notmatch 'analyzedVodPartCount') {
     throw 'VOD UI does not wait for analysis before PART and quality selection.'
+}
+if ($vodUi -notmatch 'PickVodCookieFileAsync' -or
+    $vodUi -notmatch 'FileTypeFilter\.Add\("\.txt"\)' -or
+    $vodUi -notmatch 'CleanupVodIncompleteArtifacts') {
+    throw 'VOD Cookie file picker or cancellation artifact cleanup is missing.'
+}
+if ($core -notmatch '\[Console\]::Out\.WriteLine' -or
+    $core -notmatch 'Register-VodOwnedOutputPath' -or
+    $merge -notmatch 'Complete-VodOwnedOutputPath') {
+    throw 'VOD event pipeline isolation or owned-output cleanup is missing.'
 }
 $explorerSources = Get-ChildItem -LiteralPath (Join-Path $root 'overlay') -Filter '*.cs' |
     ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }

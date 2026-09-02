@@ -24,4 +24,28 @@ try { [void](Assert-VodFullPath -Path $tooLong) }
 catch { $rejected = $true }
 if (-not $rejected) { throw 'VOD full path safety limit was not enforced.' }
 
+$script:VodRequest = [pscustomobject]@{ JobId = 'pipeline-test' }
+$capturedEvent = @(Write-VodEvent -Type 'part_started' -Message 'event must not enter success pipeline')
+if ($capturedEvent.Count -ne 0) { throw 'Structured VOD event polluted the PartFiles success pipeline.' }
+
+$cleanupRoot = Join-Path ([IO.Path]::GetTempPath()) ('soop-vod-cleanup-' + [Guid]::NewGuid().ToString('N'))
+$outputRoot = Join-Path $cleanupRoot 'output'
+New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+try {
+    $partTarget = Join-Path $outputRoot 'part.mp4'
+    [IO.File]::WriteAllText($partTarget, 'complete', [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText($partTarget + '.part', 'partial', [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText($partTarget + '.ytdl', 'state', [Text.Encoding]::ASCII)
+    Register-VodOwnedOutputPath -JobDirectory $cleanupRoot -Path $partTarget
+    $mergeTarget = Join-Path $outputRoot 'merge.mp4'
+    [IO.File]::WriteAllText($mergeTarget, 'incomplete', [Text.Encoding]::ASCII)
+    Register-VodOwnedOutputPath -JobDirectory $cleanupRoot -Path $mergeTarget -DeleteTargetOnCleanup
+    Remove-VodIncompleteArtifacts -JobDirectory $cleanupRoot
+    if (-not (Test-Path -LiteralPath $partTarget)) { throw 'VOD cancellation cleanup removed a completed PART.' }
+    if (Test-Path -LiteralPath ($partTarget + '.part')) { throw 'VOD cancellation cleanup retained an mp4.part file.' }
+    if (Test-Path -LiteralPath ($partTarget + '.ytdl')) { throw 'VOD cancellation cleanup retained a ytdl state file.' }
+    if (Test-Path -LiteralPath $mergeTarget) { throw 'VOD cancellation cleanup retained an incomplete merge target.' }
+}
+finally { Remove-Item -LiteralPath $cleanupRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
 Write-Host 'VOD path and concat regression tests passed.'

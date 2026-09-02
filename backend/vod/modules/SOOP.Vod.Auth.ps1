@@ -242,6 +242,25 @@ function New-VodCloudFrontCurlConfig {
     [System.IO.File]::WriteAllText($Destination, ('header = "{0}"' -f $escaped), [System.Text.UTF8Encoding]::new($false))
 }
 
+function Write-VodCloudFrontCookieValues {
+    param($Values, [string]$CookieFile, [string]$ResourceUrl)
+    $resourceUri = $null
+    if ($null -eq $Values -or
+        -not [Uri]::TryCreate($ResourceUrl, [UriKind]::Absolute, [ref]$resourceUri) -or
+        $resourceUri.Scheme -ne 'https') { return 0 }
+    foreach ($name in @('CloudFront-Key-Pair-Id', 'CloudFront-Policy', 'CloudFront-Signature')) {
+        if ([string]::IsNullOrWhiteSpace([string]$Values[$name])) { return 0 }
+    }
+    Remove-VodCloudFrontCookies -CookieFile $CookieFile
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in [System.IO.File]::ReadAllLines($CookieFile, [System.Text.Encoding]::UTF8)) { [void]$lines.Add($line) }
+    foreach ($name in @('CloudFront-Key-Pair-Id', 'CloudFront-Policy', 'CloudFront-Signature')) {
+        [void]$lines.Add(("{0}`tFALSE`t/`tTRUE`t0`t{1}`t{2}" -f $resourceUri.Host.ToLowerInvariant(), $name, $Values[$name]))
+    }
+    [System.IO.File]::WriteAllLines($CookieFile, [string[]]$lines, [System.Text.UTF8Encoding]::new($false))
+    return 3
+}
+
 function Import-VodCloudFrontSetCookieHeaders {
     param([string]$HeaderFile, [string]$CookieFile, [string]$ResourceUrl)
     if (-not (Test-Path -LiteralPath $HeaderFile -PathType Leaf)) { return 0 }
@@ -251,16 +270,25 @@ function Import-VodCloudFrontSetCookieHeaders {
         if ($match.Success) { $values[$match.Groups['name'].Value] = $match.Groups['value'].Value.Trim('"') }
     }
     if ($values.Count -lt 3) { return 0 }
-    $resourceUri = $null
-    if (-not [Uri]::TryCreate($ResourceUrl, [UriKind]::Absolute, [ref]$resourceUri) -or $resourceUri.Scheme -ne 'https') { return 0 }
-    Remove-VodCloudFrontCookies -CookieFile $CookieFile
-    $lines = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($line in [System.IO.File]::ReadAllLines($CookieFile, [System.Text.Encoding]::UTF8)) { $lines.Add($line) }
-    foreach ($name in @('CloudFront-Key-Pair-Id', 'CloudFront-Policy', 'CloudFront-Signature')) {
-        $lines.Add(("{0}`tFALSE`t/`tTRUE`t0`t{1}`t{2}" -f $resourceUri.Host.ToLowerInvariant(), $name, $values[$name]))
+    return Write-VodCloudFrontCookieValues -Values $values -CookieFile $CookieFile -ResourceUrl $ResourceUrl
+}
+
+function Import-VodCloudFrontJsonResponse {
+    param([string]$JsonText, [string]$CookieFile, [string]$ResourceUrl)
+    if ([string]::IsNullOrWhiteSpace($JsonText)) { return 0 }
+    $patterns = [ordered]@{
+        'CloudFront-Key-Pair-Id' = '"(?:CloudFront[-_])?(?:Key[-_]?Pair[-_]?I[Dd]|Key)"\s*:\s*"(?<value>(?:\\.|[^"\\])*)"'
+        'CloudFront-Policy' = '"(?:CloudFront[-_])?Policy"\s*:\s*"(?<value>(?:\\.|[^"\\])*)"'
+        'CloudFront-Signature' = '"(?:CloudFront[-_])?Signature"\s*:\s*"(?<value>(?:\\.|[^"\\])*)"'
     }
-    [System.IO.File]::WriteAllLines($CookieFile, [string[]]$lines, [System.Text.UTF8Encoding]::new($false))
-    return 3
+    $values = @{}
+    foreach ($name in $patterns.Keys) {
+        $match = [regex]::Match($JsonText, [string]$patterns[$name], [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $match.Success) { return 0 }
+        try { $values[$name] = ('"' + $match.Groups['value'].Value + '"') | ConvertFrom-Json }
+        catch { return 0 }
+    }
+    return Write-VodCloudFrontCookieValues -Values $values -CookieFile $CookieFile -ResourceUrl $ResourceUrl
 }
 
 function Repair-VodCloudFrontCookieScope {
@@ -438,9 +466,19 @@ function Refresh-VodAuthorization {
             $script:LastVodAuthError = $detail
         }
         if ($success) {
-            [void](Import-VodCloudFrontSetCookieHeaders -HeaderFile $headerFile -CookieFile $CookieFile -ResourceUrl $Url)
-            Test-VodNetscapeCookieFile -Path $CookieFile
-            [void](Repair-VodCloudFrontCookieScope -CookieFile $CookieFile -ResourceUrl $Url)
+            $imported = Import-VodCloudFrontSetCookieHeaders -HeaderFile $headerFile -CookieFile $CookieFile -ResourceUrl $Url
+            if ($imported -lt 3) {
+                $imported = Import-VodCloudFrontJsonResponse -JsonText $responseText -CookieFile $CookieFile -ResourceUrl $Url
+            }
+            $cloudFrontValues = Get-VodCloudFrontCookieValues -Path $CookieFile
+            if ($null -eq $cloudFrontValues) {
+                $success = $false
+                $script:LastVodAuthError = 'private_auth 성공 응답에 CloudFront Cookie 3종이 없습니다.'
+            }
+            else {
+                Test-VodNetscapeCookieFile -Path $CookieFile
+                [void](Repair-VodCloudFrontCookieScope -CookieFile $CookieFile -ResourceUrl $Url)
+            }
         }
         return $success
     }

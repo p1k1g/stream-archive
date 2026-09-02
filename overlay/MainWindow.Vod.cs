@@ -19,6 +19,8 @@ public sealed partial class MainWindow
     TextBox VodFfmpegPathBox = null!;
     ComboBox VodCookieModeBox = null!;
     TextBox VodCookieSourceBox = null!;
+    Grid VodCookieSourceGrid = null!;
+    Button VodCookieBrowseButton = null!;
     TextBlock VodLoginStatusText = null!;
     TextBlock VodStatusText = null!;
     ProgressBar VodProgress = null!;
@@ -82,7 +84,9 @@ public sealed partial class MainWindow
         VodCookieModeBox.SelectionChanged += (_, _) =>
         {
             var mode = SelectedVodCookieMode();
-            VodCookieSourceBox.Visibility = mode == "SOOP_LOGIN" ? Visibility.Collapsed : Visibility.Visible;
+            VodCookieSourceGrid.Visibility = mode == "SOOP_LOGIN" ? Visibility.Collapsed : Visibility.Visible;
+            VodCookieBrowseButton.Visibility = mode == "FILE" ? Visibility.Visible : Visibility.Collapsed;
+            VodCookieSourceBox.Header = mode == "BROWSER" ? "브라우저 이름" : "Cookie 파일 경로";
             VodLoginStatusText.Visibility = mode == "SOOP_LOGIN" ? Visibility.Visible : Visibility.Collapsed;
             VodCookieSourceBox.Text = mode == "BROWSER" ? vodSettings.BrowserName : vodSettings.CookieFile;
             InvalidateVodAnalysis();
@@ -95,9 +99,11 @@ public sealed partial class MainWindow
         stack.Children.Add(BuildVodExecutablePicker(VodYtDlpPathBox, "yt-dlp.exe 선택", "yt-dlp.exe"));
         stack.Children.Add(BuildVodExecutablePicker(VodFfmpegPathBox, "ffmpeg.exe 선택", "ffmpeg.exe"));
         stack.Children.Add(VodCookieModeBox);
-        stack.Children.Add(VodCookieSourceBox);
+        stack.Children.Add(BuildVodCookieSourcePicker());
         stack.Children.Add(VodLoginStatusText);
-        VodCookieSourceBox.Visibility = vodSettings.CookieMode == "SOOP_LOGIN" ? Visibility.Collapsed : Visibility.Visible;
+        VodCookieSourceGrid.Visibility = vodSettings.CookieMode == "SOOP_LOGIN" ? Visibility.Collapsed : Visibility.Visible;
+        VodCookieBrowseButton.Visibility = vodSettings.CookieMode == "FILE" ? Visibility.Visible : Visibility.Collapsed;
+        VodCookieSourceBox.Header = vodSettings.CookieMode == "BROWSER" ? "브라우저 이름" : "Cookie 파일 경로";
         VodLoginStatusText.Visibility = vodSettings.CookieMode == "SOOP_LOGIN" ? Visibility.Visible : Visibility.Collapsed;
         VodUrlBox.TextChanged += (_, _) => InvalidateVodAnalysis();
         VodCookieSourceBox.TextChanged += (_, _) => InvalidateVodAnalysis();
@@ -145,6 +151,39 @@ public sealed partial class MainWindow
         Grid.SetColumn(browse, 1);
         grid.Children.Add(browse);
         return grid;
+    }
+
+    FrameworkElement BuildVodCookieSourcePicker()
+    {
+        VodCookieSourceGrid = new Grid { ColumnSpacing = DesignTokens.SpaceSm };
+        VodCookieSourceGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        VodCookieSourceGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        VodCookieSourceGrid.Children.Add(VodCookieSourceBox);
+        VodCookieBrowseButton = new Button
+        {
+            Content = new SymbolIcon(Symbol.OpenFile),
+            VerticalAlignment = VerticalAlignment.Bottom,
+            MinWidth = 44,
+            Height = 34
+        };
+        AutomationProperties.SetName(VodCookieBrowseButton, "Cookie 파일 선택");
+        ToolTipService.SetToolTip(VodCookieBrowseButton, "Cookie 파일 선택");
+        VodCookieBrowseButton.Click += async (_, _) => await PickVodCookieFileAsync();
+        Grid.SetColumn(VodCookieBrowseButton, 1);
+        VodCookieSourceGrid.Children.Add(VodCookieBrowseButton);
+        return VodCookieSourceGrid;
+    }
+
+    async Task PickVodCookieFileAsync()
+    {
+        var picker = new Windows.Storage.Pickers.FileOpenPicker
+        {
+            SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.Downloads
+        };
+        picker.FileTypeFilter.Add(".txt");
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+        var file = await picker.PickSingleFileAsync();
+        if (file != null) VodCookieSourceBox.Text = file.Path;
     }
 
     async Task PickVodExecutableAsync(TextBox target, string expectedFileName)
@@ -321,7 +360,46 @@ public sealed partial class MainWindow
         var directory = activeVodJobDirectory;
         activeVodJobDirectory = null;
         if (string.IsNullOrWhiteSpace(directory)) return;
+        CleanupVodIncompleteArtifacts(directory);
         try { Directory.Delete(directory, true); } catch { }
+    }
+
+    static void CleanupVodIncompleteArtifacts(string jobDirectory)
+    {
+        try
+        {
+            var registry = Path.Combine(jobDirectory, "owned-output-paths.txt");
+            if (!File.Exists(registry)) return;
+            foreach (var record in File.ReadAllLines(registry, Encoding.UTF8))
+            {
+                var separator = record.IndexOf('|');
+                if (separator <= 0) continue;
+                var kind = record[..separator];
+                var target = record[(separator + 1)..];
+                if (string.IsNullOrWhiteSpace(target)) continue;
+                var outputDirectory = Path.GetDirectoryName(target);
+                var leaf = Path.GetFileName(target);
+                if (string.IsNullOrWhiteSpace(outputDirectory) || string.IsNullOrWhiteSpace(leaf) || !Directory.Exists(outputDirectory)) continue;
+                var artifactPrefixes = new[] { leaf + ".part", leaf + ".ytdl", leaf + ".temp" };
+                foreach (var suffix in new[] { ".part", ".ytdl", ".temp" })
+                {
+                    var candidate = target + suffix;
+                    if (!File.Exists(candidate)) continue;
+                    try { File.Delete(candidate); } catch { }
+                }
+                foreach (var artifact in Directory.EnumerateFiles(outputDirectory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    var name = Path.GetFileName(artifact);
+                    if (!artifactPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) continue;
+                    try { File.Delete(artifact); } catch { }
+                }
+                if (string.Equals(kind, "DELETE", StringComparison.Ordinal) && File.Exists(target))
+                {
+                    try { File.Delete(target); } catch { }
+                }
+            }
+        }
+        catch { }
     }
 
     string SelectedVodCookieMode() =>

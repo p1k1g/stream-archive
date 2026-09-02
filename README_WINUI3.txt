@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix73
+Version 1.2.0-preview1-fix76
 
 BUG FIX
 -------
@@ -1904,3 +1904,54 @@ fix73 implemented changes
 3. Regression coverage
 - Tests require initial PART URL preservation and deterministic Set-Cookie import
   for Key-Pair-Id, Policy, and Signature without exposing their real values.
+
+
+fix74 implemented changes
+-------------------------
+
+1. Cookie file picker and stored-login compatibility
+- FILE mode now shows a Windows .txt picker beside the Cookie path while browser
+  mode keeps the same editable browser-name field.
+- Stored login imports CloudFront credentials from either private_auth Set-Cookie
+  headers or supported JSON key/policy/signature fields before manifest preflight.
+
+2. Cancellation cleanup
+- Every VOD target is registered in the private job directory before yt-dlp or
+  ffmpeg starts. Backend finally cleanup and GUI forced-cancel cleanup remove only
+  that job's .part, .ytdl, .temp, fragment files, and incomplete merge target.
+- Completed individual PART files and a successfully completed merge are retained.
+
+3. Merge input isolation
+- Structured events now write directly to redirected stdout, not PowerShell's
+  success pipeline. Invoke-VodDownloads therefore returns only real mp4 paths and
+  ffmpeg no longer receives an @@SOOP_VOD_EVENT@@ JSON line as a PART filename.
+
+4. Regression coverage
+- Tests cover Set-Cookie and JSON authorization import, success-pipeline isolation,
+  owned temporary-file cleanup, Cookie picker wiring, and merge completion state.
+
+
+fix75 implemented changes
+-------------------------
+
+1. Windows PowerShell cancellation cleanup
+- Owned-output registry records are parsed with an explicit Regex Match instead of
+  relying on the automatic Matches variable after a negative match expression.
+- Residual part, ytdl, and temp files are selected by case-insensitive literal file
+  name prefixes, avoiding wildcard-provider differences on Windows PowerShell 5.1.
+- GUI forced-cancel cleanup uses the same literal prefix rules.
+
+2. Regression diagnostics
+- Cancellation regression failures now identify whether a completed PART was
+  removed or which incomplete artifact was retained.
+
+
+fix76 implemented changes
+-------------------------
+
+1. Deterministic yt-dlp residue deletion
+- Standard target.part, target.ytdl, and target.temp files are deleted by their
+  exact literal paths before optional prefix enumeration handles variants.
+- Owned-output records use delimiter indexes and substrings only, avoiding both
+  automatic match state and regex differences in Windows PowerShell 5.1.
+- Forced GUI cleanup applies the same exact-path-first policy.
