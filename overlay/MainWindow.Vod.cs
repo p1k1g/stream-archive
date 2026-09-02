@@ -381,6 +381,12 @@ public sealed partial class MainWindow
                 var leaf = Path.GetFileName(target);
                 if (string.IsNullOrWhiteSpace(outputDirectory) || string.IsNullOrWhiteSpace(leaf) || !Directory.Exists(outputDirectory)) continue;
                 var artifactPrefixes = new[] { leaf + ".part", leaf + ".ytdl", leaf + ".temp" };
+                foreach (var suffix in new[] { ".part", ".ytdl", ".temp" })
+                {
+                    var candidate = target + suffix;
+                    if (!File.Exists(candidate)) continue;
+                    try { File.Delete(candidate); } catch { }
+                }
                 foreach (var artifact in Directory.EnumerateFiles(outputDirectory, "*", SearchOption.TopDirectoryOnly))
                 {
                     var name = Path.GetFileName(artifact);

@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix75
+Version 1.2.0-preview1-fix76
 
 BUG FIX
 -------
@@ -1944,3 +1944,14 @@ fix75 implemented changes
 2. Regression diagnostics
 - Cancellation regression failures now identify whether a completed PART was
   removed or which incomplete artifact was retained.
+
+
+fix76 implemented changes
+-------------------------
+
+1. Deterministic yt-dlp residue deletion
+- Standard target.part, target.ytdl, and target.temp files are deleted by their
+  exact literal paths before optional prefix enumeration handles variants.
+- Owned-output records use delimiter indexes and substrings only, avoiding both
+  automatic match state and regex differences in Windows PowerShell 5.1.
+- Forced GUI cleanup applies the same exact-path-first policy.

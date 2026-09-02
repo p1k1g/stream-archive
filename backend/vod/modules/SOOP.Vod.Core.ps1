@@ -29,27 +29,38 @@ function Remove-VodIncompleteArtifacts {
     if (-not (Test-Path -LiteralPath $registry -PathType Leaf)) { return }
     foreach ($record in [System.IO.File]::ReadAllLines($registry, [System.Text.Encoding]::UTF8)) {
         if ([string]::IsNullOrWhiteSpace($record)) { continue }
-        # Do not depend on the automatic $Matches variable after -notmatch.
-        # Its update behavior is easy to invalidate with a later comparison and
-        # caused the Windows PowerShell 5.1 cleanup path to skip valid records.
-        $recordMatch = [regex]::Match($record, '^(?<kind>KEEP|DELETE)\|(?<path>.+)$')
-        if (-not $recordMatch.Success) { continue }
-        $target = $recordMatch.Groups['path'].Value
-        $kind = $recordMatch.Groups['kind'].Value
+        $separator = $record.IndexOf('|')
+        if ($separator -le 0 -or $separator -ge ($record.Length - 1)) { continue }
+        $kind = $record.Substring(0, $separator)
+        if ($kind -ne 'KEEP' -and $kind -ne 'DELETE') { continue }
+        $target = $record.Substring($separator + 1)
         $directory = Split-Path -Parent $target
         $leaf = Split-Path -Leaf $target
         if ([string]::IsNullOrWhiteSpace($directory) -or -not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
         $artifactPrefixes = @($leaf + '.part', $leaf + '.ytdl', $leaf + '.temp')
-        foreach ($artifact in Get-ChildItem -LiteralPath $directory -File -ErrorAction SilentlyContinue) {
+        # Remove the standard yt-dlp names explicitly. This is the reliable path
+        # on Windows PowerShell 5.1 even when provider enumeration behaves
+        # differently for a directory containing a recently closed subprocess.
+        foreach ($suffix in @('.part', '.ytdl', '.temp')) {
+            $candidate = $target + $suffix
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $artifactPaths = @()
+        try { $artifactPaths = @([System.IO.Directory]::EnumerateFiles($directory)) }
+        catch { }
+        foreach ($artifactPath in $artifactPaths) {
+            $artifactName = [System.IO.Path]::GetFileName($artifactPath)
             $removeArtifact = $false
             foreach ($prefix in $artifactPrefixes) {
-                if ($artifact.Name.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                if ($artifactName.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
                     $removeArtifact = $true
                     break
                 }
             }
             if ($removeArtifact) {
-                Remove-Item -LiteralPath $artifact.FullName -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue
             }
         }
         if ($kind -eq 'DELETE' -and (Test-Path -LiteralPath $target -PathType Leaf)) {
