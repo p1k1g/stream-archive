@@ -129,8 +129,14 @@ if ($vodUi -notmatch 'ApplyVodAnalysis' -or $vodUi -notmatch 'VodQualityBox' -or
 }
 if ($vodUi -notmatch 'VodProgress = new ProgressBar' -or
     $vodUi -notmatch 'MaxWidth = 980' -or
-    $vodUi -notmatch 'HorizontalAlignment = HorizontalAlignment\.Stretch') {
+    $vodUi -notmatch 'stack\.SizeChanged' -or
+    $vodUi -notmatch 'VodProgress\.Width = Math\.Min') {
     throw 'VOD progress width is not bounded to the responsive form width.'
+}
+if ($entrySource -notmatch 'Get-VodPartDurationOptions' -or
+    $entrySource -notmatch '-PartDurations \$partDurations' -or
+    $vodUi -notmatch 'VodDurationFormatter\.Format') {
+    throw 'VOD analysis does not expose and display per-PART durations.'
 }
 if ($vodUi -notmatch 'PickVodCookieFileAsync' -or
     $vodUi -notmatch 'FileTypeFilter\.Add\("\.txt"\)' -or

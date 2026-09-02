@@ -33,9 +33,10 @@ try {
     $cookie = Initialize-VodCookie -Request $script:VodRequest -JobDirectory $script:VodJobDirectory -YtDlp $tools.YtDlp -BackendRoot $backendRoot
     $metadata = Get-VodMetadata -Request $script:VodRequest -YtDlp $tools.YtDlp -CookieFile $cookie.Path -JobDirectory $script:VodJobDirectory
     $qualities = Get-VodAnalysisQualities -Request $script:VodRequest -Metadata $metadata -Tools $tools -Cookie $cookie -JobDirectory $script:VodJobDirectory
-    Write-VodEvent -Type 'metadata_ready' -Message ("{0} · {1}개 PART · 화질 {2}개" -f $metadata.Title, $metadata.Entries.Count, $qualities.Count) -Title $metadata.Title -Streamer $metadata.Streamer -PartCount $metadata.Entries.Count -Qualities $qualities
+    $partDurations = @(Get-VodPartDurationOptions -Entries $metadata.Entries)
+    Write-VodEvent -Type 'metadata_ready' -Message ("{0} · {1}개 PART · 화질 {2}개" -f $metadata.Title, $metadata.Entries.Count, $qualities.Count) -Title $metadata.Title -Streamer $metadata.Streamer -PartCount $metadata.Entries.Count -Qualities $qualities -PartDurations $partDurations
     if ([bool]$script:VodRequest.AnalyzeOnly) {
-        Write-VodEvent -Type 'analysis_completed' -Message '분석 완료 · PART와 화질을 선택한 뒤 다운로드를 시작하세요.' -Title $metadata.Title -Streamer $metadata.Streamer -PartCount $metadata.Entries.Count -Qualities $qualities
+        Write-VodEvent -Type 'analysis_completed' -Message '분석 완료 · PART와 화질을 선택한 뒤 다운로드를 시작하세요.' -Title $metadata.Title -Streamer $metadata.Streamer -PartCount $metadata.Entries.Count -Qualities $qualities -PartDurations $partDurations
         return
     }
 

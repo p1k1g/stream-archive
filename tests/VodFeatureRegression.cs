@@ -24,15 +24,20 @@ static class VodFeatureRegression
             partCount = 10,
             percent = 42.5,
             qualities = new[] { "best|최고 화질", "best[height<=1080]|1080p" },
+            partDurations = new[] { "1|3660", "2|1800" },
             outputFile = @"C:\VOD[한글]\제목|=.mp4"
         });
         if (!VodEventParser.TryParse(line, out var parsed) || parsed == null ||
-            parsed.Percent != 42.5 || parsed.OutputFile != @"C:\VOD[한글]\제목|=.mp4" || parsed.Qualities.Count != 2)
+            parsed.Percent != 42.5 || parsed.OutputFile != @"C:\VOD[한글]\제목|=.mp4" ||
+            parsed.Qualities.Count != 2 || parsed.PartDurations.Count != 2 || parsed.PartDurations[0] != "1|3660")
             throw new InvalidOperationException("VOD JSON event special-character regression.");
         if (VodEventParser.TryParse(VodEventParser.Prefix + "{bad", out _))
             throw new InvalidOperationException("Malformed VOD JSON event was accepted.");
         if (VodEventParser.TryParse(VodEventParser.Prefix + "{\"version\":2,\"type\":\"completed\"}", out _))
             throw new InvalidOperationException("Unknown VOD event version was accepted.");
+        if (VodDurationFormatter.Format("1|3660") != "PART 1 : 01시 01분" ||
+            VodDurationFormatter.Format("2|0") != "PART 2 : 시간 정보 없음")
+            throw new InvalidOperationException("VOD PART duration formatting regression.");
 
         var defaultState = new VodSettings();
         if (defaultState.CookieMode != "SOOP_LOGIN")

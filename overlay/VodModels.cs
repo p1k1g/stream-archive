@@ -33,7 +33,8 @@ public sealed record VodBackendEvent(
     int PartCount,
     double Percent,
     string OutputFile,
-    IReadOnlyList<string> Qualities);
+    IReadOnlyList<string> Qualities,
+    IReadOnlyList<string> PartDurations);
 
 public sealed record VodSettings(
     string OutputDirectory = "",

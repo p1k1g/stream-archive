@@ -387,7 +387,7 @@ public sealed partial class MainWindow : Window
         });
         titleStack.Children.Add(new TextBlock
         {
-            Text = "WinUI 3 · v1.2.0-preview1-fix78",
+            Text = "WinUI 3 · v1.2.0-preview1-fix79",
             Foreground = MakeBrush("#667085"),
             FontSize = 12
         });

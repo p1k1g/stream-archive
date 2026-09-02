@@ -1,6 +1,6 @@
 ﻿function Write-VodEvent {
-    param([string]$Type, [string]$Message = '', [string]$Title = '', [string]$Streamer = '', [int]$Part = 0, [int]$PartCount = 0, [double]$Percent = 0, [string]$OutputFile = '', [string[]]$Qualities = @())
-    $event = [ordered]@{ version = 1; type = $Type; jobId = [string]$script:VodRequest.JobId; timestamp = [DateTimeOffset]::Now.ToString('o'); message = $Message; title = $Title; streamer = $Streamer; part = $Part; partCount = $PartCount; percent = $Percent; outputFile = $OutputFile; qualities = @($Qualities) }
+    param([string]$Type, [string]$Message = '', [string]$Title = '', [string]$Streamer = '', [int]$Part = 0, [int]$PartCount = 0, [double]$Percent = 0, [string]$OutputFile = '', [string[]]$Qualities = @(), [string[]]$PartDurations = @())
+    $event = [ordered]@{ version = 1; type = $Type; jobId = [string]$script:VodRequest.JobId; timestamp = [DateTimeOffset]::Now.ToString('o'); message = $Message; title = $Title; streamer = $Streamer; part = $Part; partCount = $PartCount; percent = $Percent; outputFile = $OutputFile; qualities = @($Qualities); partDurations = @($PartDurations) }
     # Write directly to stdout instead of the success pipeline. Invoke-VodDownloads
     # is assigned to $downloaded by the entry script; pipeline events would become
     # fake PartFiles and later be handed to ffmpeg as file names.

@@ -126,10 +126,15 @@ public sealed partial class MainWindow
             Maximum = 100,
             Value = 0,
             MaxWidth = 980,
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            HorizontalAlignment = HorizontalAlignment.Left
         };
+        var progressHost = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch, MaxWidth = 980 };
+        // Derive the track width from the already-laid-out form, never from the
+        // growing indicator itself. Value changes therefore fill a fixed track.
+        stack.SizeChanged += (_, args) => VodProgress.Width = Math.Min(980, Math.Max(0, args.NewSize.Width));
+        progressHost.Children.Add(VodProgress);
         VodStatusText = new TextBlock { Text = "대기 중", Foreground = Muted, TextWrapping = TextWrapping.Wrap };
-        stack.Children.Add(VodProgress);
+        stack.Children.Add(progressHost);
         stack.Children.Add(VodStatusText);
         root.Children.Add(new ScrollViewer { Content = stack });
 
@@ -338,7 +343,11 @@ public sealed partial class MainWindow
         }
         VodQualityBox.SelectedIndex = 0;
         VodQualityBox.IsEnabled = true;
-        VodAnalysisInfoText.Text = $"{item.Streamer} · {item.Title} · PART {item.PartCount}개";
+        var durationLines = item.PartDurations
+            .Select(VodDurationFormatter.Format)
+            .Where(line => !string.IsNullOrWhiteSpace(line));
+        VodAnalysisInfoText.Text = string.Join(Environment.NewLine,
+            new[] { $"{item.Streamer} · {item.Title} · PART {item.PartCount}개" }.Concat(durationLines));
     }
 
     void InvalidateVodAnalysis()

@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix78
+Version 1.2.0-preview1-fix79
 
 BUG FIX
 -------
@@ -1982,3 +1982,22 @@ fix78 implemented changes
 - Delimited the interpolated private_auth failure-code variable before its colon,
   preventing PowerShell from interpreting it as an invalid scoped variable.
 - The VOD source regression now requires the parser-safe interpolation form.
+
+
+fix79 implemented changes
+-------------------------
+
+1. Stable responsive VOD progress track
+- The progress track takes its width from the laid-out VOD form, not from the
+  indicator, and remains capped to the same 980-pixel width as the form controls.
+- Progress values now fill a stable track without changing its horizontal size.
+
+2. Per-PART duration planning
+- Analysis events include each PART duration as invariant seconds from yt-dlp
+  metadata, with SOOP API file metadata used as a fallback when available.
+- The VOD analysis summary lists every PART as PART N : HH시 MM분, or explicitly
+  reports when that PART has no duration metadata.
+
+3. Regression coverage
+- Parser and formatter regressions cover the duration event contract and display,
+  while PowerShell regressions cover numeric, time-string, and missing durations.

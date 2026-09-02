@@ -18,6 +18,15 @@ try {
     if ((Get-VodApiFileUrl -File $apiFile) -ne $apiFile.file) {
         throw 'SOOP VOD API file URL fallback was not recognized.'
     }
+    $durationOptions = @(Get-VodPartDurationOptions -Entries @(
+        [pscustomobject]@{ duration = 3660 },
+        [pscustomobject]@{ duration_string = '00:30:00' },
+        [pscustomobject]@{}
+    ))
+    if ($durationOptions.Count -ne 3 -or $durationOptions[0] -ne '1|3660' -or
+        $durationOptions[1] -ne '2|1800' -or $durationOptions[2] -ne '3|0') {
+        throw 'VOD PART durations were not normalized to invariant seconds.'
+    }
     $originalEntry = [pscustomobject]@{ url = 'https://cdn.example.test/original-part-2.m3u8' }
     $missingRefresh = @([pscustomobject]@{ url = 'https://cdn.example.test/part-1.m3u8' }, [pscustomobject]@{ url = '' })
     $resolvedFallback = Resolve-VodAttemptManifestUrl -OriginalEntry $originalEntry -RefreshedEntries $missingRefresh -Part 2

@@ -96,6 +96,34 @@ function Get-VodMetadata {
     return [pscustomobject]@{ Title = $title; Streamer = $streamer; StreamerId = $streamerId; Date = $date.Substring(2, 6); Entries = $entries }
 }
 
+function Get-VodPartDurationOptions {
+    param([object[]]$Entries)
+    $result = New-Object 'System.Collections.Generic.List[string]'
+    for ($index = 0; $index -lt $Entries.Count; $index++) {
+        $entry = $Entries[$index]
+        [double]$seconds = 0
+        foreach ($name in @('duration', 'file_duration', 'play_time')) {
+            $property = $entry.PSObject.Properties[$name]
+            if ($null -eq $property -or $null -eq $property.Value) { continue }
+            if ([double]::TryParse([string]$property.Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$seconds) -and $seconds -gt 0) { break }
+            $seconds = 0
+        }
+        if ($seconds -le 0) {
+            foreach ($name in @('duration_string', 'durationString')) {
+                $property = $entry.PSObject.Properties[$name]
+                if ($null -eq $property) { continue }
+                $duration = [TimeSpan]::Zero
+                if ([TimeSpan]::TryParse([string]$property.Value, [Globalization.CultureInfo]::InvariantCulture, [ref]$duration) -and $duration.TotalSeconds -gt 0) {
+                    $seconds = $duration.TotalSeconds
+                    break
+                }
+            }
+        }
+        $result.Add(("{0}|{1}" -f ($index + 1), [int][Math]::Round($seconds)))
+    }
+    return @($result)
+}
+
 function Get-VodEntryManifestUrl {
     param($Entry)
     if ($null -eq $Entry) { return '' }
@@ -152,7 +180,16 @@ function Get-VodApiFileUrl {
 function Complete-VodManifestUrlsFromApi {
     param($Request, [string]$CookieFile, [object[]]$Entries, [string]$JobDirectory)
     $missing = @($Entries | Where-Object { [string]::IsNullOrWhiteSpace((Get-VodEntryManifestUrl -Entry $_)) })
-    if ($missing.Count -eq 0) { return @($Entries) }
+    $missingDuration = @($Entries | Where-Object {
+        $entry = $_
+        $hasDuration = $false
+        foreach ($name in @('duration', 'file_duration', 'play_time', 'duration_string', 'durationString')) {
+            $property = $entry.PSObject.Properties[$name]
+            if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) { $hasDuration = $true; break }
+        }
+        -not $hasDuration
+    })
+    if ($missing.Count -eq 0 -and $missingDuration.Count -eq 0) { return @($Entries) }
     $titleNo = [regex]::Match([string]$Request.VodUrl, '/player/(\d+)').Groups[1].Value
     if ([string]::IsNullOrWhiteSpace($titleNo)) { return @($Entries) }
     $stderrFile = Join-Path $JobDirectory 'soop-vod-api.stderr.log'
@@ -169,11 +206,22 @@ function Complete-VodManifestUrlsFromApi {
         catch { return @($Entries) }
         $files = @($api.data.files)
         for ($index = 0; $index -lt $Entries.Count -and $index -lt $files.Count; $index++) {
-            if (-not [string]::IsNullOrWhiteSpace((Get-VodEntryManifestUrl -Entry $Entries[$index]))) { continue }
-            $fileUrl = Get-VodApiFileUrl -File $files[$index]
-            $uri = $null
-            if ([Uri]::TryCreate($fileUrl, [UriKind]::Absolute, [ref]$uri) -and $uri.Scheme -eq 'https') {
-                $Entries[$index] | Add-Member -NotePropertyName 'manifest_url' -NotePropertyValue $fileUrl -Force
+            $entry = $Entries[$index]
+            $file = $files[$index]
+            if ([string]::IsNullOrWhiteSpace((Get-VodEntryManifestUrl -Entry $entry))) {
+                $fileUrl = Get-VodApiFileUrl -File $file
+                $uri = $null
+                if ([Uri]::TryCreate($fileUrl, [UriKind]::Absolute, [ref]$uri) -and $uri.Scheme -eq 'https') {
+                    $entry | Add-Member -NotePropertyName 'manifest_url' -NotePropertyValue $fileUrl -Force
+                }
+            }
+            foreach ($name in @('duration', 'file_duration', 'play_time', 'duration_string', 'durationString')) {
+                $existing = $entry.PSObject.Properties[$name]
+                $source = $file.PSObject.Properties[$name]
+                if (($null -eq $existing -or [string]::IsNullOrWhiteSpace([string]$existing.Value)) -and
+                    $null -ne $source -and -not [string]::IsNullOrWhiteSpace([string]$source.Value)) {
+                    $entry | Add-Member -NotePropertyName $name -NotePropertyValue $source.Value -Force
+                }
             }
         }
         return @($Entries)

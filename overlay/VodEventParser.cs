@@ -19,7 +19,8 @@ public static class VodEventParser
             if (string.IsNullOrWhiteSpace(type)) return false;
             value = new VodBackendEvent(1, type, GetString(root, "jobId"), GetString(root, "message"),
                 GetString(root, "title"), GetString(root, "streamer"), GetInt(root, "part"),
-                GetInt(root, "partCount"), GetDouble(root, "percent"), GetString(root, "outputFile"), GetStrings(root, "qualities"));
+                GetInt(root, "partCount"), GetDouble(root, "percent"), GetString(root, "outputFile"),
+                GetStrings(root, "qualities"), GetStrings(root, "partDurations"));
             return true;
         }
         catch (JsonException) { return false; }
