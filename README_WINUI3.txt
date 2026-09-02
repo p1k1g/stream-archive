@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix79
+Version 1.2.0-preview1-fix80
 
 BUG FIX
 -------
@@ -2001,3 +2001,24 @@ fix79 implemented changes
 3. Regression coverage
 - Parser and formatter regressions cover the duration event contract and display,
   while PowerShell regressions cover numeric, time-string, and missing durations.
+
+
+fix80 implemented changes
+-------------------------
+
+1. Conservative LIVE BJ filename sanitization
+- Channel/BJ names now pass through a dedicated filename sanitizer for output
+  folders and recording filenames. Windows-invalid characters and Unicode symbol,
+  format, surrogate, private-use, and unassigned categories become underscores.
+- Displayed BJ names remain unchanged; only filesystem path components are cleaned.
+- Channel output-directory checks now use LiteralPath so bracketed names cannot be
+  interpreted as PowerShell wildcard expressions.
+
+2. Recorder launch diagnostics
+- Recorder startup validates the exact Streamlink executable and output directory.
+- Process-start failures now report executable, output directory, output filename,
+  and the underlying error instead of only the generic Windows file-not-found text.
+
+3. Regression coverage
+- Recorder regressions cover a BJ name containing a heart symbol and a Windows-
+  invalid colon without embedding non-ASCII source text in the test script.
