@@ -68,7 +68,26 @@ if not exist "%~dp0publish\backend\SOOP_LIVE.ps1" (
     exit /b 1
 )
 
-echo [OK] publish backend verified.
+for %%M in (SOOP.Security.ps1 SOOP.Core.ps1 SOOP.Network.ps1 SOOP.Recorder.ps1) do (
+  if not exist "%~dp0publish\backend\modules\%%M" (
+    echo.
+    echo [ERROR] publish backend module missing: %%M
+    exit /b 1
+  )
+)
+
+if not exist "%~dp0publish\backend\vod\SOOP_VOD.ps1" (
+  echo [ERROR] publish VOD backend missing.
+  exit /b 1
+)
+for %%M in (SOOP.Vod.Core.ps1 SOOP.Vod.Auth.ps1 SOOP.Vod.Download.ps1 SOOP.Vod.Merge.ps1) do (
+  if not exist "%~dp0publish\backend\vod\modules\%%M" (
+    echo [ERROR] publish VOD backend module missing: %%M
+    exit /b 1
+  )
+)
+
+echo [OK] publish LIVE/VOD backends and modules verified.
 echo.
 
 pause
