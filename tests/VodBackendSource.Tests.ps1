@@ -36,6 +36,7 @@ if ($auth -notmatch '\$mode -eq ''SOOP_LOGIN''' -or
     $auth -notmatch 'LoginAction\.php' -or
     $auth -notmatch 'ReadAsByteArrayAsync' -or
     $auth -notmatch '\$isSoopParentDomain' -or
+    $auth -notmatch '\$\{failureCode\}:' -or
     $auth -notmatch 'New-VodSoopLoginCookie.+VodUrl' -or
     $auth -notmatch 'Repair-VodCloudFrontCookieScope' -or
     $auth -notmatch 'Retain only the last value curl wrote' -or

@@ -472,7 +472,9 @@ function Refresh-VodAuthorization {
                 $failureCode = [string]$failureJson.data.code
                 $failureMessage = [string]$failureJson.data.message
                 if (-not [string]::IsNullOrWhiteSpace($failureMessage)) {
-                    $detail = if ([string]::IsNullOrWhiteSpace($failureCode)) { $failureMessage } else { "private_auth $failureCode: $failureMessage" }
+                    # Delimit the variable before ':' for Windows PowerShell 5.1;
+                    # otherwise it parses $failureCode: as a scoped variable.
+                    $detail = if ([string]::IsNullOrWhiteSpace($failureCode)) { $failureMessage } else { "private_auth ${failureCode}: $failureMessage" }
                 }
             }
             catch { }

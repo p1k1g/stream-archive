@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix77
+Version 1.2.0-preview1-fix78
 
 BUG FIX
 -------
@@ -1973,3 +1973,12 @@ fix77 implemented changes
 3. Regression coverage
 - Cookie tests cover a parent domain returned without a leading dot, and source
   checks enforce both cookie canonicalization and the progress width bound.
+
+
+fix78 implemented changes
+-------------------------
+
+1. Windows PowerShell 5.1 parser compatibility
+- Delimited the interpolated private_auth failure-code variable before its colon,
+  preventing PowerShell from interpreting it as an invalid scoped variable.
+- The VOD source regression now requires the parser-safe interpolation form.
