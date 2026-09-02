@@ -3,6 +3,11 @@
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $IniPath = Join-Path $ScriptDir "SOOP_LIVE_SETTING.ini"
 $ChannelPath = Join-Path $ScriptDir "SOOP_LIVE_CHANNELS.txt"
+$SecurityModule = Join-Path $ScriptDir "modules\SOOP.Security.ps1"
+if (-not (Test-Path -LiteralPath $SecurityModule -PathType Leaf)) {
+    throw "필수 보안 모듈이 없습니다: $SecurityModule"
+}
+. $SecurityModule
 
 function Pause-Menu {
     Write-Host ""
@@ -66,7 +71,7 @@ function Read-Ini {
         $cfg[$key] = $value
     }
 
-    return $cfg
+    return (Resolve-ProtectedConfigSecrets -Config $cfg)
 }
 
 function Get-Cfg {
@@ -116,6 +121,9 @@ function Read-Keep {
 function Write-Ini {
     param([hashtable]$Config)
 
+    $protectedPassword = Protect-DpapiSecret -Value ([string]$Config.SOOP_PASSWORD) -SettingName "SOOP_PASSWORD"
+    $protectedWorkerKey = Protect-DpapiSecret -Value ([string]$Config.CLOUDFLARE_API_KEY) -SettingName "CLOUDFLARE_API_KEY"
+
     $lines = @(
         "# SOOP LIVE Downloader Settings - Cloudflare",
         "",
@@ -135,11 +143,11 @@ function Write-Ini {
         "STREAMLINK_FALLBACK=$($Config.STREAMLINK_FALLBACK)",
         "",
         "SOOP_USERNAME=$($Config.SOOP_USERNAME)",
-        "SOOP_PASSWORD=$($Config.SOOP_PASSWORD)",
+        "SOOP_PASSWORD=$protectedPassword",
         "SOOP_PURGE_CREDENTIALS=Y",
         "",
         "CLOUDFLARE_WORKER_URL=$($Config.CLOUDFLARE_WORKER_URL)",
-        "CLOUDFLARE_API_KEY=$($Config.CLOUDFLARE_API_KEY)",
+        "CLOUDFLARE_API_KEY=$protectedWorkerKey",
         "",
         "MASTER_QUALITY=auto",
         "",
@@ -148,11 +156,34 @@ function Write-Ini {
         "LOG_RETENTION_DAYS=$($Config.LOG_RETENTION_DAYS)"
     )
 
-    [IO.File]::WriteAllLines(
-        $IniPath,
-        $lines,
-        (New-Object Text.UTF8Encoding($true))
-    )
+    $directory = Split-Path -Parent $IniPath
+    $temporary = Join-Path $directory ("." + [IO.Path]::GetFileName($IniPath) + "." + [Guid]::NewGuid().ToString("N") + ".tmp")
+    try {
+        [IO.File]::WriteAllLines($temporary,$lines,(New-Object Text.UTF8Encoding($true)))
+        $verified = Read-Ini $temporary
+        if (-not $verified.ContainsKey("OUTPUT_DIR")) { throw "임시 설정 파일 검증 실패" }
+        if (Test-Path -LiteralPath $IniPath -PathType Leaf) {
+            $backupPath = $IniPath + ".bak"
+            $backupText = [IO.File]::ReadAllText($IniPath,[Text.Encoding]::UTF8)
+            $protectedBackup = Protect-IniSecretText -Text $backupText
+            $backupTemporary = $backupPath + "." + [Guid]::NewGuid().ToString("N") + ".tmp"
+            try {
+                [IO.File]::WriteAllText($backupTemporary,$protectedBackup,(New-Object Text.UTF8Encoding($false)))
+                Move-Item -LiteralPath $backupTemporary -Destination $backupPath -Force
+            }
+            finally {
+                if (Test-Path -LiteralPath $backupTemporary -PathType Leaf) {
+                    Remove-Item -LiteralPath $backupTemporary -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        Move-Item -LiteralPath $temporary -Destination $IniPath -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Ensure-ChannelFile {
