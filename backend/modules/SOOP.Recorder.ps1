@@ -110,7 +110,7 @@ function Get-SafeFileName {
         return "UNKNOWN"
     }
 
-    $safe = $Name -replace '[\x00-\x1F]', ''
+    $safe = $Name.Normalize([Text.NormalizationForm]::FormC) -replace '[\x00-\x1F]', ''
     $safe = $safe -replace '[\\/:*?"<>|]', '_'
     $safe = $safe -replace '\s+', ' '
     $safe = $safe.Trim().TrimEnd(".")
@@ -127,44 +127,6 @@ function Get-SafeFileName {
         $safe = "_" + $safe
     }
 
-    return $safe
-}
-
-function Get-SafeChannelFileName {
-    param(
-        [string]$Name,
-        [int]$MaxLength = 80
-    )
-
-    $safe = (Get-SafeFileName -Name $Name -MaxLength 0).Normalize([Text.NormalizationForm]::FormC)
-    $builder = New-Object System.Text.StringBuilder
-    foreach ($character in $safe.ToCharArray()) {
-        $category = [Globalization.CharUnicodeInfo]::GetUnicodeCategory($character)
-        if ($category -in @(
-            [Globalization.UnicodeCategory]::Control,
-            [Globalization.UnicodeCategory]::Format,
-            [Globalization.UnicodeCategory]::Surrogate,
-            [Globalization.UnicodeCategory]::PrivateUse,
-            [Globalization.UnicodeCategory]::OtherNotAssigned,
-            [Globalization.UnicodeCategory]::MathSymbol,
-            [Globalization.UnicodeCategory]::CurrencySymbol,
-            [Globalization.UnicodeCategory]::ModifierSymbol,
-            [Globalization.UnicodeCategory]::OtherSymbol
-        )) {
-            [void]$builder.Append('_')
-        }
-        else {
-            [void]$builder.Append($character)
-        }
-    }
-
-    $safe = $builder.ToString() -replace '_+', '_'
-    $safe = $safe.Trim().TrimEnd('.', ' ')
-    if ([string]::IsNullOrWhiteSpace($safe)) { $safe = 'UNKNOWN' }
-    if ($MaxLength -gt 0 -and $safe.Length -gt $MaxLength) {
-        $safe = $safe.Substring(0, $MaxLength).Trim().TrimEnd('.', ' ')
-    }
-    if ($safe -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$') { $safe = '_' + $safe }
     return $safe
 }
 
@@ -265,7 +227,7 @@ function Get-ChannelOutputDirectory {
         $base = $Channel.OutDir
     }
 
-    $safeName = Get-SafeChannelFileName $Channel.Name
+    $safeName = Get-SafeFileName $Channel.Name
     $dir = Join-Path $base $safeName
 
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
@@ -283,7 +245,7 @@ function Get-UniqueOutputFile {
         [string]$Pattern = "LEGACY"
     )
 
-    $safeChannel = Get-SafeChannelFileName -Name $ChannelName -MaxLength 60
+    $safeChannel = Get-SafeFileName -Name $ChannelName -MaxLength 60
     $safeTitle = Get-SafeFileName -Name $Title -MaxLength 90
     $now = Get-Date
     $date = $now.ToString("yyMMdd")
@@ -795,6 +757,13 @@ function Start-ChannelRecording {
     if (-not (Test-Path -LiteralPath $outputDir -PathType Container)) {
         throw "RECORDING OUTPUT DIRECTORY NOT FOUND - $outputDir"
     }
+    # Streamlink receives an absolute output path and does not need the BJ output
+    # folder as its current directory. Use the verified executable directory so
+    # a Unicode/bracketed BJ folder cannot make CreateProcess fail before launch.
+    $streamlinkWorkingDirectory = Split-Path -Parent $StreamlinkExe
+    if (-not (Test-Path -LiteralPath $streamlinkWorkingDirectory -PathType Container)) {
+        throw "STREAMLINK WORKING DIRECTORY NOT FOUND - $streamlinkWorkingDirectory"
+    }
 
     # Important: Streamlink never writes directly to this watcher console.
     # Each recorder gets its own output files.
@@ -802,15 +771,15 @@ function Start-ChannelRecording {
         $proc = Start-Process `
             -FilePath $StreamlinkExe `
             -ArgumentList $argString `
-            -WorkingDirectory $outputDir `
+            -WorkingDirectory $streamlinkWorkingDirectory `
             -NoNewWindow `
             -RedirectStandardOutput $stdoutFile `
             -RedirectStandardError $stderrFile `
             -PassThru
     }
     catch {
-        throw ("STREAMLINK PROCESS START FAILED - exe={0} outputDir={1} outputFile={2} detail={3}" -f `
-            $StreamlinkExe, $outputDir, $outputFile, $_.Exception.Message)
+        throw ("STREAMLINK PROCESS START FAILED - exe={0} workDir={1} outputDir={2} outputFile={3} detail={4}" -f `
+            $StreamlinkExe, $streamlinkWorkingDirectory, $outputDir, $outputFile, $_.Exception.Message)
     }
 
     Write-GuiEvent -Type "recording_started" -Data @{

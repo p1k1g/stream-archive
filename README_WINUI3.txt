@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix80
+Version 1.2.0-preview1-fix81
 
 BUG FIX
 -------
@@ -2022,3 +2022,25 @@ fix80 implemented changes
 3. Regression coverage
 - Recorder regressions cover a BJ name containing a heart symbol and a Windows-
   invalid colon without embedding non-ASCII source text in the test script.
+
+
+fix81 implemented changes
+-------------------------
+
+1. Corrected LIVE recorder launch diagnosis
+- The detailed fix80 log proves the Streamlink executable, BJ output directory,
+  and generated output filename all exist; the failure occurs in process launch.
+- Streamlink now starts with its verified installation directory as WorkingDirectory
+  while continuing to receive the recording destination as an absolute output path.
+- This isolates CreateProcess and Streamlink launcher dependencies from Unicode or
+  bracketed BJ output directories such as the reported salt-heart channel path.
+
+2. Preserve valid BJ characters
+- Removed the overly conservative Unicode-symbol replacement. Valid Windows filename
+  characters, including the heart in the reported BJ name, are preserved.
+- The shared sanitizer still normalizes Unicode, replaces actual Windows-invalid
+  characters, trims unsafe endings, bounds length, and protects reserved names.
+
+3. Diagnostics and regression coverage
+- Launch failures now distinguish Streamlink working directory from output directory.
+- Recorder regression covers preserving a heart while replacing an invalid colon.

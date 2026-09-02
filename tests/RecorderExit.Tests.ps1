@@ -18,9 +18,9 @@ if ((Get-RecorderExitReason -ExitCode 1) -ne 'RECORDER EXIT CODE=1') {
 }
 
 $heart = [string][char]0x2665
-$safeChannel = Get-SafeChannelFileName -Name ("salt[$heart]:name")
-if ($safeChannel -ne 'salt[_]_name' -or $safeChannel.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
-    throw 'Channel/BJ filename sanitization did not replace symbols or invalid Windows characters.'
+$safeChannel = Get-SafeFileName -Name ("salt[$heart]:name")
+if ($safeChannel -ne ("salt[$heart]_name") -or $safeChannel.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+    throw 'Channel/BJ filename sanitization did not preserve valid Unicode or replace invalid Windows characters.'
 }
 
 Write-Host 'Recorder exit classification tests passed.'

@@ -38,6 +38,10 @@ try {
     if ($source -notmatch 'while\s*\(Test-Path\s+-LiteralPath\s+\$candidate\)') {
         throw 'Collision-safe output naming no longer uses a literal path.'
     }
+    if ($source -match '-WorkingDirectory\s+\$outputDir' -or
+        $source -notmatch '-WorkingDirectory\s+\$streamlinkWorkingDirectory') {
+        throw 'Streamlink launch working directory is coupled to the BJ output path.'
+    }
 
     Write-Host 'Backend literal-path regression tests passed.'
 }
