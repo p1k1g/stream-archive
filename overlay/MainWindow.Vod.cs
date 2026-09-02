@@ -380,12 +380,12 @@ public sealed partial class MainWindow
                 var outputDirectory = Path.GetDirectoryName(target);
                 var leaf = Path.GetFileName(target);
                 if (string.IsNullOrWhiteSpace(outputDirectory) || string.IsNullOrWhiteSpace(leaf) || !Directory.Exists(outputDirectory)) continue;
-                foreach (var pattern in new[] { leaf + ".part*", leaf + ".ytdl*", leaf + ".temp*" })
+                var artifactPrefixes = new[] { leaf + ".part", leaf + ".ytdl", leaf + ".temp" };
+                foreach (var artifact in Directory.EnumerateFiles(outputDirectory, "*", SearchOption.TopDirectoryOnly))
                 {
-                    foreach (var artifact in Directory.EnumerateFiles(outputDirectory, pattern, SearchOption.TopDirectoryOnly))
-                    {
-                        try { File.Delete(artifact); } catch { }
-                    }
+                    var name = Path.GetFileName(artifact);
+                    if (!artifactPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) continue;
+                    try { File.Delete(artifact); } catch { }
                 }
                 if (string.Equals(kind, "DELETE", StringComparison.Ordinal) && File.Exists(target))
                 {

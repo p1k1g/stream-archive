@@ -41,12 +41,10 @@ try {
     [IO.File]::WriteAllText($mergeTarget, 'incomplete', [Text.Encoding]::ASCII)
     Register-VodOwnedOutputPath -JobDirectory $cleanupRoot -Path $mergeTarget -DeleteTargetOnCleanup
     Remove-VodIncompleteArtifacts -JobDirectory $cleanupRoot
-    if (-not (Test-Path -LiteralPath $partTarget) -or
-        (Test-Path -LiteralPath ($partTarget + '.part')) -or
-        (Test-Path -LiteralPath ($partTarget + '.ytdl')) -or
-        (Test-Path -LiteralPath $mergeTarget)) {
-        throw 'VOD cancellation artifact cleanup did not preserve completed parts or remove incomplete files.'
-    }
+    if (-not (Test-Path -LiteralPath $partTarget)) { throw 'VOD cancellation cleanup removed a completed PART.' }
+    if (Test-Path -LiteralPath ($partTarget + '.part')) { throw 'VOD cancellation cleanup retained an mp4.part file.' }
+    if (Test-Path -LiteralPath ($partTarget + '.ytdl')) { throw 'VOD cancellation cleanup retained a ytdl state file.' }
+    if (Test-Path -LiteralPath $mergeTarget) { throw 'VOD cancellation cleanup retained an incomplete merge target.' }
 }
 finally { Remove-Item -LiteralPath $cleanupRoot -Recurse -Force -ErrorAction SilentlyContinue }
 

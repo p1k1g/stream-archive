@@ -1,5 +1,5 @@
 ﻿SOOP LIVE Downloader - WinUI 3
-Version 1.2.0-preview1-fix74
+Version 1.2.0-preview1-fix75
 
 BUG FIX
 -------
@@ -1929,3 +1929,18 @@ fix74 implemented changes
 4. Regression coverage
 - Tests cover Set-Cookie and JSON authorization import, success-pipeline isolation,
   owned temporary-file cleanup, Cookie picker wiring, and merge completion state.
+
+
+fix75 implemented changes
+-------------------------
+
+1. Windows PowerShell cancellation cleanup
+- Owned-output registry records are parsed with an explicit Regex Match instead of
+  relying on the automatic Matches variable after a negative match expression.
+- Residual part, ytdl, and temp files are selected by case-insensitive literal file
+  name prefixes, avoiding wildcard-provider differences on Windows PowerShell 5.1.
+- GUI forced-cancel cleanup uses the same literal prefix rules.
+
+2. Regression diagnostics
+- Cancellation regression failures now identify whether a completed PART was
+  removed or which incomplete artifact was retained.

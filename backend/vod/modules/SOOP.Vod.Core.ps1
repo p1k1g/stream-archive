@@ -28,15 +28,29 @@ function Remove-VodIncompleteArtifacts {
     $registry = Join-Path $JobDirectory 'owned-output-paths.txt'
     if (-not (Test-Path -LiteralPath $registry -PathType Leaf)) { return }
     foreach ($record in [System.IO.File]::ReadAllLines($registry, [System.Text.Encoding]::UTF8)) {
-        if ([string]::IsNullOrWhiteSpace($record) -or $record -notmatch '^(?<kind>KEEP|DELETE)\|(?<path>.+)$') { continue }
-        $target = $matches['path']
-        $kind = $matches['kind']
+        if ([string]::IsNullOrWhiteSpace($record)) { continue }
+        # Do not depend on the automatic $Matches variable after -notmatch.
+        # Its update behavior is easy to invalidate with a later comparison and
+        # caused the Windows PowerShell 5.1 cleanup path to skip valid records.
+        $recordMatch = [regex]::Match($record, '^(?<kind>KEEP|DELETE)\|(?<path>.+)$')
+        if (-not $recordMatch.Success) { continue }
+        $target = $recordMatch.Groups['path'].Value
+        $kind = $recordMatch.Groups['kind'].Value
         $directory = Split-Path -Parent $target
         $leaf = Split-Path -Leaf $target
         if ([string]::IsNullOrWhiteSpace($directory) -or -not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
-        foreach ($pattern in @($leaf + '.part*', $leaf + '.ytdl*', $leaf + '.temp*')) {
-            Get-ChildItem -LiteralPath $directory -Filter $pattern -File -ErrorAction SilentlyContinue |
-                Remove-Item -Force -ErrorAction SilentlyContinue
+        $artifactPrefixes = @($leaf + '.part', $leaf + '.ytdl', $leaf + '.temp')
+        foreach ($artifact in Get-ChildItem -LiteralPath $directory -File -ErrorAction SilentlyContinue) {
+            $removeArtifact = $false
+            foreach ($prefix in $artifactPrefixes) {
+                if ($artifact.Name.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    $removeArtifact = $true
+                    break
+                }
+            }
+            if ($removeArtifact) {
+                Remove-Item -LiteralPath $artifact.FullName -Force -ErrorAction SilentlyContinue
+            }
         }
         if ($kind -eq 'DELETE' -and (Test-Path -LiteralPath $target -PathType Leaf)) {
             Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
