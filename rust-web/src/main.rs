@@ -5,6 +5,7 @@ mod recorder;
 mod security;
 mod support;
 mod vod;
+mod vod_tool_settings;
 
 use anyhow::{bail, Context, Result};
 use axum::{
@@ -103,6 +104,7 @@ async fn main() -> Result<()> {
         .route("/api/vod/analyze", post(api_vod_analyze))
         .route("/api/vod/download", post(api_vod_download))
         .route("/api/vod/cancel", post(api_vod_cancel))
+        .route("/api/vod/tool-settings", get(api_vod_tool_settings).put(api_update_vod_tool_settings))
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -228,7 +230,26 @@ async fn api_watcher_start(State(state): State<AppState>, headers: HeaderMap) ->
 async fn api_watcher_stop(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> { authorize(&headers,&state)?; Ok(Json(state.watcher.stop().await.map_err(internal_error)?)) }
 async fn api_channel_action(State(state): State<AppState>, headers: HeaderMap, AxumPath((account,action)): AxumPath<(String,String)>) -> ApiResult<StatusCode> { authorize(&headers,&state)?; state.watcher.channel_action(account,&action).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; Ok(StatusCode::NO_CONTENT) }
 
+async fn api_vod_tool_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<BTreeMap<String,String>>> {
+    authorize(&headers,&state)?;
+    Ok(Json(vod_tool_settings::read(&state.backend_dir).map_err(internal_error)?))
+}
+async fn api_update_vod_tool_settings(State(state): State<AppState>, headers: HeaderMap, Json(updates): Json<BTreeMap<String,String>>) -> ApiResult<Json<BTreeMap<String,String>>> {
+    authorize(&headers,&state)?;
+    let _guard=state.file_write_lock.lock().await;
+    vod_tool_settings::update(&state.backend_dir,&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    state.logs.push(format!("[SERVER] VOD tool settings updated: {}",updates.keys().cloned().collect::<Vec<_>>().join(", "))).await;
+    Ok(Json(vod_tool_settings::read(&state.backend_dir).map_err(internal_error)?))
+}
 async fn api_vod_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<VodJobStatus>> { authorize(&headers,&state)?; Ok(Json(state.vod.status().await)) }
-async fn api_vod_analyze(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<VodAnalyzeRequest>) -> ApiResult<Json<VodJobStatus>> { authorize(&headers,&state)?; Ok(Json(state.vod.analyze(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?)) }
-async fn api_vod_download(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<VodDownloadRequest>) -> ApiResult<Json<VodJobStatus>> { authorize(&headers,&state)?; Ok(Json(state.vod.download(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?)) }
+async fn api_vod_analyze(State(state): State<AppState>, headers: HeaderMap, Json(mut req): Json<VodAnalyzeRequest>) -> ApiResult<Json<VodJobStatus>> {
+    authorize(&headers,&state)?;
+    vod_tool_settings::apply_defaults(&state.backend_dir,&mut req.yt_dlp_path,&mut req.ffmpeg_path).map_err(internal_error)?;
+    Ok(Json(state.vod.analyze(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?))
+}
+async fn api_vod_download(State(state): State<AppState>, headers: HeaderMap, Json(mut req): Json<VodDownloadRequest>) -> ApiResult<Json<VodJobStatus>> {
+    authorize(&headers,&state)?;
+    vod_tool_settings::apply_defaults(&state.backend_dir,&mut req.yt_dlp_path,&mut req.ffmpeg_path).map_err(internal_error)?;
+    Ok(Json(state.vod.download(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?))
+}
 async fn api_vod_cancel(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<VodJobStatus>> { authorize(&headers,&state)?; Ok(Json(state.vod.cancel().await.map_err(internal_error)?)) }
