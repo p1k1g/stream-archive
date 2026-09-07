@@ -33,10 +33,10 @@ copy /y "docs\REVERSE_PROXY.md" "%OUT%\docs\REVERSE_PROXY.md" >nul || exit /b 1
 >>"%OUT%\RESTORE_DATA.bat" echo cd /d "%%~dp0"
 >>"%OUT%\RESTORE_DATA.bat" echo powershell -NoProfile -ExecutionPolicy Bypass -File ".\maintenance\Restore-SoopData.ps1" %%*
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$m=Get-Content '.\rust-web\Cargo.toml'; $v=($m ^| Select-String '^version\s*=\s*\"(.+)\"' ^| Select-Object -First 1).Matches.Groups[1].Value; $sha='unknown'; if(Get-Command git -ErrorAction SilentlyContinue){$sha=(git rev-parse --short=12 HEAD 2^>$null)}; @('product=SOOP Downloader','version='+$v,'commit='+$sha,'built_at='+(Get-Date).ToString('o')) ^| Set-Content -LiteralPath '.\%OUT%\RELEASE_INFO.txt' -Encoding UTF8"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$m=Get-Content '.\rust-web\Cargo.toml'; $v=($m | Select-String '^version\s*=\s*\"(.+)\"' | Select-Object -First 1).Matches.Groups[1].Value; $sha='unknown'; if(Get-Command git -ErrorAction SilentlyContinue){$sha=(git rev-parse --short=12 HEAD 2>$null)}; @('product=SOOP Downloader','version='+$v,'commit='+$sha,'built_at='+(Get-Date).ToString('o')) | Set-Content -LiteralPath '.\%OUT%\RELEASE_INFO.txt' -Encoding UTF8"
 if errorlevel 1 exit /b 1
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$h=(Get-FileHash -Algorithm SHA256 -LiteralPath '.\%OUT%\soop-server.exe').Hash.ToLowerInvariant(); ($h+'  soop-server.exe') ^| Set-Content -LiteralPath '.\%OUT%\SHA256SUMS.txt' -Encoding ASCII"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$h=(Get-FileHash -Algorithm SHA256 -LiteralPath '.\%OUT%\soop-server.exe').Hash.ToLowerInvariant(); ($h+'  soop-server.exe') | Set-Content -LiteralPath '.\%OUT%\SHA256SUMS.txt' -Encoding ASCII"
 if errorlevel 1 exit /b 1
 
 echo.
