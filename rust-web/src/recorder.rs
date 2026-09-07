@@ -1,4 +1,8 @@
-use crate::backend::LogBuffer;
+use crate::{
+    backend::LogBuffer,
+    model::LiveHistoryItem,
+    store::Store,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use std::{
@@ -8,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{io::{AsyncBufReadExt, BufReader}, process::{Child, Command}};
+use uuid::Uuid;
 
 const GB: u64 = 1024 * 1024 * 1024;
 
@@ -26,6 +31,7 @@ pub struct Recording {
     pub title: String,
     pub file: PathBuf,
     pub started_at: DateTime<Utc>,
+    pub history_id: String,
     child: Child,
     output_dir: PathBuf,
     last_size: u64,
@@ -43,11 +49,12 @@ pub enum RecordingPoll {
 #[derive(Clone)]
 pub struct RecorderManager {
     logs: LogBuffer,
+    store: Store,
 }
 
 impl RecorderManager {
-    pub fn new(logs: LogBuffer) -> Self {
-        Self { logs }
+    pub fn new(logs: LogBuffer, store: Store) -> Self {
+        Self { logs, store }
     }
 
     pub async fn start(
@@ -99,6 +106,25 @@ impl RecorderManager {
             });
         }
 
+        let started_at = Utc::now();
+        let history_id = Uuid::new_v4().to_string();
+        if let Err(err) = self.store.start_live(&LiveHistoryItem {
+            id: history_id.clone(),
+            account: account.to_string(),
+            channel_name: channel.to_string(),
+            bno: Some(bno.clone()),
+            title: Some(title.clone()),
+            file_path: Some(output_file.display().to_string()),
+            started_at: started_at.to_rfc3339(),
+            ended_at: None,
+            duration_seconds: 0,
+            size_bytes: 0,
+            reason: None,
+            status: "RECORDING".into(),
+        }) {
+            self.logs.push(format!("[DB:WARN] LIVE history start failed: {err:#}")).await;
+        }
+
         self.logs.push(format!(
             "[RUST] RECORD START channel={channel} account={account} bno={bno} pid={pid} file={}",
             output_file.display()
@@ -109,7 +135,8 @@ impl RecorderManager {
             bno,
             title,
             file: output_file,
-            started_at: Utc::now(),
+            started_at,
+            history_id,
             child,
             output_dir,
             last_size: 0,
@@ -166,7 +193,19 @@ impl RecorderManager {
 
     pub async fn log_finished(&self, channel: &str, account: &str, rec: &Recording, reason: &str) {
         let size = fs::metadata(&rec.file).map(|m| m.len()).unwrap_or(rec.last_size);
-        let secs = (Utc::now() - rec.started_at).num_seconds().max(0);
+        let ended_at = Utc::now();
+        let secs = (ended_at - rec.started_at).num_seconds().max(0);
+        let status = if reason == "NORMAL" { "COMPLETED" } else if reason.contains("STALLED") || reason.contains("EXIT CODE") { "FAILED" } else { "STOPPED" };
+        if let Err(err) = self.store.finish_live(
+            &rec.history_id,
+            &ended_at.to_rfc3339(),
+            secs,
+            size,
+            reason,
+            status,
+        ) {
+            self.logs.push(format!("[DB:WARN] LIVE history finish failed: {err:#}")).await;
+        }
         self.logs.push(format!(
             "[RUST] RECORD FINISHED channel={channel} account={account} duration={secs}s size={size} reason={reason} file={}",
             rec.file.display()
