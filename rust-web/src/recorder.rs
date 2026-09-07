@@ -1,7 +1,7 @@
 use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
-    store::Store,
+    store,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -49,12 +49,11 @@ pub enum RecordingPoll {
 #[derive(Clone)]
 pub struct RecorderManager {
     logs: LogBuffer,
-    store: Store,
 }
 
 impl RecorderManager {
-    pub fn new(logs: LogBuffer, store: Store) -> Self {
-        Self { logs, store }
+    pub fn new(logs: LogBuffer) -> Self {
+        Self { logs }
     }
 
     pub async fn start(
@@ -108,21 +107,23 @@ impl RecorderManager {
 
         let started_at = Utc::now();
         let history_id = Uuid::new_v4().to_string();
-        if let Err(err) = self.store.start_live(&LiveHistoryItem {
-            id: history_id.clone(),
-            account: account.to_string(),
-            channel_name: channel.to_string(),
-            bno: Some(bno.clone()),
-            title: Some(title.clone()),
-            file_path: Some(output_file.display().to_string()),
-            started_at: started_at.to_rfc3339(),
-            ended_at: None,
-            duration_seconds: 0,
-            size_bytes: 0,
-            reason: None,
-            status: "RECORDING".into(),
-        }) {
-            self.logs.push(format!("[DB:WARN] LIVE history start failed: {err:#}")).await;
+        if let Ok(db) = store::global() {
+            if let Err(err) = db.start_live(&LiveHistoryItem {
+                id: history_id.clone(),
+                account: account.to_string(),
+                channel_name: channel.to_string(),
+                bno: Some(bno.clone()),
+                title: Some(title.clone()),
+                file_path: Some(output_file.display().to_string()),
+                started_at: started_at.to_rfc3339(),
+                ended_at: None,
+                duration_seconds: 0,
+                size_bytes: 0,
+                reason: None,
+                status: "RECORDING".into(),
+            }) {
+                self.logs.push(format!("[DB:WARN] LIVE history start failed: {err:#}")).await;
+            }
         }
 
         self.logs.push(format!(
@@ -196,15 +197,17 @@ impl RecorderManager {
         let ended_at = Utc::now();
         let secs = (ended_at - rec.started_at).num_seconds().max(0);
         let status = if reason == "NORMAL" { "COMPLETED" } else if reason.contains("STALLED") || reason.contains("EXIT CODE") { "FAILED" } else { "STOPPED" };
-        if let Err(err) = self.store.finish_live(
-            &rec.history_id,
-            &ended_at.to_rfc3339(),
-            secs,
-            size,
-            reason,
-            status,
-        ) {
-            self.logs.push(format!("[DB:WARN] LIVE history finish failed: {err:#}")).await;
+        if let Ok(db) = store::global() {
+            if let Err(err) = db.finish_live(
+                &rec.history_id,
+                &ended_at.to_rfc3339(),
+                secs,
+                size,
+                reason,
+                status,
+            ) {
+                self.logs.push(format!("[DB:WARN] LIVE history finish failed: {err:#}")).await;
+            }
         }
         self.logs.push(format!(
             "[RUST] RECORD FINISHED channel={channel} account={account} duration={secs}s size={size} reason={reason} file={}",
