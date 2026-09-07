@@ -3,6 +3,7 @@ mod model;
 mod native_watcher;
 mod recorder;
 mod security;
+mod store;
 mod support;
 mod vod;
 mod vod_tool_settings;
@@ -20,8 +21,9 @@ use backend::{
     settings_path, update_settings, write_channels, LogBuffer, HIDDEN_SETTING_KEYS,
 };
 use model::{
-    Channel, ChannelLookupResponse, LogsResponse, NativeWatcherStatus as WatcherStatus,
-    SettingsResponse, StatusResponse, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus,
+    Channel, ChannelLookupResponse, HistoryResponse, LogsResponse,
+    NativeWatcherStatus as WatcherStatus, SettingsResponse, StatusResponse, VodAnalyzeRequest,
+    VodDownloadRequest, VodJobStatus,
 };
 use native_watcher::NativeWatcherManager;
 use security::{configured_secrets, save_protected_secrets};
@@ -31,6 +33,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use store::Store;
 use support::{find_legacy_watcher, resolve_channel_name};
 use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::trace::TraceLayer;
@@ -49,6 +52,7 @@ struct AppState {
     token: Arc<String>,
     watcher: Arc<NativeWatcherManager>,
     vod: Arc<VodManager>,
+    store: Store,
     logs: LogBuffer,
     file_write_lock: Arc<Mutex<()>>,
 }
@@ -59,6 +63,10 @@ async fn main() -> Result<()> {
 
     let backend_dir = resolve_backend_dir()?;
     ensure_runtime_files(&backend_dir)?;
+
+    let store = Store::open(Store::default_path(&backend_dir))?;
+    store::init_global(store.clone())?;
+    let migration = store.sync_legacy_snapshot(&backend_dir)?;
 
     let bind = env::var("SOOP_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let (token, token_source) = load_or_create_token(&backend_dir)?;
@@ -72,15 +80,20 @@ async fn main() -> Result<()> {
         token: Arc::new(token.clone()),
         watcher: watcher.clone(),
         vod: vod.clone(),
+        store: store.clone(),
         logs: logs.clone(),
         file_write_lock: Arc::new(Mutex::new(())),
     };
 
     logs.push(format!(
-        "[SERVER] Phase 4 Rust LIVE+VOD ready; backend={}",
-        backend_dir.display()
-    ))
-    .await;
+        "[SERVER] Phase 5 Rust productization ready; backend={} db={}",
+        backend_dir.display(),
+        store.path().display()
+    )).await;
+    logs.push(format!(
+        "[DB] legacy snapshot synced settings={} channels={}",
+        migration.settings, migration.channels
+    )).await;
 
     if bind.starts_with("0.0.0.0:") || bind.starts_with("[::]:") {
         warn!("SOOP web server is listening on all interfaces. Use HTTPS/reverse proxy for internet access.");
@@ -93,6 +106,7 @@ async fn main() -> Result<()> {
         .route("/style.css", get(style_css))
         .route("/api/status", get(api_status))
         .route("/api/logs", get(api_logs))
+        .route("/api/history", get(api_history))
         .route("/api/settings", get(api_settings).put(api_update_settings))
         .route("/api/secrets", get(api_secrets).put(api_update_secrets))
         .route("/api/channels", get(api_channels).put(api_update_channels))
@@ -113,14 +127,16 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to bind {bind}"))?;
 
     println!();
-    println!("SOOP Rust Web - Phase 4");
+    println!("SOOP Rust Web - Phase 5");
     println!("Backend : {}", backend_dir.display());
+    println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
     println!("Token   : {token}");
     println!("Source  : {}", token_source.display());
     println!("Watcher : Rust native v3");
     println!("Recorder: Rust RecorderManager -> Streamlink");
     println!("VOD     : Rust VodManager -> yt-dlp/ffmpeg");
+    println!("History : SQLite");
     println!("Secrets : Rust native DPAPI (Windows CurrentUser)");
     println!();
     println!("The server is NOT registered as an OS service.");
@@ -200,35 +216,82 @@ fn internal_error(err: impl std::fmt::Display) -> ApiError { (StatusCode::INTERN
 async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<StatusResponse>> {
     authorize(&headers, &state)?;
     let watcher = state.watcher.status().await.map_err(internal_error)?;
-    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase4-rust-vod" }))
+    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase5-rust-productization" }))
 }
 async fn api_logs(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<LogsResponse>> {
-    authorize(&headers, &state)?; Ok(Json(LogsResponse { lines: state.logs.tail(400).await }))
+    authorize(&headers, &state)?;
+    Ok(Json(LogsResponse { lines: state.logs.tail(400).await }))
+}
+async fn api_history(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<HistoryResponse>> {
+    authorize(&headers, &state)?;
+    Ok(Json(state.store.history(100).map_err(internal_error)?))
 }
 async fn api_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<SettingsResponse>> {
-    authorize(&headers, &state)?; let path=settings_path(&state.backend_dir); let values=read_safe_settings(&path).map_err(internal_error)?; Ok(Json(SettingsResponse{values,hidden_keys:HIDDEN_SETTING_KEYS.to_vec()}))
+    authorize(&headers, &state)?;
+    let path=settings_path(&state.backend_dir);
+    let values=read_safe_settings(&path).map_err(internal_error)?;
+    Ok(Json(SettingsResponse{values,hidden_keys:HIDDEN_SETTING_KEYS.to_vec()}))
 }
 async fn api_update_settings(State(state): State<AppState>, headers: HeaderMap, Json(updates): Json<BTreeMap<String,String>>) -> ApiResult<Json<SettingsResponse>> {
-    authorize(&headers,&state)?; let _guard=state.file_write_lock.lock().await; let path=settings_path(&state.backend_dir); update_settings(&path,&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; state.logs.push(format!("[SERVER] settings updated: {}",updates.keys().cloned().collect::<Vec<_>>().join(", "))).await; let values=read_safe_settings(&path).map_err(internal_error)?; Ok(Json(SettingsResponse{values,hidden_keys:HIDDEN_SETTING_KEYS.to_vec()}))
+    authorize(&headers,&state)?;
+    let _guard=state.file_write_lock.lock().await;
+    let path=settings_path(&state.backend_dir);
+    update_settings(&path,&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    let values=read_safe_settings(&path).map_err(internal_error)?;
+    state.store.sync_settings(&values,"SOOP_LIVE_SETTING.ini").map_err(internal_error)?;
+    state.logs.push(format!("[SERVER] settings updated: {}",updates.keys().cloned().collect::<Vec<_>>().join(", "))).await;
+    Ok(Json(SettingsResponse{values,hidden_keys:HIDDEN_SETTING_KEYS.to_vec()}))
 }
 async fn api_secrets(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<BTreeMap<String,bool>>> {
-    authorize(&headers,&state)?; let path=settings_path(&state.backend_dir); Ok(Json(configured_secrets(&path).map_err(internal_error)?))
+    authorize(&headers,&state)?;
+    let path=settings_path(&state.backend_dir);
+    Ok(Json(configured_secrets(&path).map_err(internal_error)?))
 }
 async fn api_update_secrets(State(state): State<AppState>, headers: HeaderMap, Json(updates): Json<BTreeMap<String,String>>) -> ApiResult<Json<BTreeMap<String,bool>>> {
-    authorize(&headers,&state)?; let _guard=state.file_write_lock.lock().await; let path=settings_path(&state.backend_dir); save_protected_secrets(&path,&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; if !updates.is_empty(){state.logs.push(format!("[SERVER] protected secrets updated: {}",updates.iter().filter(|(_,v)|!v.is_empty()).map(|(k,_)|k.clone()).collect::<Vec<_>>().join(", "))).await;} Ok(Json(configured_secrets(&path).map_err(internal_error)?))
+    authorize(&headers,&state)?;
+    let _guard=state.file_write_lock.lock().await;
+    let path=settings_path(&state.backend_dir);
+    save_protected_secrets(&path,&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    if !updates.is_empty(){state.logs.push(format!("[SERVER] protected secrets updated: {}",updates.iter().filter(|(_,v)|!v.is_empty()).map(|(k,_)|k.clone()).collect::<Vec<_>>().join(", "))).await;}
+    Ok(Json(configured_secrets(&path).map_err(internal_error)?))
 }
-async fn api_channels(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<Channel>>> { authorize(&headers,&state)?; Ok(Json(read_channels(&channels_path(&state.backend_dir)).map_err(internal_error)?)) }
+async fn api_channels(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<Channel>>> {
+    authorize(&headers,&state)?;
+    Ok(Json(read_channels(&channels_path(&state.backend_dir)).map_err(internal_error)?))
+}
 async fn api_update_channels(State(state): State<AppState>, headers: HeaderMap, Json(channels): Json<Vec<Channel>>) -> ApiResult<Json<Vec<Channel>>> {
-    authorize(&headers,&state)?; let _guard=state.file_write_lock.lock().await; let path=channels_path(&state.backend_dir); write_channels(&path,&channels).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; state.logs.push(format!("[SERVER] channel list updated ({} channels)",channels.len())).await; Ok(Json(read_channels(&path).map_err(internal_error)?))
+    authorize(&headers,&state)?;
+    let _guard=state.file_write_lock.lock().await;
+    let path=channels_path(&state.backend_dir);
+    write_channels(&path,&channels).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    let saved=read_channels(&path).map_err(internal_error)?;
+    state.store.sync_channels(&saved).map_err(internal_error)?;
+    state.logs.push(format!("[SERVER] channel list updated ({} channels)",channels.len())).await;
+    Ok(Json(saved))
 }
 async fn api_channel_resolve(State(state): State<AppState>, headers: HeaderMap, AxumPath(account): AxumPath<String>) -> ApiResult<Json<ChannelLookupResponse>> {
-    authorize(&headers,&state)?; let name=resolve_channel_name(&account).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; state.logs.push(format!("[SERVER] channel resolved: {account} -> {name}")).await; Ok(Json(ChannelLookupResponse{account,name}))
+    authorize(&headers,&state)?;
+    let name=resolve_channel_name(&account).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    state.logs.push(format!("[SERVER] channel resolved: {account} -> {name}")).await;
+    Ok(Json(ChannelLookupResponse{account,name}))
 }
 async fn api_watcher_start(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> {
-    authorize(&headers,&state)?; if let Some(legacy)=find_legacy_watcher(){state.logs.push(format!("[SERVER:WARN] native watcher start blocked: legacy SOOP_LIVE.ps1 is already running ({legacy})")).await; return Err((StatusCode::CONFLICT,format!("기존 PowerShell watcher가 이미 실행 중입니다. 먼저 종료하세요. ({legacy})")));} Ok(Json(state.watcher.start().await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?))
+    authorize(&headers,&state)?;
+    if let Some(legacy)=find_legacy_watcher(){
+        state.logs.push(format!("[SERVER:WARN] native watcher start blocked: legacy SOOP_LIVE.ps1 is already running ({legacy})")).await;
+        return Err((StatusCode::CONFLICT,format!("기존 PowerShell watcher가 이미 실행 중입니다. 먼저 종료하세요. ({legacy})")));
+    }
+    Ok(Json(state.watcher.start().await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?))
 }
-async fn api_watcher_stop(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> { authorize(&headers,&state)?; Ok(Json(state.watcher.stop().await.map_err(internal_error)?)) }
-async fn api_channel_action(State(state): State<AppState>, headers: HeaderMap, AxumPath((account,action)): AxumPath<(String,String)>) -> ApiResult<StatusCode> { authorize(&headers,&state)?; state.watcher.channel_action(account,&action).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; Ok(StatusCode::NO_CONTENT) }
+async fn api_watcher_stop(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> {
+    authorize(&headers,&state)?;
+    Ok(Json(state.watcher.stop().await.map_err(internal_error)?))
+}
+async fn api_channel_action(State(state): State<AppState>, headers: HeaderMap, AxumPath((account,action)): AxumPath<(String,String)>) -> ApiResult<StatusCode> {
+    authorize(&headers,&state)?;
+    state.watcher.channel_action(account,&action).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 async fn api_vod_tool_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<BTreeMap<String,String>>> {
     authorize(&headers,&state)?;
@@ -238,18 +301,34 @@ async fn api_update_vod_tool_settings(State(state): State<AppState>, headers: He
     authorize(&headers,&state)?;
     let _guard=state.file_write_lock.lock().await;
     vod_tool_settings::update(&state.backend_dir,&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    let values=vod_tool_settings::read(&state.backend_dir).map_err(internal_error)?;
+    state.store.sync_settings(&values,"SOOP_VOD_SETTING.ini").map_err(internal_error)?;
     state.logs.push(format!("[SERVER] VOD tool settings updated: {}",updates.keys().cloned().collect::<Vec<_>>().join(", "))).await;
-    Ok(Json(vod_tool_settings::read(&state.backend_dir).map_err(internal_error)?))
+    Ok(Json(values))
 }
-async fn api_vod_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<VodJobStatus>> { authorize(&headers,&state)?; Ok(Json(state.vod.status().await)) }
+async fn api_vod_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<VodJobStatus>> {
+    authorize(&headers,&state)?;
+    let status=state.vod.status().await;
+    state.store.upsert_vod(&status).map_err(internal_error)?;
+    Ok(Json(status))
+}
 async fn api_vod_analyze(State(state): State<AppState>, headers: HeaderMap, Json(mut req): Json<VodAnalyzeRequest>) -> ApiResult<Json<VodJobStatus>> {
     authorize(&headers,&state)?;
     vod_tool_settings::apply_defaults(&state.backend_dir,&mut req.yt_dlp_path,&mut req.ffmpeg_path).map_err(internal_error)?;
-    Ok(Json(state.vod.analyze(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?))
+    let status=state.vod.analyze(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?;
+    state.store.upsert_vod(&status).map_err(internal_error)?;
+    Ok(Json(status))
 }
 async fn api_vod_download(State(state): State<AppState>, headers: HeaderMap, Json(mut req): Json<VodDownloadRequest>) -> ApiResult<Json<VodJobStatus>> {
     authorize(&headers,&state)?;
     vod_tool_settings::apply_defaults(&state.backend_dir,&mut req.yt_dlp_path,&mut req.ffmpeg_path).map_err(internal_error)?;
-    Ok(Json(state.vod.download(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?))
+    let status=state.vod.download(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?;
+    state.store.upsert_vod(&status).map_err(internal_error)?;
+    Ok(Json(status))
 }
-async fn api_vod_cancel(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<VodJobStatus>> { authorize(&headers,&state)?; Ok(Json(state.vod.cancel().await.map_err(internal_error)?)) }
+async fn api_vod_cancel(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<VodJobStatus>> {
+    authorize(&headers,&state)?;
+    let status=state.vod.cancel().await.map_err(internal_error)?;
+    state.store.upsert_vod(&status).map_err(internal_error)?;
+    Ok(Json(status))
+}
