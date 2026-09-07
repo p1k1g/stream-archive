@@ -41,7 +41,7 @@ pub fn update(backend: &Path, updates: &BTreeMap<String, String>) -> Result<()> 
         if !KEYS.contains(&key.as_str()) {
             bail!("unsupported VOD tool setting: {key}");
         }
-        if value.contains(['\r', '\n', '\0']) || value.len() > 2048 {
+        if value.contains('\r') || value.contains('\n') || value.contains('\0') || value.len() > 2048 {
             bail!("invalid VOD tool path: {key}");
         }
     }
@@ -135,5 +135,24 @@ mod tests {
         let loaded = read(dir.path()).unwrap();
         assert_eq!(loaded["YT_DLP_PATH"], r"C:\Tools\yt-dlp.exe");
         assert_eq!(loaded["FFMPEG_PATH"], r"C:\Tools\ffmpeg.exe");
+    }
+
+    #[test]
+    fn request_paths_override_saved_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("vod")).unwrap();
+        update(
+            dir.path(),
+            &BTreeMap::from([
+                ("YT_DLP_PATH".to_string(), "saved-yt".to_string()),
+                ("FFMPEG_PATH".to_string(), "saved-ff".to_string()),
+            ]),
+        )
+        .unwrap();
+        let mut yt = "request-yt".to_string();
+        let mut ff = String::new();
+        apply_defaults(dir.path(), &mut yt, &mut ff).unwrap();
+        assert_eq!(yt, "request-yt");
+        assert_eq!(ff, "saved-ff");
     }
 }
