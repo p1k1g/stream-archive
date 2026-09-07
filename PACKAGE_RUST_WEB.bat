@@ -20,6 +20,7 @@ copy /y "maintenance\Backup-SoopData.ps1" "%OUT%\maintenance\Backup-SoopData.ps1
 copy /y "maintenance\Restore-SoopData.ps1" "%OUT%\maintenance\Restore-SoopData.ps1" >nul || exit /b 1
 copy /y "docs\OPERATIONS.md" "%OUT%\docs\OPERATIONS.md" >nul || exit /b 1
 copy /y "docs\REVERSE_PROXY.md" "%OUT%\docs\REVERSE_PROXY.md" >nul || exit /b 1
+copy /y "deploy\Caddyfile.example" "%OUT%\Caddyfile.example" >nul || exit /b 1
 
 >"%OUT%\RUN.bat" echo @echo off
 >>"%OUT%\RUN.bat" echo cd /d "%%~dp0"
@@ -41,6 +42,6 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Portable package created: %OUT%
-echo Included: maintenance scripts, operations docs, release metadata, SHA256 checksum.
+echo Included: maintenance scripts, operations docs, Caddy template, release metadata, SHA256 checksum.
 echo External tools are not bundled. Configure Streamlink, yt-dlp and ffmpeg paths or install them in PATH.
 endlocal

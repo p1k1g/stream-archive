@@ -18,9 +18,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use backend::{
-    ensure_runtime_files, resolve_backend_dir, LogBuffer, HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS,
-};
+use backend::{ensure_runtime_files, resolve_backend_dir, LogBuffer, HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS};
 use model::{
     Channel, ChannelLookupResponse, HistoryResponse, LogsResponse,
     NativeWatcherStatus as WatcherStatus, SettingsResponse, StatusResponse, VodAnalyzeRequest,
@@ -32,6 +30,7 @@ use primary_config::{
     validate_vod_tool_updates, VOD_TOOL_KEYS,
 };
 use security::protect_secret;
+use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     env, fs,
@@ -67,7 +66,6 @@ struct AppState {
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-
     let backend_dir = resolve_backend_dir()?;
     ensure_runtime_files(&backend_dir)?;
 
@@ -78,44 +76,27 @@ async fn main() -> Result<()> {
 
     let bind = env::var("SOOP_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let (token, token_source) = load_or_create_token(&backend_dir)?;
-
     let logs = LogBuffer::new();
     let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
     let vod = Arc::new(VodManager::new(backend_dir.clone(), logs.clone()));
     let state = AppState {
-        backend_dir: backend_dir.clone(),
-        bind: bind.clone(),
-        token: Arc::new(token.clone()),
-        watcher: watcher.clone(),
-        vod: vod.clone(),
-        store: store.clone(),
-        logs: logs.clone(),
+        backend_dir: backend_dir.clone(), bind: bind.clone(), token: Arc::new(token.clone()),
+        watcher: watcher.clone(), vod: vod.clone(), store: store.clone(), logs: logs.clone(),
         config_write_lock: Arc::new(Mutex::new(())),
     };
 
-    logs.push(format!(
-        "[SERVER] Phase 6 release-hardening ready; backend={} db={}",
-        backend_dir.display(),
-        store.path().display()
-    )).await;
+    logs.push(format!("[SERVER] Phase 7 runtime-remote ready; backend={} db={}", backend_dir.display(), store.path().display())).await;
     if migration.imported {
-        logs.push(format!(
-            "[DB] one-time legacy import completed settings={} channels={}",
-            migration.settings, migration.channels
-        )).await;
+        logs.push(format!("[DB] one-time legacy import completed settings={} channels={}", migration.settings, migration.channels)).await;
     } else {
-        logs.push(format!(
-            "[DB] SQLite primary already initialized settings={} channels={}",
-            migration.settings, migration.channels
-        )).await;
+        logs.push(format!("[DB] SQLite primary already initialized settings={} channels={}", migration.settings, migration.channels)).await;
     }
-
     if bind.starts_with("0.0.0.0:") || bind.starts_with("[::]:") {
-        warn!("SOOP web server is listening on all interfaces. Use HTTPS/reverse proxy for internet access.");
-        logs.push("[SERVER:WARN] listening on all interfaces; use HTTPS/reverse proxy for internet access").await;
+        warn!("SOOP web server is listening on all interfaces. Prefer loopback plus HTTPS reverse proxy.");
+        logs.push("[SERVER:WARN] public/LAN listener detected; loopback + Caddy is recommended").await;
     }
 
-    spawn_compatibility_reconciler(store.clone(), backend_dir.clone(), logs.clone());
+    // Phase 7: watcher reads SQLite directly. Compatibility files are refreshed only on startup/API writes.
     spawn_vod_history_sync(store.clone(), vod.clone(), logs.clone());
 
     let app = Router::new()
@@ -123,6 +104,7 @@ async fn main() -> Result<()> {
         .route("/app.js", get(app_js))
         .route("/style.css", get(style_css))
         .route("/api/status", get(api_status))
+        .route("/api/diagnostics", get(api_diagnostics))
         .route("/api/logs", get(api_logs))
         .route("/api/history", get(api_history))
         .route("/api/settings", get(api_settings).put(api_update_settings))
@@ -140,37 +122,30 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
-    let listener = TcpListener::bind(&bind)
-        .await
-        .with_context(|| format!("failed to bind {bind}"))?;
-
+    let listener = TcpListener::bind(&bind).await.with_context(|| format!("failed to bind {bind}"))?;
     println!();
-    println!("SOOP Rust Web - Phase 6");
+    println!("SOOP Rust Web - Phase 7");
     println!("Backend : {}", backend_dir.display());
     println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
     println!("Token   : {token}");
     println!("Source  : {}", token_source.display());
-    println!("Config  : SQLite primary (INI/TXT are generated compatibility mirrors)");
-    println!("Watcher : Rust native v3");
+    println!("Config  : SQLite direct (INI/TXT are import/export compatibility mirrors)");
+    println!("Watcher : Rust native v4 (SQLite direct)");
     println!("Recorder: Rust RecorderManager -> Streamlink");
     println!("VOD     : Rust VodManager -> yt-dlp/ffmpeg");
     println!("History : SQLite");
-    println!("Secrets : DPAPI ciphertext stored in SQLite (Windows CurrentUser)");
+    println!("Remote  : Keep 127.0.0.1:8787 and expose Caddy on 80/443");
     println!();
     println!("The server is NOT registered as an OS service.");
     println!("Press Ctrl+C to stop the web server and owned LIVE/VOD processes.");
     println!();
-
     info!("listening on http://{bind}");
 
     if env_flag("SOOP_START_WATCHER") {
         match watcher.start().await {
             Ok(status) => info!("watcher auto-start result: running={}", status.running),
-            Err(err) => {
-                warn!("watcher auto-start failed: {err:#}");
-                logs.push(format!("[SERVER:ERR] watcher auto-start failed: {err:#}")).await;
-            }
+            Err(err) => { warn!("watcher auto-start failed: {err:#}"); logs.push(format!("[SERVER:ERR] watcher auto-start failed: {err:#}")).await; }
         }
     }
 
@@ -184,20 +159,16 @@ async fn main() -> Result<()> {
         })
         .await
         .context("web server failed")?;
-
     Ok(())
 }
 
 fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("soop_web=info,tower_http=info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("soop_web=info,tower_http=info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
-
 fn env_flag(name: &str) -> bool {
     env::var(name).ok().is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "y" | "yes" | "true" | "on"))
 }
-
 fn load_or_create_token(backend_dir: &Path) -> Result<(String, PathBuf)> {
     if let Ok(token) = env::var("SOOP_WEB_TOKEN") {
         let token = token.trim().to_string();
@@ -216,28 +187,12 @@ fn load_or_create_token(backend_dir: &Path) -> Result<(String, PathBuf)> {
     fs::write(&token_path, format!("{token}\n")).with_context(|| format!("failed to write {}", token_path.display()))?;
     Ok((token, token_path))
 }
-
-fn spawn_compatibility_reconciler(store: Store, backend_dir: PathBuf, logs: LogBuffer) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            if let Err(err) = materialize_primary_files(&store, &backend_dir) {
-                logs.push(format!("[DB:WARN] compatibility mirror reconcile failed: {err:#}"))
-                    .await;
-            }
-        }
-    });
-}
-
 fn spawn_vod_history_sync(store: Store, vod: Arc<VodManager>, logs: LogBuffer) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
             let status = vod.status().await;
-            if let Err(err) = store.upsert_vod(&status) {
-                logs.push(format!("[DB:WARN] VOD history sync failed: {err:#}"))
-                    .await;
-            }
+            if let Err(err) = store.upsert_vod(&status) { logs.push(format!("[DB:WARN] VOD history sync failed: {err:#}")).await; }
         }
     });
 }
@@ -246,76 +201,41 @@ fn materialize_primary_files(store: &Store, backend_dir: &Path) -> Result<()> {
     let live = store.live_settings_with_secrets()?;
     let channels = store.channels()?;
     let vod = store.vod_tool_settings()?;
-
-    let mut live_lines = vec![
-        "# Generated compatibility mirror from data/soop.db. Manual edits are not authoritative.".to_string(),
-    ];
+    let mut live_lines = vec!["# Export/import compatibility mirror from data/soop.db. Runtime reads SQLite directly.".to_string()];
     for key in SAFE_SETTING_KEYS.iter().chain(HIDDEN_SETTING_KEYS.iter()) {
         live_lines.push(format!("{key}={}", live.get(*key).cloned().unwrap_or_default()));
     }
-    write_if_changed(
-        &backend_dir.join("SOOP_LIVE_SETTING.ini"),
-        &format!("{}\r\n", live_lines.join("\r\n")),
-    )?;
-
+    write_if_changed(&backend_dir.join("SOOP_LIVE_SETTING.ini"), &format!("{}\r\n", live_lines.join("\r\n")))?;
     let mut channel_lines = vec![
-        "# Generated compatibility mirror from data/soop.db. Manual edits are not authoritative.".to_string(),
+        "# Export/import compatibility mirror from data/soop.db. Runtime reads SQLite directly.".to_string(),
         "# ENABLED|NAME|ACCOUNT|OUTDIR".to_string(),
     ];
     for channel in channels {
-        channel_lines.push(format!(
-            "{}|{}|{}|{}",
-            if channel.enabled { "Y" } else { "N" },
-            channel.name.trim(),
-            channel.account.trim(),
-            channel.outdir.trim()
-        ));
+        channel_lines.push(format!("{}|{}|{}|{}", if channel.enabled { "Y" } else { "N" }, channel.name.trim(), channel.account.trim(), channel.outdir.trim()));
     }
-    write_if_changed(
-        &backend_dir.join("SOOP_LIVE_CHANNELS.txt"),
-        &format!("{}\r\n", channel_lines.join("\r\n")),
-    )?;
-
+    write_if_changed(&backend_dir.join("SOOP_LIVE_CHANNELS.txt"), &format!("{}\r\n", channel_lines.join("\r\n")))?;
     let vod_dir = backend_dir.join("vod");
     fs::create_dir_all(&vod_dir)?;
-    let mut vod_lines = vec![
-        "# Generated compatibility mirror from data/soop.db. Manual edits are not authoritative.".to_string(),
-    ];
-    for key in VOD_TOOL_KEYS {
-        vod_lines.push(format!("{key}={}", vod.get(*key).cloned().unwrap_or_default()));
-    }
-    write_if_changed(
-        &vod_dir.join("SOOP_VOD_SETTING.ini"),
-        &format!("{}\r\n", vod_lines.join("\r\n")),
-    )?;
+    let mut vod_lines = vec!["# Export/import compatibility mirror from data/soop.db. Runtime reads SQLite directly.".to_string()];
+    for key in VOD_TOOL_KEYS { vod_lines.push(format!("{key}={}", vod.get(*key).cloned().unwrap_or_default())); }
+    write_if_changed(&vod_dir.join("SOOP_VOD_SETTING.ini"), &format!("{}\r\n", vod_lines.join("\r\n")))?;
     Ok(())
 }
-
 fn write_if_changed(path: &Path, content: &str) -> Result<()> {
-    if fs::read(path).ok().as_deref() == Some(content.as_bytes()) {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    if fs::read(path).ok().as_deref() == Some(content.as_bytes()) { return Ok(()); }
+    if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
     if path.is_file() {
-        let mut backup_name = path.as_os_str().to_os_string();
-        backup_name.push(".bak");
-        fs::copy(path, PathBuf::from(backup_name))?;
+        let mut backup_name = path.as_os_str().to_os_string(); backup_name.push(".bak"); fs::copy(path, PathBuf::from(backup_name))?;
     }
-    let mut file = AtomicWriteFile::options()
-        .open(path)
-        .with_context(|| format!("failed to open compatibility mirror {}", path.display()))?;
+    let mut file = AtomicWriteFile::options().open(path).with_context(|| format!("failed to open compatibility mirror {}", path.display()))?;
     file.write_all(content.as_bytes())?;
-    file.commit()
-        .with_context(|| format!("failed to commit compatibility mirror {}", path.display()))?;
+    file.commit().with_context(|| format!("failed to commit compatibility mirror {}", path.display()))?;
     Ok(())
 }
 
 async fn index() -> Html<&'static str> { Html(include_str!("../web/index.html")) }
 async fn app_js() -> impl IntoResponse { ([(CONTENT_TYPE, "application/javascript; charset=utf-8")], include_str!("../web/app.js")) }
 async fn style_css() -> impl IntoResponse { ([(CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../web/style.css")) }
-
 fn authorize(headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
     let supplied = headers.get(AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer "));
     if supplied == Some(state.token.as_str()) { Ok(()) } else { Err((StatusCode::UNAUTHORIZED, "invalid management token".into())) }
@@ -325,126 +245,101 @@ fn internal_error(err: impl std::fmt::Display) -> ApiError { (StatusCode::INTERN
 async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<StatusResponse>> {
     authorize(&headers, &state)?;
     let watcher = state.watcher.status().await.map_err(internal_error)?;
-    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase6-release-hardening" }))
+    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase7-runtime-remote" }))
 }
-async fn api_logs(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<LogsResponse>> {
+async fn api_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     authorize(&headers, &state)?;
-    Ok(Json(LogsResponse { lines: state.logs.tail(400).await }))
+    let safe = state.store.safe_settings().map_err(internal_error)?;
+    let vod = state.store.vod_tool_settings().map_err(internal_error)?;
+    let loopback_only = state.bind.starts_with("127.0.0.1:") || state.bind.starts_with("[::1]:") || state.bind.starts_with("localhost:");
+    let streamlink = diagnose_tool(
+        safe.get("STREAMLINK_PATH").map(String::as_str).unwrap_or("AUTO"),
+        &[state.backend_dir.join("streamlink.exe"), PathBuf::from(r"C:\Program Files\Streamlink\bin\streamlink.exe")],
+        "streamlink.exe",
+    );
+    let yt_dlp = diagnose_tool(vod.get("YT_DLP_PATH").map(String::as_str).unwrap_or(""), &[state.backend_dir.join("vod").join("yt-dlp.exe")], "yt-dlp.exe");
+    let ffmpeg = diagnose_tool(vod.get("FFMPEG_PATH").map(String::as_str).unwrap_or(""), &[state.backend_dir.join("vod").join("ffmpeg.exe")], "ffmpeg.exe");
+    Ok(Json(json!({
+        "phase": "phase7-runtime-remote",
+        "bind": state.bind,
+        "loopback_only": loopback_only,
+        "database": state.store.path().display().to_string(),
+        "sqlite_primary": true,
+        "watcher_config_source": "sqlite-direct",
+        "compatibility_mirrors": "startup-and-api-write-only",
+        "reverse_proxy": {
+            "recommended": true,
+            "upstream": "127.0.0.1:8787",
+            "router_forward": "TCP 80/443 -> PC LAN IP; do not forward to 127.0.0.1",
+            "direct_8787_exposure_recommended": false
+        },
+        "tools": {"streamlink": streamlink, "yt_dlp": yt_dlp, "ffmpeg": ffmpeg}
+    })))
 }
-async fn api_history(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<HistoryResponse>> {
-    authorize(&headers, &state)?;
-    Ok(Json(state.store.history(100).map_err(internal_error)?))
+fn diagnose_tool(configured: &str, candidates: &[PathBuf], binary: &str) -> Value {
+    let configured = configured.trim();
+    if !configured.is_empty() && !configured.eq_ignore_ascii_case("AUTO") {
+        let path = PathBuf::from(configured);
+        return json!({"configured": configured, "found": path.is_file(), "resolved": if path.is_file() { Some(path.display().to_string()) } else { None }});
+    }
+    for path in candidates {
+        if path.is_file() { return json!({"configured": configured, "found": true, "resolved": path.display().to_string()}); }
+    }
+    if let Some(path) = find_on_path(binary) { return json!({"configured": configured, "found": true, "resolved": path.display().to_string()}); }
+    json!({"configured": configured, "found": false, "resolved": Value::Null})
 }
+fn find_on_path(binary: &str) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|paths| env::split_paths(&paths).map(|dir| dir.join(binary)).find(|path| path.is_file()))
+}
+async fn api_logs(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<LogsResponse>> { authorize(&headers, &state)?; Ok(Json(LogsResponse { lines: state.logs.tail(400).await })) }
+async fn api_history(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<HistoryResponse>> { authorize(&headers, &state)?; Ok(Json(state.store.history(100).map_err(internal_error)?)) }
 async fn api_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<SettingsResponse>> {
-    authorize(&headers, &state)?;
-    let values = state.store.safe_settings().map_err(internal_error)?;
-    Ok(Json(SettingsResponse{values,hidden_keys:HIDDEN_SETTING_KEYS.to_vec()}))
+    authorize(&headers, &state)?; let values = state.store.safe_settings().map_err(internal_error)?; Ok(Json(SettingsResponse{values,hidden_keys:HIDDEN_SETTING_KEYS.to_vec()}))
 }
 async fn api_update_settings(State(state): State<AppState>, headers: HeaderMap, Json(updates): Json<BTreeMap<String,String>>) -> ApiResult<Json<SettingsResponse>> {
-    authorize(&headers,&state)?;
-    validate_setting_updates(&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
-    let _guard=state.config_write_lock.lock().await;
-    state.store.sync_settings(&updates,"sqlite-live").map_err(internal_error)?;
-    materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?;
-    let values=state.store.safe_settings().map_err(internal_error)?;
-    state.logs.push(format!("[SERVER] SQLite settings updated: {}",updates.keys().cloned().collect::<Vec<_>>().join(", "))).await;
+    authorize(&headers,&state)?; validate_setting_updates(&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; let _guard=state.config_write_lock.lock().await;
+    state.store.sync_settings(&updates,"sqlite-live").map_err(internal_error)?; materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?;
+    let values=state.store.safe_settings().map_err(internal_error)?; state.logs.push(format!("[SERVER] SQLite settings updated: {}",updates.keys().cloned().collect::<Vec<_>>().join(", "))).await;
     Ok(Json(SettingsResponse{values,hidden_keys:HIDDEN_SETTING_KEYS.to_vec()}))
 }
-async fn api_secrets(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<BTreeMap<String,bool>>> {
-    authorize(&headers,&state)?;
-    Ok(Json(state.store.configured_secrets().map_err(internal_error)?))
-}
+async fn api_secrets(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<BTreeMap<String,bool>>> { authorize(&headers,&state)?; Ok(Json(state.store.configured_secrets().map_err(internal_error)?)) }
 async fn api_update_secrets(State(state): State<AppState>, headers: HeaderMap, Json(updates): Json<BTreeMap<String,String>>) -> ApiResult<Json<BTreeMap<String,bool>>> {
-    authorize(&headers,&state)?;
-    validate_secret_updates(&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
-    let _guard=state.config_write_lock.lock().await;
-    let mut encrypted=BTreeMap::new();
-    for (key,value) in &updates {
-        if !value.is_empty() {
-            encrypted.insert(key.clone(),protect_secret(value).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?);
-        }
-    }
-    if !encrypted.is_empty() {
-        state.store.sync_settings(&encrypted,"sqlite-secret").map_err(internal_error)?;
-        materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?;
-        state.logs.push(format!("[SERVER] SQLite protected secrets updated: {}",encrypted.keys().cloned().collect::<Vec<_>>().join(", "))).await;
-    }
+    authorize(&headers,&state)?; validate_secret_updates(&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; let _guard=state.config_write_lock.lock().await; let mut encrypted=BTreeMap::new();
+    for (key,value) in &updates { if !value.is_empty() { encrypted.insert(key.clone(),protect_secret(value).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?); } }
+    if !encrypted.is_empty() { state.store.sync_settings(&encrypted,"sqlite-secret").map_err(internal_error)?; materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?; state.logs.push(format!("[SERVER] SQLite protected secrets updated: {}",encrypted.keys().cloned().collect::<Vec<_>>().join(", "))).await; }
     Ok(Json(state.store.configured_secrets().map_err(internal_error)?))
 }
-async fn api_channels(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<Channel>>> {
-    authorize(&headers,&state)?;
-    Ok(Json(state.store.channels().map_err(internal_error)?))
-}
+async fn api_channels(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<Channel>>> { authorize(&headers,&state)?; Ok(Json(state.store.channels().map_err(internal_error)?)) }
 async fn api_update_channels(State(state): State<AppState>, headers: HeaderMap, Json(channels): Json<Vec<Channel>>) -> ApiResult<Json<Vec<Channel>>> {
-    authorize(&headers,&state)?;
-    validate_channels(&channels).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
-    let _guard=state.config_write_lock.lock().await;
-    state.store.sync_channels(&channels).map_err(internal_error)?;
-    materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?;
-    let saved=state.store.channels().map_err(internal_error)?;
-    state.logs.push(format!("[SERVER] SQLite channel list updated ({} channels)",saved.len())).await;
-    Ok(Json(saved))
+    authorize(&headers,&state)?; validate_channels(&channels).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; let _guard=state.config_write_lock.lock().await;
+    state.store.sync_channels(&channels).map_err(internal_error)?; materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?; let saved=state.store.channels().map_err(internal_error)?;
+    state.logs.push(format!("[SERVER] SQLite channel list updated ({} channels)",saved.len())).await; Ok(Json(saved))
 }
 async fn api_channel_resolve(State(state): State<AppState>, headers: HeaderMap, AxumPath(account): AxumPath<String>) -> ApiResult<Json<ChannelLookupResponse>> {
-    authorize(&headers,&state)?;
-    let name=resolve_channel_name(&account).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
-    state.logs.push(format!("[SERVER] channel resolved: {account} -> {name}")).await;
-    Ok(Json(ChannelLookupResponse{account,name}))
+    authorize(&headers,&state)?; let name=resolve_channel_name(&account).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; state.logs.push(format!("[SERVER] channel resolved: {account} -> {name}")).await; Ok(Json(ChannelLookupResponse{account,name}))
 }
-async fn api_watcher_start(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> {
-    authorize(&headers,&state)?;
-    materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?;
-    Ok(Json(state.watcher.start().await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?))
-}
-async fn api_watcher_stop(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> {
-    authorize(&headers,&state)?;
-    Ok(Json(state.watcher.stop().await.map_err(internal_error)?))
-}
+async fn api_watcher_start(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> { authorize(&headers,&state)?; Ok(Json(state.watcher.start().await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?)) }
+async fn api_watcher_stop(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> { authorize(&headers,&state)?; Ok(Json(state.watcher.stop().await.map_err(internal_error)?)) }
 async fn api_channel_action(State(state): State<AppState>, headers: HeaderMap, AxumPath((account,action)): AxumPath<(String,String)>) -> ApiResult<StatusCode> {
-    authorize(&headers,&state)?;
-    state.watcher.channel_action(account,&action).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
-    Ok(StatusCode::NO_CONTENT)
+    authorize(&headers,&state)?; state.watcher.channel_action(account,&action).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; Ok(StatusCode::NO_CONTENT)
 }
-
-async fn api_vod_tool_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<BTreeMap<String,String>>> {
-    authorize(&headers,&state)?;
-    Ok(Json(state.store.vod_tool_settings().map_err(internal_error)?))
-}
+async fn api_vod_tool_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<BTreeMap<String,String>>> { authorize(&headers,&state)?; Ok(Json(state.store.vod_tool_settings().map_err(internal_error)?)) }
 async fn api_update_vod_tool_settings(State(state): State<AppState>, headers: HeaderMap, Json(updates): Json<BTreeMap<String,String>>) -> ApiResult<Json<BTreeMap<String,String>>> {
-    authorize(&headers,&state)?;
-    validate_vod_tool_updates(&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
-    let _guard=state.config_write_lock.lock().await;
-    state.store.sync_settings(&updates,"sqlite-vod").map_err(internal_error)?;
-    materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?;
-    let values=state.store.vod_tool_settings().map_err(internal_error)?;
-    state.logs.push(format!("[SERVER] SQLite VOD tool settings updated: {}",updates.keys().cloned().collect::<Vec<_>>().join(", "))).await;
-    Ok(Json(values))
+    authorize(&headers,&state)?; validate_vod_tool_updates(&updates).map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; let _guard=state.config_write_lock.lock().await;
+    state.store.sync_settings(&updates,"sqlite-vod").map_err(internal_error)?; materialize_primary_files(&state.store,&state.backend_dir).map_err(internal_error)?; let values=state.store.vod_tool_settings().map_err(internal_error)?;
+    state.logs.push(format!("[SERVER] SQLite VOD tool settings updated: {}",updates.keys().cloned().collect::<Vec<_>>().join(", "))).await; Ok(Json(values))
 }
 async fn api_vod_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<VodJobStatus>> {
-    authorize(&headers,&state)?;
-    let status=state.vod.status().await;
-    state.store.upsert_vod(&status).map_err(internal_error)?;
-    Ok(Json(status))
+    authorize(&headers,&state)?; let status=state.vod.status().await; state.store.upsert_vod(&status).map_err(internal_error)?; Ok(Json(status))
 }
 async fn api_vod_analyze(State(state): State<AppState>, headers: HeaderMap, Json(mut req): Json<VodAnalyzeRequest>) -> ApiResult<Json<VodJobStatus>> {
-    authorize(&headers,&state)?;
-    let tools=state.store.vod_tool_settings().map_err(internal_error)?;
-    apply_vod_tool_defaults(&tools,&mut req.yt_dlp_path,&mut req.ffmpeg_path);
-    let status=state.vod.analyze(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?;
-    state.store.upsert_vod(&status).map_err(internal_error)?;
-    Ok(Json(status))
+    authorize(&headers,&state)?; let tools=state.store.vod_tool_settings().map_err(internal_error)?; apply_vod_tool_defaults(&tools,&mut req.yt_dlp_path,&mut req.ffmpeg_path);
+    let status=state.vod.analyze(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?; state.store.upsert_vod(&status).map_err(internal_error)?; Ok(Json(status))
 }
 async fn api_vod_download(State(state): State<AppState>, headers: HeaderMap, Json(mut req): Json<VodDownloadRequest>) -> ApiResult<Json<VodJobStatus>> {
-    authorize(&headers,&state)?;
-    let tools=state.store.vod_tool_settings().map_err(internal_error)?;
-    apply_vod_tool_defaults(&tools,&mut req.yt_dlp_path,&mut req.ffmpeg_path);
-    let status=state.vod.download(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?;
-    state.store.upsert_vod(&status).map_err(internal_error)?;
-    Ok(Json(status))
+    authorize(&headers,&state)?; let tools=state.store.vod_tool_settings().map_err(internal_error)?; apply_vod_tool_defaults(&tools,&mut req.yt_dlp_path,&mut req.ffmpeg_path);
+    let status=state.vod.download(req).await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?; state.store.upsert_vod(&status).map_err(internal_error)?; Ok(Json(status))
 }
 async fn api_vod_cancel(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<VodJobStatus>> {
-    authorize(&headers,&state)?;
-    let status=state.vod.cancel().await.map_err(internal_error)?;
-    state.store.upsert_vod(&status).map_err(internal_error)?;
-    Ok(Json(status))
+    authorize(&headers,&state)?; let status=state.vod.cancel().await.map_err(internal_error)?; state.store.upsert_vod(&status).map_err(internal_error)?; Ok(Json(status))
 }
