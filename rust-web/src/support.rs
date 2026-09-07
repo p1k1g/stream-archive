@@ -44,9 +44,28 @@ pub async fn resolve_channel_name(account: &str) -> Result<String> {
         .await
         .context("SOOP 채널 정보 JSON 파싱 실패")?;
 
-    let name = value
-        .get("station_name")
+    let result = value.get("RESULT").and_then(Value::as_i64).unwrap_or(0);
+    if result == 0 {
+        bail!("유효한 SOOP 계정을 찾지 못했습니다: {account}");
+    }
+
+    // Current SOOP response shape:
+    // { "RESULT": 1, "DATA": { "user_id": "...", "user_nick": "..." } }
+    // Older consumers have also observed top-level station_name, so keep that as a fallback.
+    let returned_id = value
+        .pointer("/DATA/user_id")
         .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+
+    if !returned_id.is_empty() && !returned_id.eq_ignore_ascii_case(account) {
+        bail!("SOOP 응답 계정이 요청과 다릅니다: 요청={account}, 응답={returned_id}");
+    }
+
+    let name = value
+        .pointer("/DATA/user_nick")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("station_name").and_then(Value::as_str))
         .unwrap_or("")
         .trim();
 
@@ -113,4 +132,37 @@ pub fn spawn_streamlink_log_bridge(logs: LogBuffer) {
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nickname_from_value(value: &Value) -> Option<&str> {
+        value
+            .pointer("/DATA/user_nick")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("station_name").and_then(Value::as_str))
+    }
+
+    #[test]
+    fn parses_current_station_status_nickname_shape() {
+        let value = serde_json::json!({
+            "RESULT": 1,
+            "DATA": {
+                "user_id": "1004ysus",
+                "user_nick": "테스트닉"
+            }
+        });
+        assert_eq!(nickname_from_value(&value), Some("테스트닉"));
+    }
+
+    #[test]
+    fn parses_legacy_station_name_fallback() {
+        let value = serde_json::json!({
+            "RESULT": 1,
+            "station_name": "구형닉"
+        });
+        assert_eq!(nickname_from_value(&value), Some("구형닉"));
+    }
 }
