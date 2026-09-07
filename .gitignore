@@ -19,6 +19,7 @@ backend/history/
 backend/.rust-web/
 backend/*.tmp
 backend/*.processing
+data/
 
 # Local settings, credentials, and personal channel data
 backend/SOOP_LIVE_SETTING.ini
