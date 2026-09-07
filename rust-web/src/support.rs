@@ -2,7 +2,6 @@ use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
-use sysinfo::System;
 
 pub async fn resolve_channel_name(account: &str) -> Result<String> {
     let account = account.trim();
@@ -62,24 +61,6 @@ pub async fn resolve_channel_name(account: &str) -> Result<String> {
         bail!("채널 닉네임을 찾지 못했습니다: {account}");
     }
     Ok(name.to_string())
-}
-
-pub fn find_legacy_watcher() -> Option<String> {
-    let mut system = System::new_all();
-    system.refresh_all();
-
-    for (pid, process) in system.processes() {
-        let command = process
-            .cmd()
-            .iter()
-            .map(|part| part.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join(" ");
-        if command.to_ascii_lowercase().contains("soop_live.ps1") {
-            return Some(format!("pid={pid} {command}"));
-        }
-    }
-    None
 }
 
 #[cfg(test)]
