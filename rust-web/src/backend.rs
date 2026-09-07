@@ -297,12 +297,47 @@ where
     });
 }
 
+fn strip_windows_verbatim_prefix(value: &str) -> String {
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    value.to_string()
+}
+
+fn child_process_compatible_path(path: PathBuf) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        env::current_dir()
+            .context("cannot resolve current directory")?
+            .join(path)
+    };
+
+    #[cfg(windows)]
+    {
+        // std::fs::canonicalize() commonly returns \\?\C:\... on Windows.
+        // Windows PowerShell 5.1 provider cmdlets such as Split-Path/Join-Path
+        // do not reliably accept that verbatim-path form. Keep a normal Win32
+        // absolute path at the process boundary instead.
+        return Ok(PathBuf::from(strip_windows_verbatim_prefix(
+            &absolute.to_string_lossy(),
+        )));
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(absolute)
+    }
+}
+
 pub fn resolve_backend_dir() -> Result<PathBuf> {
     if let Ok(value) = env::var("SOOP_BACKEND_DIR") {
-        let path = PathBuf::from(value);
+        let path = child_process_compatible_path(PathBuf::from(value))?;
         if path.join("SOOP_LIVE.ps1").is_file() {
-            return fs::canonicalize(&path)
-                .with_context(|| format!("cannot canonicalize {}", path.display()));
+            return Ok(path);
         }
         bail!(
             "SOOP_BACKEND_DIR does not contain SOOP_LIVE.ps1: {}",
@@ -321,9 +356,9 @@ pub fn resolve_backend_dir() -> Result<PathBuf> {
     }
 
     for candidate in candidates {
+        let candidate = child_process_compatible_path(candidate)?;
         if candidate.join("SOOP_LIVE.ps1").is_file() {
-            return fs::canonicalize(&candidate)
-                .with_context(|| format!("cannot canonicalize {}", candidate.display()));
+            return Ok(candidate);
         }
     }
 
@@ -591,6 +626,22 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
+
+    #[test]
+    fn strips_windows_verbatim_path_prefixes() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\C:\Users\test\backend"),
+            r"C:\Users\test\backend"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\backend"),
+            r"\\server\share\backend"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"C:\Users\test\backend"),
+            r"C:\Users\test\backend"
+        );
+    }
 
     #[test]
     fn channel_parser_accepts_crlf_lf_and_cr() {
