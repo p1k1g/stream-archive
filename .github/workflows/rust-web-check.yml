@@ -9,6 +9,7 @@ on:
       - "PACKAGE_RUST_WEB.bat"
       - "maintenance/**"
       - "docs/**"
+      - "deploy/**"
       - "backend/*.example.*"
       - "backend/vod/*.example.ini"
       - ".github/workflows/rust-web-check.yml"
@@ -21,6 +22,7 @@ on:
       - "PACKAGE_RUST_WEB.bat"
       - "maintenance/**"
       - "docs/**"
+      - "deploy/**"
       - "backend/*.example.*"
       - "backend/vod/*.example.ini"
       - ".github/workflows/rust-web-check.yml"
@@ -55,6 +57,7 @@ jobs:
             './dist/soop-recorder/RUN.bat',
             './dist/soop-recorder/BACKUP_DATA.bat',
             './dist/soop-recorder/RESTORE_DATA.bat',
+            './dist/soop-recorder/Caddyfile.example',
             './dist/soop-recorder/RELEASE_INFO.txt',
             './dist/soop-recorder/SHA256SUMS.txt',
             './dist/soop-recorder/maintenance/Backup-SoopData.ps1',
@@ -70,6 +73,9 @@ jobs:
           $actual = (Get-FileHash -Algorithm SHA256 ./dist/soop-recorder/soop-server.exe).Hash.ToLowerInvariant()
           if ($expected -ne $actual) { throw 'soop-server.exe checksum mismatch' }
 
+          $caddy = Get-Content ./dist/soop-recorder/Caddyfile.example -Raw
+          if ($caddy -notmatch 'reverse_proxy\s+127\.0\.0\.1:8787') { throw 'Caddy template upstream mismatch' }
+
           $metadata = cargo metadata --locked --no-deps --format-version 1 --manifest-path ./rust-web/Cargo.toml | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
           $cargoVersion = ($metadata.packages | Where-Object { $_.name -eq 'soop-web' } | Select-Object -First 1).version
@@ -82,12 +88,5 @@ jobs:
               $releaseMap[$matches[1].Trim()] = $matches[2].Trim()
             }
           }
-
-          if (-not $releaseMap.ContainsKey('version')) {
-            Get-Content ./dist/soop-recorder/RELEASE_INFO.txt | ForEach-Object { Write-Host "META: [$_]" }
-            throw 'release metadata missing version key'
-          }
-          if ($releaseMap['version'] -ne $cargoVersion) {
-            Get-Content ./dist/soop-recorder/RELEASE_INFO.txt | ForEach-Object { Write-Host "META: [$_]" }
-            throw "release metadata version mismatch: expected $cargoVersion actual $($releaseMap['version'])"
-          }
+          if (-not $releaseMap.ContainsKey('version')) { throw 'release metadata missing version key' }
+          if ($releaseMap['version'] -ne $cargoVersion) { throw "release metadata version mismatch: expected $cargoVersion actual $($releaseMap['version'])" }
