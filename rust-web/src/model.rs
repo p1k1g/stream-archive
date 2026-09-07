@@ -23,8 +23,16 @@ pub struct ChannelRuntimeStatus {
     pub detail: Option<String>,
 }
 
+// Kept for the Phase 1 PowerShell bridge code that remains in backend.rs as a fallback.
 #[derive(Debug, Clone, Serialize)]
 pub struct WatcherStatus {
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub last_exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NativeWatcherStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub last_exit_code: Option<i32>,
@@ -37,7 +45,7 @@ pub struct WatcherStatus {
     pub channels: Vec<ChannelRuntimeStatus>,
 }
 
-impl Default for WatcherStatus {
+impl Default for NativeWatcherStatus {
     fn default() -> Self {
         Self {
             running: false,
@@ -56,7 +64,7 @@ impl Default for WatcherStatus {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusResponse {
-    pub watcher: WatcherStatus,
+    pub watcher: NativeWatcherStatus,
     pub backend_dir: String,
     pub bind: String,
     pub phase: &'static str,
