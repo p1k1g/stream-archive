@@ -1,19 +1,21 @@
 mod backend;
 mod model;
+mod native_watcher;
 
 use anyhow::{bail, Context, Result};
 use axum::{
-    extract::State,
+    extract::{Path as AxumPath, State},
     http::{header::{AUTHORIZATION, CONTENT_TYPE}, HeaderMap, StatusCode},
     response::{Html, IntoResponse},
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use backend::{
     channels_path, ensure_runtime_files, read_channels, read_safe_settings, resolve_backend_dir,
-    settings_path, update_settings, write_channels, LogBuffer, WatcherManager, HIDDEN_SETTING_KEYS,
+    settings_path, update_settings, write_channels, LogBuffer, HIDDEN_SETTING_KEYS,
 };
-use model::{Channel, LogsResponse, SettingsResponse, StatusResponse, WatcherStatus};
+use model::{Channel, LogsResponse, NativeWatcherStatus as WatcherStatus, SettingsResponse, StatusResponse};
+use native_watcher::NativeWatcherManager;
 use std::{
     collections::BTreeMap,
     env, fs,
@@ -34,7 +36,7 @@ struct AppState {
     backend_dir: PathBuf,
     bind: String,
     token: Arc<String>,
-    watcher: Arc<WatcherManager>,
+    watcher: Arc<NativeWatcherManager>,
     logs: LogBuffer,
     file_write_lock: Arc<Mutex<()>>,
 }
@@ -50,7 +52,7 @@ async fn main() -> Result<()> {
     let (token, token_source) = load_or_create_token(&backend_dir)?;
 
     let logs = LogBuffer::new();
-    let watcher = Arc::new(WatcherManager::new(backend_dir.clone(), logs.clone()));
+    let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
     let state = AppState {
         backend_dir: backend_dir.clone(),
         bind: bind.clone(),
@@ -61,7 +63,7 @@ async fn main() -> Result<()> {
     };
 
     logs.push(format!(
-        "[SERVER] Phase 1 web bridge ready; backend={}",
+        "[SERVER] Phase 2 Rust-native watcher ready; backend={}",
         backend_dir.display()
     ))
     .await;
@@ -86,6 +88,7 @@ async fn main() -> Result<()> {
         .route("/api/channels", get(api_channels).put(api_update_channels))
         .route("/api/watcher/start", post(api_watcher_start))
         .route("/api/watcher/stop", post(api_watcher_stop))
+        .route("/api/watcher/channel/{account}/{action}", post(api_channel_action))
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -94,14 +97,15 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to bind {bind}"))?;
 
     println!();
-    println!("SOOP Rust Web - Phase 1");
+    println!("SOOP Rust Web - Phase 2");
     println!("Backend : {}", backend_dir.display());
     println!("Listen  : http://{bind}");
     println!("Token   : {token}");
     println!("Source  : {}", token_source.display());
+    println!("Watcher : Rust native (Streamlink remains external)");
     println!();
     println!("The server is NOT registered as an OS service.");
-    println!("Press Ctrl+C to stop the web server and the watcher.");
+    println!("Press Ctrl+C to stop the web server and owned recordings.");
     println!();
 
     info!("listening on http://{bind}");
@@ -228,7 +232,7 @@ async fn api_status(
         watcher,
         backend_dir: state.backend_dir.display().to_string(),
         bind: state.bind.clone(),
-        phase: "phase1-powershell-bridge",
+        phase: "phase2-rust-native-watcher",
     }))
 }
 
@@ -238,7 +242,7 @@ async fn api_logs(
 ) -> ApiResult<Json<LogsResponse>> {
     authorize(&headers, &state)?;
     Ok(Json(LogsResponse {
-        lines: state.logs.tail(250).await,
+        lines: state.logs.tail(300).await,
     }))
 }
 
@@ -335,4 +339,18 @@ async fn api_watcher_stop(
     authorize(&headers, &state)?;
     let status = state.watcher.stop().await.map_err(internal_error)?;
     Ok(Json(status))
+}
+
+async fn api_channel_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((account, action)): AxumPath<(String, String)>,
+) -> ApiResult<StatusCode> {
+    authorize(&headers, &state)?;
+    state
+        .watcher
+        .channel_action(account, &action)
+        .await
+        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
