@@ -34,7 +34,7 @@ use std::{
     sync::Arc,
 };
 use store::Store;
-use support::{find_legacy_watcher, resolve_channel_name};
+use support::resolve_channel_name;
 use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -86,12 +86,12 @@ async fn main() -> Result<()> {
     };
 
     logs.push(format!(
-        "[SERVER] Phase 5 Rust productization ready; backend={} db={}",
+        "[SERVER] Phase 5.1 Rust-only runtime ready; backend={} db={}",
         backend_dir.display(),
         store.path().display()
     )).await;
     logs.push(format!(
-        "[DB] legacy snapshot synced settings={} channels={}",
+        "[DB] compatibility snapshot synced settings={} channels={}",
         migration.settings, migration.channels
     )).await;
 
@@ -127,7 +127,7 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to bind {bind}"))?;
 
     println!();
-    println!("SOOP Rust Web - Phase 5");
+    println!("SOOP Rust Web - Phase 5.1");
     println!("Backend : {}", backend_dir.display());
     println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
@@ -146,16 +146,11 @@ async fn main() -> Result<()> {
     info!("listening on http://{bind}");
 
     if env_flag("SOOP_START_WATCHER") {
-        if let Some(legacy) = find_legacy_watcher() {
-            warn!("watcher auto-start blocked by legacy watcher: {legacy}");
-            logs.push(format!("[SERVER:WARN] native watcher auto-start blocked: legacy SOOP_LIVE.ps1 is already running ({legacy})")).await;
-        } else {
-            match watcher.start().await {
-                Ok(status) => info!("watcher auto-start result: running={}", status.running),
-                Err(err) => {
-                    warn!("watcher auto-start failed: {err:#}");
-                    logs.push(format!("[SERVER:ERR] watcher auto-start failed: {err:#}")).await;
-                }
+        match watcher.start().await {
+            Ok(status) => info!("watcher auto-start result: running={}", status.running),
+            Err(err) => {
+                warn!("watcher auto-start failed: {err:#}");
+                logs.push(format!("[SERVER:ERR] watcher auto-start failed: {err:#}")).await;
             }
         }
     }
@@ -216,7 +211,7 @@ fn internal_error(err: impl std::fmt::Display) -> ApiError { (StatusCode::INTERN
 async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<StatusResponse>> {
     authorize(&headers, &state)?;
     let watcher = state.watcher.status().await.map_err(internal_error)?;
-    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase5-rust-productization" }))
+    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase5.1-rust-only-cleanup" }))
 }
 async fn api_logs(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<LogsResponse>> {
     authorize(&headers, &state)?;
@@ -277,10 +272,6 @@ async fn api_channel_resolve(State(state): State<AppState>, headers: HeaderMap, 
 }
 async fn api_watcher_start(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> {
     authorize(&headers,&state)?;
-    if let Some(legacy)=find_legacy_watcher(){
-        state.logs.push(format!("[SERVER:WARN] native watcher start blocked: legacy SOOP_LIVE.ps1 is already running ({legacy})")).await;
-        return Err((StatusCode::CONFLICT,format!("기존 PowerShell watcher가 이미 실행 중입니다. 먼저 종료하세요. ({legacy})")));
-    }
     Ok(Json(state.watcher.start().await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?))
 }
 async fn api_watcher_stop(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> {
