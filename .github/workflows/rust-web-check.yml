@@ -68,5 +68,13 @@ jobs:
           $expected = (Get-Content ./dist/soop-recorder/SHA256SUMS.txt -Raw).Trim().Split()[0]
           $actual = (Get-FileHash -Algorithm SHA256 ./dist/soop-recorder/soop-server.exe).Hash.ToLowerInvariant()
           if ($expected -ne $actual) { throw 'soop-server.exe checksum mismatch' }
+
+          $cargoToml = Get-Content ./rust-web/Cargo.toml -Raw
+          $versionMatch = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"([^"]+)"\s*$')
+          if (-not $versionMatch.Success) { throw 'Cargo.toml package version not found' }
+          $cargoVersion = $versionMatch.Groups[1].Value
           $releaseInfo = Get-Content ./dist/soop-recorder/RELEASE_INFO.txt -Raw
-          if ($releaseInfo -notmatch 'version=0\.5\.2') { throw 'release metadata version mismatch' }
+          $expectedVersionLine = "version=$cargoVersion"
+          if (-not (($releaseInfo -split "\r?\n") -contains $expectedVersionLine)) {
+            throw "release metadata version mismatch: expected $expectedVersionLine"
+          }
