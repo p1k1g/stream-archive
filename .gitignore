@@ -5,6 +5,9 @@ publish_selfcontained/
 bin/
 obj/
 
+# Rust build output
+rust-web/target/
+
 # Local archives, diagnostics, and runtime state
 *.zip
 *.pdb
@@ -13,6 +16,7 @@ SOOPLiveWinUI_startup.log
 backend/logs/
 backend/control/
 backend/history/
+backend/.rust-web/
 backend/*.tmp
 backend/*.processing
 
