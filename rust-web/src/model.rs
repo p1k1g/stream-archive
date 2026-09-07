@@ -79,11 +79,46 @@ pub struct ChannelLookupResponse {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct LiveHistoryItem {
+    pub id: String,
+    pub account: String,
+    pub channel_name: String,
+    pub bno: Option<String>,
+    pub title: Option<String>,
+    pub file_path: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub duration_seconds: i64,
+    pub size_bytes: u64,
+    pub reason: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct VodHistoryItem {
+    pub id: String,
+    pub kind: String,
+    pub vod_url: String,
+    pub title: String,
+    pub streamer: String,
+    pub part_count: usize,
+    pub state: String,
+    pub output_file: Option<String>,
+    pub message: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct HistoryResponse {
+    pub live: Vec<LiveHistoryItem>,
+    pub vod: Vec<VodHistoryItem>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct VodAnalyzeRequest {
     pub vod_url: String,
-    #[serde(default)]
-    pub output_directory: String,
     #[serde(default = "default_cookie_mode")]
     pub cookie_mode: String,
     #[serde(default)]
