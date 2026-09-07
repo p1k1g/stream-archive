@@ -1,6 +1,7 @@
 mod backend;
 mod model;
 mod native_watcher;
+mod support;
 
 use anyhow::{bail, Context, Result};
 use axum::{
@@ -14,7 +15,10 @@ use backend::{
     channels_path, ensure_runtime_files, read_channels, read_safe_settings, resolve_backend_dir,
     settings_path, update_settings, write_channels, LogBuffer, HIDDEN_SETTING_KEYS,
 };
-use model::{Channel, LogsResponse, NativeWatcherStatus as WatcherStatus, SettingsResponse, StatusResponse};
+use model::{
+    Channel, ChannelLookupResponse, LogsResponse, NativeWatcherStatus as WatcherStatus,
+    SettingsResponse, StatusResponse,
+};
 use native_watcher::NativeWatcherManager;
 use std::{
     collections::BTreeMap,
@@ -22,6 +26,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use support::{find_legacy_watcher, resolve_channel_name, spawn_streamlink_log_bridge};
 use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -52,6 +57,7 @@ async fn main() -> Result<()> {
     let (token, token_source) = load_or_create_token(&backend_dir)?;
 
     let logs = LogBuffer::new();
+    spawn_streamlink_log_bridge(logs.clone());
     let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
     let state = AppState {
         backend_dir: backend_dir.clone(),
@@ -63,7 +69,7 @@ async fn main() -> Result<()> {
     };
 
     logs.push(format!(
-        "[SERVER] Phase 2 Rust-native watcher ready; backend={}",
+        "[SERVER] Phase 2.1 Rust-native watcher ready; backend={}",
         backend_dir.display()
     ))
     .await;
@@ -86,6 +92,7 @@ async fn main() -> Result<()> {
         .route("/api/logs", get(api_logs))
         .route("/api/settings", get(api_settings).put(api_update_settings))
         .route("/api/channels", get(api_channels).put(api_update_channels))
+        .route("/api/channels/resolve/{account}", get(api_channel_resolve))
         .route("/api/watcher/start", post(api_watcher_start))
         .route("/api/watcher/stop", post(api_watcher_stop))
         .route("/api/watcher/channel/{account}/{action}", post(api_channel_action))
@@ -97,7 +104,7 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to bind {bind}"))?;
 
     println!();
-    println!("SOOP Rust Web - Phase 2");
+    println!("SOOP Rust Web - Phase 2.1");
     println!("Backend : {}", backend_dir.display());
     println!("Listen  : http://{bind}");
     println!("Token   : {token}");
@@ -111,12 +118,20 @@ async fn main() -> Result<()> {
     info!("listening on http://{bind}");
 
     if env_flag("SOOP_START_WATCHER") {
-        match watcher.start().await {
-            Ok(status) => info!("watcher auto-start result: running={}", status.running),
-            Err(err) => {
-                warn!("watcher auto-start failed: {err:#}");
-                logs.push(format!("[SERVER:ERR] watcher auto-start failed: {err:#}"))
-                    .await;
+        if let Some(legacy) = find_legacy_watcher() {
+            warn!("watcher auto-start blocked by legacy watcher: {legacy}");
+            logs.push(format!(
+                "[SERVER:WARN] native watcher auto-start blocked: legacy SOOP_LIVE.ps1 is already running ({legacy})"
+            ))
+            .await;
+        } else {
+            match watcher.start().await {
+                Ok(status) => info!("watcher auto-start result: running={}", status.running),
+                Err(err) => {
+                    warn!("watcher auto-start failed: {err:#}");
+                    logs.push(format!("[SERVER:ERR] watcher auto-start failed: {err:#}"))
+                        .await;
+                }
             }
         }
     }
@@ -232,7 +247,7 @@ async fn api_status(
         watcher,
         backend_dir: state.backend_dir.display().to_string(),
         bind: state.bind.clone(),
-        phase: "phase2-rust-native-watcher",
+        phase: "phase2.1-rust-polish",
     }))
 }
 
@@ -319,11 +334,41 @@ async fn api_update_channels(
     Ok(Json(channels))
 }
 
+async fn api_channel_resolve(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(account): AxumPath<String>,
+) -> ApiResult<Json<ChannelLookupResponse>> {
+    authorize(&headers, &state)?;
+    let name = resolve_channel_name(&account)
+        .await
+        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+    state
+        .logs
+        .push(format!("[SERVER] channel resolved: {account} -> {name}"))
+        .await;
+    Ok(Json(ChannelLookupResponse { account, name }))
+}
+
 async fn api_watcher_start(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<WatcherStatus>> {
     authorize(&headers, &state)?;
+
+    if let Some(legacy) = find_legacy_watcher() {
+        state
+            .logs
+            .push(format!(
+                "[SERVER:WARN] native watcher start blocked: legacy SOOP_LIVE.ps1 is already running ({legacy})"
+            ))
+            .await;
+        return Err((
+            StatusCode::CONFLICT,
+            format!("기존 PowerShell watcher가 이미 실행 중입니다. 먼저 종료하세요. ({legacy})"),
+        ));
+    }
+
     let status = state
         .watcher
         .start()

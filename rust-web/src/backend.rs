@@ -1,20 +1,14 @@
-use crate::model::{Channel, WatcherStatus};
+use crate::model::Channel;
 use anyhow::{bail, Context, Result};
 use atomic_write_file::AtomicWriteFile;
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
-    env,
-    fs,
+    env, fs,
     io::Write,
     path::{Path, PathBuf},
-    process::Stdio,
     sync::Arc,
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, BufReader},
-    process::{Child, Command},
-    sync::{Mutex, RwLock},
-};
+use tokio::sync::RwLock;
 
 const SETTINGS_FILE: &str = "SOOP_LIVE_SETTING.ini";
 const SETTINGS_EXAMPLE_FILE: &str = "SOOP_LIVE_SETTING.example.ini";
@@ -81,222 +75,7 @@ impl LogBuffer {
     }
 }
 
-struct WatcherRuntime {
-    child: Option<Child>,
-    pid: Option<u32>,
-    last_exit_code: Option<i32>,
-}
-
-pub struct WatcherManager {
-    backend_dir: PathBuf,
-    runtime: Mutex<WatcherRuntime>,
-    logs: LogBuffer,
-}
-
-impl WatcherManager {
-    pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
-        Self {
-            backend_dir,
-            runtime: Mutex::new(WatcherRuntime {
-                child: None,
-                pid: None,
-                last_exit_code: None,
-            }),
-            logs,
-        }
-    }
-
-    pub async fn start(&self) -> Result<WatcherStatus> {
-        let mut runtime = self.runtime.lock().await;
-        refresh_runtime(&mut runtime)?;
-
-        if runtime.child.is_some() {
-            return Ok(snapshot_from_runtime(&runtime));
-        }
-
-        let ps1 = self.backend_dir.join("SOOP_LIVE.ps1");
-        if !ps1.is_file() {
-            bail!("SOOP_LIVE.ps1 not found: {}", ps1.display());
-        }
-
-        let shell = if cfg!(windows) { "powershell.exe" } else { "pwsh" };
-        let escaped_ps1 = ps1.to_string_lossy().replace('\'', "''");
-        let ps_command = format!(
-            "[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); \
-             [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); \
-             $OutputEncoding=[System.Text.UTF8Encoding]::new($false); \
-             & '{escaped_ps1}'"
-        );
-
-        let mut command = Command::new(shell);
-        command.arg("-NoLogo").arg("-NoProfile");
-        if cfg!(windows) {
-            command.arg("-ExecutionPolicy").arg("Bypass");
-        }
-        command
-            .arg("-Command")
-            .arg(ps_command)
-            .current_dir(&self.backend_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(false);
-
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("failed to start {shell}"))?;
-
-        let pid = child.id();
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        runtime.pid = pid;
-        runtime.last_exit_code = None;
-        runtime.child = Some(child);
-
-        if let Some(stdout) = stdout {
-            spawn_reader(stdout, self.logs.clone(), "[WATCHER]");
-        }
-        if let Some(stderr) = stderr {
-            spawn_reader(stderr, self.logs.clone(), "[WATCHER:ERR]");
-        }
-
-        self.logs
-            .push(format!(
-                "[SERVER] watcher started (pid={})",
-                pid.map(|v| v.to_string()).unwrap_or_else(|| "?".into())
-            ))
-            .await;
-
-        Ok(snapshot_from_runtime(&runtime))
-    }
-
-    pub async fn stop(&self) -> Result<WatcherStatus> {
-        let mut runtime = self.runtime.lock().await;
-        refresh_runtime(&mut runtime)?;
-
-        let Some(pid) = runtime.pid else {
-            return Ok(snapshot_from_runtime(&runtime));
-        };
-
-        let exit_code = {
-            let Some(child) = runtime.child.as_mut() else {
-                runtime.pid = None;
-                return Ok(snapshot_from_runtime(&runtime));
-            };
-
-            #[cfg(windows)]
-            {
-                let taskkill_status = Command::new("taskkill.exe")
-                    .arg("/PID")
-                    .arg(pid.to_string())
-                    .arg("/T")
-                    .arg("/F")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .await;
-
-                let taskkill_ok = taskkill_status
-                    .as_ref()
-                    .map(|status| status.success())
-                    .unwrap_or(false);
-
-                if !taskkill_ok {
-                    if let Some(status) = child
-                        .try_wait()
-                        .context("failed to verify watcher after taskkill failure")?
-                    {
-                        status.code()
-                    } else {
-                        bail!("taskkill /PID {pid} /T /F failed; watcher remains running");
-                    }
-                } else {
-                    child.wait().await.ok().and_then(|status| status.code())
-                }
-            }
-
-            #[cfg(not(windows))]
-            {
-                let _ = child.kill().await;
-                child.wait().await.ok().and_then(|status| status.code())
-            }
-        };
-
-        runtime.child = None;
-        runtime.pid = None;
-        runtime.last_exit_code = exit_code;
-
-        self.logs
-            .push(format!(
-                "[SERVER] watcher stopped (exit={})",
-                exit_code.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())
-            ))
-            .await;
-
-        Ok(snapshot_from_runtime(&runtime))
-    }
-
-    pub async fn status(&self) -> Result<WatcherStatus> {
-        let mut runtime = self.runtime.lock().await;
-        let was_running = runtime.child.is_some();
-        refresh_runtime(&mut runtime)?;
-        if was_running && runtime.child.is_none() {
-            self.logs
-                .push(format!(
-                    "[SERVER] watcher exited (exit={})",
-                    runtime
-                        .last_exit_code
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "unknown".into())
-                ))
-                .await;
-        }
-        Ok(snapshot_from_runtime(&runtime))
-    }
-}
-
-fn refresh_runtime(runtime: &mut WatcherRuntime) -> Result<()> {
-    let exit = match runtime.child.as_mut() {
-        Some(child) => child.try_wait().context("failed to query watcher status")?,
-        None => None,
-    };
-    if let Some(status) = exit {
-        runtime.last_exit_code = status.code();
-        runtime.child = None;
-        runtime.pid = None;
-    }
-    Ok(())
-}
-
-fn snapshot_from_runtime(runtime: &WatcherRuntime) -> WatcherStatus {
-    WatcherStatus {
-        running: runtime.child.is_some(),
-        pid: runtime.pid,
-        last_exit_code: runtime.last_exit_code,
-    }
-}
-
-fn spawn_reader<R>(reader: R, logs: LogBuffer, prefix: &'static str)
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        loop {
-            match lines.next_line().await {
-                Ok(Some(line)) => logs.push(format!("{prefix} {line}")).await,
-                Ok(None) => break,
-                Err(err) => {
-                    logs.push(format!("{prefix} <read error: {err}>")).await;
-                    break;
-                }
-            }
-        }
-    });
-}
-
+#[cfg(windows)]
 fn strip_windows_verbatim_prefix(value: &str) -> String {
     if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
         return format!(r"\\{rest}");
@@ -318,10 +97,6 @@ fn child_process_compatible_path(path: PathBuf) -> Result<PathBuf> {
 
     #[cfg(windows)]
     {
-        // std::fs::canonicalize() commonly returns \\?\C:\... on Windows.
-        // Windows PowerShell 5.1 provider cmdlets such as Split-Path/Join-Path
-        // do not reliably accept that verbatim-path form. Keep a normal Win32
-        // absolute path at the process boundary instead.
         return Ok(PathBuf::from(strip_windows_verbatim_prefix(
             &absolute.to_string_lossy(),
         )));
@@ -336,11 +111,11 @@ fn child_process_compatible_path(path: PathBuf) -> Result<PathBuf> {
 pub fn resolve_backend_dir() -> Result<PathBuf> {
     if let Ok(value) = env::var("SOOP_BACKEND_DIR") {
         let path = child_process_compatible_path(PathBuf::from(value))?;
-        if path.join("SOOP_LIVE.ps1").is_file() {
+        if path.join(SETTINGS_FILE).is_file() || path.join(SETTINGS_EXAMPLE_FILE).is_file() {
             return Ok(path);
         }
         bail!(
-            "SOOP_BACKEND_DIR does not contain SOOP_LIVE.ps1: {}",
+            "SOOP_BACKEND_DIR does not contain SOOP runtime files: {}",
             path.display()
         );
     }
@@ -357,7 +132,7 @@ pub fn resolve_backend_dir() -> Result<PathBuf> {
 
     for candidate in candidates {
         let candidate = child_process_compatible_path(candidate)?;
-        if candidate.join("SOOP_LIVE.ps1").is_file() {
+        if candidate.join(SETTINGS_FILE).is_file() || candidate.join(SETTINGS_EXAMPLE_FILE).is_file() {
             return Ok(candidate);
         }
     }
@@ -461,7 +236,7 @@ fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()> {
     let allowed: HashSet<&str> = SAFE_SETTING_KEYS.iter().copied().collect();
     for (key, value) in updates {
         if !allowed.contains(key.as_str()) {
-            bail!("setting is not editable in Phase 1: {key}");
+            bail!("setting is not editable in Rust web: {key}");
         }
         validate_single_line(value, 2048, &format!("setting {key}"))?;
         match key.as_str() {
@@ -627,6 +402,7 @@ mod tests {
     use std::collections::BTreeMap;
     use tempfile::tempdir;
 
+    #[cfg(windows)]
     #[test]
     fn strips_windows_verbatim_path_prefixes() {
         assert_eq!(
@@ -636,10 +412,6 @@ mod tests {
         assert_eq!(
             strip_windows_verbatim_prefix(r"\\?\UNC\server\share\backend"),
             r"\\server\share\backend"
-        );
-        assert_eq!(
-            strip_windows_verbatim_prefix(r"C:\Users\test\backend"),
-            r"C:\Users\test\backend"
         );
     }
 
