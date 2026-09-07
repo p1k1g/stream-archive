@@ -631,7 +631,10 @@ async fn run_download(
                     complete = true;
                     break;
                 }
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    cleanup_incomplete(&output);
+                    return Ok(());
+                }
                 Err(err) => {
                     last_error = err.to_string();
                     cleanup_incomplete(&output);
