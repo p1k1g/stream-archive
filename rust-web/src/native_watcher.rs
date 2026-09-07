@@ -1,8 +1,9 @@
 use crate::{
-    backend::{channels_path, read_channels, LogBuffer},
+    backend::LogBuffer,
     model::{Channel, ChannelRuntimeStatus, NativeWatcherStatus as WatcherStatus},
     recorder::{RecorderConfig, RecorderManager, Recording, RecordingPoll},
     security::unprotect_secret,
+    store,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{Local, Utc};
@@ -17,7 +18,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 use tokio::{
     sync::{mpsc, oneshot, Mutex, RwLock},
@@ -126,8 +127,10 @@ impl NativeWatcherManager {
         runtime.stop_tx = None;
         runtime.command_tx = None;
 
-        let config = WatcherConfig::load(&self.backend_dir)?;
-        let channels = read_channels(&channels_path(&self.backend_dir))?;
+        let db = store::global()?;
+        let settings = db.live_settings_with_secrets()?;
+        let config = WatcherConfig::from_values(&self.backend_dir, &settings)?;
+        let channels = db.channels()?;
         let (stop_tx, stop_rx) = oneshot::channel();
         let (command_tx, command_rx) = mpsc::channel(32);
         let backend_dir = self.backend_dir.clone();
@@ -140,7 +143,7 @@ impl NativeWatcherManager {
                 running: true,
                 pid: None,
                 last_exit_code: None,
-                engine: "rust-native-v3",
+                engine: "rust-native-v4-sqlite",
                 started_at: Some(Utc::now().to_rfc3339()),
                 channel_count: channels.len(),
                 recording_count: 0,
@@ -161,6 +164,7 @@ impl NativeWatcherManager {
         let task = tokio::spawn(async move {
             let result = run_native_watcher(
                 backend_dir,
+                settings,
                 config,
                 channels,
                 logs.clone(),
@@ -179,7 +183,9 @@ impl NativeWatcherManager {
         runtime.stop_tx = Some(stop_tx);
         runtime.command_tx = Some(command_tx);
         runtime.task = Some(task);
-        self.logs.push("[RUST] native watcher v3 started").await;
+        self.logs
+            .push("[RUST] native watcher v4 started (SQLite direct)")
+            .await;
         Ok(self.snapshot.read().await.clone())
     }
 
@@ -196,7 +202,7 @@ impl NativeWatcherManager {
             let _ = task.await;
         }
         self.snapshot.write().await.running = false;
-        self.logs.push("[RUST] native watcher v3 stopped").await;
+        self.logs.push("[RUST] native watcher v4 stopped").await;
         Ok(self.snapshot.read().await.clone())
     }
 
@@ -238,6 +244,7 @@ impl NativeWatcherManager {
 
 async fn run_native_watcher(
     backend_dir: PathBuf,
+    mut last_settings: BTreeMap<String, String>,
     mut config: WatcherConfig,
     initial_channels: Vec<Channel>,
     logs: LogBuffer,
@@ -270,17 +277,14 @@ async fn run_native_watcher(
         }
     }
 
+    let mut last_channel_signature = channel_signature(&initial_channels);
     let mut states = HashMap::new();
     apply_channels(&mut states, initial_channels, &recorder, &logs).await;
-    let channels_file = channels_path(&backend_dir);
-    let settings_file = backend_dir.join("SOOP_LIVE_SETTING.ini");
-    let mut last_channel_mtime = modified(&channels_file);
-    let mut last_setting_mtime = modified(&settings_file);
     let mut next_reload = Instant::now();
     let mut next_setting_check = Instant::now();
 
     logs.push(format!(
-        "[RUST] watcher ready | check={}s reload={}s output={} streamlink={} secret_backend=native-dpapi",
+        "[RUST] watcher ready | source=sqlite check={}s reload={}s output={} streamlink={} secret_backend=native-dpapi",
         config.check_interval,
         config.reload_interval,
         config.output_dir.display(),
@@ -300,38 +304,42 @@ async fn run_native_watcher(
 
                 if now >= next_setting_check {
                     next_setting_check = now + Duration::from_secs(1);
-                    let mtime = modified(&settings_file);
-                    if mtime.is_some() && mtime != last_setting_mtime {
-                        match WatcherConfig::load(&backend_dir) {
-                            Ok(new_config) => {
-                                let auth_changed = new_config.soop_username != config.soop_username
-                                    || new_config.soop_password != config.soop_password;
-                                config = new_config;
-                                last_setting_mtime = mtime;
-                                logs.push("[RUST] settings hot reload applied").await;
-                                if auth_changed && !config.soop_username.is_empty() && !config.soop_password.is_empty() {
-                                    match session.login(&config.soop_username, &config.soop_password).await {
-                                        Ok(login) => logs.push(format!("[RUST:AUTH] SOOP login refreshed : {login}")).await,
-                                        Err(err) => logs.push(format!("[RUST:WARN] SOOP login refresh failed: {err:#}")).await,
+                    match store::global().and_then(|db| db.live_settings_with_secrets()) {
+                        Ok(values) if values != last_settings => {
+                            match WatcherConfig::from_values(&backend_dir, &values) {
+                                Ok(new_config) => {
+                                    let auth_changed = new_config.soop_username != config.soop_username
+                                        || new_config.soop_password != config.soop_password;
+                                    config = new_config;
+                                    last_settings = values;
+                                    logs.push("[RUST] SQLite settings hot reload applied").await;
+                                    if auth_changed && !config.soop_username.is_empty() && !config.soop_password.is_empty() {
+                                        match session.login(&config.soop_username, &config.soop_password).await {
+                                            Ok(login) => logs.push(format!("[RUST:AUTH] SOOP login refreshed : {login}")).await,
+                                            Err(err) => logs.push(format!("[RUST:WARN] SOOP login refresh failed: {err:#}")).await,
+                                        }
                                     }
                                 }
+                                Err(err) => logs.push(format!("[RUST:WARN] SQLite settings reload rejected; previous values kept: {err:#}")).await,
                             }
-                            Err(err) => logs.push(format!("[RUST:WARN] settings reload rejected; previous values kept: {err:#}")).await,
                         }
+                        Ok(_) => {}
+                        Err(err) => logs.push(format!("[RUST:WARN] SQLite settings read failed; previous values kept: {err:#}")).await,
                     }
                 }
 
                 if now >= next_reload {
                     next_reload = now + Duration::from_secs(config.reload_interval.max(1));
-                    let mtime = modified(&channels_file);
-                    if mtime.is_some() && mtime != last_channel_mtime {
-                        match read_channels(&channels_file) {
-                            Ok(channels) => {
+                    match store::global().and_then(|db| db.channels()) {
+                        Ok(channels) => {
+                            let signature = channel_signature(&channels);
+                            if signature != last_channel_signature {
                                 apply_channels(&mut states, channels, &recorder, &logs).await;
-                                last_channel_mtime = mtime;
+                                last_channel_signature = signature;
+                                logs.push("[RUST] SQLite channel hot reload applied").await;
                             }
-                            Err(err) => logs.push(format!("[RUST:WARN] channel reload failed; previous list kept: {err:#}")).await,
                         }
+                        Err(err) => logs.push(format!("[RUST:WARN] SQLite channel reload failed; previous list kept: {err:#}")).await,
                     }
                 }
 
@@ -913,8 +921,7 @@ fn collect_cookies(target: &mut BTreeMap<String, String>, response: &Response) {
 }
 
 impl WatcherConfig {
-    fn load(backend_dir: &Path) -> Result<Self> {
-        let map = read_ini(&backend_dir.join("SOOP_LIVE_SETTING.ini"))?;
+    fn from_values(backend_dir: &Path, map: &BTreeMap<String, String>) -> Result<Self> {
         let raw = |name: &str| map.get(name).cloned().unwrap_or_default();
         let worker_api_key = unprotect_secret(&raw("CLOUDFLARE_API_KEY"), "CLOUDFLARE_API_KEY")?;
         let soop_password = unprotect_secret(&raw("SOOP_PASSWORD"), "SOOP_PASSWORD")?;
@@ -933,13 +940,13 @@ impl WatcherConfig {
                 .unwrap_or_else(default_output_dir),
         );
         fs::create_dir_all(&output_dir)?;
-        let streamlink = resolve_streamlink(backend_dir, &map)?;
+        let streamlink = resolve_streamlink(backend_dir, map)?;
 
         Ok(Self {
-            check_interval: int(&map, "CHECK_INTERVAL", 30),
-            reload_interval: int(&map, "CHANNEL_RELOAD_INTERVAL", 2),
-            retry_interval: int(&map, "RECORD_RETRY_INTERVAL", 5),
-            worker_max_retry: int(&map, "WORKER_MAX_RETRY", 3) as usize,
+            check_interval: int(map, "CHECK_INTERVAL", 30),
+            reload_interval: int(map, "CHANNEL_RELOAD_INTERVAL", 2),
+            retry_interval: int(map, "RECORD_RETRY_INTERVAL", 5),
+            worker_max_retry: int(map, "WORKER_MAX_RETRY", 3) as usize,
             output_dir,
             file_name_pattern: map
                 .get("FILE_NAME_PATTERN")
@@ -957,8 +964,8 @@ impl WatcherConfig {
                     .cloned()
                     .filter(|v| !v.is_empty())
                     .unwrap_or_else(|| "best".into()),
-                stall_timeout: int(&map, "RECORD_STALL_TIMEOUT", 90),
-                monitor_interval: int(&map, "RECORD_MONITOR_INTERVAL", 5),
+                stall_timeout: int(map, "RECORD_STALL_TIMEOUT", 90),
+                monitor_interval: int(map, "RECORD_MONITOR_INTERVAL", 5),
                 min_free_space_gb: map
                     .get("MIN_FREE_SPACE_GB")
                     .and_then(|v| v.parse().ok())
@@ -966,22 +973,6 @@ impl WatcherConfig {
             },
         })
     }
-}
-
-fn read_ini(path: &Path) -> Result<BTreeMap<String, String>> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let mut map = BTreeMap::new();
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            map.insert(key.trim().to_string(), value.trim().to_string());
-        }
-    }
-    Ok(map)
 }
 
 fn resolve_streamlink(backend_dir: &Path, map: &BTreeMap<String, String>) -> Result<PathBuf> {
@@ -1105,8 +1096,20 @@ fn int(map: &BTreeMap<String, String>, key: &str, default: u64) -> u64 {
     map.get(key).and_then(|value| value.parse().ok()).unwrap_or(default)
 }
 
-fn modified(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path).and_then(|metadata| metadata.modified()).ok()
+fn channel_signature(channels: &[Channel]) -> String {
+    channels
+        .iter()
+        .map(|channel| {
+            format!(
+                "{}|{}|{}|{}",
+                if channel.enabled { "Y" } else { "N" },
+                channel.name,
+                channel.account.to_ascii_lowercase(),
+                channel.outdir
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn compact(text: &str, max: usize) -> String {
@@ -1137,11 +1140,9 @@ mod tests {
     }
 
     #[test]
-    fn ini_parser_preserves_protected_secret_text() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("x.ini");
-        fs::write(&path, "A=1\r\nSOOP_PASSWORD=dpapi:v1:abc\r\n").unwrap();
-        let map = read_ini(&path).unwrap();
-        assert_eq!(map["SOOP_PASSWORD"], "dpapi:v1:abc");
+    fn channel_signature_is_case_insensitive_for_accounts() {
+        let a = vec![Channel { enabled: true, name: "A".into(), account: "UserA".into(), outdir: "".into() }];
+        let b = vec![Channel { enabled: true, name: "A".into(), account: "usera".into(), outdir: "".into() }];
+        assert_eq!(channel_signature(&a), channel_signature(&b));
     }
 }
