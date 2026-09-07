@@ -1,60 +1,103 @@
 # Reverse proxy deployment
 
-The recommended production layout keeps the Rust server bound to loopback and terminates HTTPS in a reverse proxy.
+Phase 7 recommends keeping the Rust server on loopback and exposing only Caddy over HTTPS.
 
 ```text
-Internet / LAN
-  -> HTTPS reverse proxy
-     -> 127.0.0.1:8787
-        -> SOOP Rust Web
+Internet
+  -> router TCP 80/443
+     -> PC LAN IPv4:80/443
+        -> Caddy
+           -> 127.0.0.1:8787
+              -> SOOP Rust Web
 ```
 
-Keep the application on `127.0.0.1:8787` unless you have a specific reason to expose the Axum listener directly.
+## Important: 127.0.0.1 is not a port-forward target
 
-## Caddy example
+Do **not** configure a router rule such as `external 8787 -> 127.0.0.1:8787`.
+`127.0.0.1` is loopback on the device that receives the packet. On a router it means the router itself, not the Windows PC.
+
+Use the Windows PC's LAN IPv4 address for router forwarding, for example `192.168.0.35`:
+
+```text
+TCP 80  -> 192.168.0.35:80
+TCP 443 -> 192.168.0.35:443
+```
+
+Keep SOOP itself at the default `127.0.0.1:8787`. There is normally no reason to expose port 8787 directly.
+
+Find the PC address with:
+
+```powershell
+ipconfig
+```
+
+Reserve that address in the router's DHCP settings if possible so the forwarding rule does not break after a lease change.
+
+## Caddy
+
+The portable package contains `Caddyfile.example`. Copy or rename it to `Caddyfile` and replace the placeholder hostname:
 
 ```caddyfile
-soop.example.com {
+YOUR_DOMAIN.example.com {
     encode zstd gzip
     reverse_proxy 127.0.0.1:8787
-}
-```
 
-Caddy can obtain and renew public TLS certificates automatically when DNS and inbound ports are configured correctly.
-
-## Nginx example
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name soop.example.com;
-
-    ssl_certificate     /path/to/fullchain.pem;
-    ssl_certificate_key /path/to/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 3600s;
+    header {
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
     }
 }
 ```
 
-## Access-control notes
+Caddy automatically obtains and renews a public TLS certificate when:
 
-- The Web API requires the management bearer token, but HTTPS is still required when traffic leaves the local machine.
-- Do not place the management token in a public repository, reverse-proxy config committed to Git, screenshots, or logs.
-- Prefer VPN/LAN-only exposure if public internet access is not needed.
-- If exposing publicly, restrict source networks at the reverse proxy/firewall when practical.
-- Do not proxy unrelated local applications through the SOOP management hostname.
+- the hostname resolves to your public IP,
+- inbound TCP 80/443 reach the Windows PC,
+- the ISP/router is not blocking those ports,
+- the connection is not behind unsupported CGNAT.
+
+Start Caddy from the folder containing `caddy.exe` and `Caddyfile`:
+
+```powershell
+.\caddy.exe validate --config .\Caddyfile
+.\caddy.exe run --config .\Caddyfile
+```
+
+Keep the SOOP server running separately. Neither process is registered as an OS service by this project.
 
 ## Windows firewall
 
-If Caddy/Nginx runs on the same Windows host, the Rust server itself can remain loopback-only and does not need an inbound firewall rule for port 8787. Only the reverse proxy's HTTPS port needs to be reachable.
+If Caddy runs on the same Windows host, port 8787 can remain loopback-only and does not need an inbound firewall rule. Allow Caddy or TCP 80/443 instead. Example from an elevated PowerShell:
+
+```powershell
+New-NetFirewallRule -DisplayName "SOOP Caddy HTTP"  -Direction Inbound -Protocol TCP -LocalPort 80  -Action Allow
+New-NetFirewallRule -DisplayName "SOOP Caddy HTTPS" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow
+```
+
+## External testing
+
+Some routers do not support NAT loopback/hairpin NAT. A public hostname can therefore fail while tested from the same home Wi-Fi even though it works externally. Test with a phone using Wi-Fi off and LTE/5G on.
+
+If the router WAN address is in a private/CGNAT range such as `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, or `100.64.0.0/10`, ordinary IPv4 port forwarding may not work. In that case request a public IPv4 address or use a VPN/tunnel approach instead.
+
+## Direct LAN listener (not preferred for internet exposure)
+
+For LAN-only troubleshooting you can bind Axum to all interfaces:
+
+```powershell
+$env:SOOP_WEB_BIND="0.0.0.0:8787"
+.\soop-server.exe
+```
+
+Then forward/connect to the **PC LAN IPv4**, never `127.0.0.1`. For public internet use, switch back to `127.0.0.1:8787` and use Caddy.
+
+## Security notes
+
+- The Web API requires the management bearer token, but HTTPS is still required when traffic leaves the local machine.
+- Do not put the token in the Caddyfile, Git, screenshots, or logs.
+- Prefer VPN/LAN-only exposure if public internet access is unnecessary.
+- If exposing publicly, source-IP restrictions or an additional authentication layer at the proxy are worthwhile.
 
 ## Health check
 
-After deployment, open the HTTPS hostname in a browser and verify that the UI loads. The API status endpoint still requires the management token; a bare unauthenticated request returning HTTP 401 is expected and confirms the backend is not exposing management data anonymously.
+Open the HTTPS hostname and verify the UI loads. A bare unauthenticated `/api/status` request returning HTTP 401 is expected and confirms management data is not exposed anonymously.
