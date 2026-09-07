@@ -10,8 +10,10 @@ use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
+
+static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct Store {
@@ -24,6 +26,19 @@ pub struct MigrationSummary {
     pub settings: usize,
     pub channels: usize,
     pub database: PathBuf,
+}
+
+pub fn init_global(store: Store) -> Result<()> {
+    GLOBAL_STORE
+        .set(store)
+        .map_err(|_| anyhow::anyhow!("SQLite store already initialized"))
+}
+
+pub fn global() -> Result<Store> {
+    GLOBAL_STORE
+        .get()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("SQLite store is not initialized"))
 }
 
 impl Store {
