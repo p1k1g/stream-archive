@@ -1,87 +1,104 @@
-# SOOP Rust Web - Phase 3
+# SOOP Rust Web - Phase 4
 
-Phase 3 separates recording process ownership from the watcher and removes the last PowerShell dependency from the Rust LIVE runtime.
+Phase 4 keeps the LIVE pipeline from Phase 3 and moves the VOD orchestration into Rust.
 
 ```text
 Browser
   -> Axum Web/API
-  -> Rust NativeWatcher
-     -> SOOP login / LIVE detection
-     -> Cloudflare Worker master HLS
-     -> Rust RecorderManager
-        -> streamlink.exe
-        -> output .ts
+     -> Rust NativeWatcher
+        -> SOOP LIVE detection
+        -> Cloudflare Worker
+        -> Rust RecorderManager -> Streamlink
+
+     -> Rust VodManager
+        -> SOOP login / private_auth / manifest probe
+        -> yt-dlp metadata + PART download
+        -> ffmpeg concat merge
 
 Secrets
   -> Rust security module
   -> Windows CurrentUser DPAPI
 ```
 
-The application remains **manual-start only**. It does not register a Windows Service, scheduled task, or OS auto-start entry.
+The application remains **manual-start only**. No Windows Service, scheduled task, systemd unit, or OS auto-start entry is created.
 
-## What changed in Phase 3
+## Phase 4 VOD scope
 
-### RecorderManager boundary
-
-The watcher now owns scheduling and broadcast detection only. Streamlink lifecycle is owned through `RecorderManager`:
-
-- exact owned Streamlink PID/process-tree management
-- Streamlink stderr captured directly into Web logs
-- file-growth stall monitoring
-- minimum free-space monitoring
-- recording finish reason and size logging
-- channel disable/remove/current-broadcast-stop uses the same recorder ownership path
-
-This keeps UI/API/Watcher recording actions on one process-management path instead of duplicating recorder lifecycle logic.
-
-### Rust-native DPAPI
-
-Existing Windows secrets use:
+The Web page now exposes a VOD section backed by these APIs:
 
 ```text
-dpapi:v1:<base64>
+GET  /api/vod/status
+POST /api/vod/analyze
+POST /api/vod/download
+POST /api/vod/cancel
 ```
 
-Phase 3 reads this format directly from Rust using Windows DPAPI (`CryptProtectData` / `CryptUnprotectData`) with the same CurrentUser scope and legacy entropy value.
+The Rust VOD engine provides:
 
-**The LIVE Rust runtime no longer starts PowerShell to decrypt secrets.**
+- separate analyze and download phases
+- `SOOP_LOGIN`, `FILE`, and `BROWSER` cookie modes
+- Phase 3 native DPAPI credentials reused for stored SOOP login
+- Rust-managed Netscape cookie jar
+- subscription VOD `private_auth.php` refresh
+- CloudFront Key-Pair/Policy/Signature capture and host-scope repair
+- direct manifest authorization probe and available height extraction
+- yt-dlp metadata extraction
+- SOOP mobile API fallback when PART URL/duration is absent from yt-dlp metadata
+- PART selection (`1,2,4-6` in the Web UI)
+- metadata + authorization refresh on each retry
+- yt-dlp progress surfaced through `/api/vod/status`
+- exact owned yt-dlp/ffmpeg cancellation
+- optional ffmpeg concat merge
+- source PART files removed only after a successful merged output is validated
+- temporary job/cookie files under ignored `backend/.rust-web/vod`
 
-Existing encrypted values remain compatible; there is no forced migration or plaintext conversion.
+The new Rust VOD path does **not** launch PowerShell or curl. yt-dlp and ffmpeg remain external media tools.
 
-### Protected secret API
+## VOD Web flow
+
+1. Enter a SOOP VOD URL.
+2. Choose Cookie mode. Normally use `SOOP_LOGIN` when the Phase 3 SOOP credentials are configured.
+3. Click **분석**.
+4. Wait for title, streamer, PART count, durations, and quality choices.
+5. Enter PART selection or leave blank for all.
+6. Click **다운로드**.
+7. Use **취소** to terminate the exact owned external process tree.
+
+The quality selector uses the same values as the legacy backend:
 
 ```text
-GET /api/secrets
-PUT /api/secrets
+best
+best[height<=1080]
+best[height<=720]
+...
 ```
 
-`GET` returns only whether each secret is configured:
+## Subscription VOD retry behavior
 
-```json
-{
-  "SOOP_PASSWORD": true,
-  "CLOUDFLARE_API_KEY": true
-}
+For each PART attempt, Phase 4 refreshes metadata before starting the download. A later PART may otherwise inherit an expired manifest URL from the original analysis.
+
+When a fresh short-lived authorization is needed:
+
+```text
+SOOP/browser base session
+  -> private_auth.php
+  -> CloudFront signed cookies
+  -> manifest probe
+  -> yt-dlp PART download
 ```
 
-The secret value/ciphertext is never returned to the browser.
+Retry backoff is capped similarly to the legacy implementation. Existing FILE-mode signed cookies can be used for the first attempt; if they are expired and the cookie file has no reusable SOOP login cookies, a fresh login/browser session is required.
 
-`PUT` accepts a newly entered secret and stores it as DPAPI ciphertext. An empty value means "leave the existing value unchanged". Writes preserve the existing configuration format and use `.bak` plus atomic replacement.
+## LIVE behavior retained from Phase 3
 
-On the Web page, secret fields are password inputs and are cleared after save.
-
-## Existing behavior retained
-
-- SOOP login/session cookies
-- direct channel page + `player_live_api.php` LIVE/BNO detection
-- Windows native TLS / HTTP 1.1 / no-proxy SOOP client behavior
-- Cloudflare Worker master-playlist request and retry
+- Rust NativeWatcher
+- Rust RecorderManager
+- Rust-native CurrentUser DPAPI
+- Streamlink ownership/stall/disk monitoring
 - channel/settings hot reload
-- channel nickname lookup
-- filename patterns and collision protection
-- per-channel stop current broadcast / resume / immediate recheck
-- legacy `SOOP_LIVE.ps1` duplicate-watcher guard
-- exact owned process-tree stop; never system-wide Streamlink kill by image name
+- nickname lookup
+- current-broadcast stop/resume/recheck
+- legacy watcher duplicate guard
 
 ## Run
 
@@ -95,14 +112,12 @@ Default:
 http://127.0.0.1:8787
 ```
 
-Optional watcher auto-start after the user manually launches the server:
+Optional LIVE watcher auto-start after manually launching the server:
 
 ```powershell
 $env:SOOP_START_WATCHER="Y"
 .\RUN_RUST_WEB.bat
 ```
-
-This is application-level auto-start only, not OS startup registration.
 
 For temporary LAN testing:
 
@@ -113,47 +128,38 @@ $env:SOOP_WEB_BIND="0.0.0.0:8787"
 
 Use HTTPS/reverse proxy before exposing the management endpoint to the Internet.
 
-## Phase 3 local validation
+## Phase 4 local validation
 
-With the old WinUI/PowerShell watcher stopped:
+Before merging Phase 4:
 
-1. Start `RUN_RUST_WEB.bat`.
-2. Confirm the Web page shows the two protected secrets as `설정됨` when the existing INI has them.
-3. Start Watcher and confirm logs contain:
+1. Start the branch with `RUN_RUST_WEB.bat` and confirm Phase 3 LIVE behavior still works.
+2. Analyze a known public VOD using `SOOP_LOGIN`.
+3. Confirm title, streamer, PART count, duration, and quality options appear.
+4. Download one PART and confirm the MP4 is playable.
+5. Download two or more PARTs with merge enabled and confirm the final merged file is valid and source PARTs are removed only after merge success.
+6. Test Cancel while yt-dlp is active and confirm the owned process tree exits.
+7. If available, test a subscription VOD to exercise `private_auth.php` / CloudFront refresh and retry behavior.
 
-```text
-[RUST] native watcher v3 started
-[RUST:AUTH] SOOP login OK : <account>
-[RUST] watcher ready ... secret_backend=native-dpapi
-```
+## Legacy files
 
-4. Confirm no PowerShell child is launched merely to start the Rust watcher/decrypt secrets.
-5. With a LIVE channel, confirm Streamlink starts and file size grows.
-6. Test current-broadcast stop/resume and watcher stop.
-7. Optional: enter a new secret in the Web security section and save. Confirm `SOOP_LIVE_SETTING.ini` contains a `dpapi:v1:` value rather than plaintext and a `.bak` exists.
-
-## Existing PowerShell backend
-
-Legacy files remain in the repository for regression/fallback and VOD until its own migration phase:
+The old PowerShell/WinUI/VOD sources remain in the repository during regression testing:
 
 ```text
 backend/SOOP_LIVE.ps1
 backend/modules/*
 backend/vod/*
+overlay/*
 ```
 
-The Rust LIVE watcher does not execute `SOOP_LIVE.ps1`.
+The Rust LIVE/VOD Web paths do not execute those PowerShell scripts.
 
-## Remaining migration work
+## Later cleanup
 
-Phase 4:
+After functional parity is verified:
 
-- VOD engine/auth/CloudFront short-lived authorization/merge migration to Rust
-
-Later cleanup:
-
-- SQLite settings/channel/recording history storage
+- SQLite settings/channel/recording/VOD history storage
 - event bus / SSE or WebSocket if useful
-- release packaging and retirement of WinUI/PowerShell after functional parity
+- release packaging
+- retire the old WinUI/PowerShell implementation
 
-Windows Service/systemd startup is intentionally not planned unless explicitly requested.
+Windows Service/systemd startup remains intentionally out of scope unless explicitly requested.
