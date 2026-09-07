@@ -65,16 +65,29 @@ jobs:
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
           }
+
           $expected = (Get-Content ./dist/soop-recorder/SHA256SUMS.txt -Raw).Trim().Split()[0]
           $actual = (Get-FileHash -Algorithm SHA256 ./dist/soop-recorder/soop-server.exe).Hash.ToLowerInvariant()
           if ($expected -ne $actual) { throw 'soop-server.exe checksum mismatch' }
 
-          $cargoToml = Get-Content ./rust-web/Cargo.toml -Raw
-          $versionMatch = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"([^"]+)"\s*$')
-          if (-not $versionMatch.Success) { throw 'Cargo.toml package version not found' }
-          $cargoVersion = $versionMatch.Groups[1].Value
-          $releaseInfo = Get-Content ./dist/soop-recorder/RELEASE_INFO.txt -Raw
-          $expectedVersionLine = "version=$cargoVersion"
-          if (-not (($releaseInfo -split "\r?\n") -contains $expectedVersionLine)) {
-            throw "release metadata version mismatch: expected $expectedVersionLine"
+          $metadata = cargo metadata --locked --no-deps --format-version 1 --manifest-path ./rust-web/Cargo.toml | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
+          $cargoVersion = ($metadata.packages | Where-Object { $_.name -eq 'soop-web' } | Select-Object -First 1).version
+          if ([string]::IsNullOrWhiteSpace($cargoVersion)) { throw 'soop-web version not found in cargo metadata' }
+
+          $releaseMap = @{}
+          foreach ($line in Get-Content ./dist/soop-recorder/RELEASE_INFO.txt) {
+            $clean = $line.Trim().TrimStart([char]0xFEFF)
+            if ($clean -match '^([^=]+)=(.*)$') {
+              $releaseMap[$matches[1].Trim()] = $matches[2].Trim()
+            }
+          }
+
+          if (-not $releaseMap.ContainsKey('version')) {
+            Get-Content ./dist/soop-recorder/RELEASE_INFO.txt | ForEach-Object { Write-Host "META: [$_]" }
+            throw 'release metadata missing version key'
+          }
+          if ($releaseMap['version'] -ne $cargoVersion) {
+            Get-Content ./dist/soop-recorder/RELEASE_INFO.txt | ForEach-Object { Write-Host "META: [$_]" }
+            throw "release metadata version mismatch: expected $cargoVersion actual $($releaseMap['version'])"
           }
