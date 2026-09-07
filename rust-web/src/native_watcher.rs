@@ -244,7 +244,13 @@ async fn run_native_watcher(
     mut stop_rx: oneshot::Receiver<()>,
     mut command_rx: mpsc::Receiver<WatcherCommand>,
 ) -> Result<()> {
+    // Match the legacy PowerShell direct-client behavior as closely as possible:
+    // - bypass environment/system proxies
+    // - use the Windows native TLS stack (Schannel via reqwest native-tls)
+    // - keep SOOP requests on HTTP/1.1 instead of negotiating HTTP/2
     let client = Client::builder()
+        .no_proxy()
+        .http1_only()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36")
         .timeout(Duration::from_secs(15))
         .build()?;
