@@ -5,7 +5,7 @@
 <title>SOOP Recorder</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header><div><h1>SOOP Recorder</h1><small>Rust Web Phase 4 · Native LIVE + Native VOD</small></div><button id="tokenBtn">토큰 변경</button></header>
+<header><div><h1>SOOP Recorder</h1><small>Rust Web Phase 5 · SQLite History + Portable Runtime</small></div><button id="tokenBtn">토큰 변경</button></header>
 <main>
 <section>
   <div class="title"><h2>Watcher</h2><b id="watcher">확인 중</b></div>
@@ -35,6 +35,13 @@
   <p id="vodMessage" class="hint"></p>
   <p id="vodMeta" class="mono"></p>
   <p id="vodOutputFile" class="mono"></p>
+</section>
+<section>
+  <div class="title"><h2>History</h2><button id="refreshHistory">새로고침</button></div>
+  <h3>LIVE 녹화 이력</h3>
+  <div class="table"><table><thead><tr><th>상태</th><th>채널</th><th>시작</th><th>길이</th><th>크기</th><th>종료 사유 / 파일</th></tr></thead><tbody id="liveHistory"></tbody></table></div>
+  <h3>VOD 작업 이력</h3>
+  <div class="table"><table><thead><tr><th>상태</th><th>종류</th><th>VOD</th><th>PART</th><th>시작</th><th>결과</th></tr></thead><tbody id="vodHistory"></tbody></table></div>
 </section>
 <section>
   <div class="title"><h2>보안 설정</h2><button id="saveSecrets">암호화 저장</button></div>
