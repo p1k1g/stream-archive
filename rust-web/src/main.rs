@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
     };
 
     logs.push(format!(
-        "[SERVER] Phase 5.2 SQLite-primary ready; backend={} db={}",
+        "[SERVER] Phase 6 release-hardening ready; backend={} db={}",
         backend_dir.display(),
         store.path().display()
     )).await;
@@ -145,7 +145,7 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to bind {bind}"))?;
 
     println!();
-    println!("SOOP Rust Web - Phase 5.2");
+    println!("SOOP Rust Web - Phase 6");
     println!("Backend : {}", backend_dir.display());
     println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
@@ -325,7 +325,7 @@ fn internal_error(err: impl std::fmt::Display) -> ApiError { (StatusCode::INTERN
 async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<StatusResponse>> {
     authorize(&headers, &state)?;
     let watcher = state.watcher.status().await.map_err(internal_error)?;
-    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase5.2-sqlite-primary" }))
+    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase6-release-hardening" }))
 }
 async fn api_logs(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<LogsResponse>> {
     authorize(&headers, &state)?;
