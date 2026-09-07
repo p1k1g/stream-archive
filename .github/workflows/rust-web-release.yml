@@ -9,10 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build release
-        shell: pwsh
-        run: cargo build --release --manifest-path ./rust-web/Cargo.toml
-      - name: Assemble portable package
+      - name: Build and assemble portable package
         shell: cmd
         run: PACKAGE_RUST_WEB.bat
       - name: Archive portable package

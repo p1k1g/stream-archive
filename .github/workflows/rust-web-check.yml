@@ -4,11 +4,23 @@ on:
   push:
     paths:
       - "rust-web/**"
+      - "BUILD_RUST_WEB.bat"
+      - "RUN_RUST_WEB.bat"
+      - "PACKAGE_RUST_WEB.bat"
+      - "backend/*.example.*"
+      - "backend/vod/*.example.ini"
       - ".github/workflows/rust-web-check.yml"
+      - ".github/workflows/rust-web-release.yml"
   pull_request:
     paths:
       - "rust-web/**"
+      - "BUILD_RUST_WEB.bat"
+      - "RUN_RUST_WEB.bat"
+      - "PACKAGE_RUST_WEB.bat"
+      - "backend/*.example.*"
+      - "backend/vod/*.example.ini"
       - ".github/workflows/rust-web-check.yml"
+      - ".github/workflows/rust-web-release.yml"
 
 jobs:
   test:
