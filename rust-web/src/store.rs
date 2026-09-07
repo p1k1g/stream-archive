@@ -1,13 +1,14 @@
 use crate::{
-    backend::{channels_path, read_channels, read_safe_settings, settings_path},
+    backend::{channels_path, read_channels, read_safe_settings, settings_path, HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS},
     model::{Channel, HistoryResponse, LiveHistoryItem, VodHistoryItem, VodJobStatus},
+    primary_config::VOD_TOOL_KEYS,
     vod_tool_settings,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, OnceLock},
@@ -26,6 +27,7 @@ pub struct MigrationSummary {
     pub settings: usize,
     pub channels: usize,
     pub database: PathBuf,
+    pub imported: bool,
 }
 
 pub fn init_global(store: Store) -> Result<()> {
@@ -157,26 +159,96 @@ impl Store {
         Ok(())
     }
 
-    pub fn sync_legacy_snapshot(&self, backend_dir: &Path) -> Result<MigrationSummary> {
-        let live_settings = read_safe_settings(&settings_path(backend_dir))?;
+    pub fn bootstrap_primary_once(&self, backend_dir: &Path) -> Result<MigrationSummary> {
+        if self.meta_value("sqlite_primary_bootstrap")?.as_deref() == Some("1") {
+            return Ok(MigrationSummary {
+                settings: self.settings_count()?,
+                channels: self.channels()?.len(),
+                database: self.path.clone(),
+                imported: false,
+            });
+        }
+
+        let mut live_settings = read_safe_settings(&settings_path(backend_dir))?;
+        for (key, value) in read_hidden_settings(&settings_path(backend_dir))? {
+            live_settings.insert(key, value);
+        }
         let channels = read_channels(&channels_path(backend_dir))?;
         let vod_settings = vod_tool_settings::read(backend_dir)?;
-        self.sync_settings(&live_settings, "SOOP_LIVE_SETTING.ini")?;
-        self.sync_settings(&vod_settings, "SOOP_VOD_SETTING.ini")?;
-        self.sync_channels(&channels)?;
 
-        let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO meta(key,value) VALUES('legacy_snapshot_at',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![Utc::now().to_rfc3339()],
-        )?;
-        drop(conn);
+        self.sync_settings(&live_settings, "legacy-import-live")?;
+        self.sync_settings(&vod_settings, "legacy-import-vod")?;
+        self.sync_channels(&channels)?;
+        self.set_meta("sqlite_primary_bootstrap", "1")?;
+        self.set_meta("sqlite_primary_bootstrap_at", &Utc::now().to_rfc3339())?;
 
         Ok(MigrationSummary {
             settings: live_settings.len() + vod_settings.len(),
             channels: channels.len(),
             database: self.path.clone(),
+            imported: true,
         })
+    }
+
+    pub fn safe_settings(&self) -> Result<BTreeMap<String, String>> {
+        self.settings_for_keys(SAFE_SETTING_KEYS)
+    }
+
+    pub fn live_settings_with_secrets(&self) -> Result<BTreeMap<String, String>> {
+        let mut keys = SAFE_SETTING_KEYS.to_vec();
+        keys.extend_from_slice(HIDDEN_SETTING_KEYS);
+        self.settings_for_keys(&keys)
+    }
+
+    pub fn vod_tool_settings(&self) -> Result<BTreeMap<String, String>> {
+        let mut values = self.settings_for_keys(VOD_TOOL_KEYS)?;
+        for key in VOD_TOOL_KEYS {
+            values.entry((*key).to_string()).or_default();
+        }
+        Ok(values)
+    }
+
+    pub fn settings_for_keys(&self, keys: &[&str]) -> Result<BTreeMap<String, String>> {
+        let wanted: HashSet<&str> = keys.iter().copied().collect();
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT key,value FROM settings ORDER BY key")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows
+            .into_iter()
+            .filter(|(key, _)| wanted.contains(key.as_str()))
+            .collect())
+    }
+
+    pub fn configured_secrets(&self) -> Result<BTreeMap<String, bool>> {
+        let values = self.settings_for_keys(HIDDEN_SETTING_KEYS)?;
+        Ok(HIDDEN_SETTING_KEYS
+            .iter()
+            .map(|key| {
+                (
+                    (*key).to_string(),
+                    values.get(*key).is_some_and(|value| !value.trim().is_empty()),
+                )
+            })
+            .collect())
+    }
+
+    pub fn channels(&self) -> Result<Vec<Channel>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT name,account,enabled,outdir FROM channels ORDER BY name COLLATE NOCASE, account COLLATE NOCASE",
+        )?;
+        stmt.query_map([], |row| {
+            Ok(Channel {
+                name: row.get(0)?,
+                account: row.get(1)?,
+                enabled: row.get::<_, i64>(2)? != 0,
+                outdir: row.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
     }
 
     pub fn sync_settings(&self, values: &BTreeMap<String, String>, source: &str) -> Result<()> {
@@ -206,6 +278,28 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    fn meta_value(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn()?;
+        conn.query_row("SELECT value FROM meta WHERE key=?1", params![key], |row| row.get(0))
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    fn settings_count(&self) -> Result<usize> {
+        let conn = self.conn()?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM settings", [], |row| row.get(0))?;
+        Ok(count.max(0) as usize)
     }
 
     pub fn start_live(&self, item: &LiveHistoryItem) -> Result<()> {
@@ -340,4 +434,23 @@ impl Store {
         .optional()
         .map_err(Into::into)
     }
+}
+
+fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let hidden: HashSet<&str> = HIDDEN_SETTING_KEYS.iter().copied().collect();
+    let mut values = BTreeMap::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else { continue; };
+        let key = key.trim();
+        if hidden.contains(key) {
+            values.insert(key.to_string(), value.trim().to_string());
+        }
+    }
+    Ok(values)
 }
