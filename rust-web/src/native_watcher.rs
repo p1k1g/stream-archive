@@ -1,4 +1,4 @@
-use crate::{backend::{read_channels, channels_path, LogBuffer}, model::{Channel, ChannelRuntimeStatus, WatcherStatus}};
+use crate::{backend::{read_channels, channels_path, LogBuffer}, model::{Channel, ChannelRuntimeStatus, NativeWatcherStatus as WatcherStatus}};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{DateTime, Local, Utc};
