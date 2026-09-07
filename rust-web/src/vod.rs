@@ -1667,9 +1667,13 @@ fn collision_path(dir: &Path, base: &str, extension: &str) -> Result<PathBuf> {
     bail!("충돌 없는 출력 파일명을 만들지 못했습니다.")
 }
 
-fn cleanup_incomplete(target: &Path) {
+fn incomplete_artifacts(target: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
     for suffix in [".part", ".ytdl", ".temp"] {
-        let _ = fs::remove_file(format!("{}{}", target.display(), suffix));
+        let path = PathBuf::from(format!("{}{}", target.display(), suffix));
+        if path.exists() {
+            paths.push(path);
+        }
     }
     if let (Some(parent), Some(name)) = (target.parent(), target.file_name().and_then(|v| v.to_str())) {
         if let Ok(entries) = fs::read_dir(parent) {
@@ -1680,9 +1684,34 @@ fn cleanup_incomplete(target: &Path) {
                     || file_name.starts_with(&format!("{name}.ytdl"))
                     || file_name.starts_with(&format!("{name}.temp"))
                 {
-                    let _ = fs::remove_file(entry.path());
+                    let path = entry.path();
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                    }
                 }
             }
+        }
+    }
+    paths
+}
+
+fn cleanup_incomplete(target: &Path) {
+    // On Windows, yt-dlp/ffmpeg can release the .part handle a few hundred
+    // milliseconds after the parent process has exited. Retry instead of
+    // silently giving up on the first sharing-violation error.
+    for attempt in 0..20 {
+        let paths = incomplete_artifacts(target);
+        if paths.is_empty() {
+            break;
+        }
+        for path in paths {
+            let _ = fs::remove_file(path);
+        }
+        if incomplete_artifacts(target).is_empty() {
+            break;
+        }
+        if attempt < 19 {
+            std::thread::sleep(Duration::from_millis(150));
         }
     }
 }
