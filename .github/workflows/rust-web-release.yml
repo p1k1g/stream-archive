@@ -42,4 +42,4 @@ jobs:
           path: |
             ./soop-recorder-windows-x64.zip
             ./soop-recorder-windows-x64.zip.sha256
-          retention-days: 7
+          retention-days: 1
