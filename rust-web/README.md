@@ -1,21 +1,20 @@
-# SOOP Rust Web — Phase 5.1
+# SOOP Rust Web — Phase 5.2
 
-Phase 5.1 establishes the Rust Web implementation as the only product runtime in this repository.
+Phase 5.2 makes SQLite the authoritative configuration and history store while keeping the native Rust runtime introduced in Phase 5.1.
 
 ## Runtime
 
 ```text
 Browser
   -> Axum server
+     -> SQLite data/soop.db
+        -> settings / channels / encrypted secrets / history
      -> NativeWatcherManager
         -> RecorderManager -> streamlink
      -> VodManager -> yt-dlp / ffmpeg
-     -> SQLite data/soop.db
 ```
 
-The old WinUI and PowerShell LIVE/VOD implementations have been removed from the repository.
-
-The server is still manually launched. It is not registered as a Windows Service or systemd unit.
+The server is manually launched. It is not registered as a Windows Service or systemd unit.
 
 ## Run
 
@@ -34,6 +33,40 @@ http://127.0.0.1:8787
 The management token is printed at startup and stored under `backend/.rust-web/web-token.txt` unless `SOOP_WEB_TOKEN` is supplied.
 
 Press `Ctrl+C` to stop the server. Graceful shutdown cancels VOD work and stops the native watcher/owned recorder child processes.
+
+## SQLite primary configuration
+
+Default database:
+
+```text
+data/soop.db
+```
+
+Override the data directory with `SOOP_DATA_DIR`.
+
+At the first Phase 5.2 startup, the server performs a one-time import from the existing compatibility files:
+
+```text
+backend/SOOP_LIVE_SETTING.ini
+backend/SOOP_LIVE_CHANNELS.txt
+backend/vod/SOOP_VOD_SETTING.ini
+```
+
+A `meta.sqlite_primary_bootstrap=1` marker prevents later startups from importing those files again. From then on, Web reads and writes go to SQLite first.
+
+The compatibility files remain because the current native watcher still consumes the established text format internally. They are generated projections from SQLite and are reconciled back to the database state. Manual file edits after the cutover are therefore not authoritative and may be overwritten.
+
+If `data/soop.db` is removed, a fresh database can be bootstrapped from the remaining compatibility/example files on the next startup.
+
+## Secret storage
+
+`SOOP_PASSWORD` and `CLOUDFLARE_API_KEY` are protected with Windows CurrentUser DPAPI before they are written into the SQLite `settings` table. Only the `dpapi:v1:...` ciphertext is persisted. Web secret APIs expose configured/not-configured status rather than plaintext values.
+
+## History
+
+LIVE and VOD history are persisted in SQLite. Rows that were in progress when the server previously stopped are recovered as `INTERRUPTED` on startup.
+
+Phase 5.2 also persists VOD lifecycle state in a server-side background task, so final VOD history no longer depends on the browser continuing to poll `/api/vod/status`.
 
 ## Build
 
@@ -63,38 +96,13 @@ dist/soop-recorder/
 
 External `streamlink`, `yt-dlp`, and `ffmpeg` binaries are not bundled.
 
-## Persistence
-
-SQLite database:
-
-```text
-data/soop.db
-```
-
-Override the data directory with `SOOP_DATA_DIR`.
-
-LIVE and VOD history are persisted in SQLite. Rows that were in-progress when the server previously stopped are recovered as interrupted on startup.
-
-## Compatibility settings
-
-Phase 5.1 intentionally keeps the existing text configuration contract for one more migration window:
-
-```text
-backend/SOOP_LIVE_SETTING.ini
-backend/SOOP_LIVE_CHANNELS.txt
-backend/vod/SOOP_VOD_SETTING.ini
-```
-
-Web saves continue to dual-write the compatibility files and SQLite snapshot tables. This preserves hot reload/manual editing and the existing DPAPI secret behavior while removing the old executable implementations.
-
-Tracked repository files contain only `.example` templates; runtime settings/secrets are ignored by Git.
-
 ## Security
 
 - SOOP password and Cloudflare API key use Windows CurrentUser DPAPI.
 - Secrets are never returned in clear text by the Web API.
 - Use a reverse proxy with HTTPS for internet exposure.
 - The recommended default bind remains `127.0.0.1:8787`.
+- Child process cleanup targets only processes owned by this server/manager.
 
 ## Environment variables
 
@@ -112,6 +120,6 @@ cargo check --manifest-path rust-web/Cargo.toml
 
 CI runs Rust unit tests on Linux and a Windows native compile check.
 
-## Next migration boundary
+## Next boundary
 
-Phase 5.2 will make SQLite the primary source for settings/channels. INI/TXT will then be reduced to migration/import compatibility rather than being the active runtime authority.
+Phase 6 can focus on release hardening: database backup/restore and retention, portable release finalization, reverse-proxy documentation, and reproducible release metadata.
