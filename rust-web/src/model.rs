@@ -119,8 +119,6 @@ pub struct HistoryResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct VodAnalyzeRequest {
     pub vod_url: String,
-    #[serde(default)]
-    pub output_directory: String,
     #[serde(default = "default_cookie_mode")]
     pub cookie_mode: String,
     #[serde(default)]
