@@ -1,64 +1,87 @@
-# SOOP Rust Web - Phase 2
+# SOOP Rust Web - Phase 3
 
-Phase 2 moves the LIVE watcher and recorder lifecycle into Rust. Streamlink remains an external recorder process; the existing PowerShell/VOD code is kept in the repository for fallback and later migration, but `Watcher Start` in the Rust Web UI no longer launches `SOOP_LIVE.ps1`.
-
-## Runtime architecture
+Phase 3 separates recording process ownership from the watcher and removes the last PowerShell dependency from the Rust LIVE runtime.
 
 ```text
 Browser
   -> Axum Web/API
-  -> Rust native watcher
-     -> SOOP channel/live API (reqwest)
-     -> Cloudflare Worker master HLS request
-     -> Rust recorder manager
+  -> Rust NativeWatcher
+     -> SOOP login / LIVE detection
+     -> Cloudflare Worker master HLS
+     -> Rust RecorderManager
         -> streamlink.exe
         -> output .ts
+
+Secrets
+  -> Rust security module
+  -> Windows CurrentUser DPAPI
 ```
 
-The application remains **manual-start only**. It does not register a Windows Service or OS auto-start entry.
+The application remains **manual-start only**. It does not register a Windows Service, scheduled task, or OS auto-start entry.
 
-## Included in Phase 2
+## What changed in Phase 3
 
-- Rust-native channel polling and hot reload
-- Rust-native SOOP login/session cookies
-- direct channel-page + `player_live_api.php` LIVE/BNO detection
-- Cloudflare Worker master-playlist request and retry
-- Streamlink process launch/ownership
-- output filename collision protection and existing filename patterns
-- recording file-growth stall detection
-- minimum free-space checks
-- exact owned recorder process-tree stop on Windows
-- channel disable/remove -> owned recorder stop
-- per-channel stop current broadcast / resume / recheck
-- runtime channel dashboard in the browser
-- settings hot reload
-- existing `.ini`, channel file, `.bak`, and atomic-write compatibility
+### RecorderManager boundary
 
-## DPAPI compatibility during migration
+The watcher now owns scheduling and broadcast detection only. Streamlink lifecycle is owned through `RecorderManager`:
 
-Existing secrets use the legacy format:
+- exact owned Streamlink PID/process-tree management
+- Streamlink stderr captured directly into Web logs
+- file-growth stall monitoring
+- minimum free-space monitoring
+- recording finish reason and size logging
+- channel disable/remove/current-broadcast-stop uses the same recorder ownership path
+
+This keeps UI/API/Watcher recording actions on one process-management path instead of duplicating recorder lifecycle logic.
+
+### Rust-native DPAPI
+
+Existing Windows secrets use:
 
 ```text
 dpapi:v1:<base64>
 ```
 
-On Windows, Phase 2 decrypts those values through a **short-lived PowerShell DPAPI compatibility bootstrap at watcher start/settings reload**. PowerShell is no longer the persistent watcher or recorder manager.
+Phase 3 reads this format directly from Rust using Windows DPAPI (`CryptProtectData` / `CryptUnprotectData`) with the same CurrentUser scope and legacy entropy value.
 
-This temporary bootstrap is intentionally left for Phase 3, where secret storage will be moved fully into Rust/cross-platform storage.
+**The LIVE Rust runtime no longer starts PowerShell to decrypt secrets.**
 
-On non-Windows systems, DPAPI-protected settings cannot be decrypted in Phase 2. Cross-platform runtime testing therefore requires secrets stored by the future Phase 3 secret backend or temporary plaintext test values.
+Existing encrypted values remain compatible; there is no forced migration or plaintext conversion.
 
-## Existing PowerShell backend
-
-These files remain for fallback/regression comparison and VOD migration:
+### Protected secret API
 
 ```text
-backend/SOOP_LIVE.ps1
-backend/modules/*
-backend/vod/*
+GET /api/secrets
+PUT /api/secrets
 ```
 
-Phase 2 `Watcher Start` does not execute `SOOP_LIVE.ps1`.
+`GET` returns only whether each secret is configured:
+
+```json
+{
+  "SOOP_PASSWORD": true,
+  "CLOUDFLARE_API_KEY": true
+}
+```
+
+The secret value/ciphertext is never returned to the browser.
+
+`PUT` accepts a newly entered secret and stores it as DPAPI ciphertext. An empty value means "leave the existing value unchanged". Writes preserve the existing configuration format and use `.bak` plus atomic replacement.
+
+On the Web page, secret fields are password inputs and are cleared after save.
+
+## Existing behavior retained
+
+- SOOP login/session cookies
+- direct channel page + `player_live_api.php` LIVE/BNO detection
+- Windows native TLS / HTTP 1.1 / no-proxy SOOP client behavior
+- Cloudflare Worker master-playlist request and retry
+- channel/settings hot reload
+- channel nickname lookup
+- filename patterns and collision protection
+- per-channel stop current broadcast / resume / immediate recheck
+- legacy `SOOP_LIVE.ps1` duplicate-watcher guard
+- exact owned process-tree stop; never system-wide Streamlink kill by image name
 
 ## Run
 
@@ -72,6 +95,15 @@ Default:
 http://127.0.0.1:8787
 ```
 
+Optional watcher auto-start after the user manually launches the server:
+
+```powershell
+$env:SOOP_START_WATCHER="Y"
+.\RUN_RUST_WEB.bat
+```
+
+This is application-level auto-start only, not OS startup registration.
+
 For temporary LAN testing:
 
 ```powershell
@@ -79,42 +111,49 @@ $env:SOOP_WEB_BIND="0.0.0.0:8787"
 .\RUN_RUST_WEB.bat
 ```
 
-Use HTTPS/reverse proxy before exposing the management page to the Internet.
+Use HTTPS/reverse proxy before exposing the management endpoint to the Internet.
 
-## Watcher behavior
+## Phase 3 local validation
 
-By default, manually starting `soop-web` starts the web server only. Start the Rust watcher from the browser.
+With the old WinUI/PowerShell watcher stopped:
 
-Optional auto-start **after manually launching the Rust server**:
-
-```powershell
-$env:SOOP_START_WATCHER="Y"
-.\RUN_RUST_WEB.bat
-```
-
-This is not OS auto-start.
-
-## New channel control API
+1. Start `RUN_RUST_WEB.bat`.
+2. Confirm the Web page shows the two protected secrets as `설정됨` when the existing INI has them.
+3. Start Watcher and confirm logs contain:
 
 ```text
-POST /api/watcher/channel/{account}/stop
-POST /api/watcher/channel/{account}/resume
-POST /api/watcher/channel/{account}/recheck
+[RUST] native watcher v3 started
+[RUST:AUTH] SOOP login OK : <account>
+[RUST] watcher ready ... secret_backend=native-dpapi
 ```
 
-`stop` suppresses the current BNO so the same broadcast is not immediately restarted. `resume` clears the suppression and schedules an immediate check.
+4. Confirm no PowerShell child is launched merely to start the Rust watcher/decrypt secrets.
+5. With a LIVE channel, confirm Streamlink starts and file size grows.
+6. Test current-broadcast stop/resume and watcher stop.
+7. Optional: enter a new secret in the Web security section and save. Confirm `SOOP_LIVE_SETTING.ini` contains a `dpapi:v1:` value rather than plaintext and a `.bak` exists.
+
+## Existing PowerShell backend
+
+Legacy files remain in the repository for regression/fallback and VOD until its own migration phase:
+
+```text
+backend/SOOP_LIVE.ps1
+backend/modules/*
+backend/vod/*
+```
+
+The Rust LIVE watcher does not execute `SOOP_LIVE.ps1`.
 
 ## Remaining migration work
 
-Phase 2 intentionally does not yet move:
+Phase 4:
 
-- VOD engine to Rust
-- SQLite settings/channel storage
-- fully Rust-native secret storage
-- WebSocket/SSE event bus
-- reverse-proxy/HTTPS provisioning
-- Windows Service/systemd integration (not planned unless explicitly requested)
+- VOD engine/auth/CloudFront short-lived authorization/merge migration to Rust
 
-## Safety / fallback
+Later cleanup:
 
-Test Phase 2 with the old WinUI/PowerShell watcher stopped. The Rust watcher owns only the Streamlink processes it launches and does not kill Streamlink/Python processes by name.
+- SQLite settings/channel/recording history storage
+- event bus / SSE or WebSocket if useful
+- release packaging and retirement of WinUI/PowerShell after functional parity
+
+Windows Service/systemd startup is intentionally not planned unless explicitly requested.

@@ -1,13 +1,7 @@
-use crate::backend::LogBuffer;
 use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    env, fs,
-    path::PathBuf,
-    time::Duration,
-};
+use std::time::Duration;
 use sysinfo::System;
 
 pub async fn resolve_channel_name(account: &str) -> Result<String> {
@@ -49,15 +43,11 @@ pub async fn resolve_channel_name(account: &str) -> Result<String> {
         bail!("유효한 SOOP 계정을 찾지 못했습니다: {account}");
     }
 
-    // Current SOOP response shape:
-    // { "RESULT": 1, "DATA": { "user_id": "...", "user_nick": "..." } }
-    // Older consumers have also observed top-level station_name, so keep that as a fallback.
     let returned_id = value
         .pointer("/DATA/user_id")
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim();
-
     if !returned_id.is_empty() && !returned_id.eq_ignore_ascii_case(account) {
         bail!("SOOP 응답 계정이 요청과 다릅니다: 요청={account}, 응답={returned_id}");
     }
@@ -68,11 +58,9 @@ pub async fn resolve_channel_name(account: &str) -> Result<String> {
         .or_else(|| value.get("station_name").and_then(Value::as_str))
         .unwrap_or("")
         .trim();
-
     if name.is_empty() {
         bail!("채널 닉네임을 찾지 못했습니다: {account}");
     }
-
     Ok(name.to_string())
 }
 
@@ -88,50 +76,10 @@ pub fn find_legacy_watcher() -> Option<String> {
             .collect::<Vec<_>>()
             .join(" ");
         if command.to_ascii_lowercase().contains("soop_live.ps1") {
-            return Some(format!("pid={pid} {}", command));
+            return Some(format!("pid={pid} {command}"));
         }
     }
     None
-}
-
-pub fn spawn_streamlink_log_bridge(logs: LogBuffer) {
-    tokio::spawn(async move {
-        let temp_dir = env::temp_dir();
-        let mut offsets: HashMap<PathBuf, usize> = HashMap::new();
-
-        loop {
-            if let Ok(entries) = fs::read_dir(&temp_dir) {
-                let mut present = Vec::new();
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
-                        continue;
-                    };
-                    if !name.starts_with("soop_streamlink_rust_") || !name.ends_with("stderr.log") {
-                        continue;
-                    }
-                    present.push(path.clone());
-
-                    let Ok(bytes) = fs::read(&path) else {
-                        continue;
-                    };
-                    let offset = offsets.entry(path.clone()).or_insert(0);
-                    if bytes.len() <= *offset {
-                        continue;
-                    }
-
-                    let chunk = String::from_utf8_lossy(&bytes[*offset..]).to_string();
-                    *offset = bytes.len();
-                    for line in chunk.lines().map(str::trim).filter(|line| !line.is_empty()) {
-                        logs.push(format!("[RUST:STREAMLINK] {line}")).await;
-                    }
-                }
-                offsets.retain(|path, _| present.contains(path));
-            }
-
-            tokio::time::sleep(Duration::from_millis(150)).await;
-        }
-    });
 }
 
 #[cfg(test)]
