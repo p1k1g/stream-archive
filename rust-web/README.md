@@ -1,74 +1,47 @@
-# SOOP Rust Web - Phase 5
+# SOOP Rust Web — Phase 5.1
 
-Phase 5 is the productization stage after LIVE and VOD orchestration moved to Rust.
+Phase 5.1 establishes the Rust Web implementation as the only product runtime in this repository.
+
+## Runtime
 
 ```text
 Browser
-  -> Axum Web/API
-     -> Rust NativeWatcher -> RecorderManager -> Streamlink
-     -> Rust VodManager -> yt-dlp / ffmpeg
-     -> SQLite Store -> data/soop.db
+  -> Axum server
+     -> NativeWatcherManager
+        -> RecorderManager -> streamlink
+     -> VodManager -> yt-dlp / ffmpeg
+     -> SQLite data/soop.db
 ```
 
-The application remains **manual-start only**. No Windows Service, scheduled task, systemd unit, or OS auto-start entry is created.
+The old WinUI and PowerShell LIVE/VOD implementations have been removed from the repository.
 
-## SQLite persistence
+The server is still manually launched. It is not registered as a Windows Service or systemd unit.
 
-Phase 5 creates `data/soop.db` by default. Set `SOOP_DATA_DIR` to override the data directory.
+## Run
 
-SQLite stores:
+From the repository root:
 
-- safe setting snapshots
-- channel snapshots
-- LIVE recording history
-- VOD job history
-- migration metadata
+```powershell
+.\RUN_RUST_WEB.bat
+```
 
-The database uses WAL mode and marks unfinished LIVE/VOD rows as `INTERRUPTED` on the next server start.
-
-### Safe migration strategy
-
-Phase 5 intentionally uses a compatibility period instead of removing the working INI/TXT flow immediately:
+Default endpoint:
 
 ```text
-SOOP_LIVE_SETTING.ini ----\
-SOOP_LIVE_CHANNELS.txt ----+--> idempotent startup snapshot --> SQLite
-SOOP_VOD_SETTING.ini -----/
-
-Web save
-  -> existing file write
-  -> SQLite sync
+http://127.0.0.1:8787
 ```
 
-The NativeWatcher continues reading the legacy-compatible files, so hot reload and manual editing remain available while SQLite history is validated. DPAPI secrets are not copied into the normal settings table.
+The management token is printed at startup and stored under `backend/.rust-web/web-token.txt` unless `SOOP_WEB_TOKEN` is supplied.
 
-## History
+Press `Ctrl+C` to stop the server. Graceful shutdown cancels VOD work and stops the native watcher/owned recorder child processes.
 
-The Web UI now has a History section backed by:
+## Build
 
-```text
-GET /api/history
+```powershell
+.\BUILD_RUST_WEB.bat
 ```
 
-It shows recent LIVE recordings and VOD jobs, including status, start time, duration, file size/output path and stop/failure reason.
-
-LIVE history is written directly by `RecorderManager` when Streamlink starts and finishes. VOD status is persisted by the API status lifecycle.
-
-## VOD tool settings
-
-`YT_DLP_PATH` and `FFMPEG_PATH` are shown in the normal Settings area. They remain stored in `backend/vod/SOOP_VOD_SETTING.ini` during the compatibility period and are also mirrored into SQLite.
-
-Resolution order remains:
-
-```text
-saved YT_DLP_PATH / FFMPEG_PATH
-  -> backend/vod local executable
-  -> PATH
-```
-
-## Portable package
-
-Build a local portable directory with:
+Portable package:
 
 ```powershell
 .\PACKAGE_RUST_WEB.bat
@@ -83,71 +56,62 @@ dist/soop-recorder/
   backend/
     SOOP_LIVE_SETTING.example.ini
     SOOP_LIVE_CHANNELS.example.txt
-    vod/SOOP_VOD_SETTING.example.ini
+    vod/
+      SOOP_VOD_SETTING.example.ini
   data/
 ```
 
-Streamlink, yt-dlp and ffmpeg are intentionally not bundled. Configure their paths in Settings or install them in PATH.
+External `streamlink`, `yt-dlp`, and `ffmpeg` binaries are not bundled.
 
-## Run
+## Persistence
 
-Development/repository run:
-
-```powershell
-.\RUN_RUST_WEB.bat
-```
-
-Portable package:
-
-```powershell
-.\RUN.bat
-```
-
-Default address:
+SQLite database:
 
 ```text
-http://127.0.0.1:8787
+data/soop.db
 ```
 
-Optional watcher auto-start after manually starting the server:
+Override the data directory with `SOOP_DATA_DIR`.
 
-```powershell
-$env:SOOP_START_WATCHER="Y"
-.\RUN_RUST_WEB.bat
-```
+LIVE and VOD history are persisted in SQLite. Rows that were in-progress when the server previously stopped are recovered as interrupted on startup.
 
-For temporary LAN testing:
+## Compatibility settings
 
-```powershell
-$env:SOOP_WEB_BIND="0.0.0.0:8787"
-.\RUN_RUST_WEB.bat
-```
-
-Use HTTPS/reverse proxy before exposing the management endpoint to the Internet.
-
-## Phase 5 validation
-
-Before removing legacy source files, validate:
-
-1. Existing INI/TXT settings and channels migrate into `data/soop.db` without changing runtime behavior.
-2. Settings and channel saves still hot-reload correctly.
-3. Start/stop a LIVE recording and confirm a History row records duration, size and reason.
-4. Complete and cancel VOD jobs and confirm History state updates.
-5. Restart the server during an active job and confirm the previous row becomes `INTERRUPTED`.
-6. Build `PACKAGE_RUST_WEB.bat` and run the produced `soop-server.exe` with the packaged backend examples.
-
-## Legacy retirement boundary
-
-The old PowerShell/WinUI implementation remains in the repository for one final regression window. The Rust LIVE/VOD paths do not execute those PowerShell scripts.
-
-After Phase 5 runtime/history validation, the next cleanup can remove:
+Phase 5.1 intentionally keeps the existing text configuration contract for one more migration window:
 
 ```text
-backend/SOOP_LIVE.ps1
-backend/modules/*
-backend/vod PowerShell modules
-overlay/*
-legacy WinUI build workflow
+backend/SOOP_LIVE_SETTING.ini
+backend/SOOP_LIVE_CHANNELS.txt
+backend/vod/SOOP_VOD_SETTING.ini
 ```
 
-The compatibility INI/TXT files can then become import/export files instead of the primary watcher configuration source.
+Web saves continue to dual-write the compatibility files and SQLite snapshot tables. This preserves hot reload/manual editing and the existing DPAPI secret behavior while removing the old executable implementations.
+
+Tracked repository files contain only `.example` templates; runtime settings/secrets are ignored by Git.
+
+## Security
+
+- SOOP password and Cloudflare API key use Windows CurrentUser DPAPI.
+- Secrets are never returned in clear text by the Web API.
+- Use a reverse proxy with HTTPS for internet exposure.
+- The recommended default bind remains `127.0.0.1:8787`.
+
+## Environment variables
+
+- `SOOP_WEB_BIND`: bind address, default `127.0.0.1:8787`
+- `SOOP_WEB_TOKEN`: optional fixed management token
+- `SOOP_START_WATCHER`: start the native watcher after the manually launched server starts
+- `SOOP_DATA_DIR`: SQLite data directory override
+
+## Tests
+
+```powershell
+cargo test --manifest-path rust-web/Cargo.toml
+cargo check --manifest-path rust-web/Cargo.toml
+```
+
+CI runs Rust unit tests on Linux and a Windows native compile check.
+
+## Next migration boundary
+
+Phase 5.2 will make SQLite the primary source for settings/channels. INI/TXT will then be reduced to migration/import compatibility rather than being the active runtime authority.
