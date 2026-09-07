@@ -29,22 +29,12 @@
     <label>화질<select id="vodQuality"><option value="best">최고 화질 (자동)</option></select></label>
     <label>PART<input id="vodParts" placeholder="예: 1,2,4-6 / 비우면 전체"></label>
     <label>최대 재시도<input id="vodRetries" type="number" min="1" max="20" value="5"></label>
-    <label>yt-dlp 경로<input id="vodYtDlp" placeholder="비우면 저장된 기본값/자동"></label>
-    <label>ffmpeg 경로<input id="vodFfmpeg" placeholder="비우면 저장된 기본값/자동"></label>
     <label><span>PART 병합</span><select id="vodMerge"><option value="Y">Y</option><option value="N">N</option></select></label>
   </div>
   <div class="summary"><span>상태 <b id="vodState">IDLE</b></span><span>PART <b id="vodPart">0/0</b></span><span>진행률 <b id="vodPercent">0%</b></span></div>
   <p id="vodMessage" class="hint"></p>
   <p id="vodMeta" class="mono"></p>
   <p id="vodOutputFile" class="mono"></p>
-</section>
-<section>
-  <div class="title"><h2>VOD 도구 설정</h2><button id="saveVodToolSettings">저장</button></div>
-  <div class="grid">
-    <label>YT_DLP_PATH<input id="vodDefaultYtDlp" placeholder="예: C:\Tools\yt-dlp.exe / 비우면 자동 탐색"></label>
-    <label>FFMPEG_PATH<input id="vodDefaultFfmpeg" placeholder="예: C:\Tools\ffmpeg.exe / 비우면 자동 탐색"></label>
-  </div>
-  <p class="hint">backend\vod\SOOP_VOD_SETTING.ini에 저장합니다. VOD 화면에서 경로를 따로 입력하면 해당 값이 우선합니다.</p>
 </section>
 <section>
   <div class="title"><h2>보안 설정</h2><button id="saveSecrets">암호화 저장</button></div>
@@ -54,7 +44,11 @@
   </div>
   <p class="hint">저장된 값은 API/화면으로 다시 노출하지 않습니다. Windows CurrentUser DPAPI로 암호화하며 기존 dpapi:v1 값과 호환됩니다.</p>
 </section>
-<section><div class="title"><h2>설정</h2><button id="saveSettings">저장</button></div><div id="settings" class="grid"></div></section>
+<section>
+  <div class="title"><h2>설정</h2><button id="saveSettings">저장</button></div>
+  <div id="settings" class="grid"></div>
+  <p class="hint">YT_DLP_PATH / FFMPEG_PATH는 VOD 기본 실행 경로입니다. 비우면 backend\vod 또는 PATH에서 자동 탐색합니다.</p>
+</section>
 <section><div class="title"><h2>로그</h2><button id="refreshLogs">새로고침</button></div><pre id="logs">로딩 중...</pre></section>
 </main><div id="toast"></div><script src="/app.js"></script>
 </body></html>
