@@ -1,0 +1,28 @@
+name: Rust web check
+
+on:
+  push:
+    paths:
+      - "rust-web/**"
+      - ".github/workflows/rust-web-check.yml"
+  pull_request:
+    paths:
+      - "rust-web/**"
+      - ".github/workflows/rust-web-check.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Unit tests
+        run: cargo test --manifest-path rust-web/Cargo.toml
+
+      - name: Windows compile check
+        run: cargo check --manifest-path rust-web/Cargo.toml --target x86_64-pc-windows-msvc
