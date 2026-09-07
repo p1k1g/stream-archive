@@ -11,7 +11,7 @@ use tokio::{io::{AsyncBufReadExt, BufReader}, process::{Child, Command}};
 
 const GB: u64 = 1024 * 1024 * 1024;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RecorderConfig {
     pub streamlink: PathBuf,
     pub quality: String,
