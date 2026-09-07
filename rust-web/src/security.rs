@@ -1,8 +1,11 @@
 use anyhow::{bail, Context, Result};
+use atomic_write_file::AtomicWriteFile;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use std::{fs, io::Write, path::{Path, PathBuf}};
 
 pub const DPAPI_PREFIX: &str = "dpapi:v1:";
 const DPAPI_ENTROPY: &[u8] = b"SOOPLiveDownloader:v1";
+const SECRET_KEYS: &[&str] = &["SOOP_PASSWORD", "CLOUDFLARE_API_KEY"];
 
 pub fn is_protected(value: &str) -> bool {
     value.trim().to_ascii_lowercase().starts_with(DPAPI_PREFIX)
@@ -35,6 +38,99 @@ pub fn protect_secret(value: &str) -> Result<String> {
     }
     let cipher = platform_protect(value.as_bytes()).context("DPAPI encrypt failed")?;
     Ok(format!("{DPAPI_PREFIX}{}", BASE64.encode(cipher)))
+}
+
+pub fn configured_secrets(path: &Path) -> Result<std::collections::BTreeMap<String, bool>> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let mut result = std::collections::BTreeMap::new();
+    for key in SECRET_KEYS {
+        result.insert((*key).to_string(), false);
+    }
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else { continue; };
+        let key = key.trim();
+        if SECRET_KEYS.contains(&key) {
+            result.insert(key.to_string(), !value.trim().is_empty());
+        }
+    }
+    Ok(result)
+}
+
+pub fn save_protected_secrets(
+    path: &Path,
+    updates: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+    for key in updates.keys() {
+        if !SECRET_KEYS.contains(&key.as_str()) {
+            bail!("unsupported secret key: {key}");
+        }
+    }
+
+    let original = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let newline = if original.contains("\r\n") { "\r\n" } else { "\n" };
+    let normalized = original.replace("\r\n", "\n").replace('\r', "\n");
+    let mut encrypted = std::collections::BTreeMap::new();
+    for (key, value) in updates {
+        if value.is_empty() {
+            continue; // blank from the UI means "leave the existing secret unchanged"
+        }
+        encrypted.insert(key.clone(), protect_secret(value)?);
+    }
+    if encrypted.is_empty() {
+        return Ok(());
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut output = Vec::new();
+    for raw in normalized.lines() {
+        if let Some((key, _)) = raw.split_once('=') {
+            let key = key.trim();
+            if let Some(value) = encrypted.get(key) {
+                output.push(format!("{key}={value}"));
+                seen.insert(key.to_string());
+                continue;
+            }
+        }
+        output.push(raw.to_string());
+    }
+    for (key, value) in &encrypted {
+        if !seen.contains(key) {
+            output.push(format!("{key}={value}"));
+        }
+    }
+
+    backup_existing(path)?;
+    let mut content = output.join(newline);
+    content.push_str(newline);
+    let mut file = AtomicWriteFile::options()
+        .open(path)
+        .with_context(|| format!("failed to open atomic writer for {}", path.display()))?;
+    file.write_all(content.as_bytes())?;
+    file.commit()
+        .with_context(|| format!("failed to commit {}", path.display()))?;
+    Ok(())
+}
+
+fn backup_existing(path: &Path) -> Result<()> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let mut backup_name = path.as_os_str().to_os_string();
+    backup_name.push(".bak");
+    let backup = PathBuf::from(backup_name);
+    fs::copy(path, &backup).with_context(|| {
+        format!("failed to create backup {} from {}", backup.display(), path.display())
+    })?;
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -82,7 +178,6 @@ mod dpapi {
         fn drop(&mut self) {
             if !self.0.pbData.is_null() {
                 unsafe {
-                    // The unprotect path can contain plaintext. Wipe before release.
                     std::ptr::write_bytes(self.0.pbData, 0, self.0.cbData as usize);
                     LocalFree(self.0.pbData.cast::<c_void>());
                 }
@@ -160,6 +255,16 @@ mod tests {
     fn protected_prefix_is_detected_case_insensitively() {
         assert!(is_protected("dpapi:v1:abc"));
         assert!(is_protected("DPAPI:V1:abc"));
+    }
+
+    #[test]
+    fn configured_status_does_not_expose_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.ini");
+        fs::write(&path, "SOOP_PASSWORD=secret\nCLOUDFLARE_API_KEY=\n").unwrap();
+        let status = configured_secrets(&path).unwrap();
+        assert_eq!(status["SOOP_PASSWORD"], true);
+        assert_eq!(status["CLOUDFLARE_API_KEY"], false);
     }
 
     #[cfg(windows)]
