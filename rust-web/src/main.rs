@@ -1,6 +1,8 @@
 mod backend;
 mod model;
 mod native_watcher;
+mod recorder;
+mod security;
 mod support;
 
 use anyhow::{bail, Context, Result};
@@ -20,13 +22,14 @@ use model::{
     SettingsResponse, StatusResponse,
 };
 use native_watcher::NativeWatcherManager;
+use security::{configured_secrets, save_protected_secrets};
 use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use support::{find_legacy_watcher, resolve_channel_name, spawn_streamlink_log_bridge};
+use support::{find_legacy_watcher, resolve_channel_name};
 use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -57,7 +60,6 @@ async fn main() -> Result<()> {
     let (token, token_source) = load_or_create_token(&backend_dir)?;
 
     let logs = LogBuffer::new();
-    spawn_streamlink_log_bridge(logs.clone());
     let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
     let state = AppState {
         backend_dir: backend_dir.clone(),
@@ -69,7 +71,7 @@ async fn main() -> Result<()> {
     };
 
     logs.push(format!(
-        "[SERVER] Phase 2.1 Rust-native watcher ready; backend={}",
+        "[SERVER] Phase 3 Rust core ready; backend={}",
         backend_dir.display()
     ))
     .await;
@@ -91,6 +93,7 @@ async fn main() -> Result<()> {
         .route("/api/status", get(api_status))
         .route("/api/logs", get(api_logs))
         .route("/api/settings", get(api_settings).put(api_update_settings))
+        .route("/api/secrets", get(api_secrets).put(api_update_secrets))
         .route("/api/channels", get(api_channels).put(api_update_channels))
         .route("/api/channels/resolve/{account}", get(api_channel_resolve))
         .route("/api/watcher/start", post(api_watcher_start))
@@ -104,12 +107,14 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to bind {bind}"))?;
 
     println!();
-    println!("SOOP Rust Web - Phase 2.1");
+    println!("SOOP Rust Web - Phase 3");
     println!("Backend : {}", backend_dir.display());
     println!("Listen  : http://{bind}");
     println!("Token   : {token}");
     println!("Source  : {}", token_source.display());
-    println!("Watcher : Rust native (Streamlink remains external)");
+    println!("Watcher : Rust native v3");
+    println!("Recorder: Rust RecorderManager -> Streamlink");
+    println!("Secrets : Rust native DPAPI (Windows CurrentUser)");
     println!();
     println!("The server is NOT registered as an OS service.");
     println!("Press Ctrl+C to stop the web server and owned recordings.");
@@ -186,18 +191,12 @@ fn load_or_create_token(backend_dir: &Path) -> Result<(String, PathBuf)> {
                 token_path.display()
             );
         }
-
         return Ok((token, token_path));
     }
 
-    let token = format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    );
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     fs::write(&token_path, format!("{token}\n"))
         .with_context(|| format!("failed to write {}", token_path.display()))?;
-
     Ok((token, token_path))
 }
 
@@ -247,7 +246,7 @@ async fn api_status(
         watcher,
         backend_dir: state.backend_dir.display().to_string(),
         bind: state.bind.clone(),
-        phase: "phase2.1-rust-polish",
+        phase: "phase3-rust-core",
     }))
 }
 
@@ -266,7 +265,6 @@ async fn api_settings(
     headers: HeaderMap,
 ) -> ApiResult<Json<SettingsResponse>> {
     authorize(&headers, &state)?;
-
     let path = settings_path(&state.backend_dir);
     let values = read_safe_settings(&path).map_err(internal_error)?;
     Ok(Json(SettingsResponse {
@@ -285,7 +283,6 @@ async fn api_update_settings(
 
     let path = settings_path(&state.backend_dir);
     update_settings(&path, &updates).map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
-
     state
         .logs
         .push(format!(
@@ -299,6 +296,46 @@ async fn api_update_settings(
         values,
         hidden_keys: HIDDEN_SETTING_KEYS.to_vec(),
     }))
+}
+
+async fn api_secrets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<BTreeMap<String, bool>>> {
+    authorize(&headers, &state)?;
+    let path = settings_path(&state.backend_dir);
+    let status = configured_secrets(&path).map_err(internal_error)?;
+    Ok(Json(status))
+}
+
+async fn api_update_secrets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(updates): Json<BTreeMap<String, String>>,
+) -> ApiResult<Json<BTreeMap<String, bool>>> {
+    authorize(&headers, &state)?;
+    let _guard = state.file_write_lock.lock().await;
+    let path = settings_path(&state.backend_dir);
+    save_protected_secrets(&path, &updates)
+        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+
+    if !updates.is_empty() {
+        state
+            .logs
+            .push(format!(
+                "[SERVER] protected secrets updated: {}",
+                updates
+                    .iter()
+                    .filter(|(_, value)| !value.is_empty())
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+            .await;
+    }
+
+    let status = configured_secrets(&path).map_err(internal_error)?;
+    Ok(Json(status))
 }
 
 async fn api_channels(
@@ -321,7 +358,6 @@ async fn api_update_channels(
 
     let path = channels_path(&state.backend_dir);
     write_channels(&path, &channels).map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
-
     state
         .logs
         .push(format!(
