@@ -25,6 +25,8 @@ backend/SOOP_LIVE_SETTING.ini
 backend/SOOP_LIVE_SETTING.ini.bak
 backend/SOOP_LIVE_CHANNELS.txt
 backend/SOOP_LIVE_CHANNELS.txt.bak
+backend/vod/SOOP_VOD_SETTING.ini
+backend/vod/SOOP_VOD_SETTING.ini.bak
 
 # IDE and OS metadata
 .vs/
