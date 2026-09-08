@@ -1,3 +1,4 @@
+mod auth;
 mod backend;
 mod model;
 mod native_watcher;
@@ -13,6 +14,7 @@ mod vod_tool_settings;
 
 use anyhow::{bail, Context, Result};
 use atomic_write_file::AtomicWriteFile;
+use auth::AuthManager;
 use axum::{
     extract::{Path as AxumPath, State},
     http::{header::{AUTHORIZATION, CONTENT_TYPE}, HeaderMap, StatusCode},
@@ -58,6 +60,7 @@ struct AppState {
     backend_dir: PathBuf,
     bind: String,
     token: Arc<String>,
+    auth: Arc<AuthManager>,
     watcher: Arc<NativeWatcherManager>,
     vod: Arc<VodManager>,
     store: Store,
@@ -78,16 +81,17 @@ async fn main() -> Result<()> {
 
     let bind = env::var("SOOP_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let (token, token_source) = load_or_create_token(&backend_dir)?;
+    let auth = Arc::new(AuthManager::open(store.path().to_path_buf())?);
     let logs = LogBuffer::new();
     let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
     let vod = Arc::new(VodManager::new(backend_dir.clone(), logs.clone()));
     let state = AppState {
-        backend_dir: backend_dir.clone(), bind: bind.clone(), token: Arc::new(token.clone()),
+        backend_dir: backend_dir.clone(), bind: bind.clone(), token: Arc::new(token.clone()), auth: auth.clone(),
         watcher: watcher.clone(), vod: vod.clone(), store: store.clone(), logs: logs.clone(),
         config_write_lock: Arc::new(Mutex::new(())),
     };
 
-    logs.push(format!("[SERVER] Phase 9.1 native picker ready; backend={} db={}", backend_dir.display(), store.path().display())).await;
+    logs.push(format!("[SERVER] Phase 10 session auth ready; backend={} db={}", backend_dir.display(), store.path().display())).await;
     if migration.imported {
         logs.push(format!("[DB] one-time legacy import completed settings={} channels={}", migration.settings, migration.channels)).await;
     } else {
@@ -98,7 +102,7 @@ async fn main() -> Result<()> {
         logs.push("[SERVER:WARN] public/LAN listener detected; loopback + Caddy is recommended").await;
     }
 
-    // Phase 9.1 keeps the SQLite-direct runtime and adds the direct-loopback Windows path picker.
+    // Phase 10 keeps the SQLite-direct runtime/native picker and adds browser ID/password sessions.
     spawn_vod_history_sync(store.clone(), vod.clone(), logs.clone());
 
     let app = Router::new()
@@ -106,7 +110,14 @@ async fn main() -> Result<()> {
         .route("/app.js", get(app_js))
         .route("/phase8.js", get(phase8_js))
         .route("/phase9_1.js", get(phase9_1_js))
+        .route("/phase10.js", get(phase10_js))
         .route("/style.css", get(style_css))
+        .route("/api/auth/status", get(auth::api_status))
+        .route("/api/auth/setup", post(auth::api_setup))
+        .route("/api/auth/login", post(auth::api_login))
+        .route("/api/auth/logout", post(auth::api_logout))
+        .route("/api/auth/logout-all", post(auth::api_logout_all))
+        .route("/api/auth/change-password", post(auth::api_change_password))
         .route("/api/status", get(api_status))
         .route("/api/diagnostics", get(api_diagnostics))
         .route("/api/logs", get(api_logs))
@@ -131,11 +142,11 @@ async fn main() -> Result<()> {
 
     let listener = TcpListener::bind(&bind).await.with_context(|| format!("failed to bind {bind}"))?;
     println!();
-    println!("SOOP Rust Web - Phase 9.1");
+    println!("SOOP Rust Web - Phase 10");
     println!("Backend : {}", backend_dir.display());
     println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
-    println!("Token   : {token}");
+    println!("Recovery: {token}");
     println!("Source  : {}", token_source.display());
     println!("Config  : SQLite direct (INI/TXT are import/export compatibility mirrors)");
     println!("Watcher : Rust native v4 (SQLite direct)");
@@ -144,6 +155,8 @@ async fn main() -> Result<()> {
     println!("History : SQLite + filtered query UX");
     println!("Storage : LIVE/channel/VOD free-space diagnostics");
     println!("Picker  : Native Windows file/folder dialog (direct loopback only)");
+    println!("Auth    : Browser ID/password session + Bearer recovery token");
+    println!("Session : HttpOnly/SameSite cookie + CSRF; Secure cookie through HTTPS proxy");
     println!("Remote  : Keep 127.0.0.1:8787 and expose Caddy on 80/443");
     println!();
     println!("The server is NOT registered as an OS service.");
@@ -246,17 +259,25 @@ async fn index() -> Html<&'static str> { Html(include_str!("../web/index.html"))
 async fn app_js() -> impl IntoResponse { ([(CONTENT_TYPE, "application/javascript; charset=utf-8")], include_str!("../web/app.js")) }
 async fn phase8_js() -> impl IntoResponse { ([(CONTENT_TYPE, "application/javascript; charset=utf-8")], include_str!("../web/phase8.js")) }
 async fn phase9_1_js() -> impl IntoResponse { ([(CONTENT_TYPE, "application/javascript; charset=utf-8")], include_str!("../web/phase9_1.js")) }
+async fn phase10_js() -> impl IntoResponse { ([(CONTENT_TYPE, "application/javascript; charset=utf-8")], include_str!("../web/phase10.js")) }
 async fn style_css() -> impl IntoResponse { ([(CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../web/style.css")) }
 fn authorize(headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
     let supplied = headers.get(AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer "));
-    if supplied == Some(state.token.as_str()) { Ok(()) } else { Err((StatusCode::UNAUTHORIZED, "invalid management token".into())) }
+    if let Some(supplied) = supplied {
+        return if supplied == state.token.as_str() {
+            Ok(())
+        } else {
+            Err((StatusCode::UNAUTHORIZED, "invalid management recovery token".into()))
+        };
+    }
+    state.auth.authorize_session(headers)
 }
 fn internal_error(err: impl std::fmt::Display) -> ApiError { (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()) }
 
 async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<StatusResponse>> {
     authorize(&headers, &state)?;
     let watcher = state.watcher.status().await.map_err(internal_error)?;
-    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase9.1-native-picker" }))
+    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase10-session-auth" }))
 }
 async fn api_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     authorize(&headers, &state)?;
@@ -271,13 +292,15 @@ async fn api_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> A
     let yt_dlp = diagnose_tool(vod.get("YT_DLP_PATH").map(String::as_str).unwrap_or(""), &[state.backend_dir.join("vod").join("yt-dlp.exe")], "yt-dlp.exe");
     let ffmpeg = diagnose_tool(vod.get("FFMPEG_PATH").map(String::as_str).unwrap_or(""), &[state.backend_dir.join("vod").join("ffmpeg.exe")], "ffmpeg.exe");
     Ok(Json(json!({
-        "phase": "phase9.1-native-picker",
+        "phase": "phase10-session-auth",
         "bind": state.bind,
         "loopback_only": loopback_only,
         "database": state.store.path().display().to_string(),
         "sqlite_primary": true,
         "watcher_config_source": "sqlite-direct",
         "compatibility_mirrors": "startup-and-api-write-only",
+        "browser_session_auth": true,
+        "bearer_recovery": true,
         "reverse_proxy": {
             "recommended": true,
             "upstream": "127.0.0.1:8787",
