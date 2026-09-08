@@ -53,7 +53,9 @@ jobs:
         run: |
           $required = @(
             './dist/soop-recorder/soop-server.exe',
+            './dist/soop-recorder/soop-launcher.exe',
             './dist/soop-recorder/RUN.bat',
+            './dist/soop-recorder/RUN_SERVER_CONSOLE.bat',
             './dist/soop-recorder/BACKUP_DATA.bat',
             './dist/soop-recorder/RESTORE_DATA.bat',
             './dist/soop-recorder/Caddyfile.example',
@@ -62,15 +64,30 @@ jobs:
             './dist/soop-recorder/maintenance/Backup-SoopData.ps1',
             './dist/soop-recorder/maintenance/Restore-SoopData.ps1',
             './dist/soop-recorder/docs/OPERATIONS.md',
-            './dist/soop-recorder/docs/REVERSE_PROXY.md'
+            './dist/soop-recorder/docs/REVERSE_PROXY.md',
+            './dist/soop-recorder/docs/LOCAL_LAUNCHER.md'
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
           }
 
-          $expected = (Get-Content ./dist/soop-recorder/SHA256SUMS.txt -Raw).Trim().Split()[0]
-          $actual = (Get-FileHash -Algorithm SHA256 ./dist/soop-recorder/soop-server.exe).Hash.ToLowerInvariant()
-          if ($expected -ne $actual) { throw 'soop-server.exe checksum mismatch' }
+          $expected = @{}
+          foreach ($line in Get-Content ./dist/soop-recorder/SHA256SUMS.txt) {
+            if ($line -match '^([0-9a-fA-F]{64})\s+(.+)$') {
+              $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
+            }
+          }
+          foreach ($name in @('soop-server.exe', 'soop-launcher.exe')) {
+            if (-not $expected.ContainsKey($name)) { throw "checksum missing: $name" }
+            $actual = (Get-FileHash -Algorithm SHA256 (Join-Path './dist/soop-recorder' $name)).Hash.ToLowerInvariant()
+            if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
+          }
+
+          $run = Get-Content ./dist/soop-recorder/RUN.bat -Raw
+          if ($run -notmatch 'soop-launcher\.exe') { throw 'RUN.bat does not use soop-launcher.exe' }
+
+          $direct = Get-Content ./dist/soop-recorder/RUN_SERVER_CONSOLE.bat -Raw
+          if ($direct -notmatch 'soop-server\.exe') { throw 'RUN_SERVER_CONSOLE.bat does not start soop-server.exe' }
 
           $caddy = Get-Content ./dist/soop-recorder/Caddyfile.example -Raw
           if ($caddy -notmatch 'reverse_proxy\s+127\.0\.0\.1:8787') { throw 'Caddy template upstream mismatch' }
