@@ -71,7 +71,8 @@ jobs:
           $t = Read-Utf8 $p
           $t = Regex-Replace-Required $t '(?m)^use atomic_write_file::AtomicWriteFile;\r?\n' '' 'remove unused atomic writer import'
           $t = Replace-Required $t 'use std::{fs, io::Write, path::{Path, PathBuf}};' "#[cfg(test)]`nuse std::{fs, path::Path};" 'security test-only imports'
-          $t = Replace-Required $t 'const SECRET_KEYS: &[&str] = &["SOOP_PASSWORD", "CLOUDFLARE_API_KEY"];' "#[cfg(test)]`nconst SECRET_KEYS: &[&str] = &[\"SOOP_PASSWORD\", \"CLOUDFLARE_API_KEY\"];" 'security test-only keys'
+          $secretKeys = '#[cfg(test)]' + "`n" + 'const SECRET_KEYS: &[&str] = &["SOOP_PASSWORD", "CLOUDFLARE_API_KEY"];'
+          $t = Replace-Required $t 'const SECRET_KEYS: &[&str] = &["SOOP_PASSWORD", "CLOUDFLARE_API_KEY"];' $secretKeys 'security test-only keys'
           $t = Replace-Required $t 'pub fn configured_secrets(' "#[cfg(test)]`npub fn configured_secrets(" 'security configured_secrets test-only'
           $t = Regex-Replace-Required $t 'pub fn save_protected_secrets\(.*?(?=#\[cfg\(windows\)\]\r?\nfn platform_protect)' '' 'remove unused legacy secret writer'
           Write-Utf8 $p $t
