@@ -82,6 +82,10 @@ impl RecorderManager {
             );
         }
 
+        let stream_timeout = config
+            .stall_timeout
+            .max(10)
+            .saturating_add(config.monitor_interval.max(1));
         let mut command = Command::new(&config.streamlink);
         command
             .arg(stream_url)
@@ -89,17 +93,22 @@ impl RecorderManager {
             .arg("--output")
             .arg(&output_file)
             .arg("--force")
+            // Streamlink's progress renderer expects an interactive Windows console.
+            // The recorder pipes stderr, so disable progress rendering but keep log output.
             .arg("--progress")
             .arg("no")
             .arg("--hls-live-edge")
             .arg("3")
             .arg("--stream-segment-threads")
             .arg("3")
-            // Streamlink's queue deadline is a segment-duration multiplier, not seconds.
-            // Make it deliberately generous so RecorderManager's file-growth stall timeout
-            // remains the authoritative timeout instead of Streamlink stopping after ~6s.
+            // Disable Streamlink's segment-duration-based early deadline. RecorderManager
+            // owns liveness via file growth and RECORD_STALL_TIMEOUT.
             .arg("--stream-segmented-queue-deadline")
-            .arg(config.stall_timeout.max(10).to_string())
+            .arg("0")
+            // Keep Streamlink's generic read timeout just beyond RecorderManager's stall
+            // threshold so the Rust monitor gets the first chance to classify a stall.
+            .arg("--stream-timeout")
+            .arg(stream_timeout.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
