@@ -1,12 +1,15 @@
 use crate::{
-    backend::{channels_path, read_channels, read_safe_settings, settings_path, HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS},
-    model::{Channel, HistoryResponse, LiveHistoryItem, VodHistoryItem, VodJobStatus},
+    backend::{
+        HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS, channels_path, read_channels, read_safe_settings,
+        settings_path,
+    },
+    model::{Channel, LiveHistoryItem, VodJobStatus},
     primary_config::VOD_TOOL_KEYS,
     vod_tool_settings,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     collections::{BTreeMap, HashSet},
     env, fs,
@@ -26,7 +29,6 @@ pub struct Store {
 pub struct MigrationSummary {
     pub settings: usize,
     pub channels: usize,
-    pub database: PathBuf,
     pub imported: bool,
 }
 
@@ -164,7 +166,6 @@ impl Store {
             return Ok(MigrationSummary {
                 settings: self.settings_count()?,
                 channels: self.channels()?.len(),
-                database: self.path.clone(),
                 imported: false,
             });
         }
@@ -185,7 +186,6 @@ impl Store {
         Ok(MigrationSummary {
             settings: live_settings.len() + vod_settings.len(),
             channels: channels.len(),
-            database: self.path.clone(),
             imported: true,
         })
     }
@@ -213,7 +213,9 @@ impl Store {
         let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT key,value FROM settings ORDER BY key")?;
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows
             .into_iter()
@@ -228,7 +230,9 @@ impl Store {
             .map(|key| {
                 (
                     (*key).to_string(),
-                    values.get(*key).is_some_and(|value| !value.trim().is_empty()),
+                    values
+                        .get(*key)
+                        .is_some_and(|value| !value.trim().is_empty()),
                 )
             })
             .collect())
@@ -282,9 +286,11 @@ impl Store {
 
     fn meta_value(&self, key: &str) -> Result<Option<String>> {
         let conn = self.conn()?;
-        conn.query_row("SELECT value FROM meta WHERE key=?1", params![key], |row| row.get(0))
-            .optional()
-            .map_err(Into::into)
+        conn.query_row("SELECT value FROM meta WHERE key=?1", params![key], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(Into::into)
     }
 
     fn set_meta(&self, key: &str, value: &str) -> Result<()> {
@@ -329,7 +335,9 @@ impl Store {
     }
 
     pub fn upsert_vod(&self, status: &VodJobStatus) -> Result<()> {
-        let Some(id) = status.job_id.as_deref() else { return Ok(()); };
+        let Some(id) = status.job_id.as_deref() else {
+            return Ok(());
+        };
         let analysis = status.analysis.as_ref();
         let vod_url = analysis.map(|a| a.vod_url.as_str()).unwrap_or("");
         let title = analysis.map(|a| a.title.as_str()).unwrap_or("");
@@ -374,56 +382,6 @@ impl Store {
         Ok(())
     }
 
-    pub fn history(&self, limit: usize) -> Result<HistoryResponse> {
-        let limit = limit.clamp(1, 500) as i64;
-        let conn = self.conn()?;
-
-        let mut live_stmt = conn.prepare(
-            "SELECT id,account,channel_name,bno,title,file_path,started_at,ended_at,duration_seconds,size_bytes,reason,status FROM live_recordings ORDER BY started_at DESC LIMIT ?1",
-        )?;
-        let live = live_stmt
-            .query_map(params![limit], |row| {
-                Ok(LiveHistoryItem {
-                    id: row.get(0)?,
-                    account: row.get(1)?,
-                    channel_name: row.get(2)?,
-                    bno: row.get(3)?,
-                    title: row.get(4)?,
-                    file_path: row.get(5)?,
-                    started_at: row.get(6)?,
-                    ended_at: row.get(7)?,
-                    duration_seconds: row.get(8)?,
-                    size_bytes: row.get::<_, i64>(9)?.max(0) as u64,
-                    reason: row.get(10)?,
-                    status: row.get(11)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        let mut vod_stmt = conn.prepare(
-            "SELECT id,kind,vod_url,title,streamer,part_count,state,output_file,message,started_at,finished_at FROM vod_jobs ORDER BY COALESCE(started_at,updated_at) DESC LIMIT ?1",
-        )?;
-        let vod = vod_stmt
-            .query_map(params![limit], |row| {
-                Ok(VodHistoryItem {
-                    id: row.get(0)?,
-                    kind: row.get(1)?,
-                    vod_url: row.get(2)?,
-                    title: row.get(3)?,
-                    streamer: row.get(4)?,
-                    part_count: row.get::<_, i64>(5)?.max(0) as usize,
-                    state: row.get(6)?,
-                    output_file: row.get(7)?,
-                    message: row.get(8)?,
-                    started_at: row.get(9)?,
-                    finished_at: row.get(10)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        Ok(HistoryResponse { live, vod })
-    }
-
     pub fn setting_value(&self, key: &str) -> Result<Option<String>> {
         let conn = self.conn()?;
         conn.query_row(
@@ -437,8 +395,8 @@ impl Store {
 }
 
 fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let hidden: HashSet<&str> = HIDDEN_SETTING_KEYS.iter().copied().collect();
     let mut values = BTreeMap::new();
     for raw in text.lines() {
@@ -446,7 +404,9 @@ fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else { continue; };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         let key = key.trim();
         if hidden.contains(key) {
             values.insert(key.to_string(), value.trim().to_string());

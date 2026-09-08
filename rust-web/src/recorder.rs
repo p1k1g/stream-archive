@@ -1,9 +1,5 @@
-use crate::{
-    backend::LogBuffer,
-    model::LiveHistoryItem,
-    store,
-};
-use anyhow::{anyhow, bail, Context, Result};
+use crate::{backend::LogBuffer, model::LiveHistoryItem, store};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use std::{
     fs,
@@ -11,7 +7,10 @@ use std::{
     process::Stdio,
     time::{Duration, Instant},
 };
-use tokio::{io::{AsyncBufReadExt, BufReader}, process::{Child, Command}};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::{Child, Command},
+};
 use uuid::Uuid;
 
 const GB: u64 = 1024 * 1024 * 1024;
@@ -66,31 +65,65 @@ impl RecorderManager {
         channel: &str,
         account: &str,
     ) -> Result<Recording> {
-        let output_dir = output_file.parent().ok_or_else(|| anyhow!("output file has no parent"))?.to_path_buf();
+        let output_dir = output_file
+            .parent()
+            .ok_or_else(|| anyhow!("output file has no parent"))?
+            .to_path_buf();
         fs::create_dir_all(&output_dir)?;
         let free = free_gb(&output_dir)?;
         if free < config.min_free_space_gb {
-            bail!("LOW DISK SPACE - free={free:.2}GB limit={:.2}GB", config.min_free_space_gb);
+            bail!(
+                "LOW DISK SPACE - free={free:.2}GB limit={:.2}GB",
+                config.min_free_space_gb
+            );
         }
 
+        let stream_timeout = config
+            .stall_timeout
+            .max(10)
+            .saturating_add(config.monitor_interval.max(1));
         let mut command = Command::new(&config.streamlink);
         command
             .arg(stream_url)
             .arg(&config.quality)
-            .arg("--output").arg(&output_file)
+            .arg("--output")
+            .arg(&output_file)
             .arg("--force")
-            .arg("--hls-live-edge").arg("3")
-            .arg("--stream-segment-threads").arg("3")
+            // Streamlink's progress renderer expects an interactive Windows console.
+            // The recorder pipes stderr, so disable progress rendering but keep log output.
+            .arg("--progress")
+            .arg("no")
+            .arg("--hls-live-edge")
+            .arg("3")
+            .arg("--stream-segment-threads")
+            .arg("3")
+            // Disable Streamlink's segment-duration-based early deadline. RecorderManager
+            // owns liveness via file growth and RECORD_STALL_TIMEOUT.
+            .arg("--stream-segmented-queue-deadline")
+            .arg("0")
+            // Keep Streamlink's generic read timeout just beyond RecorderManager's stall
+            // threshold so the Rust monitor gets the first chance to classify a stall.
+            .arg("--stream-timeout")
+            .arg(stream_timeout.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .kill_on_drop(false);
         if let Some(parent) = config.streamlink.parent() {
-            if parent.is_dir() { command.current_dir(parent); }
+            if parent.is_dir() {
+                command.current_dir(parent);
+            }
         }
 
-        let mut child = command.spawn().with_context(|| format!("failed to start Streamlink: {}", config.streamlink.display()))?;
-        let pid = child.id().ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "failed to start Streamlink: {}",
+                config.streamlink.display()
+            )
+        })?;
+        let pid = child
+            .id()
+            .ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
         if let Some(stderr) = child.stderr.take() {
             let logs = self.logs.clone();
             let account = account.to_string();
@@ -99,7 +132,8 @@ impl RecorderManager {
                 while let Ok(Some(line)) = lines.next_line().await {
                     let line = line.trim();
                     if !line.is_empty() {
-                        logs.push(format!("[RUST:STREAMLINK:{account}] {line}")).await;
+                        logs.push(format!("[RUST:STREAMLINK:{account}] {line}"))
+                            .await;
                     }
                 }
             });
@@ -122,14 +156,18 @@ impl RecorderManager {
                 reason: None,
                 status: "RECORDING".into(),
             }) {
-                self.logs.push(format!("[DB:WARN] LIVE history start failed: {err:#}")).await;
+                self.logs
+                    .push(format!("[DB:WARN] LIVE history start failed: {err:#}"))
+                    .await;
             }
         }
 
-        self.logs.push(format!(
-            "[RUST] RECORD START channel={channel} account={account} bno={bno} pid={pid} file={}",
-            output_file.display()
-        )).await;
+        self.logs
+            .push(format!(
+                "[RUST] RECORD START channel={channel} account={account} bno={bno} pid={pid} file={}",
+                output_file.display()
+            ))
+            .await;
 
         Ok(Recording {
             pid,
@@ -147,7 +185,11 @@ impl RecorderManager {
     }
 
     pub fn poll(&self, rec: &mut Recording, config: &RecorderConfig) -> Result<RecordingPoll> {
-        if let Some(status) = rec.child.try_wait().context("failed to query Streamlink status")? {
+        if let Some(status) = rec
+            .child
+            .try_wait()
+            .context("failed to query Streamlink status")?
+        {
             return Ok(RecordingPoll::Exited(status.code()));
         }
         if rec.last_monitor.elapsed() < Duration::from_secs(config.monitor_interval.max(1)) {
@@ -177,9 +219,15 @@ impl RecorderManager {
             #[cfg(windows)]
             {
                 let status = Command::new("taskkill.exe")
-                    .arg("/PID").arg(rec.pid.to_string()).arg("/T").arg("/F")
-                    .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-                    .status().await?;
+                    .arg("/PID")
+                    .arg(rec.pid.to_string())
+                    .arg("/T")
+                    .arg("/F")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await?;
                 if !status.success() && rec.child.try_wait()?.is_none() {
                     bail!("taskkill failed for recorder pid={}", rec.pid);
                 }
@@ -193,10 +241,18 @@ impl RecorderManager {
     }
 
     pub async fn log_finished(&self, channel: &str, account: &str, rec: &Recording, reason: &str) {
-        let size = fs::metadata(&rec.file).map(|m| m.len()).unwrap_or(rec.last_size);
+        let size = fs::metadata(&rec.file)
+            .map(|m| m.len())
+            .unwrap_or(rec.last_size);
         let ended_at = Utc::now();
         let secs = (ended_at - rec.started_at).num_seconds().max(0);
-        let status = if reason == "NORMAL" { "COMPLETED" } else if reason.contains("STALLED") || reason.contains("EXIT CODE") { "FAILED" } else { "STOPPED" };
+        let status = if reason == "NORMAL" {
+            "COMPLETED"
+        } else if reason.contains("STALLED") || reason.contains("EXIT CODE") {
+            "FAILED"
+        } else {
+            "STOPPED"
+        };
         if let Ok(db) = store::global() {
             if let Err(err) = db.finish_live(
                 &rec.history_id,
@@ -206,13 +262,17 @@ impl RecorderManager {
                 reason,
                 status,
             ) {
-                self.logs.push(format!("[DB:WARN] LIVE history finish failed: {err:#}")).await;
+                self.logs
+                    .push(format!("[DB:WARN] LIVE history finish failed: {err:#}"))
+                    .await;
             }
         }
-        self.logs.push(format!(
-            "[RUST] RECORD FINISHED channel={channel} account={account} duration={secs}s size={size} reason={reason} file={}",
-            rec.file.display()
-        )).await;
+        self.logs
+            .push(format!(
+                "[RUST] RECORD FINISHED channel={channel} account={account} duration={secs}s size={size} reason={reason} file={}",
+                rec.file.display()
+            ))
+            .await;
     }
 }
 

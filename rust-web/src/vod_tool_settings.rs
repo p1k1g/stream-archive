@@ -1,9 +1,13 @@
-use anyhow::{bail, Context, Result};
+#[cfg(test)]
+use anyhow::bail;
+use anyhow::{Context, Result};
+#[cfg(test)]
 use atomic_write_file::AtomicWriteFile;
+#[cfg(test)]
+use std::io::Write;
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -20,14 +24,16 @@ pub fn read(backend: &Path) -> Result<BTreeMap<String, String>> {
         return Ok(result);
     }
 
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else { continue; };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         let key = key.trim();
         if KEYS.contains(&key) {
             result.insert(key.to_string(), value.trim().to_string());
@@ -36,12 +42,17 @@ pub fn read(backend: &Path) -> Result<BTreeMap<String, String>> {
     Ok(result)
 }
 
+#[cfg(test)]
 pub fn update(backend: &Path, updates: &BTreeMap<String, String>) -> Result<()> {
     for (key, value) in updates {
         if !KEYS.contains(&key.as_str()) {
             bail!("unsupported VOD tool setting: {key}");
         }
-        if value.contains('\r') || value.contains('\n') || value.contains('\0') || value.len() > 2048 {
+        if value.contains('\r')
+            || value.contains('\n')
+            || value.contains('\0')
+            || value.len() > 2048
+        {
             bail!("invalid VOD tool path: {key}");
         }
     }
@@ -51,7 +62,11 @@ pub fn update(backend: &Path, updates: &BTreeMap<String, String>) -> Result<()> 
         fs::create_dir_all(parent)?;
     }
     let original = fs::read_to_string(&path).unwrap_or_default();
-    let newline = if original.contains("\r\n") { "\r\n" } else { "\n" };
+    let newline = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     let normalized = original.replace("\r\n", "\n").replace('\r', "\n");
     let mut output = Vec::new();
     let mut seen = BTreeMap::new();
@@ -95,6 +110,7 @@ pub fn update(backend: &Path, updates: &BTreeMap<String, String>) -> Result<()> 
     Ok(())
 }
 
+#[cfg(test)]
 pub fn apply_defaults(backend: &Path, yt_dlp: &mut String, ffmpeg: &mut String) -> Result<()> {
     let values = read(backend)?;
     if yt_dlp.trim().is_empty() {
@@ -110,6 +126,7 @@ fn path(backend: &Path) -> PathBuf {
     backend.join("vod").join(FILE_NAME)
 }
 
+#[cfg(test)]
 fn backup_existing(path: &Path) -> Result<()> {
     if path.is_file() {
         let mut backup = path.as_os_str().to_os_string();
@@ -128,8 +145,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("vod")).unwrap();
         let updates = BTreeMap::from([
-            ("YT_DLP_PATH".to_string(), r"C:\Tools\yt-dlp.exe".to_string()),
-            ("FFMPEG_PATH".to_string(), r"C:\Tools\ffmpeg.exe".to_string()),
+            (
+                "YT_DLP_PATH".to_string(),
+                r"C:\Tools\yt-dlp.exe".to_string(),
+            ),
+            (
+                "FFMPEG_PATH".to_string(),
+                r"C:\Tools\ffmpeg.exe".to_string(),
+            ),
         ]);
         update(dir.path(), &updates).unwrap();
         let loaded = read(dir.path()).unwrap();
