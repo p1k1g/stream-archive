@@ -32,12 +32,23 @@ if "%PRESERVE_RUNTIME%"=="1" (
 )
 
 if exist "%OUT%" rmdir /s /q "%OUT%"
+if exist "%OUT%" (
+    echo ERROR: Existing portable package could not be removed.
+    echo Stop the SOOP server/launcher and retry PACKAGE_RUST_WEB.bat.
+    if "%PRESERVE_RUNTIME%"=="1" if exist "%PRESERVE%\data" (
+        if not exist "%OUT%\data" mkdir "%OUT%\data" 2>nul
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -LiteralPath '.\%PRESERVE%\data\*' -Destination '.\%OUT%\data' -Recurse -Force" >nul 2>nul
+    )
+    exit /b 1
+)
+
 mkdir "%OUT%\backend\vod" || exit /b 1
 mkdir "%OUT%\data" || exit /b 1
 mkdir "%OUT%\maintenance" || exit /b 1
 mkdir "%OUT%\docs" || exit /b 1
 
 copy /y "rust-web\target\release\soop-web.exe" "%OUT%\soop-server.exe" >nul || exit /b 1
+copy /y "rust-web\target\release\soop-launcher.exe" "%OUT%\soop-launcher.exe" >nul || exit /b 1
 copy /y "backend\SOOP_LIVE_SETTING.example.ini" "%OUT%\backend\SOOP_LIVE_SETTING.example.ini" >nul || exit /b 1
 copy /y "backend\SOOP_LIVE_CHANNELS.example.txt" "%OUT%\backend\SOOP_LIVE_CHANNELS.example.txt" >nul || exit /b 1
 if exist "backend\vod\SOOP_VOD_SETTING.example.ini" copy /y "backend\vod\SOOP_VOD_SETTING.example.ini" "%OUT%\backend\vod\SOOP_VOD_SETTING.example.ini" >nul
@@ -45,6 +56,7 @@ copy /y "maintenance\Backup-SoopData.ps1" "%OUT%\maintenance\Backup-SoopData.ps1
 copy /y "maintenance\Restore-SoopData.ps1" "%OUT%\maintenance\Restore-SoopData.ps1" >nul || exit /b 1
 copy /y "docs\OPERATIONS.md" "%OUT%\docs\OPERATIONS.md" >nul || exit /b 1
 copy /y "docs\REVERSE_PROXY.md" "%OUT%\docs\REVERSE_PROXY.md" >nul || exit /b 1
+copy /y "docs\LOCAL_LAUNCHER.md" "%OUT%\docs\LOCAL_LAUNCHER.md" >nul || exit /b 1
 copy /y "deploy\Caddyfile.example" "%OUT%\Caddyfile.example" >nul || exit /b 1
 
 if "%PRESERVE_RUNTIME%"=="1" (
@@ -62,7 +74,11 @@ if "%PRESERVE_RUNTIME%"=="1" (
 
 >"%OUT%\RUN.bat" echo @echo off
 >>"%OUT%\RUN.bat" echo cd /d "%%~dp0"
->>"%OUT%\RUN.bat" echo soop-server.exe
+>>"%OUT%\RUN.bat" echo start "" "soop-launcher.exe"
+
+>"%OUT%\RUN_SERVER_CONSOLE.bat" echo @echo off
+>>"%OUT%\RUN_SERVER_CONSOLE.bat" echo cd /d "%%~dp0"
+>>"%OUT%\RUN_SERVER_CONSOLE.bat" echo soop-server.exe
 
 >"%OUT%\BACKUP_DATA.bat" echo @echo off
 >>"%OUT%\BACKUP_DATA.bat" echo cd /d "%%~dp0"
@@ -75,12 +91,14 @@ if "%PRESERVE_RUNTIME%"=="1" (
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\maintenance\Write-ReleaseMetadata.ps1" -OutputPath ".\%OUT%\RELEASE_INFO.txt" -ManifestPath ".\rust-web\Cargo.toml"
 if errorlevel 1 exit /b 1
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$h=(Get-FileHash -Algorithm SHA256 -LiteralPath '.\%OUT%\soop-server.exe').Hash.ToLowerInvariant(); ($h+'  soop-server.exe') | Set-Content -LiteralPath '.\%OUT%\SHA256SUMS.txt' -Encoding ASCII"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$names=@('soop-server.exe','soop-launcher.exe'); $lines=foreach($n in $names){$h=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path '.\%OUT%' $n)).Hash.ToLowerInvariant(); $h+'  '+$n}; $lines | Set-Content -LiteralPath '.\%OUT%\SHA256SUMS.txt' -Encoding ASCII"
 if errorlevel 1 exit /b 1
 
 echo.
 echo Portable package created: %OUT%
 if "%PRESERVE_RUNTIME%"=="1" echo Existing local data/history and management token were preserved when present.
-echo Included: maintenance scripts, operations docs, Caddy template, release metadata, SHA256 checksum.
+echo Default launch: RUN.bat ^> soop-launcher.exe ^> local server ^> default browser.
+echo Direct troubleshooting: RUN_SERVER_CONSOLE.bat
+echo Included: launcher, maintenance scripts, operations docs, Caddy template, release metadata, SHA256 checksums.
 echo External tools are not bundled. Configure Streamlink, yt-dlp and ffmpeg paths or install them in PATH.
 endlocal
