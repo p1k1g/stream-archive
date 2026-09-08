@@ -6,7 +6,7 @@ const fileSettings=new Map([
   ['YT_DLP_PATH','exe'],
   ['FFMPEG_PATH','exe']
 ]);
-const directLocal=['127.0.0.1','localhost','::1'].includes(String(location.hostname||'').toLowerCase());
+const directLocal=['127.0.0.1','localhost','::1','[::1]'].includes(String(location.hostname||'').toLowerCase());
 let refreshQueued=false;
 
 function p91InjectStyle(){
