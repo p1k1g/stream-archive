@@ -1,6 +1,7 @@
 mod backend;
 mod model;
 mod native_watcher;
+mod phase8;
 mod primary_config;
 mod recorder;
 mod security;
@@ -20,7 +21,7 @@ use axum::{
 };
 use backend::{ensure_runtime_files, resolve_backend_dir, LogBuffer, HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS};
 use model::{
-    Channel, ChannelLookupResponse, HistoryResponse, LogsResponse,
+    Channel, ChannelLookupResponse, LogsResponse,
     NativeWatcherStatus as WatcherStatus, SettingsResponse, StatusResponse, VodAnalyzeRequest,
     VodDownloadRequest, VodJobStatus,
 };
@@ -85,7 +86,7 @@ async fn main() -> Result<()> {
         config_write_lock: Arc::new(Mutex::new(())),
     };
 
-    logs.push(format!("[SERVER] Phase 7 runtime-remote ready; backend={} db={}", backend_dir.display(), store.path().display())).await;
+    logs.push(format!("[SERVER] Phase 8 storage-ux ready; backend={} db={}", backend_dir.display(), store.path().display())).await;
     if migration.imported {
         logs.push(format!("[DB] one-time legacy import completed settings={} channels={}", migration.settings, migration.channels)).await;
     } else {
@@ -96,17 +97,20 @@ async fn main() -> Result<()> {
         logs.push("[SERVER:WARN] public/LAN listener detected; loopback + Caddy is recommended").await;
     }
 
-    // Phase 7: watcher reads SQLite directly. Compatibility files are refreshed only on startup/API writes.
+    // Phase 8 keeps the Phase 7 SQLite-direct runtime and adds storage/history UX APIs.
     spawn_vod_history_sync(store.clone(), vod.clone(), logs.clone());
 
     let app = Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_js))
+        .route("/phase8.js", get(phase8_js))
         .route("/style.css", get(style_css))
         .route("/api/status", get(api_status))
         .route("/api/diagnostics", get(api_diagnostics))
         .route("/api/logs", get(api_logs))
-        .route("/api/history", get(api_history))
+        .route("/api/history", get(phase8::api_history))
+        .route("/api/storage", get(phase8::api_storage))
+        .route("/api/storage/check", post(phase8::api_storage_check))
         .route("/api/settings", get(api_settings).put(api_update_settings))
         .route("/api/secrets", get(api_secrets).put(api_update_secrets))
         .route("/api/channels", get(api_channels).put(api_update_channels))
@@ -124,7 +128,7 @@ async fn main() -> Result<()> {
 
     let listener = TcpListener::bind(&bind).await.with_context(|| format!("failed to bind {bind}"))?;
     println!();
-    println!("SOOP Rust Web - Phase 7");
+    println!("SOOP Rust Web - Phase 8");
     println!("Backend : {}", backend_dir.display());
     println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
@@ -134,7 +138,8 @@ async fn main() -> Result<()> {
     println!("Watcher : Rust native v4 (SQLite direct)");
     println!("Recorder: Rust RecorderManager -> Streamlink");
     println!("VOD     : Rust VodManager -> yt-dlp/ffmpeg");
-    println!("History : SQLite");
+    println!("History : SQLite + filtered query UX");
+    println!("Storage : LIVE/channel/VOD free-space diagnostics");
     println!("Remote  : Keep 127.0.0.1:8787 and expose Caddy on 80/443");
     println!();
     println!("The server is NOT registered as an OS service.");
@@ -235,6 +240,7 @@ fn write_if_changed(path: &Path, content: &str) -> Result<()> {
 
 async fn index() -> Html<&'static str> { Html(include_str!("../web/index.html")) }
 async fn app_js() -> impl IntoResponse { ([(CONTENT_TYPE, "application/javascript; charset=utf-8")], include_str!("../web/app.js")) }
+async fn phase8_js() -> impl IntoResponse { ([(CONTENT_TYPE, "application/javascript; charset=utf-8")], include_str!("../web/phase8.js")) }
 async fn style_css() -> impl IntoResponse { ([(CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../web/style.css")) }
 fn authorize(headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
     let supplied = headers.get(AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer "));
@@ -245,7 +251,7 @@ fn internal_error(err: impl std::fmt::Display) -> ApiError { (StatusCode::INTERN
 async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<StatusResponse>> {
     authorize(&headers, &state)?;
     let watcher = state.watcher.status().await.map_err(internal_error)?;
-    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase7-runtime-remote" }))
+    Ok(Json(StatusResponse { watcher, backend_dir: state.backend_dir.display().to_string(), bind: state.bind.clone(), phase: "phase8-storage-ux" }))
 }
 async fn api_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     authorize(&headers, &state)?;
@@ -260,7 +266,7 @@ async fn api_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> A
     let yt_dlp = diagnose_tool(vod.get("YT_DLP_PATH").map(String::as_str).unwrap_or(""), &[state.backend_dir.join("vod").join("yt-dlp.exe")], "yt-dlp.exe");
     let ffmpeg = diagnose_tool(vod.get("FFMPEG_PATH").map(String::as_str).unwrap_or(""), &[state.backend_dir.join("vod").join("ffmpeg.exe")], "ffmpeg.exe");
     Ok(Json(json!({
-        "phase": "phase7-runtime-remote",
+        "phase": "phase8-storage-ux",
         "bind": state.bind,
         "loopback_only": loopback_only,
         "database": state.store.path().display().to_string(),
@@ -292,7 +298,6 @@ fn find_on_path(binary: &str) -> Option<PathBuf> {
     env::var_os("PATH").and_then(|paths| env::split_paths(&paths).map(|dir| dir.join(binary)).find(|path| path.is_file()))
 }
 async fn api_logs(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<LogsResponse>> { authorize(&headers, &state)?; Ok(Json(LogsResponse { lines: state.logs.tail(400).await })) }
-async fn api_history(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<HistoryResponse>> { authorize(&headers, &state)?; Ok(Json(state.store.history(100).map_err(internal_error)?)) }
 async fn api_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<SettingsResponse>> {
     authorize(&headers, &state)?; let values = state.store.safe_settings().map_err(internal_error)?; Ok(Json(SettingsResponse{values,hidden_keys:HIDDEN_SETTING_KEYS.to_vec()}))
 }
