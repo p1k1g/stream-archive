@@ -44,7 +44,7 @@ jobs:
           $p = 'rust-web/src/backend.rs'
           $t = Read-Utf8 $p
           $t = Replace-Required $t 'use atomic_write_file::AtomicWriteFile;' "#[cfg(test)]`nuse atomic_write_file::AtomicWriteFile;" 'backend atomic writer import'
-          $t = Replace-Required $t "    io::Write,`n" '' 'backend io::Write tree import'
+          $t = Regex-Replace-Required $t '(?m)^\s{4}io::Write,\r?\n' '' 'backend io::Write tree import'
           $t = Replace-Required $t 'use tokio::sync::RwLock;' "use tokio::sync::RwLock;`n#[cfg(test)]`nuse std::io::Write;" 'backend test Write import'
           foreach ($sig in @(
             'pub fn update_settings(',
@@ -69,8 +69,8 @@ jobs:
 
           $p = 'rust-web/src/security.rs'
           $t = Read-Utf8 $p
-          $t = Replace-Required $t "use atomic_write_file::AtomicWriteFile;`n" '' 'remove unused atomic writer import'
-          $t = Replace-Required $t 'use std::{fs, io::Write, path::{Path, PathBuf}};' "#[cfg(test)]`nuse std::{fs, path::Path};" 'security test-only imports'
+          $t = Regex-Replace-Required $t '(?m)^use atomic_write_file::AtomicWriteFile;\r?\n' '' 'remove unused atomic writer import'
+          $t = Regex-Replace-Required $t '(?m)^use std::\{fs, io::Write, path::\{Path, PathBuf\}\};$' "#[cfg(test)]`nuse std::{fs, path::Path};" 'security test-only imports'
           $t = Replace-Required $t 'const SECRET_KEYS: &[&str] = &["SOOP_PASSWORD", "CLOUDFLARE_API_KEY"];' "#[cfg(test)]`nconst SECRET_KEYS: &[&str] = &[\"SOOP_PASSWORD\", \"CLOUDFLARE_API_KEY\"];" 'security test-only keys'
           $t = Replace-Required $t 'pub fn configured_secrets(' "#[cfg(test)]`npub fn configured_secrets(" 'security configured_secrets test-only'
           $t = Regex-Replace-Required $t 'pub fn save_protected_secrets\(.*?(?=#\[cfg\(windows\)\]\r?\nfn platform_protect)' '' 'remove unused legacy secret writer'
@@ -79,9 +79,8 @@ jobs:
           $p = 'rust-web/src/store.rs'
           $t = Read-Utf8 $p
           $t = Replace-Required $t 'model::{Channel, HistoryResponse, LiveHistoryItem, VodHistoryItem, VodJobStatus},' 'model::{Channel, LiveHistoryItem, VodJobStatus},' 'store unused history imports'
-          $t = Replace-Required $t "    pub database: PathBuf,`n" '' 'store unused migration database field'
-          $t = $t.Replace("                database: self.path.clone(),`n", '')
-          $t = $t.Replace("            database: self.path.clone(),`n", '')
+          $t = Regex-Replace-Required $t '(?m)^\s{4}pub database: PathBuf,\r?\n' '' 'store unused migration database field'
+          $t = [regex]::Replace($t, '(?m)^\s+database: self\.path\.clone\(\),\r?\n', '')
           $t = Regex-Replace-Required $t '    pub fn history\(&self, limit: usize\).*?(?=    pub fn setting_value)' '' 'remove unused unfiltered history method'
           Write-Utf8 $p $t
 
@@ -89,8 +88,8 @@ jobs:
           $t = Read-Utf8 $p
           $t = Replace-Required $t 'use anyhow::{bail, Context, Result};' "use anyhow::{Context, Result};`n#[cfg(test)]`nuse anyhow::bail;" 'vod tool test-only bail import'
           $t = Replace-Required $t 'use atomic_write_file::AtomicWriteFile;' "#[cfg(test)]`nuse atomic_write_file::AtomicWriteFile;" 'vod tool test-only atomic writer'
-          $t = Replace-Required $t "    io::Write,`n" '' 'vod tool io::Write tree import'
-          $t = Replace-Required $t '};' "};`n#[cfg(test)]`nuse std::io::Write;" 'vod tool test-only Write import'
+          $t = Regex-Replace-Required $t '(?m)^\s{4}io::Write,\r?\n' '' 'vod tool io::Write tree import'
+          $t = Regex-Replace-Required $t '(?m)^\};\r?\n\r?\nconst FILE_NAME' "};`n#[cfg(test)]`nuse std::io::Write;`n`nconst FILE_NAME" 'vod tool test-only Write import'
           foreach ($sig in @('pub fn update(', 'pub fn apply_defaults(', 'fn backup_existing(')) {
             $t = Replace-Required $t $sig ("#[cfg(test)]`n" + $sig) ("vod tool test-only " + $sig)
           }
