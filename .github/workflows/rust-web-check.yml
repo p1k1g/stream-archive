@@ -1,20 +1,9 @@
 name: Rust web check
 
 on:
-  push:
-    paths:
-      - "rust-web/**"
-      - "BUILD_RUST_WEB.bat"
-      - "RUN_RUST_WEB.bat"
-      - "PACKAGE_RUST_WEB.bat"
-      - "maintenance/**"
-      - "docs/**"
-      - "deploy/**"
-      - "backend/*.example.*"
-      - "backend/vod/*.example.ini"
-      - ".github/workflows/rust-web-check.yml"
-      - ".github/workflows/rust-web-release.yml"
   pull_request:
+    branches:
+      - main
     paths:
       - "rust-web/**"
       - "BUILD_RUST_WEB.bat"
@@ -27,11 +16,16 @@ on:
       - "backend/vod/*.example.ini"
       - ".github/workflows/rust-web-check.yml"
       - ".github/workflows/rust-web-release.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-web-check-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  linux-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -39,18 +33,28 @@ jobs:
         run: cargo test --locked --manifest-path rust-web/Cargo.toml
 
   windows-check:
-    runs-on: windows-latest
-    timeout-minutes: 20
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Environment
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          rustc --version
+          cargo --version
+          git --version
+
       - name: Windows native compile check
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: cargo check --locked --manifest-path rust-web/Cargo.toml
+
       - name: Windows portable package smoke
         shell: cmd
         run: PACKAGE_RUST_WEB.bat
+
       - name: Verify portable package
-        shell: pwsh
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $required = @(
             './dist/soop-recorder/soop-server.exe',
