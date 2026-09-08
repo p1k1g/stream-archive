@@ -1,6 +1,6 @@
 use crate::{
     authorize, internal_error,
-    model::{HistoryQuery, HistoryResponse, StorageResponse, StorageVolume},
+    model::{HistoryResponse, LiveHistoryItem, VodHistoryItem},
     AppState, ApiResult,
 };
 use axum::{
@@ -8,8 +8,41 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use serde::Deserialize;
-use std::{collections::BTreeMap, env, fs, path::{Path, PathBuf}};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct HistoryQuery {
+    pub q: Option<String>,
+    pub status: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct StorageResponse {
+    pub threshold_gb: f64,
+    pub database_size_bytes: u64,
+    pub volumes: Vec<StorageVolume>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct StorageVolume {
+    pub roles: Vec<String>,
+    pub paths: Vec<String>,
+    pub probe_path: String,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub used_percent: f64,
+    pub threshold_gb: f64,
+    pub status: String,
+    pub error: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct StorageCheckRequest {
@@ -22,12 +55,43 @@ pub(crate) async fn api_history(
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<HistoryResponse>> {
     authorize(&headers, &state)?;
-    Ok(Json(
-        state
-            .store
-            .history_filtered(&query)
-            .map_err(internal_error)?,
-    ))
+    let mut history = state.store.history(500).map_err(internal_error)?;
+    let needle = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    let status = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_uppercase);
+    let from = normalized_date(query.from.as_deref());
+    let to = normalized_date(query.to.as_deref());
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+
+    history.live.retain(|item| {
+        text_matches_live(item, needle.as_deref())
+            && status
+                .as_deref()
+                .is_none_or(|wanted| item.status.eq_ignore_ascii_case(wanted))
+            && date_matches(&item.started_at, from.as_deref(), to.as_deref())
+    });
+    history.vod.retain(|item| {
+        text_matches_vod(item, needle.as_deref())
+            && status
+                .as_deref()
+                .is_none_or(|wanted| item.state.eq_ignore_ascii_case(wanted))
+            && item
+                .started_at
+                .as_deref()
+                .is_none_or(|started| date_matches(started, from.as_deref(), to.as_deref()))
+    });
+    history.live.truncate(limit);
+    history.vod.truncate(limit);
+    Ok(Json(history))
 }
 
 pub(crate) async fn api_storage(
@@ -43,14 +107,12 @@ pub(crate) async fn api_storage(
         .unwrap_or(20.0)
         .max(0.0);
 
-    let mut targets = Vec::new();
     let live_default = safe
         .get("OUTPUT_DIR")
         .cloned()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| default_live_output().to_string());
-    targets.push(("LIVE 기본".to_string(), live_default));
-
+    let mut targets = vec![("LIVE 기본".to_string(), live_default)];
     for channel in channels {
         if !channel.outdir.trim().is_empty() {
             targets.push((format!("LIVE · {}", channel.name), channel.outdir));
@@ -60,12 +122,10 @@ pub(crate) async fn api_storage(
         targets.push(("SQLite 데이터".to_string(), parent.display().to_string()));
     }
 
-    let volumes = collapse_volumes(targets, threshold_gb);
-    let database_size_bytes = database_size(state.store.path());
     Ok(Json(StorageResponse {
         threshold_gb,
-        database_size_bytes,
-        volumes,
+        database_size_bytes: database_size(state.store.path()),
+        volumes: collapse_volumes(targets, threshold_gb),
     }))
 }
 
@@ -88,7 +148,50 @@ pub(crate) async fn api_storage_check(
         .max(0.0);
     storage_volume(vec!["VOD 출력".to_string()], vec![path.to_string()], threshold_gb)
         .map(Json)
-        .map_err(|err| (StatusCode::BAD_REQUEST, err))
+        .map_err(|error| (StatusCode::BAD_REQUEST, error))
+}
+
+fn text_matches_live(item: &LiveHistoryItem, needle: Option<&str>) -> bool {
+    let Some(needle) = needle else { return true; };
+    [
+        Some(item.account.as_str()),
+        Some(item.channel_name.as_str()),
+        item.title.as_deref(),
+        item.file_path.as_deref(),
+        item.reason.as_deref(),
+        Some(item.status.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_ascii_lowercase().contains(needle))
+}
+
+fn text_matches_vod(item: &VodHistoryItem, needle: Option<&str>) -> bool {
+    let Some(needle) = needle else { return true; };
+    [
+        Some(item.kind.as_str()),
+        Some(item.vod_url.as_str()),
+        Some(item.title.as_str()),
+        Some(item.streamer.as_str()),
+        item.output_file.as_deref(),
+        Some(item.message.as_str()),
+        Some(item.state.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_ascii_lowercase().contains(needle))
+}
+
+fn normalized_date(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| value.len() >= 10)
+        .map(|value| value[..10].to_string())
+}
+
+fn date_matches(timestamp: &str, from: Option<&str>, to: Option<&str>) -> bool {
+    let date = timestamp.get(..10).unwrap_or(timestamp);
+    from.is_none_or(|min| date >= min) && to.is_none_or(|max| date <= max)
 }
 
 fn collapse_volumes(targets: Vec<(String, String)>, threshold_gb: f64) -> Vec<StorageVolume> {
@@ -96,7 +199,7 @@ fn collapse_volumes(targets: Vec<(String, String)>, threshold_gb: f64) -> Vec<St
     for (role, path) in targets {
         match storage_volume(vec![role.clone()], vec![path.clone()], threshold_gb) {
             Ok(volume) => {
-                let key = format!("{}:{}", volume.total_bytes, volume.free_bytes);
+                let key = volume_key(Path::new(&volume.probe_path));
                 if let Some(existing) = grouped.get_mut(&key) {
                     if !existing.roles.contains(&role) {
                         existing.roles.push(role);
@@ -110,7 +213,7 @@ fn collapse_volumes(targets: Vec<(String, String)>, threshold_gb: f64) -> Vec<St
             }
             Err(error) => {
                 grouped.insert(
-                    format!("error:{path}"),
+                    format!("error:{}", path.to_ascii_lowercase()),
                     StorageVolume {
                         roles: vec![role],
                         paths: vec![path],
@@ -190,6 +293,13 @@ fn existing_probe_path(path: &Path) -> Result<PathBuf, String> {
     Err(format!("no existing parent found for {}", path.display()))
 }
 
+fn volume_key(path: &Path) -> String {
+    path.components()
+        .next()
+        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_else(|| path.display().to_string().to_ascii_lowercase())
+}
+
 fn database_size(path: &Path) -> u64 {
     let mut total = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
     for suffix in ["-wal", "-shm"] {
@@ -212,5 +322,11 @@ mod tests {
         let base = env::current_dir().unwrap();
         let probe = existing_probe_path(&base.join("phase8-does-not-exist").join("child")).unwrap();
         assert!(probe.exists());
+    }
+
+    #[test]
+    fn history_date_filter_uses_calendar_date() {
+        assert!(date_matches("2026-09-08T03:00:00Z", Some("2026-09-08"), Some("2026-09-08")));
+        assert!(!date_matches("2026-09-07T23:59:59Z", Some("2026-09-08"), None));
     }
 }
