@@ -8,6 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -55,7 +56,7 @@ pub(crate) async fn api_history(
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<HistoryResponse>> {
     authorize(&headers, &state)?;
-    let mut history = state.store.history(500).map_err(internal_error)?;
+    let mut history = load_history_compat(state.store.path(), 500).map_err(internal_error)?;
     let needle = query
         .q
         .as_deref()
@@ -92,6 +93,56 @@ pub(crate) async fn api_history(
     history.live.truncate(limit);
     history.vod.truncate(limit);
     Ok(Json(history))
+}
+
+fn load_history_compat(path: &Path, limit: usize) -> rusqlite::Result<HistoryResponse> {
+    let limit = limit.clamp(1, 500) as i64;
+    let conn = Connection::open(path)?;
+
+    let mut live_stmt = conn.prepare(
+        "SELECT id,account,channel_name,bno,title,file_path,started_at,ended_at,duration_seconds,size_bytes,reason,status FROM live_recordings ORDER BY started_at DESC LIMIT ?1",
+    )?;
+    let live = live_stmt
+        .query_map(params![limit], |row| {
+            Ok(LiveHistoryItem {
+                id: row.get(0)?,
+                account: row.get(1)?,
+                channel_name: row.get(2)?,
+                bno: row.get(3)?,
+                title: row.get(4)?,
+                file_path: row.get(5)?,
+                started_at: row.get(6)?,
+                ended_at: row.get(7)?,
+                duration_seconds: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                size_bytes: row.get::<_, Option<i64>>(9)?.unwrap_or(0).max(0) as u64,
+                reason: row.get(10)?,
+                status: row.get::<_, Option<String>>(11)?.unwrap_or_else(|| "UNKNOWN".to_string()),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut vod_stmt = conn.prepare(
+        "SELECT id,COALESCE(kind,'JOB'),COALESCE(vod_url,''),COALESCE(title,''),COALESCE(streamer,''),COALESCE(part_count,0),COALESCE(state,'UNKNOWN'),output_file,COALESCE(message,''),started_at,finished_at FROM vod_jobs ORDER BY COALESCE(started_at,updated_at) DESC LIMIT ?1",
+    )?;
+    let vod = vod_stmt
+        .query_map(params![limit], |row| {
+            Ok(VodHistoryItem {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                vod_url: row.get(2)?,
+                title: row.get(3)?,
+                streamer: row.get(4)?,
+                part_count: row.get::<_, i64>(5)?.max(0) as usize,
+                state: row.get(6)?,
+                output_file: row.get(7)?,
+                message: row.get(8)?,
+                started_at: row.get(9)?,
+                finished_at: row.get(10)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(HistoryResponse { live, vod })
 }
 
 pub(crate) async fn api_storage(
