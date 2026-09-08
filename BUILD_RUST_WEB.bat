@@ -25,6 +25,7 @@ echo ========================================
 echo.
 echo Output:
 echo   rust-web\target\release\soop-web.exe
+echo   rust-web\target\release\soop-launcher.exe
 echo.
 if /I not "%SOOP_NO_PAUSE%"=="1" pause
 endlocal
