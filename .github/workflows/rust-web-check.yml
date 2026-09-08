@@ -39,14 +39,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Environment
-        shell: powershell
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           rustc --version
           cargo --version
           git --version
 
       - name: Windows native compile check
-        shell: powershell
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: cargo check --locked --manifest-path rust-web/Cargo.toml
 
       - name: Windows portable package smoke
@@ -54,7 +54,7 @@ jobs:
         run: PACKAGE_RUST_WEB.bat
 
       - name: Verify portable package
-        shell: powershell
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $required = @(
             './dist/soop-recorder/soop-server.exe',
