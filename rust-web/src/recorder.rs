@@ -1,9 +1,5 @@
-use crate::{
-    backend::LogBuffer,
-    model::LiveHistoryItem,
-    store,
-};
-use anyhow::{anyhow, bail, Context, Result};
+use crate::{backend::LogBuffer, model::LiveHistoryItem, store};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use std::{
     fs,
@@ -125,7 +121,9 @@ impl RecorderManager {
                 config.streamlink.display()
             )
         })?;
-        let pid = child.id().ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
+        let pid = child
+            .id()
+            .ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
         if let Some(stderr) = child.stderr.take() {
             let logs = self.logs.clone();
             let account = account.to_string();
@@ -242,13 +240,7 @@ impl RecorderManager {
         Ok(rec.child.wait().await.ok().and_then(|s| s.code()))
     }
 
-    pub async fn log_finished(
-        &self,
-        channel: &str,
-        account: &str,
-        rec: &Recording,
-        reason: &str,
-    ) {
+    pub async fn log_finished(&self, channel: &str, account: &str, rec: &Recording, reason: &str) {
         let size = fs::metadata(&rec.file)
             .map(|m| m.len())
             .unwrap_or(rec.last_size);
