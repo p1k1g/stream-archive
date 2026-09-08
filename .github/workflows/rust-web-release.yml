@@ -5,10 +5,17 @@ on:
 
 jobs:
   windows-portable:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Environment
+        shell: pwsh
+        run: |
+          rustc --version
+          cargo --version
+          git --version
 
       - name: Unit tests
         shell: pwsh
