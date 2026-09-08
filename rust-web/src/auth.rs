@@ -1,23 +1,23 @@
-use super::{AppState, ApiError, ApiResult};
+use super::{ApiError, ApiResult, AppState};
 use crate::security::{protect_secret, unprotect_secret};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use axum::{
+    Json,
     extract::State,
     http::{
-        header::{COOKIE, SET_COOKIE, USER_AGENT},
         HeaderMap, HeaderValue, StatusCode,
+        header::{COOKIE, SET_COOKIE, USER_AGENT},
     },
-    Json,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     env,
     path::PathBuf,
-    sync::{Mutex, MutexGuard},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -161,7 +161,12 @@ impl AuthManager {
         }
     }
 
-    fn create_session(&self, user_id: i64, username: &str, headers: &HeaderMap) -> Result<(SessionIdentity, String)> {
+    fn create_session(
+        &self,
+        user_id: i64,
+        username: &str,
+        headers: &HeaderMap,
+    ) -> Result<(SessionIdentity, String)> {
         self.cleanup_expired()?;
         let session_id = random_token();
         let secret = random_token();
@@ -188,14 +193,26 @@ impl AuthManager {
             csrf_token,
             expires_at: expires.to_rfc3339(),
         };
-        let cookie = session_cookie(&format!("{session_id}.{secret}"), self.session_hours, request_is_https(headers));
+        let cookie = session_cookie(
+            &format!("{session_id}.{secret}"),
+            self.session_hours,
+            request_is_https(headers),
+        );
         Ok((identity, cookie))
     }
 
     fn session_from_headers(&self, headers: &HeaderMap) -> Result<Option<SessionIdentity>> {
-        let Some(value) = cookie_value(headers, SESSION_COOKIE) else { return Ok(None); };
-        let Some((session_id, secret)) = value.split_once('.') else { return Ok(None); };
-        if session_id.len() > 160 || secret.len() > 160 || session_id.is_empty() || secret.is_empty() {
+        let Some(value) = cookie_value(headers, SESSION_COOKIE) else {
+            return Ok(None);
+        };
+        let Some((session_id, secret)) = value.split_once('.') else {
+            return Ok(None);
+        };
+        if session_id.len() > 160
+            || secret.len() > 160
+            || session_id.is_empty()
+            || secret.is_empty()
+        {
             return Ok(None);
         }
 
@@ -217,13 +234,18 @@ impl AuthManager {
                 },
             )
             .optional()?;
-        let Some((user_id, username, protected, csrf_token, expires_at)) = row else { return Ok(None); };
+        let Some((user_id, username, protected, csrf_token, expires_at)) = row else {
+            return Ok(None);
+        };
 
         let expired = DateTime::parse_from_rfc3339(&expires_at)
             .map(|value| value.with_timezone(&Utc) <= Utc::now())
             .unwrap_or(true);
         if expired {
-            let _ = conn.execute("DELETE FROM auth_sessions WHERE session_id=?1", params![session_id]);
+            let _ = conn.execute(
+                "DELETE FROM auth_sessions WHERE session_id=?1",
+                params![session_id],
+            );
             return Ok(None);
         }
 
@@ -257,7 +279,9 @@ impl AuthManager {
             .get(CSRF_HEADER)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        if supplied.is_empty() || !constant_time_eq(supplied.as_bytes(), session.csrf_token.as_bytes()) {
+        if supplied.is_empty()
+            || !constant_time_eq(supplied.as_bytes(), session.csrf_token.as_bytes())
+        {
             return Err((StatusCode::FORBIDDEN, "invalid CSRF token".to_string()));
         }
         Ok(())
@@ -272,16 +296,22 @@ impl AuthManager {
             .get(CSRF_HEADER)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        if supplied.is_empty() || !constant_time_eq(supplied.as_bytes(), session.csrf_token.as_bytes()) {
+        if supplied.is_empty()
+            || !constant_time_eq(supplied.as_bytes(), session.csrf_token.as_bytes())
+        {
             return Err((StatusCode::FORBIDDEN, "invalid CSRF token".to_string()));
         }
         Ok(session)
     }
 
     fn login_blocked(&self, key: &str) -> bool {
-        let Ok(mut failures) = self.failures.lock() else { return true; };
+        let Ok(mut failures) = self.failures.lock() else {
+            return true;
+        };
         let now = Instant::now();
-        let Some(state) = failures.get_mut(key) else { return false; };
+        let Some(state) = failures.get_mut(key) else {
+            return false;
+        };
         if let Some(until) = state.blocked_until {
             if now < until {
                 return true;
@@ -298,7 +328,9 @@ impl AuthManager {
     }
 
     fn record_login_failure(&self, key: &str) {
-        let Ok(mut failures) = self.failures.lock() else { return; };
+        let Ok(mut failures) = self.failures.lock() else {
+            return;
+        };
         let now = Instant::now();
         let state = failures.entry(key.to_string()).or_insert(FailureState {
             window_started: now,
@@ -328,7 +360,10 @@ pub(crate) async fn api_status(
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let configured = state.auth.configured().map_err(internal)?;
-    let session = state.auth.session_from_headers(&headers).map_err(internal)?;
+    let session = state
+        .auth
+        .session_from_headers(&headers)
+        .map_err(internal)?;
     Ok(Json(match session {
         Some(session) => json!({
             "configured": configured,
@@ -355,19 +390,34 @@ pub(crate) async fn api_setup(
     Json(body): Json<SetupRequest>,
 ) -> ApiResult<(HeaderMap, Json<Value>)> {
     if state.auth.configured().map_err(internal)? {
-        return Err((StatusCode::CONFLICT, "administrator account is already configured".into()));
+        return Err((
+            StatusCode::CONFLICT,
+            "administrator account is already configured".into(),
+        ));
     }
     validate_username(&body.username).map_err(bad_request)?;
     validate_password(&body.password).map_err(bad_request)?;
     if body.password != body.password_confirm {
-        return Err((StatusCode::BAD_REQUEST, "password confirmation does not match".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "password confirmation does not match".into(),
+        ));
     }
     let username = body.username.trim();
     let password_hash = hash_password(&body.password).map_err(internal)?;
     let now = Utc::now().to_rfc3339();
     let conn = state.auth.conn().map_err(internal)?;
-    if conn.query_row("SELECT COUNT(*) FROM auth_users", [], |row| row.get::<_, i64>(0)).map_err(internal)? > 0 {
-        return Err((StatusCode::CONFLICT, "administrator account is already configured".into()));
+    if conn
+        .query_row("SELECT COUNT(*) FROM auth_users", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(internal)?
+        > 0
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "administrator account is already configured".into(),
+        ));
     }
     conn.execute(
         "INSERT INTO auth_users(username,password_hash,created_at,password_changed_at) VALUES(?1,?2,?3,?3)",
@@ -376,10 +426,21 @@ pub(crate) async fn api_setup(
     .map_err(internal)?;
     let user_id = conn.last_insert_rowid();
     drop(conn);
-    let (session, cookie) = state.auth.create_session(user_id, username, &headers).map_err(internal)?;
-    state.auth.audit("setup", Some(username), true, Some("first administrator created"));
+    let (session, cookie) = state
+        .auth
+        .create_session(user_id, username, &headers)
+        .map_err(internal)?;
+    state.auth.audit(
+        "setup",
+        Some(username),
+        true,
+        Some("first administrator created"),
+    );
     let mut response_headers = HeaderMap::new();
-    response_headers.insert(SET_COOKIE, HeaderValue::from_str(&cookie).map_err(internal)?);
+    response_headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(internal)?,
+    );
     Ok((response_headers, Json(session_json(&session))))
 }
 
@@ -389,20 +450,34 @@ pub(crate) async fn api_login(
     Json(body): Json<LoginRequest>,
 ) -> ApiResult<(HeaderMap, Json<Value>)> {
     if !state.auth.configured().map_err(internal)? {
-        return Err((StatusCode::PRECONDITION_REQUIRED, "administrator account is not configured".into()));
+        return Err((
+            StatusCode::PRECONDITION_REQUIRED,
+            "administrator account is not configured".into(),
+        ));
     }
     let username = body.username.trim();
     let key = login_failure_key(username, &headers);
     if state.auth.login_blocked(&key) {
-        state.auth.audit("login", Some(username), false, Some("rate limited"));
-        return Err((StatusCode::TOO_MANY_REQUESTS, "too many failed login attempts; try again later".into()));
+        state
+            .auth
+            .audit("login", Some(username), false, Some("rate limited"));
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed login attempts; try again later".into(),
+        ));
     }
     let conn = state.auth.conn().map_err(internal)?;
     let row = conn
         .query_row(
             "SELECT id,username,password_hash FROM auth_users WHERE username=?1 COLLATE NOCASE",
             params![username],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()
         .map_err(internal)?;
@@ -413,15 +488,28 @@ pub(crate) async fn api_login(
         .is_some_and(|(_, _, hash)| verify_password(&body.password, hash).unwrap_or(false));
     if !valid {
         state.auth.record_login_failure(&key);
-        state.auth.audit("login", Some(username), false, Some("invalid credentials"));
-        return Err((StatusCode::UNAUTHORIZED, "invalid username or password".into()));
+        state
+            .auth
+            .audit("login", Some(username), false, Some("invalid credentials"));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "invalid username or password".into(),
+        ));
     }
     let (user_id, canonical_username, _) = row.unwrap();
     state.auth.clear_login_failures(&key);
-    let (session, cookie) = state.auth.create_session(user_id, &canonical_username, &headers).map_err(internal)?;
-    state.auth.audit("login", Some(&canonical_username), true, None);
+    let (session, cookie) = state
+        .auth
+        .create_session(user_id, &canonical_username, &headers)
+        .map_err(internal)?;
+    state
+        .auth
+        .audit("login", Some(&canonical_username), true, None);
     let mut response_headers = HeaderMap::new();
-    response_headers.insert(SET_COOKIE, HeaderValue::from_str(&cookie).map_err(internal)?);
+    response_headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(internal)?,
+    );
     Ok((response_headers, Json(session_json(&session))))
 }
 
@@ -431,10 +519,20 @@ pub(crate) async fn api_logout(
 ) -> ApiResult<(HeaderMap, Json<Value>)> {
     let session = state.auth.require_session(&headers)?;
     let conn = state.auth.conn().map_err(internal)?;
-    conn.execute("DELETE FROM auth_sessions WHERE session_id=?1", params![session.session_id]).map_err(internal)?;
-    state.auth.audit("logout", Some(&session.username), true, None);
+    conn.execute(
+        "DELETE FROM auth_sessions WHERE session_id=?1",
+        params![session.session_id],
+    )
+    .map_err(internal)?;
+    state
+        .auth
+        .audit("logout", Some(&session.username), true, None);
     let mut response_headers = HeaderMap::new();
-    response_headers.insert(SET_COOKIE, HeaderValue::from_str(&clear_session_cookie(request_is_https(&headers))).map_err(internal)?);
+    response_headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&clear_session_cookie(request_is_https(&headers)))
+            .map_err(internal)?,
+    );
     Ok((response_headers, Json(json!({"ok": true}))))
 }
 
@@ -444,10 +542,20 @@ pub(crate) async fn api_logout_all(
 ) -> ApiResult<(HeaderMap, Json<Value>)> {
     let session = state.auth.require_session(&headers)?;
     let conn = state.auth.conn().map_err(internal)?;
-    conn.execute("DELETE FROM auth_sessions WHERE user_id=?1", params![session.user_id]).map_err(internal)?;
-    state.auth.audit("logout_all", Some(&session.username), true, None);
+    conn.execute(
+        "DELETE FROM auth_sessions WHERE user_id=?1",
+        params![session.user_id],
+    )
+    .map_err(internal)?;
+    state
+        .auth
+        .audit("logout_all", Some(&session.username), true, None);
     let mut response_headers = HeaderMap::new();
-    response_headers.insert(SET_COOKIE, HeaderValue::from_str(&clear_session_cookie(request_is_https(&headers))).map_err(internal)?);
+    response_headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&clear_session_cookie(request_is_https(&headers)))
+            .map_err(internal)?,
+    );
     Ok((response_headers, Json(json!({"ok": true}))))
 }
 
@@ -459,15 +567,30 @@ pub(crate) async fn api_change_password(
     let session = state.auth.require_session(&headers)?;
     validate_password(&body.new_password).map_err(bad_request)?;
     if body.new_password != body.new_password_confirm {
-        return Err((StatusCode::BAD_REQUEST, "new password confirmation does not match".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "new password confirmation does not match".into(),
+        ));
     }
     let conn = state.auth.conn().map_err(internal)?;
     let current_hash: String = conn
-        .query_row("SELECT password_hash FROM auth_users WHERE id=?1", params![session.user_id], |row| row.get(0))
+        .query_row(
+            "SELECT password_hash FROM auth_users WHERE id=?1",
+            params![session.user_id],
+            |row| row.get(0),
+        )
         .map_err(internal)?;
     if !verify_password(&body.current_password, &current_hash).map_err(internal)? {
-        state.auth.audit("password_change", Some(&session.username), false, Some("current password mismatch"));
-        return Err((StatusCode::UNAUTHORIZED, "current password is incorrect".into()));
+        state.auth.audit(
+            "password_change",
+            Some(&session.username),
+            false,
+            Some("current password mismatch"),
+        );
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "current password is incorrect".into(),
+        ));
     }
     let new_hash = hash_password(&body.new_password).map_err(internal)?;
     conn.execute(
@@ -475,12 +598,27 @@ pub(crate) async fn api_change_password(
         params![session.user_id, new_hash, Utc::now().to_rfc3339()],
     )
     .map_err(internal)?;
-    conn.execute("DELETE FROM auth_sessions WHERE user_id=?1", params![session.user_id]).map_err(internal)?;
+    conn.execute(
+        "DELETE FROM auth_sessions WHERE user_id=?1",
+        params![session.user_id],
+    )
+    .map_err(internal)?;
     drop(conn);
-    let (new_session, cookie) = state.auth.create_session(session.user_id, &session.username, &headers).map_err(internal)?;
-    state.auth.audit("password_change", Some(&session.username), true, Some("all previous sessions invalidated"));
+    let (new_session, cookie) = state
+        .auth
+        .create_session(session.user_id, &session.username, &headers)
+        .map_err(internal)?;
+    state.auth.audit(
+        "password_change",
+        Some(&session.username),
+        true,
+        Some("all previous sessions invalidated"),
+    );
     let mut response_headers = HeaderMap::new();
-    response_headers.insert(SET_COOKIE, HeaderValue::from_str(&cookie).map_err(internal)?);
+    response_headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(internal)?,
+    );
     Ok((response_headers, Json(session_json(&new_session))))
 }
 
@@ -498,7 +636,10 @@ fn validate_username(value: &str) -> Result<()> {
     if !(3..=32).contains(&value.len()) {
         bail!("username must be 3 to 32 characters");
     }
-    if !value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')) {
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
         bail!("username may contain only letters, numbers, dot, underscore and hyphen");
     }
     Ok(())
@@ -523,7 +664,11 @@ fn login_failure_key(username: &str, headers: &HeaderMap) -> String {
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(',').next())
-        .or_else(|| headers.get("x-real-ip").and_then(|value| value.to_str().ok()))
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|value| value.to_str().ok())
+        })
         .unwrap_or("local")
         .trim();
     format!("{}|{}", username.trim().to_ascii_lowercase(), client)
@@ -531,9 +676,13 @@ fn login_failure_key(username: &str, headers: &HeaderMap) -> String {
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     for raw in headers.get_all(COOKIE) {
-        let Ok(text) = raw.to_str() else { continue; };
+        let Ok(text) = raw.to_str() else {
+            continue;
+        };
         for part in text.split(';') {
-            let Some((key, value)) = part.trim().split_once('=') else { continue; };
+            let Some((key, value)) = part.trim().split_once('=') else {
+                continue;
+            };
             if key.trim() == name {
                 return Some(value.trim().to_string());
             }
@@ -546,14 +695,23 @@ fn request_is_https(headers: &HeaderMap) -> bool {
     if headers
         .get("x-forwarded-proto")
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(',').any(|part| part.trim().eq_ignore_ascii_case("https")))
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("https"))
+        })
     {
         return true;
     }
     headers
         .get("forwarded")
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.to_ascii_lowercase().split(';').any(|part| part.trim() == "proto=https"))
+        .is_some_and(|value| {
+            value
+                .to_ascii_lowercase()
+                .split(';')
+                .any(|part| part.trim() == "proto=https")
+        })
 }
 
 fn session_cookie(value: &str, hours: i64, secure: bool) -> String {
@@ -598,7 +756,9 @@ fn verify_password(password: &str, encoded: &str) -> Result<bool> {
     if parts.len() != 5 || parts[0] != "pbkdf2-sha256" || parts[1] != "v1" {
         return Ok(false);
     }
-    let iterations = parts[2].parse::<u64>().context("invalid password hash iterations")?;
+    let iterations = parts[2]
+        .parse::<u64>()
+        .context("invalid password hash iterations")?;
     if !(100_000..=2_000_000).contains(&iterations) {
         return Ok(false);
     }
@@ -651,11 +811,16 @@ fn bad_request(err: impl std::fmt::Display) -> ApiError {
 }
 
 #[cfg(windows)]
-fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u64, output_len: usize) -> Result<Vec<u8>> {
+fn pbkdf2_sha256(
+    password: &[u8],
+    salt: &[u8],
+    iterations: u64,
+    output_len: usize,
+) -> Result<Vec<u8>> {
     use std::ptr::null;
     use windows_sys::Win32::Security::Cryptography::{
-        BCryptCloseAlgorithmProvider, BCryptDeriveKeyPBKDF2, BCryptOpenAlgorithmProvider,
         BCRYPT_ALG_HANDLE, BCRYPT_ALG_HANDLE_HMAC_FLAG, BCRYPT_SHA256_ALGORITHM,
+        BCryptCloseAlgorithmProvider, BCryptDeriveKeyPBKDF2, BCryptOpenAlgorithmProvider,
     };
 
     let mut algorithm: BCRYPT_ALG_HANDLE = 0 as _;
@@ -668,13 +833,18 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u64, output_len: usiz
         )
     };
     if status != 0 {
-        bail!("BCryptOpenAlgorithmProvider(SHA256/HMAC) failed: 0x{:08x}", status as u32);
+        bail!(
+            "BCryptOpenAlgorithmProvider(SHA256/HMAC) failed: 0x{:08x}",
+            status as u32
+        );
     }
 
     struct Algorithm(BCRYPT_ALG_HANDLE);
     impl Drop for Algorithm {
         fn drop(&mut self) {
-            unsafe { BCryptCloseAlgorithmProvider(self.0, 0); }
+            unsafe {
+                BCryptCloseAlgorithmProvider(self.0, 0);
+            }
         }
     }
     let algorithm = Algorithm(algorithm);
@@ -702,7 +872,12 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u64, output_len: usiz
 }
 
 #[cfg(not(windows))]
-fn pbkdf2_sha256(_password: &[u8], _salt: &[u8], _iterations: u64, _output_len: usize) -> Result<Vec<u8>> {
+fn pbkdf2_sha256(
+    _password: &[u8],
+    _salt: &[u8],
+    _iterations: u64,
+    _output_len: usize,
+) -> Result<Vec<u8>> {
     bail!("browser password authentication is currently available on Windows only")
 }
 
@@ -720,8 +895,14 @@ mod tests {
     #[test]
     fn cookie_parser_extracts_named_cookie() {
         let mut headers = HeaderMap::new();
-        headers.insert(COOKIE, HeaderValue::from_static("x=1; soop_session=abc.def; y=2"));
-        assert_eq!(cookie_value(&headers, SESSION_COOKIE).as_deref(), Some("abc.def"));
+        headers.insert(
+            COOKIE,
+            HeaderValue::from_static("x=1; soop_session=abc.def; y=2"),
+        );
+        assert_eq!(
+            cookie_value(&headers, SESSION_COOKIE).as_deref(),
+            Some("abc.def")
+        );
     }
 
     #[test]

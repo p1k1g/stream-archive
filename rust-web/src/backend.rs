@@ -1,10 +1,12 @@
 use crate::model::Channel;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+#[cfg(test)]
 use atomic_write_file::AtomicWriteFile;
+#[cfg(test)]
+use std::io::Write;
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
     env, fs,
-    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -132,7 +134,9 @@ pub fn resolve_backend_dir() -> Result<PathBuf> {
 
     for candidate in candidates {
         let candidate = child_process_compatible_path(candidate)?;
-        if candidate.join(SETTINGS_FILE).is_file() || candidate.join(SETTINGS_EXAMPLE_FILE).is_file() {
+        if candidate.join(SETTINGS_FILE).is_file()
+            || candidate.join(SETTINGS_EXAMPLE_FILE).is_file()
+        {
             return Ok(candidate);
         }
     }
@@ -159,10 +163,17 @@ fn ensure_from_example(target: &Path, example: &Path) -> Result<()> {
         return Ok(());
     }
     if !example.is_file() {
-        bail!("runtime file missing and example not found: {}", example.display());
+        bail!(
+            "runtime file missing and example not found: {}",
+            example.display()
+        );
     }
     fs::copy(example, target).with_context(|| {
-        format!("failed to initialize {} from {}", target.display(), example.display())
+        format!(
+            "failed to initialize {} from {}",
+            target.display(),
+            example.display()
+        )
     })?;
     Ok(())
 }
@@ -176,8 +187,8 @@ pub fn channels_path(backend_dir: &Path) -> PathBuf {
 }
 
 pub fn read_safe_settings(path: &Path) -> Result<BTreeMap<String, String>> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let safe: HashSet<&str> = SAFE_SETTING_KEYS.iter().copied().collect();
     let mut result = BTreeMap::new();
     for raw in content.lines() {
@@ -196,10 +207,11 @@ pub fn read_safe_settings(path: &Path) -> Result<BTreeMap<String, String>> {
     Ok(result)
 }
 
+#[cfg(test)]
 pub fn update_settings(path: &Path, updates: &BTreeMap<String, String>) -> Result<()> {
     validate_setting_updates(updates)?;
-    let original = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let original =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let newline = preferred_newline(&original);
     let normalized = normalize_line_endings(&original);
     let mut seen = HashSet::new();
@@ -232,6 +244,7 @@ pub fn update_settings(path: &Path, updates: &BTreeMap<String, String>) -> Resul
     write_atomic(path, content.as_bytes())
 }
 
+#[cfg(test)]
 fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()> {
     let allowed: HashSet<&str> = SAFE_SETTING_KEYS.iter().copied().collect();
     for (key, value) in updates {
@@ -262,6 +275,7 @@ fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_int(value: &str, min: u64, max: u64, key: &str) -> Result<()> {
     let parsed: u64 = value
         .parse()
@@ -272,6 +286,7 @@ fn validate_int(value: &str, min: u64, max: u64, key: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_yes_no(value: &str, key: &str) -> Result<()> {
     if !matches!(value.to_ascii_uppercase().as_str(), "Y" | "N") {
         bail!("{key} must be Y or N");
@@ -280,8 +295,8 @@ fn validate_yes_no(value: &str, key: &str) -> Result<()> {
 }
 
 pub fn read_channels(path: &Path) -> Result<Vec<Channel>> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let normalized = normalize_line_endings(&content);
     let mut channels = Vec::new();
 
@@ -304,6 +319,7 @@ pub fn read_channels(path: &Path) -> Result<Vec<Channel>> {
     Ok(channels)
 }
 
+#[cfg(test)]
 pub fn write_channels(path: &Path, channels: &[Channel]) -> Result<()> {
     let mut lines = vec!["# ENABLED|NAME|ACCOUNT|OUTDIR".to_string()];
     let mut accounts = HashSet::new();
@@ -326,6 +342,7 @@ pub fn write_channels(path: &Path, channels: &[Channel]) -> Result<()> {
     write_atomic(path, content.as_bytes())
 }
 
+#[cfg(test)]
 fn validate_channel(channel: &Channel) -> Result<()> {
     validate_single_line(&channel.name, 200, "channel name")?;
     validate_single_line(&channel.account, 200, "channel account")?;
@@ -348,6 +365,7 @@ fn validate_channel(channel: &Channel) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_single_line(value: &str, max_len: usize, label: &str) -> Result<()> {
     if value.len() > max_len {
         bail!("{label} is too long");
@@ -362,6 +380,7 @@ fn normalize_line_endings(content: &str) -> String {
     content.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+#[cfg(test)]
 fn preferred_newline(content: &str) -> &'static str {
     if content.contains("\r\n") {
         "\r\n"
@@ -372,6 +391,7 @@ fn preferred_newline(content: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn backup_existing(path: &Path) -> Result<()> {
     if !path.is_file() {
         return Ok(());
@@ -380,11 +400,16 @@ fn backup_existing(path: &Path) -> Result<()> {
     backup_name.push(".bak");
     let backup = PathBuf::from(backup_name);
     fs::copy(path, &backup).with_context(|| {
-        format!("failed to create backup {} from {}", backup.display(), path.display())
+        format!(
+            "failed to create backup {} from {}",
+            backup.display(),
+            path.display()
+        )
     })?;
     Ok(())
 }
 
+#[cfg(test)]
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = AtomicWriteFile::options()
         .open(path)
@@ -472,8 +497,18 @@ mod tests {
         );
 
         let dup = vec![
-            Channel { enabled: true, name: "A".into(), account: "same".into(), outdir: "".into() },
-            Channel { enabled: true, name: "B".into(), account: "SAME".into(), outdir: "".into() },
+            Channel {
+                enabled: true,
+                name: "A".into(),
+                account: "same".into(),
+                outdir: "".into(),
+            },
+            Channel {
+                enabled: true,
+                name: "B".into(),
+                account: "SAME".into(),
+                outdir: "".into(),
+            },
         ];
         assert!(write_channels(&path, &dup).is_err());
     }

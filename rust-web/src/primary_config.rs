@@ -2,7 +2,7 @@ use crate::{
     backend::{HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS},
     model::Channel,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, HashSet};
 
 pub const VOD_TOOL_KEYS: &[&str] = &["YT_DLP_PATH", "FFMPEG_PATH"];
@@ -31,7 +31,9 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
             | "GUI_NOTIFY_RECORD_FINISH"
             | "GUI_NOTIFY_WARNING"
             | "LOG_ENABLED" => validate_yes_no(value, key)?,
-            "CLOUDFLARE_WORKER_URL" if !value.trim().is_empty() && !value.starts_with("https://") => {
+            "CLOUDFLARE_WORKER_URL"
+                if !value.trim().is_empty() && !value.starts_with("https://") =>
+            {
                 bail!("CLOUDFLARE_WORKER_URL must be https://");
             }
             _ => {}
@@ -86,18 +88,6 @@ pub fn validate_vod_tool_updates(updates: &BTreeMap<String, String>) -> Result<(
         validate_single_line(value, 2048, &format!("VOD tool path {key}"))?;
     }
     Ok(())
-}
-
-pub fn vod_tool_values(values: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    VOD_TOOL_KEYS
-        .iter()
-        .map(|key| {
-            (
-                (*key).to_string(),
-                values.get(*key).cloned().unwrap_or_default(),
-            )
-        })
-        .collect()
 }
 
 pub fn apply_vod_tool_defaults(
@@ -157,8 +147,18 @@ mod tests {
     #[test]
     fn rejects_duplicate_channel_accounts_case_insensitively() {
         let channels = vec![
-            Channel { enabled: true, name: "A".into(), account: "User".into(), outdir: String::new() },
-            Channel { enabled: true, name: "B".into(), account: "user".into(), outdir: String::new() },
+            Channel {
+                enabled: true,
+                name: "A".into(),
+                account: "User".into(),
+                outdir: String::new(),
+            },
+            Channel {
+                enabled: true,
+                name: "B".into(),
+                account: "user".into(),
+                outdir: String::new(),
+            },
         ];
         assert!(validate_channels(&channels).is_err());
     }
