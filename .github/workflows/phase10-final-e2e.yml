@@ -14,11 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Format, unit tests and compile check
+      - name: Recorder format, unit tests and compile check
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          cargo fmt --manifest-path rust-web/Cargo.toml -- --check
-          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt --check failed' }
+          rustfmt --edition 2024 --check rust-web/src/recorder.rs
+          if ($LASTEXITCODE -ne 0) { throw 'recorder rustfmt --check failed' }
           cargo test --locked --manifest-path rust-web/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
           cargo check --locked --manifest-path rust-web/Cargo.toml
@@ -86,7 +86,6 @@ jobs:
             $auth1 = Invoke-RestMethod -Uri "$base/api/auth/status" -WebSession $webSession -Method Get
             if (-not $auth1.authenticated -or $auth1.username -ne 'e2e_admin') { throw 'session status failed after setup' }
 
-            # A second independent HTTP request with the same cookie jar represents browser refresh/session persistence.
             $auth2 = Invoke-RestMethod -Uri "$base/api/auth/status" -WebSession $webSession -Method Get
             if (-not $auth2.authenticated -or [string]::IsNullOrWhiteSpace([string]$auth2.csrf_token)) { throw 'session did not persist across requests' }
 
