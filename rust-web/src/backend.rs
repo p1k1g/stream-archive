@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 
 const SETTINGS_FILE: &str = "SOOP_LIVE_SETTING.ini";
 const SETTINGS_EXAMPLE_FILE: &str = "SOOP_LIVE_SETTING.example.ini";
@@ -53,12 +53,15 @@ const LOG_CAPACITY: usize = 400;
 #[derive(Clone)]
 pub struct LogBuffer {
     inner: Arc<RwLock<VecDeque<String>>>,
+    events: broadcast::Sender<()>,
 }
 
 impl LogBuffer {
     pub fn new() -> Self {
+        let (events, _) = broadcast::channel(128);
         Self {
             inner: Arc::new(RwLock::new(VecDeque::with_capacity(LOG_CAPACITY))),
+            events,
         }
     }
 
@@ -68,6 +71,12 @@ impl LogBuffer {
         while logs.len() > LOG_CAPACITY {
             logs.pop_front();
         }
+        drop(logs);
+        let _ = self.events.send(());
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<()> {
+        self.events.subscribe()
     }
 
     pub async fn tail(&self, max_lines: usize) -> Vec<String> {
