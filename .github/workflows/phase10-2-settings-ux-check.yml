@@ -17,15 +17,9 @@ jobs:
         with:
           ref: phase10.2-settings-korean-ux
           fetch-depth: 0
-      - name: Apply Phase 10.2 patch
+      - name: Apply Phase 10.2 patch and web sanity
         shell: cmd
         run: python .github\phase10_2_settings_ux_patch.py
-      - name: Static web sanity
-        shell: cmd
-        run: |
-          findstr /C:"방송 확인 주기" rust-web\web\phase8.js >nul || exit /b 1
-          findstr /C:"data-settings-tab=\"advanced\"" rust-web\web\index.html >nul || exit /b 1
-          findstr /C:"data-app-tab=\"diagnostics\"" rust-web\web\index.html >nul && exit /b 1 || exit /b 0
       - name: Rust format
         shell: cmd
         run: cargo fmt --manifest-path rust-web\Cargo.toml
