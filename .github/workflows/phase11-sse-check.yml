@@ -20,6 +20,9 @@ jobs:
       - name: Apply Phase 11 patch
         shell: cmd
         run: python .github\phase11_sse_patch.py
+      - name: Refresh Cargo lockfile
+        shell: cmd
+        run: cargo check --manifest-path rust-web\Cargo.toml
       - name: Rust format
         shell: cmd
         run: cargo fmt --manifest-path rust-web\Cargo.toml
