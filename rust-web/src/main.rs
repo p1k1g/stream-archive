@@ -1,5 +1,6 @@
 mod auth;
 mod backend;
+mod backup;
 mod model;
 mod native_watcher;
 mod phase8;
@@ -30,6 +31,7 @@ use axum::{
 use backend::{
     HIDDEN_SETTING_KEYS, LogBuffer, SAFE_SETTING_KEYS, ensure_runtime_files, resolve_backend_dir,
 };
+use backup::BackupManager;
 use model::{
     Channel, ChannelLookupResponse, LogsResponse, NativeWatcherStatus as WatcherStatus,
     SettingsResponse, StatusResponse, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus,
@@ -67,6 +69,7 @@ struct AppState {
     bind: String,
     token: Arc<String>,
     auth: Arc<AuthManager>,
+    backups: BackupManager,
     watcher: Arc<NativeWatcherManager>,
     vod: Arc<VodManager>,
     store: Store,
@@ -88,6 +91,7 @@ async fn main() -> Result<()> {
     let bind = env::var("SOOP_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let (token, token_source) = load_or_create_token(&backend_dir)?;
     let auth = Arc::new(AuthManager::open(store.path().to_path_buf())?);
+    let backups = BackupManager::open(store.clone(), &backend_dir)?;
     let logs = LogBuffer::new();
     let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
     let vod = Arc::new(VodManager::new(backend_dir.clone(), logs.clone()));
@@ -96,6 +100,7 @@ async fn main() -> Result<()> {
         bind: bind.clone(),
         token: Arc::new(token.clone()),
         auth: auth.clone(),
+        backups: backups.clone(),
         watcher: watcher.clone(),
         vod: vod.clone(),
         store: store.clone(),
@@ -104,7 +109,7 @@ async fn main() -> Result<()> {
     };
 
     logs.push(format!(
-        "[SERVER] Phase 11 realtime SSE ready; backend={} db={}",
+        "[SERVER] Phase 12 backup/retention ready; backend={} db={}",
         backend_dir.display(),
         store.path().display()
     ))
@@ -132,6 +137,7 @@ async fn main() -> Result<()> {
 
     // Phase 11 keeps REST compatibility and adds one authenticated SSE stream for realtime UI updates.
     spawn_vod_history_sync(store.clone(), vod.clone(), logs.clone());
+    backup::spawn_auto_backup(backups.clone(), logs.clone());
 
     let app = Router::new()
         .route("/", get(index))
@@ -139,6 +145,7 @@ async fn main() -> Result<()> {
         .route("/phase8.js", get(phase8_js))
         .route("/phase9_1.js", get(phase9_1_js))
         .route("/phase10.js", get(phase10_js))
+        .route("/phase12.js", get(phase12_js))
         .route("/style.css", get(style_css))
         .route("/api/auth/status", get(auth::api_status))
         .route("/api/auth/setup", post(auth::api_setup))
@@ -153,6 +160,14 @@ async fn main() -> Result<()> {
         .route("/api/history", get(phase8::api_history))
         .route("/api/storage", get(phase8::api_storage))
         .route("/api/storage/check", post(phase8::api_storage_check))
+        .route(
+            "/api/backups",
+            get(backup::api_list).post(backup::api_create),
+        )
+        .route(
+            "/api/backups/{file_name}/restore",
+            post(backup::api_restore),
+        )
         .route("/api/local-picker", post(phase9_1::api_local_picker))
         .route("/api/settings", get(api_settings).put(api_update_settings))
         .route("/api/secrets", get(api_secrets).put(api_update_secrets))
@@ -179,7 +194,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("failed to bind {bind}"))?;
     println!();
-    println!("SOOP Rust Web - Phase 11");
+    println!("SOOP Rust Web - Phase 12");
     println!("Backend : {}", backend_dir.display());
     println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
@@ -195,6 +210,8 @@ async fn main() -> Result<()> {
     println!("Auth    : Browser ID/password session + Bearer recovery token");
     println!("Session : HttpOnly/SameSite cookie + CSRF; Secure cookie through HTTPS proxy");
     println!("Realtime: SSE snapshot stream + automatic REST polling fallback");
+    println!("Backup  : SQLite online backup + retention + guarded restore");
+    println!("BackupDir: {}", backups.backup_dir().display());
     println!("Remote  : Keep 127.0.0.1:8787 and expose Caddy on 80/443");
     println!();
     println!("The server is NOT registered as an OS service.");
@@ -384,6 +401,12 @@ async fn phase10_js() -> impl IntoResponse {
         include_str!("../web/phase10.js"),
     )
 }
+async fn phase12_js() -> impl IntoResponse {
+    (
+        [(CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        include_str!("../web/phase12.js"),
+    )
+}
 async fn style_css() -> impl IntoResponse {
     (
         [(CONTENT_TYPE, "text/css; charset=utf-8")],
@@ -428,7 +451,7 @@ async fn api_status(
         watcher,
         backend_dir: state.backend_dir.display().to_string(),
         bind: state.bind.clone(),
-        phase: "phase11-realtime-sse",
+        phase: "phase12-backup-retention",
     }))
 }
 async fn api_diagnostics(
@@ -462,7 +485,7 @@ async fn api_diagnostics(
         "ffmpeg.exe",
     );
     Ok(Json(json!({
-        "phase": "phase11-realtime-sse",
+        "phase": "phase12-backup-retention",
         "bind": state.bind,
         "loopback_only": loopback_only,
         "database": state.store.path().display().to_string(),

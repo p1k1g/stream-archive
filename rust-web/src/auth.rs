@@ -313,6 +313,11 @@ impl AuthManager {
         Ok(())
     }
 
+    pub(crate) fn invalidate_all_sessions(&self) -> Result<usize> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM auth_sessions", [])?)
+    }
+
     pub(crate) fn authorize_session(&self, headers: &HeaderMap) -> ApiResult<()> {
         let session = self
             .session_from_headers(headers)

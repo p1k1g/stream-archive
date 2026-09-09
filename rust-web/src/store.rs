@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, backup::Backup, params};
 use std::{
     collections::{BTreeMap, HashSet},
     env, fs,
@@ -139,6 +139,41 @@ impl Store {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn backup_to(&self, destination: &Path) -> Result<()> {
+        if destination.exists() {
+            anyhow::bail!(
+                "backup destination already exists: {}",
+                destination.display()
+            );
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let source = self.conn()?;
+        let mut target = Connection::open(destination)
+            .with_context(|| format!("failed to create backup {}", destination.display()))?;
+        let backup = Backup::new(&*source, &mut target)?;
+        backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
+        drop(backup);
+        target.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    pub fn restore_from(&self, source_path: &Path) -> Result<()> {
+        let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open backup {}", source_path.display()))?;
+        let check: String = source.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        if !check.eq_ignore_ascii_case("ok") {
+            anyhow::bail!("backup SQLite quick_check failed: {check}");
+        }
+        let mut target = self.conn()?;
+        let backup = Backup::new(&source, &mut *target)?;
+        backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
+        drop(backup);
+        target.execute_batch("PRAGMA foreign_keys=ON; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
     }
 
     fn conn(&self) -> Result<MutexGuard<'_, Connection>> {

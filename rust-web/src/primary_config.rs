@@ -24,13 +24,17 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
             "CONSOLE_REFRESH_INTERVAL" => validate_int(value, 1, 3_600, key)?,
             "MIN_FREE_SPACE_GB" => validate_number(value, 0.0, 1_000_000.0, key)?,
             "LOG_RETENTION_DAYS" => validate_int(value, 0, 36_500, key)?,
+            "BACKUP_INTERVAL_HOURS" => validate_int(value, 1, 8_760, key)?,
+            "BACKUP_KEEP_COUNT" => validate_int(value, 0, 1_000, key)?,
+            "BACKUP_RETENTION_DAYS" => validate_int(value, 0, 36_500, key)?,
             "CONSOLE_AUTO_FORMAT"
             | "CONSOLE_COLOR"
             | "CONSOLE_SHOW_PATH"
             | "GUI_NOTIFY_RECORD_START"
             | "GUI_NOTIFY_RECORD_FINISH"
             | "GUI_NOTIFY_WARNING"
-            | "LOG_ENABLED" => validate_yes_no(value, key)?,
+            | "LOG_ENABLED"
+            | "BACKUP_ENABLED" => validate_yes_no(value, key)?,
             "CLOUDFLARE_WORKER_URL"
                 if !value.trim().is_empty() && !value.starts_with("https://") =>
             {

@@ -46,6 +46,10 @@ pub const SAFE_SETTING_KEYS: &[&str] = &[
     "LOG_ENABLED",
     "LOG_DIR",
     "LOG_RETENTION_DAYS",
+    "BACKUP_ENABLED",
+    "BACKUP_INTERVAL_HOURS",
+    "BACKUP_KEEP_COUNT",
+    "BACKUP_RETENTION_DAYS",
 ];
 
 const LOG_CAPACITY: usize = 400;

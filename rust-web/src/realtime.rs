@@ -52,12 +52,12 @@ async fn snapshot_event(state: &AppState) -> Event {
     let vod = state.vod.status().await;
     let logs = state.logs.tail(LOG_LINES).await;
     let payload = json!({
-        "phase": "phase11-realtime-sse",
+        "phase": "phase12-backup-retention",
         "status": {
             "watcher": watcher,
             "backend_dir": state.backend_dir.display().to_string(),
             "bind": state.bind,
-            "phase": "phase11-realtime-sse"
+            "phase": "phase12-backup-retention"
         },
         "vod": vod,
         "logs": {"lines": logs},
