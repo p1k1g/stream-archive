@@ -16,10 +16,10 @@ jobs:
       - name: JavaScript syntax checks
         shell: cmd
         run: |
-          node --check rust-web\web\app.js
-          node --check rust-web\web\phase8.js
-          node --check rust-web\web\phase10.js
-          node --check rust-web\web\phase12.js
+          "C:\github-runner\externals\node24\bin\node.exe" --check rust-web\web\app.js
+          "C:\github-runner\externals\node24\bin\node.exe" --check rust-web\web\phase8.js
+          "C:\github-runner\externals\node24\bin\node.exe" --check rust-web\web\phase10.js
+          "C:\github-runner\externals\node24\bin\node.exe" --check rust-web\web\phase12.js
       - name: Rust format check
         shell: cmd
         run: cargo fmt --manifest-path rust-web\Cargo.toml -- --check
