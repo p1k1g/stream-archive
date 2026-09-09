@@ -5,6 +5,7 @@ mod native_watcher;
 mod phase8;
 mod phase9_1;
 mod primary_config;
+mod realtime;
 mod recorder;
 mod security;
 mod store;
@@ -103,7 +104,7 @@ async fn main() -> Result<()> {
     };
 
     logs.push(format!(
-        "[SERVER] Phase 10 session auth ready; backend={} db={}",
+        "[SERVER] Phase 11 realtime SSE ready; backend={} db={}",
         backend_dir.display(),
         store.path().display()
     ))
@@ -129,7 +130,7 @@ async fn main() -> Result<()> {
             .await;
     }
 
-    // Phase 10 keeps the SQLite-direct runtime/native picker and adds browser ID/password sessions.
+    // Phase 11 keeps REST compatibility and adds one authenticated SSE stream for realtime UI updates.
     spawn_vod_history_sync(store.clone(), vod.clone(), logs.clone());
 
     let app = Router::new()
@@ -146,6 +147,7 @@ async fn main() -> Result<()> {
         .route("/api/auth/logout-all", post(auth::api_logout_all))
         .route("/api/auth/change-password", post(auth::api_change_password))
         .route("/api/status", get(api_status))
+        .route("/api/events", get(realtime::api_events))
         .route("/api/diagnostics", get(api_diagnostics))
         .route("/api/logs", get(api_logs))
         .route("/api/history", get(phase8::api_history))
@@ -177,7 +179,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("failed to bind {bind}"))?;
     println!();
-    println!("SOOP Rust Web - Phase 10");
+    println!("SOOP Rust Web - Phase 11");
     println!("Backend : {}", backend_dir.display());
     println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
@@ -192,6 +194,7 @@ async fn main() -> Result<()> {
     println!("Picker  : Native Windows file/folder dialog (direct loopback only)");
     println!("Auth    : Browser ID/password session + Bearer recovery token");
     println!("Session : HttpOnly/SameSite cookie + CSRF; Secure cookie through HTTPS proxy");
+    println!("Realtime: SSE snapshot stream + automatic REST polling fallback");
     println!("Remote  : Keep 127.0.0.1:8787 and expose Caddy on 80/443");
     println!();
     println!("The server is NOT registered as an OS service.");
@@ -425,7 +428,7 @@ async fn api_status(
         watcher,
         backend_dir: state.backend_dir.display().to_string(),
         bind: state.bind.clone(),
-        phase: "phase10-session-auth",
+        phase: "phase11-realtime-sse",
     }))
 }
 async fn api_diagnostics(
@@ -459,7 +462,7 @@ async fn api_diagnostics(
         "ffmpeg.exe",
     );
     Ok(Json(json!({
-        "phase": "phase10-session-auth",
+        "phase": "phase11-realtime-sse",
         "bind": state.bind,
         "loopback_only": loopback_only,
         "database": state.store.path().display().to_string(),
