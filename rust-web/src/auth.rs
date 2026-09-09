@@ -270,6 +270,42 @@ impl AuthManager {
         }))
     }
 
+    pub(crate) fn local_bypass_allowed(&self, headers: &HeaderMap, bind: &str) -> Result<bool> {
+        if !self.configured()? {
+            return Ok(false);
+        }
+        let loopback_bind = bind.starts_with("127.0.0.1:")
+            || bind.starts_with("[::1]:")
+            || bind.starts_with("localhost:");
+        if !loopback_bind {
+            return Ok(false);
+        }
+        if [
+            "forwarded",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-real-ip",
+        ]
+        .iter()
+        .any(|name| headers.contains_key(*name))
+        {
+            return Ok(false);
+        }
+        let host = headers
+            .get("host")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        Ok(host == "localhost"
+            || host.starts_with("localhost:")
+            || host == "127.0.0.1"
+            || host.starts_with("127.0.0.1:")
+            || host == "[::1]"
+            || host.starts_with("[::1]:"))
+    }
+
     pub(crate) fn authorize_session(&self, headers: &HeaderMap) -> ApiResult<()> {
         let session = self
             .session_from_headers(headers)
@@ -360,6 +396,22 @@ pub(crate) async fn api_status(
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let configured = state.auth.configured().map_err(internal)?;
+    if configured
+        && state
+            .auth
+            .local_bypass_allowed(&headers, &state.bind)
+            .map_err(internal)?
+    {
+        return Ok(Json(json!({
+            "configured": true,
+            "authenticated": true,
+            "username": "local",
+            "csrf_token": "local-direct",
+            "expires_at": Value::Null,
+            "session_hours": state.auth.session_hours,
+            "local_bypass": true
+        })));
+    }
     let session = state
         .auth
         .session_from_headers(&headers)
@@ -371,7 +423,8 @@ pub(crate) async fn api_status(
             "username": session.username,
             "csrf_token": session.csrf_token,
             "expires_at": session.expires_at,
-            "session_hours": state.auth.session_hours
+            "session_hours": state.auth.session_hours,
+            "local_bypass": false
         }),
         None => json!({
             "configured": configured,
@@ -379,7 +432,8 @@ pub(crate) async fn api_status(
             "username": Value::Null,
             "csrf_token": Value::Null,
             "expires_at": Value::Null,
-            "session_hours": state.auth.session_hours
+            "session_hours": state.auth.session_hours,
+            "local_bypass": false
         }),
     }))
 }
@@ -646,8 +700,8 @@ fn validate_username(value: &str) -> Result<()> {
 }
 
 fn validate_password(value: &str) -> Result<()> {
-    if !(12..=128).contains(&value.len()) {
-        bail!("password must be 12 to 128 characters");
+    if !(4..=128).contains(&value.len()) {
+        bail!("password must be 4 to 128 characters");
     }
     if value.contains('\0') || value.contains('\r') || value.contains('\n') {
         bail!("password must be a single line");
@@ -890,6 +944,12 @@ mod tests {
         assert!(validate_username("admin_01").is_ok());
         assert!(validate_username("ab").is_err());
         assert!(validate_username("admin name").is_err());
+    }
+
+    #[test]
+    fn password_validation_accepts_four_characters() {
+        assert!(validate_password("1234").is_ok());
+        assert!(validate_password("123").is_err());
     }
 
     #[test]

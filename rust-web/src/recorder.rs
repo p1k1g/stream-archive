@@ -108,7 +108,9 @@ impl RecorderManager {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .kill_on_drop(false);
+            // If the watcher task panics or is otherwise dropped unexpectedly, do not leave
+            // an unmanaged Streamlink process recording after the UI reports STOPPED.
+            .kill_on_drop(true);
         if let Some(parent) = config.streamlink.parent() {
             if parent.is_dir() {
                 command.current_dir(parent);
