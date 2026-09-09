@@ -42,8 +42,8 @@ function injectStyle(){
   .p10-card{width:min(430px,100%);background:#131920;border:1px solid #35404d;border-radius:14px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.45)}
   .p10-card h2{margin:0 0 8px}.p10-card p{color:#9da9b7}.p10-card label{display:flex;flex-direction:column;gap:6px;margin:12px 0;color:#b8c3cf;font-size:13px}
   .p10-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}.p10-error{min-height:20px;color:#ff8f9b;margin-top:8px;font-size:13px}
-  .p10-authbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.p10-user{color:#9fe3b0;font-size:13px}.p10-authbar button{padding:7px 10px;font-size:12px}
-  @media(max-width:700px){header{gap:12px;flex-wrap:wrap}.p10-authbar{width:100%;justify-content:flex-start}}
+  .p10-authbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}.p10-user{color:#9fe3b0;font-size:13px}.p10-authbar button{padding:7px 10px;font-size:12px}#tokenBtn{flex:0 0 auto}
+  @media(max-width:700px){header{gap:12px;flex-wrap:wrap}.p10-authbar{width:100%;justify-content:flex-start;margin-left:0;order:2}#tokenBtn{order:3;margin-left:auto}}
   `;
   document.head.appendChild(style);
 }
@@ -117,7 +117,7 @@ function showPasswordChange(){
 }
 function renderAuthBar(){
   if(!document.body)return;injectStyle();const header=document.querySelector('header');if(!header)return;
-  if(!authBar){authBar=document.createElement('div');authBar.className='p10-authbar';header.appendChild(authBar)}
+  if(!authBar){authBar=document.createElement('div');authBar.className='p10-authbar';const tokenButton=document.getElementById('tokenBtn');if(tokenButton&&tokenButton.parentElement===header)header.insertBefore(authBar,tokenButton);else header.appendChild(authBar)}
   authBar.replaceChildren();
   if(isRecoveryMode()){
     const label=document.createElement('span');label.className='p10-user';label.textContent='복구 토큰 모드';const back=document.createElement('button');back.type='button';back.textContent='ID/PW 사용';back.onclick=()=>{setSessionMode();location.reload()};authBar.append(label,back);return;
