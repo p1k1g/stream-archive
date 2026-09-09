@@ -306,6 +306,13 @@ impl AuthManager {
             || host.starts_with("[::1]:"))
     }
 
+    pub(crate) fn authorize_session_readonly(&self, headers: &HeaderMap) -> ApiResult<()> {
+        self.session_from_headers(headers)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
+            .ok_or((StatusCode::UNAUTHORIZED, "login required".to_string()))?;
+        Ok(())
+    }
+
     pub(crate) fn authorize_session(&self, headers: &HeaderMap) -> ApiResult<()> {
         let session = self
             .session_from_headers(headers)
@@ -979,5 +986,49 @@ mod tests {
         assert!(encoded.starts_with("pbkdf2-sha256$v1$"));
         assert!(verify_password("phase10-test-password", &encoded).unwrap());
         assert!(!verify_password("wrong-password-value", &encoded).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn readonly_session_auth_skips_csrf_and_observes_revocation() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = AuthManager::open(dir.path().join("auth.db")).unwrap();
+        let now = Utc::now().to_rfc3339();
+        let conn = auth.conn().unwrap();
+        conn.execute(
+            "INSERT INTO auth_users(username,password_hash,created_at,password_changed_at) VALUES(?1,?2,?3,?3)",
+            params!["admin", "unused-test-hash", now],
+        )
+        .unwrap();
+        let user_id = conn.last_insert_rowid();
+        drop(conn);
+
+        let request_headers = HeaderMap::new();
+        let (session, cookie) = auth
+            .create_session(user_id, "admin", &request_headers)
+            .unwrap();
+        let cookie_pair = cookie.split(';').next().unwrap();
+        let mut stream_headers = HeaderMap::new();
+        stream_headers.insert(COOKIE, HeaderValue::from_str(cookie_pair).unwrap());
+
+        assert!(auth.authorize_session_readonly(&stream_headers).is_ok());
+        assert_eq!(
+            auth.authorize_session(&stream_headers).unwrap_err().0,
+            StatusCode::FORBIDDEN
+        );
+
+        let conn = auth.conn().unwrap();
+        conn.execute(
+            "DELETE FROM auth_sessions WHERE session_id=?1",
+            params![session.session_id],
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(
+            auth.authorize_session_readonly(&stream_headers)
+                .unwrap_err()
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
     }
 }

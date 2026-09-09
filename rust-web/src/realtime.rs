@@ -18,19 +18,29 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
+const SESSION_REVALIDATE_INTERVAL: Duration = Duration::from_secs(5);
 const LOG_LINES: usize = 160;
 
-fn authorize_stream(headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamAuth {
+    LocalBypass,
+    Session,
+}
+
+fn authorize_stream(headers: &HeaderMap, state: &AppState) -> ApiResult<StreamAuth> {
     if state
         .auth
         .local_bypass_allowed(headers, &state.bind)
         .map_err(internal_error)?
     {
-        return Ok(());
+        return Ok(StreamAuth::LocalBypass);
     }
-    // Native EventSource cannot attach the recovery Bearer header. Session-cookie
-    // clients use SSE; recovery-token mode intentionally remains on REST polling.
-    state.auth.authorize_session(headers)
+    // SSE is a read-only GET. Native EventSource cannot attach X-CSRF-Token,
+    // so validate the HttpOnly session cookie without weakening CSRF checks on
+    // any mutating API. Recovery Bearer mode remains on REST polling because
+    // native EventSource also cannot attach Authorization.
+    state.auth.authorize_session_readonly(headers)?;
+    Ok(StreamAuth::Session)
 }
 
 async fn snapshot_event(state: &AppState) -> Event {
@@ -59,16 +69,30 @@ pub(crate) async fn api_events(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    authorize_stream(&headers, &state)?;
+    let auth_mode = authorize_stream(&headers, &state)?;
+    let session_headers = (auth_mode == StreamAuth::Session).then_some(headers.clone());
 
     let mut log_events = state.logs.subscribe();
     let (sender, receiver) = mpsc::channel::<Result<Event, Infallible>>(8);
     tokio::spawn(async move {
         let mut tick = interval(SNAPSHOT_INTERVAL);
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut revalidate = interval(SESSION_REVALIDATE_INTERVAL);
+        revalidate.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // The initial request was already authenticated above. Do not spend the
+        // first loop iteration re-reading SQLite solely because interval() ticks
+        // immediately on creation.
+        revalidate.tick().await;
         loop {
             tokio::select! {
                 _ = tick.tick() => {}
+                _ = revalidate.tick(), if session_headers.is_some() => {
+                    let Some(ref headers) = session_headers else { continue };
+                    if state.auth.authorize_session_readonly(headers).is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 event = log_events.recv() => match event {
                     Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -98,5 +122,10 @@ mod tests {
         logs.push("realtime-test").await;
         assert!(receiver.recv().await.is_ok());
         assert_eq!(logs.tail(1).await, vec!["realtime-test"]);
+    }
+
+    #[test]
+    fn session_revalidation_is_shorter_than_keep_alive_window() {
+        assert!(SESSION_REVALIDATE_INTERVAL < Duration::from_secs(15));
     }
 }
