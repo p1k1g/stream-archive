@@ -173,7 +173,9 @@ impl NativeWatcherManager {
                 return Ok(self.snapshot.read().await.clone());
             }
         }
-        runtime.task.take();
+        if let Some(task) = runtime.task.take() {
+            finish_watcher_task(task, &self.logs, &self.snapshot, "before restart").await;
+        }
         runtime.stop_tx = None;
         runtime.command_tx = None;
 
@@ -244,16 +246,15 @@ impl NativeWatcherManager {
     }
 
     pub async fn stop(&self) -> Result<WatcherStatus> {
-        let task = {
-            let mut runtime = self.runtime.lock().await;
-            if let Some(tx) = runtime.stop_tx.take() {
-                let _ = tx.send(());
-            }
-            runtime.command_tx = None;
-            runtime.task.take()
-        };
-        if let Some(task) = task {
-            let _ = task.await;
+        // Keep the runtime mutex for the entire shutdown. Otherwise a concurrent Start/status
+        // request can install or remove a newer watcher while the previous task is still exiting.
+        let mut runtime = self.runtime.lock().await;
+        if let Some(tx) = runtime.stop_tx.take() {
+            let _ = tx.send(());
+        }
+        runtime.command_tx = None;
+        if let Some(task) = runtime.task.take() {
+            finish_watcher_task(task, &self.logs, &self.snapshot, "stop").await;
         }
         self.snapshot.write().await.running = false;
         self.logs.push("[RUST] native watcher v4 stopped").await;
@@ -261,13 +262,13 @@ impl NativeWatcherManager {
     }
 
     pub async fn status(&self) -> Result<WatcherStatus> {
-        let finished = {
-            let runtime = self.runtime.lock().await;
-            runtime.task.as_ref().is_some_and(|task| task.is_finished())
-        };
-        if finished {
-            let mut runtime = self.runtime.lock().await;
-            runtime.task.take();
+        // Inspect and retire a finished task under one lock. The old two-lock sequence could
+        // observe an old finished task, then accidentally take a newly-started task.
+        let mut runtime = self.runtime.lock().await;
+        if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
+            if let Some(task) = runtime.task.take() {
+                finish_watcher_task(task, &self.logs, &self.snapshot, "status reap").await;
+            }
             runtime.stop_tx = None;
             runtime.command_tx = None;
             self.snapshot.write().await.running = false;
@@ -337,6 +338,32 @@ impl NativeWatcherManager {
             ))
             .await;
         self.channel_action(account, "recheck").await
+    }
+}
+
+async fn finish_watcher_task(
+    task: JoinHandle<()>,
+    logs: &LogBuffer,
+    snapshot: &Arc<RwLock<WatcherStatus>>,
+    context: &str,
+) {
+    if let Err(err) = task.await {
+        logs.push(format!(
+            "[RUST:ERR] watcher task terminated unexpectedly ({context}): {err}"
+        ))
+        .await;
+        let mut state = snapshot.write().await;
+        state.running = false;
+        state.recording_count = 0;
+        state.error_count = state.error_count.saturating_add(1);
+        for channel in &mut state.channels {
+            if channel.status == "RECORDING" {
+                channel.status = "ERROR".into();
+                channel.detail = Some(
+                    "watcher task terminated unexpectedly; recorder child was terminated".into(),
+                );
+            }
+        }
     }
 }
 
