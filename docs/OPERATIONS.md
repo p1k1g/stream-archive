@@ -73,3 +73,15 @@ After restore, launch the server and verify settings, channel list, LIVE history
 ## Incident notes
 
 The process-lifecycle invariant remains unchanged: the application may terminate only child-process trees it owns. Never use broad `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, or similar commands as operational cleanup.
+
+
+## Phase 12 backup / retention
+
+- Web UI: Settings -> Backup.
+- Default backup directory: sibling `soop-recorder-backups` next to the portable application folder, not inside `data`.
+- Override with `SOOP_BACKUP_DIR`.
+- Automatic defaults: enabled, every 24 hours, keep 10, remove backups older than 30 days.
+- SQLite backups use the online backup API and may be created while LIVE recording is active.
+- Restore requires Watcher and VOD to be stopped. A `pre_restore` safety backup is created first.
+- Restore invalidates all browser sessions so an old database cannot resurrect a previously valid session.
+- `BACKUP_DATA.bat` remains available for offline/manual maintenance and uses the same external backup location.

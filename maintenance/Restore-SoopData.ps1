@@ -59,7 +59,8 @@ $target = Join-Path $dataRoot 'soop.db'
 
 if (Test-Path -LiteralPath $target) {
     $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $safetyDir = Join-Path $dataRoot 'backups'
+    $appRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    $safetyDir = Join-Path (Split-Path $appRoot -Parent) 'soop-recorder-backups'
     New-Item -ItemType Directory -Force -Path $safetyDir | Out-Null
     $safety = Join-Path $safetyDir "pre_restore_$stamp.db"
     Copy-Item -LiteralPath $target -Destination $safety -Force

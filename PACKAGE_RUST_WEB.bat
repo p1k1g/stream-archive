@@ -100,5 +100,6 @@ if "%PRESERVE_RUNTIME%"=="1" echo Existing local data/history and management tok
 echo Default launch: RUN.bat ^> soop-launcher.exe ^> local server ^> default browser.
 echo Direct troubleshooting: RUN_SERVER_CONSOLE.bat
 echo Included: launcher, maintenance scripts, operations docs, Caddy template, release metadata, SHA256 checksums.
+echo Backups: default to a sibling soop-recorder-backups folder outside the replaceable portable package directory.
 echo External tools are not bundled. Configure Streamlink, yt-dlp and ffmpeg paths or install them in PATH.
 endlocal

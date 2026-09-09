@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, backup::Backup, params};
 use std::{
     collections::{BTreeMap, HashSet},
     env, fs,
@@ -139,6 +139,107 @@ impl Store {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn backup_to(&self, destination: &Path) -> Result<()> {
+        if destination.exists() {
+            anyhow::bail!(
+                "backup destination already exists: {}",
+                destination.display()
+            );
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let source = self.conn()?;
+        let mut target = Connection::open(destination)
+            .with_context(|| format!("failed to create backup {}", destination.display()))?;
+        let backup = Backup::new(&*source, &mut target)?;
+        backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
+        drop(backup);
+        target.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    pub fn restore_from(&self, source_path: &Path) -> Result<()> {
+        let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open backup {}", source_path.display()))?;
+        let check: String = source.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        if !check.eq_ignore_ascii_case("ok") {
+            anyhow::bail!("backup SQLite quick_check failed: {check}");
+        }
+        let mut target = self.conn()?;
+        let backup = Backup::new(&source, &mut *target)?;
+        backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
+        drop(backup);
+        target.execute_batch("PRAGMA foreign_keys=ON; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    pub fn ensure_schema(&self) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys=ON;
+
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                source TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS channels (
+                account TEXT PRIMARY KEY COLLATE NOCASE,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                outdir TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS live_recordings (
+                id TEXT PRIMARY KEY,
+                account TEXT NOT NULL,
+                channel_name TEXT NOT NULL,
+                bno TEXT,
+                title TEXT,
+                file_path TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                duration_seconds INTEGER NOT NULL DEFAULT 0,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                reason TEXT,
+                status TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_live_recordings_started
+                ON live_recordings(started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS vod_jobs (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                vod_url TEXT,
+                title TEXT,
+                streamer TEXT,
+                part_count INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL,
+                output_file TEXT,
+                message TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
+                ON vod_jobs(started_at DESC, updated_at DESC);
+            "#,
+        )?;
+        drop(conn);
+        self.recover_interrupted()?;
+        Ok(())
     }
 
     fn conn(&self) -> Result<MutexGuard<'_, Connection>> {

@@ -1,7 +1,8 @@
 param(
     [string]$DataDir = $env:SOOP_DATA_DIR,
     [string]$BackupDir = "",
-    [int]$Keep = 10
+    [int]$Keep = 10,
+    [int]$RetentionDays = 30
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,13 +45,14 @@ $dbPath = Join-Path $dataRoot 'soop.db'
 Assert-SqliteFile $dbPath
 
 if ([string]::IsNullOrWhiteSpace($BackupDir)) {
-    $BackupDir = Join-Path $dataRoot 'backups'
+    $appRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    $BackupDir = Join-Path (Split-Path $appRoot -Parent) 'soop-recorder-backups'
 }
 $backupRoot = [System.IO.Path]::GetFullPath($BackupDir)
 New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
 
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$backupPath = Join-Path $backupRoot "soop_$stamp.db"
+$backupPath = Join-Path $backupRoot "soop_manual_$stamp.db"
 Copy-Item -LiteralPath $dbPath -Destination $backupPath -Force
 Assert-SqliteFile $backupPath
 
@@ -61,11 +63,19 @@ $meta = [ordered]@{
     backup = $backupPath
     sha256 = $hash
     size_bytes = (Get-Item -LiteralPath $backupPath).Length
+    kind = 'manual'
+    version = 1
 }
 $meta | ConvertTo-Json | Set-Content -LiteralPath "$backupPath.json" -Encoding UTF8
 
+function Get-OwnedBackupFiles {
+    Get-ChildItem -LiteralPath $backupRoot -Filter 'soop_*.db' -File | Where-Object {
+        Test-Path -LiteralPath "$($_.FullName).json" -PathType Leaf
+    }
+}
+
 if ($Keep -gt 0) {
-    $old = Get-ChildItem -LiteralPath $backupRoot -Filter 'soop_*.db' -File |
+    $old = Get-OwnedBackupFiles |
         Sort-Object LastWriteTime -Descending |
         Select-Object -Skip $Keep
     foreach ($item in $old) {
@@ -74,6 +84,16 @@ if ($Keep -gt 0) {
         if (Test-Path -LiteralPath $metaPath) {
             Remove-Item -LiteralPath $metaPath -Force
         }
+    }
+}
+
+if ($RetentionDays -gt 0) {
+    $cutoff = (Get-Date).AddDays(-$RetentionDays)
+    $aged = Get-OwnedBackupFiles | Where-Object { $_.LastWriteTime -lt $cutoff }
+    foreach ($item in $aged) {
+        Remove-Item -LiteralPath $item.FullName -Force
+        $metaPath = "$($item.FullName).json"
+        if (Test-Path -LiteralPath $metaPath) { Remove-Item -LiteralPath $metaPath -Force }
     }
 }
 

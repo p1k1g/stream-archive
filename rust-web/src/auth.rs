@@ -137,6 +137,10 @@ impl AuthManager {
         Ok(())
     }
 
+    pub(crate) fn reinitialize(&self) -> Result<()> {
+        self.initialize()
+    }
+
     fn configured(&self) -> Result<bool> {
         let conn = self.conn()?;
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM auth_users", [], |row| row.get(0))?;
@@ -311,6 +315,11 @@ impl AuthManager {
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
             .ok_or((StatusCode::UNAUTHORIZED, "login required".to_string()))?;
         Ok(())
+    }
+
+    pub(crate) fn invalidate_all_sessions(&self) -> Result<usize> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM auth_sessions", [])?)
     }
 
     pub(crate) fn authorize_session(&self, headers: &HeaderMap) -> ApiResult<()> {
