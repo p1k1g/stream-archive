@@ -22,7 +22,7 @@ jobs:
         run: |
           python .github\phase11_sse_patch.py
           python .github\phase11_compile_fix.py
-      - name: Refresh Cargo lockfile
+      - name: Refresh Cargo lockfile and compile
         shell: cmd
         run: cargo check --manifest-path rust-web\Cargo.toml
       - name: Rust format
