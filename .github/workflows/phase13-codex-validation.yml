@@ -17,6 +17,9 @@ jobs:
         with:
           ref: phase13-vod-queue-alerts
           fetch-depth: 0
+      - name: Repair validation helper escaping
+        shell: cmd
+        run: python .github\fix_phase13_helper.py
       - name: Apply Codex fixes
         shell: cmd
         run: python .github\phase13_codex_fix.py
@@ -45,6 +48,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add rust-web\src\vod.rs rust-web\src\vod_queue.rs
-          git rm .github\phase13_codex_fix.py
+          git rm .github\phase13_codex_fix.py .github\fix_phase13_helper.py
           git commit -m "fix: address Phase 13 Codex queue races and limits"
           git push origin HEAD:phase13-vod-queue-alerts
