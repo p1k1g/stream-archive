@@ -16,6 +16,7 @@ use anyhow::{bail, Context, Result};
 use atomic_write_file::AtomicWriteFile;
 use auth::AuthManager;
 use axum::{
+    body::Bytes,
     extract::{Path as AxumPath, State},
     http::{header::{AUTHORIZATION, CONTENT_TYPE}, HeaderMap, StatusCode},
     response::{Html, IntoResponse},
@@ -353,8 +354,21 @@ async fn api_channel_resolve(State(state): State<AppState>, headers: HeaderMap, 
 }
 async fn api_watcher_start(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> { authorize(&headers,&state)?; Ok(Json(state.watcher.start().await.map_err(|e|(StatusCode::CONFLICT,e.to_string()))?)) }
 async fn api_watcher_stop(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<WatcherStatus>> { authorize(&headers,&state)?; Ok(Json(state.watcher.stop().await.map_err(internal_error)?)) }
-async fn api_channel_action(State(state): State<AppState>, headers: HeaderMap, AxumPath((account,action)): AxumPath<(String,String)>) -> ApiResult<StatusCode> {
-    authorize(&headers,&state)?; state.watcher.channel_action(account,&action).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?; Ok(StatusCode::NO_CONTENT)
+async fn api_channel_action(State(state): State<AppState>, headers: HeaderMap, AxumPath((account,action)): AxumPath<(String,String)>, body: Bytes) -> ApiResult<StatusCode> {
+    authorize(&headers,&state)?;
+    if action == "password" {
+        let password = std::str::from_utf8(&body).map_err(|_| (StatusCode::BAD_REQUEST, "stream password must be UTF-8".into()))?;
+        if password.trim().is_empty() {
+            return Err((StatusCode::BAD_REQUEST, "stream password is empty".into()));
+        }
+        if password.chars().count() > 128 {
+            return Err((StatusCode::BAD_REQUEST, "stream password is too long".into()));
+        }
+        state.watcher.channel_password(account, password.to_string()).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    } else {
+        state.watcher.channel_action(account,&action).await.map_err(|e|(StatusCode::BAD_REQUEST,e.to_string()))?;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 async fn api_vod_tool_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<BTreeMap<String,String>>> { authorize(&headers,&state)?; Ok(Json(state.store.vod_tool_settings().map_err(internal_error)?)) }
 async fn api_update_vod_tool_settings(State(state): State<AppState>, headers: HeaderMap, Json(updates): Json<BTreeMap<String,String>>) -> ApiResult<Json<BTreeMap<String,String>>> {
