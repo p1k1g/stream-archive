@@ -19,7 +19,9 @@ jobs:
           fetch-depth: 0
       - name: Apply Phase 11 patch
         shell: cmd
-        run: python .github\phase11_sse_patch.py
+        run: |
+          python .github\phase11_sse_patch.py
+          python .github\phase11_compile_fix.py
       - name: Refresh Cargo lockfile
         shell: cmd
         run: cargo check --manifest-path rust-web\Cargo.toml
@@ -48,6 +50,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add rust-web\Cargo.toml rust-web\Cargo.lock rust-web\src\backend.rs rust-web\src\realtime.rs rust-web\src\main.rs rust-web\web\app.js rust-web\web\index.html
-          git rm .github\phase11_sse_patch.py
+          git rm .github\phase11_sse_patch.py .github\phase11_compile_fix.py
           git commit -m "Phase 11: realtime SSE UI"
           git push origin HEAD:phase11-realtime-sse
