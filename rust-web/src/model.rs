@@ -133,7 +133,7 @@ pub struct VodAnalyzeRequest {
     pub max_retries: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VodDownloadRequest {
     pub vod_url: String,
     pub output_directory: String,
@@ -157,11 +157,21 @@ pub struct VodDownloadRequest {
     pub max_retries: u32,
 }
 
-fn default_cookie_mode() -> String { "SOOP_LOGIN".to_string() }
-fn default_browser() -> String { "firefox".to_string() }
-fn default_quality() -> String { "best".to_string() }
-fn default_max_retries() -> u32 { 5 }
-fn default_true() -> bool { true }
+fn default_cookie_mode() -> String {
+    "SOOP_LOGIN".to_string()
+}
+fn default_browser() -> String {
+    "firefox".to_string()
+}
+fn default_quality() -> String {
+    "best".to_string()
+}
+fn default_max_retries() -> u32 {
+    5
+}
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct VodQualityOption {
@@ -217,4 +227,31 @@ impl Default for VodJobStatus {
             analysis: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct VodQueueItem {
+    pub id: String,
+    pub vod_url: String,
+    pub output_directory: String,
+    pub state: String,
+    pub attempts: u32,
+    pub message: String,
+    pub title: String,
+    pub streamer: String,
+    pub current_part: usize,
+    pub part_count: usize,
+    pub percent: f64,
+    pub output_file: Option<String>,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct VodQueueSnapshot {
+    pub active_id: Option<String>,
+    pub queued_count: usize,
+    pub items: Vec<VodQueueItem>,
 }

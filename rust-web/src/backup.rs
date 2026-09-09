@@ -412,6 +412,17 @@ pub(crate) async fn api_restore(
             "VOD 작업을 중지한 뒤 복원하세요.".into(),
         ));
     }
+    if state
+        .vod_queue
+        .has_pending_or_active()
+        .await
+        .map_err(internal_error)?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "VOD 다운로드 큐를 비운 뒤 복원하세요.".into(),
+        ));
+    }
     let (selected, safety) = state
         .backups
         .restore(&file_name)

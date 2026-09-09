@@ -126,6 +126,26 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
                 ON vod_jobs(started_at DESC, updated_at DESC);
+
+
+            CREATE TABLE IF NOT EXISTS vod_queue (
+                id TEXT PRIMARY KEY,
+                request_json TEXT NOT NULL,
+                vod_url TEXT NOT NULL,
+                output_directory TEXT NOT NULL,
+                state TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                streamer TEXT NOT NULL DEFAULT '',
+                output_file TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
+                ON vod_queue(state, created_at);
             "#,
         )?;
 
@@ -235,6 +255,26 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
                 ON vod_jobs(started_at DESC, updated_at DESC);
+
+
+            CREATE TABLE IF NOT EXISTS vod_queue (
+                id TEXT PRIMARY KEY,
+                request_json TEXT NOT NULL,
+                vod_url TEXT NOT NULL,
+                output_directory TEXT NOT NULL,
+                state TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                streamer TEXT NOT NULL DEFAULT '',
+                output_file TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
+                ON vod_queue(state, created_at);
             "#,
         )?;
         drop(conn);
@@ -257,6 +297,10 @@ impl Store {
         )?;
         conn.execute(
             "UPDATE vod_jobs SET state='INTERRUPTED', finished_at=COALESCE(finished_at, ?1), updated_at=?1 WHERE state IN ('STARTING','ANALYZING','DOWNLOADING','REFRESHING','MERGING','CANCELLING')",
+            params![now],
+        )?;
+        conn.execute(
+            "UPDATE vod_queue SET state='INTERRUPTED', message='서버 재시작으로 중단됨 · 재시도 가능', finished_at=COALESCE(finished_at, ?1), updated_at=?1 WHERE state IN ('STARTING','RUNNING','CANCELLING')",
             params![now],
         )?;
         Ok(())

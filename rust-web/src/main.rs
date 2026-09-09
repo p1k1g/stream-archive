@@ -12,6 +12,7 @@ mod security;
 mod store;
 mod support;
 mod vod;
+mod vod_queue;
 mod vod_tool_settings;
 
 use anyhow::{Context, Result, bail};
@@ -26,7 +27,7 @@ use axum::{
         header::{AUTHORIZATION, CONTENT_TYPE},
     },
     response::{Html, IntoResponse},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use backend::{
     HIDDEN_SETTING_KEYS, LogBuffer, SAFE_SETTING_KEYS, ensure_runtime_files, resolve_backend_dir,
@@ -59,6 +60,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 use vod::VodManager;
+use vod_queue::VodQueueManager;
 
 type ApiError = (StatusCode, String);
 type ApiResult<T> = Result<T, ApiError>;
@@ -72,6 +74,7 @@ struct AppState {
     backups: BackupManager,
     watcher: Arc<NativeWatcherManager>,
     vod: Arc<VodManager>,
+    vod_queue: Arc<VodQueueManager>,
     store: Store,
     logs: LogBuffer,
     config_write_lock: Arc<Mutex<()>>,
@@ -96,6 +99,13 @@ async fn main() -> Result<()> {
     let logs = LogBuffer::new();
     let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
     let vod = Arc::new(VodManager::new(backend_dir.clone(), logs.clone()));
+    let lifecycle_lock = Arc::new(Mutex::new(()));
+    let vod_queue = Arc::new(VodQueueManager::new(
+        store.clone(),
+        vod.clone(),
+        logs.clone(),
+        lifecycle_lock.clone(),
+    )?);
     let state = AppState {
         backend_dir: backend_dir.clone(),
         bind: bind.clone(),
@@ -104,14 +114,15 @@ async fn main() -> Result<()> {
         backups: backups.clone(),
         watcher: watcher.clone(),
         vod: vod.clone(),
+        vod_queue: vod_queue.clone(),
         store: store.clone(),
         logs: logs.clone(),
         config_write_lock: Arc::new(Mutex::new(())),
-        lifecycle_lock: Arc::new(Mutex::new(())),
+        lifecycle_lock: lifecycle_lock.clone(),
     };
 
     logs.push(format!(
-        "[SERVER] Phase 12 backup/retention ready; backend={} db={}",
+        "[SERVER] Phase 13 VOD queue/alerts ready; backend={} db={}",
         backend_dir.display(),
         store.path().display()
     ))
@@ -140,6 +151,7 @@ async fn main() -> Result<()> {
     // Phase 11 keeps REST compatibility and adds one authenticated SSE stream for realtime UI updates.
     spawn_vod_history_sync(store.clone(), vod.clone(), logs.clone());
     backup::spawn_auto_backup(backups.clone(), logs.clone());
+    vod_queue.clone().spawn();
 
     let app = Router::new()
         .route("/", get(index))
@@ -148,6 +160,7 @@ async fn main() -> Result<()> {
         .route("/phase9_1.js", get(phase9_1_js))
         .route("/phase10.js", get(phase10_js))
         .route("/phase12.js", get(phase12_js))
+        .route("/phase13.js", get(phase13_js))
         .route("/style.css", get(style_css))
         .route("/api/auth/status", get(auth::api_status))
         .route("/api/auth/setup", post(auth::api_setup))
@@ -186,6 +199,13 @@ async fn main() -> Result<()> {
         .route("/api/vod/download", post(api_vod_download))
         .route("/api/vod/cancel", post(api_vod_cancel))
         .route(
+            "/api/vod/queue",
+            get(vod_queue::api_list).post(vod_queue::api_enqueue),
+        )
+        .route("/api/vod/queue/{id}/cancel", post(vod_queue::api_cancel))
+        .route("/api/vod/queue/{id}/retry", post(vod_queue::api_retry))
+        .route("/api/vod/queue/{id}", delete(vod_queue::api_remove))
+        .route(
             "/api/vod/tool-settings",
             get(api_vod_tool_settings).put(api_update_vod_tool_settings),
         )
@@ -196,7 +216,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("failed to bind {bind}"))?;
     println!();
-    println!("SOOP Rust Web - Phase 12");
+    println!("SOOP Rust Web - Phase 13");
     println!("Backend : {}", backend_dir.display());
     println!("Data    : {}", store.path().display());
     println!("Listen  : http://{bind}");
@@ -213,6 +233,7 @@ async fn main() -> Result<()> {
     println!("Session : HttpOnly/SameSite cookie + CSRF; Secure cookie through HTTPS proxy");
     println!("Realtime: SSE snapshot stream + automatic REST polling fallback");
     println!("Backup  : SQLite online backup + retention + guarded restore");
+    println!("VODQueue: SQLite persistent FIFO queue + retry/cancel controls");
     println!("BackupDir: {}", backups.backup_dir().display());
     println!("Remote  : Keep 127.0.0.1:8787 and expose Caddy on 80/443");
     println!();
@@ -407,6 +428,12 @@ async fn phase12_js() -> impl IntoResponse {
     (
         [(CONTENT_TYPE, "application/javascript; charset=utf-8")],
         include_str!("../web/phase12.js"),
+    )
+}
+async fn phase13_js() -> impl IntoResponse {
+    (
+        [(CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        include_str!("../web/phase13.js"),
     )
 }
 async fn style_css() -> impl IntoResponse {

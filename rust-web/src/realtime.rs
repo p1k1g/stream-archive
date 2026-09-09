@@ -50,16 +50,18 @@ async fn snapshot_event(state: &AppState) -> Event {
         Err(err) => (Default::default(), Some(err.to_string())),
     };
     let vod = state.vod.status().await;
+    let queue = state.vod_queue.snapshot().await.ok();
     let logs = state.logs.tail(LOG_LINES).await;
     let payload = json!({
-        "phase": "phase12-backup-retention",
+        "phase": "phase13-vod-queue-alerts",
         "status": {
             "watcher": watcher,
             "backend_dir": state.backend_dir.display().to_string(),
             "bind": state.bind,
-            "phase": "phase12-backup-retention"
+            "phase": "phase13-vod-queue-alerts"
         },
         "vod": vod,
+        "queue": queue,
         "logs": {"lines": logs},
         "watcher_error": watcher_error
     });
