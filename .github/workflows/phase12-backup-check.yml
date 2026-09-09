@@ -1,0 +1,55 @@
+name: Phase 12 backup retention validation
+
+on:
+  push:
+    branches: [phase12-backup-retention]
+    paths:
+      - .github/workflows/phase12-backup-check.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase12-backup-retention
+          fetch-depth: 0
+      - name: Apply Phase 12 patch
+        shell: cmd
+        run: python .github\phase12_backup_patch.py
+      - name: Refresh Cargo lockfile
+        shell: cmd
+        run: cargo check --manifest-path rust-web\Cargo.toml
+      - name: Rust format
+        shell: cmd
+        run: cargo fmt --manifest-path rust-web\Cargo.toml
+      - name: Rust unit tests
+        shell: cmd
+        run: cargo test --locked --manifest-path rust-web\Cargo.toml
+      - name: Windows native compile check
+        shell: cmd
+        run: cargo check --locked --manifest-path rust-web\Cargo.toml
+      - name: Windows portable package smoke
+        shell: cmd
+        run: PACKAGE_RUST_WEB.bat
+      - name: Verify portable package
+        shell: cmd
+        run: |
+          if not exist dist\soop-recorder\soop-server.exe exit /b 1
+          if not exist dist\soop-recorder\soop-launcher.exe exit /b 1
+          if not exist dist\soop-recorder\RUN.bat exit /b 1
+          if not exist dist\soop-recorder\BACKUP_DATA.bat exit /b 1
+          if not exist dist\soop-recorder\RESTORE_DATA.bat exit /b 1
+          if not exist dist\soop-recorder\SHA256SUMS.txt exit /b 1
+      - name: Commit validated source
+        shell: cmd
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PACKAGE_RUST_WEB.bat maintenance\Backup-SoopData.ps1 maintenance\Restore-SoopData.ps1 docs\OPERATIONS.md rust-web\Cargo.toml rust-web\Cargo.lock rust-web\src\auth.rs rust-web\src\backend.rs rust-web\src\primary_config.rs rust-web\src\store.rs rust-web\src\backup.rs rust-web\src\main.rs rust-web\src\realtime.rs rust-web\web\app.js rust-web\web\phase8.js rust-web\web\phase12.js rust-web\web\index.html
+          git rm .github\phase12_backup_patch.py
+          git commit -m "Phase 12: backup retention and guarded restore"
+          git push origin HEAD:phase12-backup-retention
