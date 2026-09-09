@@ -388,6 +388,13 @@ async fn style_css() -> impl IntoResponse {
     )
 }
 fn authorize(headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
+    if state
+        .auth
+        .local_bypass_allowed(headers, &state.bind)
+        .map_err(internal_error)?
+    {
+        return Ok(());
+    }
     let supplied = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
