@@ -16,6 +16,8 @@ async function p13ToggleNotify(){if(!('Notification'in window)){alert('이 브�
 function p13TrackLive(w){const channels=w?.channels||[];if(!p13LiveSeen){channels.forEach(c=>p13LiveStates.set(c.account,c.status));p13LiveSeen=true;return}const next=new Map();for(const c of channels){const prev=p13LiveStates.get(c.account);next.set(c.account,c.status);if(prev&&prev!=='RECORDING'&&c.status==='RECORDING')p13Notify('LIVE 녹화 시작',`${c.name} (${c.account})`);if(prev==='RECORDING'&&c.status!=='RECORDING')p13Notify('LIVE 녹화 종료',`${c.name} · ${statusText(c.status)}`)}p13LiveStates.clear();next.forEach((v,k)=>p13LiveStates.set(k,v))}
 const p13BaseRenderStatus=renderStatus;
 renderStatus=function(d){p13BaseRenderStatus(d);p13TrackLive(d?.watcher)};
+const p13BaseRenderVodStatus=renderVodStatus;
+renderVodStatus=function(s){p13BaseRenderVodStatus(s);const enqueue=$('vodDownload');if(enqueue)enqueue.disabled=false};
 
 function p13QueueControls(item){if(['RUNNING','STARTING','CANCELLING','QUEUED'].includes(item.state))return `<button class="mini danger p13-cancel" data-id="${esc(item.id)}">취소</button>`;const retry=['FAILED','CANCELLED','INTERRUPTED'].includes(item.state)?`<button class="mini p13-retry" data-id="${esc(item.id)}">재시도</button>`:'';return `${retry}<button class="mini danger p13-remove" data-id="${esc(item.id)}">삭제</button>`}
 function p13QueueRow(item){const tr=document.createElement('tr');const label=[item.title,item.streamer].filter(Boolean).map(esc).join('<br>')||`<span class="mono">${esc(item.vod_url)}</span>`;const progress=item.state==='RUNNING'?`${Number(item.percent||0).toFixed(1)}% · ${item.current_part||0}/${item.part_count||0}`:'-';const result=[item.message,item.output_file].filter(Boolean).map(esc).join('<br>')||'-';const klass=item.state==='COMPLETED'?'ok':(['FAILED','INTERRUPTED'].includes(item.state)?'bad':(['QUEUED','CANCELLED'].includes(item.state)?'muted':'warn'));tr.innerHTML=`<td class="${klass}"><b>${esc(statusText(item.state))}</b></td><td class="smallcell">${label}</td><td>${item.attempts||0}</td><td>${esc(progress)}</td><td class="smallcell">${result}</td><td>${p13QueueControls(item)}</td>`;tr.querySelector('.p13-cancel')?.addEventListener('click',()=>p13QueueAction(item.id,'cancel'));tr.querySelector('.p13-retry')?.addEventListener('click',()=>p13QueueAction(item.id,'retry'));tr.querySelector('.p13-remove')?.addEventListener('click',()=>p13Remove(item.id));return tr}
@@ -29,7 +31,7 @@ async function p13Remove(id){if(!confirm('이 큐 기록을 삭제할까요? 다
 const p13BaseRealtime=applyRealtimeSnapshot;
 applyRealtimeSnapshot=function(data){p13BaseRealtime(data);if(data?.queue)p13RenderQueue(data.queue)};
 
-const download=$('vodDownload');if(download){download.textContent='큐에 추가';download.onclick=p13Enqueue}
+const download=$('vodDownload');if(download){download.textContent='큐에 추가';download.disabled=false;download.onclick=p13Enqueue}
 const cancel=$('vodCancel');if(cancel)cancel.textContent='현재 작업 취소';
 $('p13QueueRefresh')?.addEventListener('click',p13LoadQueue);
 $('vodNotify')?.addEventListener('click',p13ToggleNotify);
