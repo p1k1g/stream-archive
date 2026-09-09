@@ -26,8 +26,8 @@ jobs:
       - name: JavaScript syntax check
         shell: cmd
         run: |
-          node --check rust-web\web\app.js
-          node --check rust-web\web\phase13.js
+          C:\github-runner\externals\node24\bin\node.exe --check rust-web\web\app.js
+          C:\github-runner\externals\node24\bin\node.exe --check rust-web\web\phase13.js
       - name: Rust unit tests
         shell: cmd
         run: cargo test --locked --manifest-path rust-web\Cargo.toml
