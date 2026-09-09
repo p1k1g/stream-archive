@@ -18,6 +18,7 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
+// Established cookie-authenticated streams are revoked within this interval.
 const SESSION_REVALIDATE_INTERVAL: Duration = Duration::from_secs(5);
 const LOG_LINES: usize = 160;
 
