@@ -15,7 +15,7 @@ use reqwest::{
 };
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
     process::Stdio,
@@ -258,11 +258,14 @@ impl Drop for JobDirGuard {
     }
 }
 
+const TERMINAL_CACHE_LIMIT: usize = 32;
+
 pub struct VodManager {
     backend_dir: PathBuf,
     logs: LogBuffer,
     runtime: Mutex<JobRuntime>,
     status: Arc<RwLock<VodJobStatus>>,
+    terminal: Arc<Mutex<VecDeque<(String, VodJobStatus)>>>,
 }
 
 impl VodManager {
@@ -275,6 +278,7 @@ impl VodManager {
                 cancel: Arc::new(AtomicBool::new(false)),
             }),
             status: Arc::new(RwLock::new(VodJobStatus::default())),
+            terminal: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -286,6 +290,15 @@ impl VodManager {
             }
         }
         self.status.read().await.clone()
+    }
+
+    pub async fn terminal_status(&self, job_id: &str) -> Option<VodJobStatus> {
+        let terminal = self.terminal.lock().await;
+        terminal
+            .iter()
+            .rev()
+            .find(|(id, _)| id == job_id)
+            .map(|(_, status)| status.clone())
     }
 
     pub async fn analyze(&self, req: VodAnalyzeRequest) -> Result<VodJobStatus> {
@@ -307,7 +320,9 @@ impl VodManager {
         let backend = self.backend_dir.clone();
         let logs = self.logs.clone();
         let status = self.status.clone();
+        let terminal = self.terminal.clone();
         let job_id = Uuid::new_v4().to_string();
+        let terminal_job_id = job_id.clone();
         {
             let mut s = status.write().await;
             *s = VodJobStatus {
@@ -328,18 +343,26 @@ impl VodManager {
                     run_download(&backend, req, &logs, &status, &cancel).await
                 }
             };
-            let mut s = status.write().await;
-            s.running = false;
-            s.finished_at = Some(Utc::now().to_rfc3339());
-            if cancel.load(Ordering::SeqCst) {
-                s.state = "CANCELLED".into();
-                s.message = "VOD 작업이 취소되었습니다.".into();
-                logs.push("[VOD] job cancelled").await;
-            } else if let Err(err) = result {
-                s.state = "FAILED".into();
-                s.message = redact(&format!("{err:#}"));
-                logs.push(format!("[VOD:ERR] {}", s.message)).await;
+            let final_status = {
+                let mut s = status.write().await;
+                s.running = false;
+                s.finished_at = Some(Utc::now().to_rfc3339());
+                if cancel.load(Ordering::SeqCst) {
+                    s.state = "CANCELLED".into();
+                    s.message = "VOD 작업이 취소되었습니다.".into();
+                    logs.push("[VOD] job cancelled").await;
+                } else if let Err(err) = result {
+                    s.state = "FAILED".into();
+                    s.message = redact(&format!("{err:#}"));
+                    logs.push(format!("[VOD:ERR] {}", s.message)).await;
+                }
+                s.clone()
+            };
+            let mut terminal = terminal.lock().await;
+            if terminal.len() >= TERMINAL_CACHE_LIMIT {
+                terminal.pop_front();
             }
+            terminal.push_back((terminal_job_id, final_status));
         });
         runtime.task = Some(task);
         Ok(self.status.read().await.clone())

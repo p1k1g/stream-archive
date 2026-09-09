@@ -86,11 +86,24 @@ impl VodQueueManager {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         let request_json = serde_json::to_string(&req)?;
-        self.conn()?.execute(
-            r#"INSERT INTO vod_queue(id,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at)
-               VALUES(?1,?2,?3,?4,'QUEUED',0,'대기 중',?5,?5)"#,
-            params![id, request_json, req.vod_url, req.output_directory, now],
-        )?;
+        {
+            let mut conn = self.conn()?;
+            let tx = conn.transaction()?;
+            let pending: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM vod_queue WHERE state IN ('QUEUED','STARTING','RUNNING','CANCELLING')",
+                [],
+                |row| row.get(0),
+            )?;
+            if pending >= QUEUE_LIMIT as i64 {
+                bail!("VOD 다운로드 큐는 실행/대기 작업을 최대 {QUEUE_LIMIT}건까지 보관합니다.");
+            }
+            tx.execute(
+                r#"INSERT INTO vod_queue(id,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at)
+                   VALUES(?1,?2,?3,?4,'QUEUED',0,'대기 중',?5,?5)"#,
+                params![id, request_json, req.vod_url, req.output_directory, now],
+            )?;
+            tx.commit()?;
+        }
         self.logs
             .push(format!("[VOD_QUEUE] queued id={id} url={}", req.vod_url))
             .await;
@@ -106,12 +119,21 @@ impl VodQueueManager {
                 apply_runtime_status(item, &current);
             }
         }
-        let queued_count = items.iter().filter(|item| item.state == "QUEUED").count();
+        let queued_count = self.queued_count()?;
         Ok(VodQueueSnapshot {
             active_id,
             queued_count,
             items,
         })
+    }
+
+    fn queued_count(&self) -> Result<usize> {
+        let count: i64 = self.conn()?.query_row(
+            "SELECT COUNT(*) FROM vod_queue WHERE state='QUEUED'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as usize)
     }
 
     pub async fn has_pending_or_active(&self) -> Result<bool> {
@@ -255,6 +277,21 @@ impl VodQueueManager {
 
             loop {
                 tokio::time::sleep(STATUS_POLL).await;
+                if let Some(status) = self.vod.terminal_status(&job_id).await {
+                    let _ = self.finish_item(&claimed.id, &status);
+                    let level = if status.state == "COMPLETED" {
+                        "VOD_QUEUE"
+                    } else {
+                        "VOD_QUEUE:WARN"
+                    };
+                    self.logs
+                        .push(format!(
+                            "[{level}] finished id={} state={} message={}",
+                            claimed.id, status.state, status.message
+                        ))
+                        .await;
+                    break;
+                }
                 let status = self.vod.status().await;
                 if status.job_id.as_deref() != Some(job_id.as_str()) {
                     if !status.running {
@@ -509,6 +546,43 @@ mod tests {
         queue.cancel(&item.id).await.unwrap();
         queue.remove(&item.id).await.unwrap();
         assert!(queue.item(&item.id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn queue_limit_keeps_all_pending_rows_visible_and_rejects_overflow() {
+        let dir = tempdir().unwrap();
+        let backend = dir.path().join("app").join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(dir.path().join("app").join("data").join("soop.db")).unwrap();
+        let logs = LogBuffer::new();
+        let vod = Arc::new(VodManager::new(backend, logs.clone()));
+        let queue = VodQueueManager::new(store, vod, logs, Arc::new(Mutex::new(()))).unwrap();
+        let request_json = serde_json::to_string(&request("C:\\SOOP_VOD")).unwrap();
+        let conn = queue.conn().unwrap();
+        for i in 0..QUEUE_LIMIT {
+            let id = format!("queued-{i:03}");
+            let now = format!("2026-09-09T00:{:02}:00Z", i % 60);
+            conn.execute(
+                r#"INSERT INTO vod_queue(id,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at)
+                   VALUES(?1,?2,'https://vod.sooplive.com/player/123456789','C:\SOOP_VOD','QUEUED',0,'대기 중',?3,?3)"#,
+                params![id, request_json, now],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let snapshot = queue.snapshot().await.unwrap();
+        assert_eq!(snapshot.queued_count, QUEUE_LIMIT);
+        assert_eq!(
+            snapshot
+                .items
+                .iter()
+                .filter(|item| item.state == "QUEUED")
+                .count(),
+            QUEUE_LIMIT
+        );
+        let err = queue.enqueue(request("C:/SOOP_VOD")).await.unwrap_err();
+        assert!(err.to_string().contains("최대"));
     }
 
     #[tokio::test]
