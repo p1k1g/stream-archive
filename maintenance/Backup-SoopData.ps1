@@ -68,8 +68,14 @@ $meta = [ordered]@{
 }
 $meta | ConvertTo-Json | Set-Content -LiteralPath "$backupPath.json" -Encoding UTF8
 
+function Get-OwnedBackupFiles {
+    Get-ChildItem -LiteralPath $backupRoot -Filter 'soop_*.db' -File | Where-Object {
+        Test-Path -LiteralPath "$($_.FullName).json" -PathType Leaf
+    }
+}
+
 if ($Keep -gt 0) {
-    $old = Get-ChildItem -LiteralPath $backupRoot -Filter 'soop_*.db' -File |
+    $old = Get-OwnedBackupFiles |
         Sort-Object LastWriteTime -Descending |
         Select-Object -Skip $Keep
     foreach ($item in $old) {
@@ -83,7 +89,7 @@ if ($Keep -gt 0) {
 
 if ($RetentionDays -gt 0) {
     $cutoff = (Get-Date).AddDays(-$RetentionDays)
-    $aged = Get-ChildItem -LiteralPath $backupRoot -Filter '*.db' -File | Where-Object { $_.LastWriteTime -lt $cutoff }
+    $aged = Get-OwnedBackupFiles | Where-Object { $_.LastWriteTime -lt $cutoff }
     foreach ($item in $aged) {
         Remove-Item -LiteralPath $item.FullName -Force
         $metaPath = "$($item.FullName).json"
