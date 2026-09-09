@@ -1,0 +1,30 @@
+name: Phase 10.1 bootstrap2
+
+on:
+  push:
+    branches: [phase10.1-auth-overlay-fix]
+    paths:
+      - .github/workflows/phase10-1-bootstrap2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase10.1-auth-overlay-fix
+          fetch-depth: 0
+      - name: Switch implementation workflow to cmd
+        shell: cmd
+        run: |
+          python -c "from pathlib import Path; p=Path(r'.github/workflows/phase10-1-implement.yml'); s=p.read_text(encoding='utf-8').replace('shell: pwsh','shell: cmd'); p.write_text(s,encoding='utf-8',newline='\n')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/phase10-1-implement.yml
+          git rm .github/workflows/phase10-1-bootstrap.yml
+          git rm .github/workflows/phase10-1-bootstrap2.yml
+          git commit -m "ci: use cmd for phase10.1 validation"
+          git push origin HEAD:phase10.1-auth-overlay-fix
