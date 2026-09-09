@@ -279,16 +279,11 @@ impl VodManager {
     }
 
     pub async fn status(&self) -> VodJobStatus {
-        let finished = {
-            self.runtime
-                .lock()
-                .await
-                .task
-                .as_ref()
-                .is_some_and(|t| t.is_finished())
-        };
-        if finished {
-            self.runtime.lock().await.task.take();
+        {
+            let mut runtime = self.runtime.lock().await;
+            if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
+                runtime.task.take();
+            }
         }
         self.status.read().await.clone()
     }

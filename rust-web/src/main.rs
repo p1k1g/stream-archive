@@ -828,6 +828,7 @@ async fn api_vod_cancel(
     headers: HeaderMap,
 ) -> ApiResult<Json<VodJobStatus>> {
     authorize(&headers, &state)?;
+    let _lifecycle_guard = state.lifecycle_lock.lock().await;
     let status = state.vod.cancel().await.map_err(internal_error)?;
     state.store.upsert_vod(&status).map_err(internal_error)?;
     Ok(Json(status))

@@ -427,6 +427,10 @@ pub(crate) async fn api_cancel(
     AxumPath(id): AxumPath<String>,
 ) -> ApiResult<Json<Value>> {
     authorize(&headers, &state)?;
+    // Match guarded restore's lifecycle -> config lock order. Holding lifecycle
+    // through VodManager::cancel prevents another direct/queued job from starting
+    // while the owned yt-dlp/ffmpeg process is still shutting down.
+    let _lifecycle_guard = state.lifecycle_lock.lock().await;
     let _config_guard = state.config_write_lock.lock().await;
     state
         .vod_queue
