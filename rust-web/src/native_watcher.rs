@@ -5,23 +5,23 @@ use crate::{
     security::unprotect_secret,
     store,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Local, Utc};
 use regex::Regex;
 use reqwest::{
-    header::{COOKIE, SET_COOKIE},
     Client, Response,
+    header::{COOKIE, SET_COOKIE},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex, OnceLock},
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{mpsc, oneshot, Mutex, RwLock},
+    sync::{Mutex, RwLock, mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -57,6 +57,52 @@ struct StreamInfo {
     playlist_url: String,
 }
 
+#[derive(Debug, Clone)]
+struct StreamPassword {
+    bno: String,
+    value: String,
+}
+
+static STREAM_PASSWORDS: OnceLock<StdMutex<HashMap<String, StreamPassword>>> = OnceLock::new();
+
+fn stream_passwords() -> &'static StdMutex<HashMap<String, StreamPassword>> {
+    STREAM_PASSWORDS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn is_password_protected(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_uppercase().as_str(),
+        "Y" | "1" | "TRUE"
+    )
+}
+
+fn stream_password_for(account: &str, bno: &str) -> Option<String> {
+    let key = account.to_ascii_lowercase();
+    let Ok(mut passwords) = stream_passwords().lock() else {
+        return None;
+    };
+    match passwords.get(&key) {
+        Some(item) if item.bno == bno => Some(item.value.clone()),
+        Some(_) => {
+            passwords.remove(&key);
+            None
+        }
+        None => None,
+    }
+}
+
+fn clear_stream_password(account: &str) {
+    if let Ok(mut passwords) = stream_passwords().lock() {
+        passwords.remove(&account.to_ascii_lowercase());
+    }
+}
+
+fn clear_all_stream_passwords() {
+    if let Ok(mut passwords) = stream_passwords().lock() {
+        passwords.clear();
+    }
+}
+
 struct ChannelState {
     channel: Channel,
     status: String,
@@ -69,7 +115,11 @@ struct ChannelState {
 
 impl ChannelState {
     fn new(channel: Channel) -> Self {
-        let status = if channel.enabled { "UNKNOWN" } else { "DISABLED" };
+        let status = if channel.enabled {
+            "UNKNOWN"
+        } else {
+            "DISABLED"
+        };
         Self {
             channel,
             status: status.into(),
@@ -154,7 +204,11 @@ impl NativeWatcherManager {
                     .map(|c| ChannelRuntimeStatus {
                         account: c.account.clone(),
                         name: c.name.clone(),
-                        status: if c.enabled { "UNKNOWN".into() } else { "DISABLED".into() },
+                        status: if c.enabled {
+                            "UNKNOWN".into()
+                        } else {
+                            "DISABLED".into()
+                        },
                         ..Default::default()
                     })
                     .collect(),
@@ -240,6 +294,50 @@ impl NativeWatcherManager {
             .context("watcher command channel closed")?;
         Ok(())
     }
+
+    pub async fn channel_password(&self, account: String, password: String) -> Result<()> {
+        let account = account.trim().to_string();
+        if account.is_empty() {
+            bail!("channel account is empty");
+        }
+        if password.is_empty() {
+            bail!("stream password is empty");
+        }
+        let bno = {
+            let snapshot = self.snapshot.read().await;
+            let channel = snapshot
+                .channels
+                .iter()
+                .find(|channel| channel.account.eq_ignore_ascii_case(&account))
+                .ok_or_else(|| anyhow!("channel not found: {account}"))?;
+            if channel.status != "PASSWORD_REQUIRED" {
+                bail!("channel is not waiting for a stream password");
+            }
+            channel
+                .bno
+                .clone()
+                .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?
+        };
+        {
+            let mut passwords = stream_passwords()
+                .lock()
+                .map_err(|_| anyhow!("stream password memory store is unavailable"))?;
+            passwords.insert(
+                account.to_ascii_lowercase(),
+                StreamPassword {
+                    bno,
+                    value: password,
+                },
+            );
+        }
+        self.logs
+            .push(format!(
+                "[RUST:AUTH] stream password supplied account={} (memory only)",
+                account
+            ))
+            .await;
+        self.channel_action(account, "recheck").await
+    }
 }
 
 async fn run_native_watcher(
@@ -255,7 +353,9 @@ async fn run_native_watcher(
     let client = Client::builder()
         .no_proxy()
         .http1_only()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36")
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+        )
         .timeout(Duration::from_secs(15))
         .build()?;
     let mut session = SoopSession::new(client);
@@ -266,17 +366,20 @@ async fn run_native_watcher(
             .login(&config.soop_username, &config.soop_password)
             .await
         {
-            Ok(login) => logs
-                .push(format!("[RUST:AUTH] SOOP login OK : {login}"))
-                .await,
-            Err(err) => logs
-                .push(format!(
+            Ok(login) => {
+                logs.push(format!("[RUST:AUTH] SOOP login OK : {login}"))
+                    .await
+            }
+            Err(err) => {
+                logs.push(format!(
                     "[RUST:WARN] initial SOOP login failed; continuing: {err:#}"
                 ))
-                .await,
+                .await
+            }
         }
     }
 
+    clear_all_stream_passwords();
     let mut last_channel_signature = channel_signature(&initial_channels);
     let mut states = HashMap::new();
     apply_channels(&mut states, initial_channels, &recorder, &logs).await;
@@ -353,6 +456,7 @@ async fn run_native_watcher(
     for state in states.values_mut() {
         stop_state_recording(state, "WATCHER EXIT", &recorder, &logs).await;
     }
+    clear_all_stream_passwords();
     update_snapshot(&states, &snapshot).await;
     Ok(())
 }
@@ -409,8 +513,10 @@ async fn handle_command(
     };
     let key = account.to_ascii_lowercase();
     let Some(state) = states.get_mut(&key) else {
-        logs.push(format!("[RUST:WARN] channel command target not found: {account}"))
-            .await;
+        logs.push(format!(
+            "[RUST:WARN] channel command target not found: {account}"
+        ))
+        .await;
         return;
     };
 
@@ -430,8 +536,11 @@ async fn handle_command(
         }
         WatcherCommand::Recheck(_) => state.next_check = Instant::now(),
     }
-    logs.push(format!("[RUST] channel {action}: {}", state.channel.account))
-        .await;
+    logs.push(format!(
+        "[RUST] channel {action}: {}",
+        state.channel.account
+    ))
+    .await;
 }
 
 async fn poll_channels(
@@ -443,10 +552,10 @@ async fn poll_channels(
 ) {
     let keys: Vec<String> = states.keys().cloned().collect();
     for key in keys {
-        let Some(state) = states.get_mut(&key) else { continue; };
-        if !state.channel.enabled
-            || state.recording.is_some()
-            || Instant::now() < state.next_check
+        let Some(state) = states.get_mut(&key) else {
+            continue;
+        };
+        if !state.channel.enabled || state.recording.is_some() || Instant::now() < state.next_check
         {
             continue;
         }
@@ -454,6 +563,7 @@ async fn poll_channels(
 
         match session.live_info(&state.channel.account).await {
             Ok(LiveResult::Offline) => {
+                clear_stream_password(&state.channel.account);
                 state.status = "OFFLINE".into();
                 state.last_bno = None;
                 state.detail = None;
@@ -469,11 +579,23 @@ async fn poll_channels(
                 }
             }
             Ok(LiveResult::Live(live)) => {
-                if state.channel.name.eq_ignore_ascii_case(&state.channel.account)
+                if state
+                    .channel
+                    .name
+                    .eq_ignore_ascii_case(&state.channel.account)
                     && !live.bj_nick.is_empty()
                 {
                     state.channel.name = live.bj_nick.clone();
                 }
+                if !is_password_protected(&live.bpwd) {
+                    clear_stream_password(&state.channel.account);
+                } else if stream_password_for(&state.channel.account, &live.bno).is_none() {
+                    state.status = "PASSWORD_REQUIRED".into();
+                    state.last_bno = Some(live.bno.clone());
+                    state.detail = Some("방송 비밀번호 입력이 필요합니다. 비밀번호는 현재 방송 동안 메모리에만 유지됩니다.".into());
+                    continue;
+                }
+
                 if state.suppressed_bno.as_deref() == Some(live.bno.as_str()) {
                     state.status = "PAUSED".into();
                     state.last_bno = Some(live.bno);
@@ -483,7 +605,8 @@ async fn poll_channels(
                     state.suppressed_bno = None;
                 }
 
-                match start_recording(&state.channel, &live, config, session, recorder, logs).await {
+                match start_recording(&state.channel, &live, config, session, recorder, logs).await
+                {
                     Ok(recording) => {
                         state.last_bno = Some(live.bno);
                         state.status = "RECORDING".into();
@@ -491,17 +614,34 @@ async fn poll_channels(
                         state.recording = Some(recording);
                     }
                     Err(err) => {
-                        state.status = "ERROR".into();
-                        state.detail = Some(err.to_string());
-                        state.next_check = Instant::now() + Duration::from_secs(config.retry_interval.max(1));
-                        logs.push(format!("[RUST:ERR] record start failed {}: {err:#}", state.channel.account)).await;
+                        state.next_check =
+                            Instant::now() + Duration::from_secs(config.retry_interval.max(1));
+                        if is_password_protected(&live.bpwd) {
+                            clear_stream_password(&state.channel.account);
+                            state.status = "PASSWORD_REQUIRED".into();
+                            state.last_bno = Some(live.bno.clone());
+                            state.detail = Some("방송 비밀번호가 올바르지 않거나 보호 스트림 확인에 실패했습니다. 다시 입력하세요.".into());
+                            logs.push(format!("[RUST:WARN] protected stream resolve failed {}; password cleared: {err:#}", state.channel.account)).await;
+                        } else {
+                            state.status = "ERROR".into();
+                            state.detail = Some(err.to_string());
+                            logs.push(format!(
+                                "[RUST:ERR] record start failed {}: {err:#}",
+                                state.channel.account
+                            ))
+                            .await;
+                        }
                     }
                 }
             }
             Err(err) => {
                 state.status = "ERROR".into();
                 state.detail = Some(err.to_string());
-                logs.push(format!("[RUST:WARN] live check failed {}: {err:#}", state.channel.account)).await;
+                logs.push(format!(
+                    "[RUST:WARN] live check failed {}: {err:#}",
+                    state.channel.account
+                ))
+                .await;
             }
         }
     }
@@ -515,7 +655,9 @@ async fn monitor_recordings(
 ) {
     let keys: Vec<String> = states.keys().cloned().collect();
     for key in keys {
-        let Some(state) = states.get_mut(&key) else { continue; };
+        let Some(state) = states.get_mut(&key) else {
+            continue;
+        };
         let poll = match state.recording.as_mut() {
             Some(rec) => recorder.poll(rec, &config.recorder),
             None => continue,
@@ -530,7 +672,8 @@ async fn monitor_recordings(
                     } else {
                         format!(
                             "RECORDER EXIT CODE={}",
-                            code.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())
+                            code.map(|v| v.to_string())
+                                .unwrap_or_else(|| "unknown".into())
                         )
                     };
                     recorder
@@ -558,7 +701,11 @@ async fn monitor_recordings(
             Err(err) => {
                 state.status = "ERROR".into();
                 state.detail = Some(format!("recorder monitor error: {err}"));
-                logs.push(format!("[RUST:WARN] recorder monitor failed {}: {err:#}", state.channel.account)).await;
+                logs.push(format!(
+                    "[RUST:WARN] recorder monitor failed {}: {err:#}",
+                    state.channel.account
+                ))
+                .await;
             }
         }
     }
@@ -580,7 +727,11 @@ async fn start_recording(
         &live.title,
         &config.file_name_pattern,
     )?;
-    let stream_url = if stream.playlist_url.to_ascii_lowercase().starts_with("hls://") {
+    let stream_url = if stream
+        .playlist_url
+        .to_ascii_lowercase()
+        .starts_with("hls://")
+    {
         stream.playlist_url.clone()
     } else {
         format!("hls://{}", stream.playlist_url)
@@ -611,11 +762,15 @@ async fn stop_state_recording(
     recorder: &RecorderManager,
     logs: &LogBuffer,
 ) {
-    let Some(mut rec) = state.recording.take() else { return; };
+    let Some(mut rec) = state.recording.take() else {
+        return;
+    };
     match recorder.stop(&mut rec).await {
-        Ok(_) => recorder
-            .log_finished(&state.channel.name, &state.channel.account, &rec, reason)
-            .await,
+        Ok(_) => {
+            recorder
+                .log_finished(&state.channel.name, &state.channel.account, &rec, reason)
+                .await
+        }
         Err(err) => {
             state.detail = Some(format!("stop failed: {err}"));
             logs.push(format!(
@@ -849,6 +1004,7 @@ impl SoopSession {
         config: &WatcherConfig,
     ) -> Result<StreamInfo> {
         let attempts = config.worker_max_retry.max(1);
+        let stream_password = stream_password_for(&channel.account, &live.bno).unwrap_or_default();
         let mut last_error = String::new();
         for attempt in 1..=attempts {
             let cookies = self.worker_cookie_header();
@@ -858,10 +1014,10 @@ impl SoopSession {
                 "rmd": live.rmd,
                 "quality": "master",
                 "cq": "sd",
-                "password": live.bpwd,
+                "password": stream_password.as_str(),
                 "cookie": cookies,
                 "bid": channel.account,
-                "bpwd": live.bpwd,
+                "bpwd": stream_password.as_str(),
                 "channel_url": format!("https://play.sooplive.com/{}", channel.account),
                 "soop_cookie_header": self.worker_cookie_header()
             });
@@ -886,9 +1042,21 @@ impl SoopSession {
                                     .to_string();
                                 if !playlist_url.is_empty() {
                                     return Ok(StreamInfo {
-                                        quality: value.get("quality").and_then(Value::as_str).unwrap_or("master").to_string(),
-                                        cdn: value.get("cdn").and_then(Value::as_str).unwrap_or("").to_string(),
-                                        host: value.get("host").and_then(Value::as_str).unwrap_or("").to_string(),
+                                        quality: value
+                                            .get("quality")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("master")
+                                            .to_string(),
+                                        cdn: value
+                                            .get("cdn")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        host: value
+                                            .get("host")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("")
+                                            .to_string(),
                                         playlist_url,
                                     });
                                 }
@@ -990,7 +1158,9 @@ fn resolve_streamlink(backend_dir: &Path, map: &BTreeMap<String, String>) -> Res
     let mut candidates = vec![backend_dir.join("streamlink.exe")];
     #[cfg(windows)]
     {
-        candidates.push(PathBuf::from(r"C:\Program Files\Streamlink\bin\streamlink.exe"));
+        candidates.push(PathBuf::from(
+            r"C:\Program Files\Streamlink\bin\streamlink.exe",
+        ));
         candidates.push(PathBuf::from(r"C:\Program Files\Streamlink\streamlink.exe"));
     }
     for path in candidates {
@@ -1012,12 +1182,7 @@ fn channel_output_dir(channel: &Channel, default: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn unique_output_file(
-    dir: &Path,
-    channel: &str,
-    title: &str,
-    pattern: &str,
-) -> Result<PathBuf> {
+fn unique_output_file(dir: &Path, channel: &str, title: &str, pattern: &str) -> Result<PathBuf> {
     let now = Local::now();
     let date = now.format("%y%m%d").to_string();
     let time = now.format("%H%M%S").to_string();
@@ -1083,9 +1248,28 @@ fn safe_name(value: &str, max: usize) -> String {
     let upper = out.to_ascii_uppercase();
     if matches!(
         upper.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     ) {
         out.insert(0, '_');
     }
@@ -1093,7 +1277,9 @@ fn safe_name(value: &str, max: usize) -> String {
 }
 
 fn int(map: &BTreeMap<String, String>, key: &str, default: u64) -> u64 {
-    map.get(key).and_then(|value| value.parse().ok()).unwrap_or(default)
+    map.get(key)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 fn channel_signature(channels: &[Channel]) -> String {
@@ -1141,8 +1327,18 @@ mod tests {
 
     #[test]
     fn channel_signature_is_case_insensitive_for_accounts() {
-        let a = vec![Channel { enabled: true, name: "A".into(), account: "UserA".into(), outdir: "".into() }];
-        let b = vec![Channel { enabled: true, name: "A".into(), account: "usera".into(), outdir: "".into() }];
+        let a = vec![Channel {
+            enabled: true,
+            name: "A".into(),
+            account: "UserA".into(),
+            outdir: "".into(),
+        }];
+        let b = vec![Channel {
+            enabled: true,
+            name: "A".into(),
+            account: "usera".into(),
+            outdir: "".into(),
+        }];
         assert_eq!(channel_signature(&a), channel_signature(&b));
     }
 }

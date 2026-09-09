@@ -38,6 +38,7 @@ function injectStyle(){
   style.id='p10Style';
   style.textContent=`
   .p10-overlay{position:fixed;inset:0;z-index:1000;background:rgba(2,6,12,.82);display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(5px)}
+  .p10-overlay[hidden]{display:none!important}
   .p10-card{width:min(430px,100%);background:#131920;border:1px solid #35404d;border-radius:14px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.45)}
   .p10-card h2{margin:0 0 8px}.p10-card p{color:#9da9b7}.p10-card label{display:flex;flex-direction:column;gap:6px;margin:12px 0;color:#b8c3cf;font-size:13px}
   .p10-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}.p10-error{min-height:20px;color:#ff8f9b;margin-top:8px;font-size:13px}
