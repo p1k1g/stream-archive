@@ -75,6 +75,7 @@ struct AppState {
     store: Store,
     logs: LogBuffer,
     config_write_lock: Arc<Mutex<()>>,
+    lifecycle_lock: Arc<Mutex<()>>,
 }
 
 #[tokio::main]
@@ -106,6 +107,7 @@ async fn main() -> Result<()> {
         store: store.clone(),
         logs: logs.clone(),
         config_write_lock: Arc::new(Mutex::new(())),
+        lifecycle_lock: Arc::new(Mutex::new(())),
     };
 
     logs.push(format!(
@@ -666,6 +668,7 @@ async fn api_watcher_start(
     headers: HeaderMap,
 ) -> ApiResult<Json<WatcherStatus>> {
     authorize(&headers, &state)?;
+    let _lifecycle_guard = state.lifecycle_lock.lock().await;
     Ok(Json(
         state
             .watcher
@@ -765,6 +768,7 @@ async fn api_vod_analyze(
     Json(mut req): Json<VodAnalyzeRequest>,
 ) -> ApiResult<Json<VodJobStatus>> {
     authorize(&headers, &state)?;
+    let _lifecycle_guard = state.lifecycle_lock.lock().await;
     let tools = state.store.vod_tool_settings().map_err(internal_error)?;
     apply_vod_tool_defaults(&tools, &mut req.yt_dlp_path, &mut req.ffmpeg_path);
     let status = state
@@ -781,6 +785,7 @@ async fn api_vod_download(
     Json(mut req): Json<VodDownloadRequest>,
 ) -> ApiResult<Json<VodJobStatus>> {
     authorize(&headers, &state)?;
+    let _lifecycle_guard = state.lifecycle_lock.lock().await;
     let tools = state.store.vod_tool_settings().map_err(internal_error)?;
     apply_vod_tool_defaults(&tools, &mut req.yt_dlp_path, &mut req.ffmpeg_path);
     let status = state

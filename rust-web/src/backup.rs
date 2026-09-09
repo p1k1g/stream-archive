@@ -82,7 +82,7 @@ impl BackupManager {
         self.backup_dir.as_path()
     }
 
-    fn ensure_policy_defaults(&self) -> Result<()> {
+    pub(crate) fn ensure_policy_defaults(&self) -> Result<()> {
         let mut defaults = std::collections::BTreeMap::new();
         for (key, value) in [
             ("BACKUP_ENABLED", "Y"),
@@ -147,7 +147,7 @@ impl BackupManager {
                 continue;
             };
             let name_text = name.to_string_lossy();
-            if !(name_text.ends_with(".db") || name_text.ends_with(".db.json")) {
+            if !is_backup_artifact_name(&name_text) {
                 continue;
             }
             let target = self.backup_dir.join(name);
@@ -219,6 +219,8 @@ impl BackupManager {
         // SQLite has restored it.
         let safety = self.create_locked_with_cleanup("pre_restore", false)?;
         self.store.restore_from(&source)?;
+        self.store.ensure_schema()?;
+        self.ensure_policy_defaults()?;
         let policy = self.policy()?;
         self.cleanup_locked(&policy)?;
         Ok((selected, safety))
@@ -268,7 +270,7 @@ impl BackupManager {
         let mut items = Vec::new();
         for entry in fs::read_dir(self.backup_dir.as_path())? {
             let path = entry?.path();
-            if path.extension().and_then(|v| v.to_str()) != Some("db") {
+            if !is_backup_database_name(&path) {
                 continue;
             }
             if let Ok(info) = inspect_backup(&path) {
@@ -286,7 +288,7 @@ impl BackupManager {
     fn cleanup_locked(&self, policy: &BackupPolicy) -> Result<usize> {
         let mut files: Vec<PathBuf> = fs::read_dir(self.backup_dir.as_path())?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().and_then(|v| v.to_str()) == Some("db"))
+            .filter(|p| is_owned_backup(p))
             .collect();
         files.sort_by_key(|p| {
             std::cmp::Reverse(
@@ -320,6 +322,7 @@ impl BackupManager {
     fn resolve_file(&self, file_name: &str) -> Result<PathBuf> {
         let trimmed = file_name.trim();
         if trimmed.is_empty()
+            || !trimmed.starts_with("soop_")
             || !trimmed.ends_with(".db")
             || Path::new(trimmed).file_name().and_then(|v| v.to_str()) != Some(trimmed)
         {
@@ -394,6 +397,8 @@ pub(crate) async fn api_restore(
     AxumPath(file_name): AxumPath<String>,
 ) -> ApiResult<Json<Value>> {
     authorize(&headers, &state)?;
+    let _lifecycle_guard = state.lifecycle_lock.lock().await;
+    let _config_guard = state.config_write_lock.lock().await;
     let watcher = state.watcher.status().await.map_err(internal_error)?;
     if watcher.running || watcher.recording_count > 0 {
         return Err((
@@ -412,6 +417,7 @@ pub(crate) async fn api_restore(
         .restore(&file_name)
         .await
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+    state.auth.reinitialize().map_err(internal_error)?;
     materialize_primary_files(&state.store, &state.backend_dir).map_err(internal_error)?;
     let invalidated = state
         .auth
@@ -427,6 +433,25 @@ pub(crate) async fn api_restore(
     Ok(Json(
         json!({"ok":true,"restored":selected,"safety_backup":safety,"sessions_invalidated":invalidated,"reauthenticate":true}),
     ))
+}
+
+fn is_backup_database_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| name.starts_with("soop_") && name.ends_with(".db"))
+}
+
+fn is_backup_artifact_name(name: &str) -> bool {
+    name.starts_with("soop_") && (name.ends_with(".db") || name.ends_with(".db.json"))
+}
+
+fn is_owned_backup(path: &Path) -> bool {
+    if !is_backup_database_name(path) || !path.with_extension("db.json").is_file() {
+        return false;
+    }
+    inspect_backup(path)
+        .map(|info| info.integrity == "OK")
+        .unwrap_or(false)
 }
 
 fn resolve_backup_dir(backend_dir: &Path) -> Result<PathBuf> {
@@ -578,6 +603,28 @@ mod tests {
             store.setting_value("TEST").unwrap().as_deref(),
             Some("before")
         );
+    }
+
+    #[test]
+    fn retention_does_not_delete_unowned_databases() {
+        let dir = tempdir().unwrap();
+        let app = dir.path().join("soop-recorder");
+        let backend = app.join("backend");
+        fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(app.join("data").join("soop.db")).unwrap();
+        let manager = BackupManager::open(store, &backend).unwrap();
+        let unrelated = manager.backup_dir().join("other-application.db");
+        rusqlite::Connection::open(&unrelated).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(manager.create_manual()).unwrap();
+        let policy = BackupPolicy {
+            enabled: true,
+            interval_hours: 24,
+            keep_count: 1,
+            retention_days: 1,
+        };
+        manager.cleanup_locked(&policy).unwrap();
+        assert!(unrelated.is_file());
     }
 
     #[test]

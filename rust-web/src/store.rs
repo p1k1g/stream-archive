@@ -176,6 +176,72 @@ impl Store {
         Ok(())
     }
 
+    pub fn ensure_schema(&self) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys=ON;
+
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                source TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS channels (
+                account TEXT PRIMARY KEY COLLATE NOCASE,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                outdir TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS live_recordings (
+                id TEXT PRIMARY KEY,
+                account TEXT NOT NULL,
+                channel_name TEXT NOT NULL,
+                bno TEXT,
+                title TEXT,
+                file_path TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                duration_seconds INTEGER NOT NULL DEFAULT 0,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                reason TEXT,
+                status TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_live_recordings_started
+                ON live_recordings(started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS vod_jobs (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                vod_url TEXT,
+                title TEXT,
+                streamer TEXT,
+                part_count INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL,
+                output_file TEXT,
+                message TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
+                ON vod_jobs(started_at DESC, updated_at DESC);
+            "#,
+        )?;
+        drop(conn);
+        self.recover_interrupted()?;
+        Ok(())
+    }
+
     fn conn(&self) -> Result<MutexGuard<'_, Connection>> {
         self.inner
             .lock()

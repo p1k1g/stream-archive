@@ -137,6 +137,10 @@ impl AuthManager {
         Ok(())
     }
 
+    pub(crate) fn reinitialize(&self) -> Result<()> {
+        self.initialize()
+    }
+
     fn configured(&self) -> Result<bool> {
         let conn = self.conn()?;
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM auth_users", [], |row| row.get(0))?;
