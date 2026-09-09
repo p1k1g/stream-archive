@@ -1,0 +1,273 @@
+from pathlib import Path
+
+
+def replace(path, old, new, count=1):
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    found = text.count(old)
+    if found < count:
+        raise SystemExit(
+            f"patch target not found enough times: {path}: expected>={count}, found={found}\nTARGET:\n{old[:300]}"
+        )
+    text = text.replace(old, new, count)
+    p.write_text(text, encoding="utf-8", newline="\n")
+
+
+nw = "rust-web/src/native_watcher.rs"
+
+replace(
+    nw,
+    "    sync::Arc,\n",
+    "    sync::{Arc, Mutex as StdMutex, OnceLock},\n",
+)
+
+replace(
+    nw,
+    '''struct StreamInfo {
+    quality: String,
+    cdn: String,
+    host: String,
+    playlist_url: String,
+}
+
+struct ChannelState {''',
+    '''struct StreamInfo {
+    quality: String,
+    cdn: String,
+    host: String,
+    playlist_url: String,
+}
+
+#[derive(Debug, Clone)]
+struct StreamPassword {
+    bno: String,
+    value: String,
+}
+
+static STREAM_PASSWORDS: OnceLock<StdMutex<HashMap<String, StreamPassword>>> = OnceLock::new();
+
+fn stream_passwords() -> &'static StdMutex<HashMap<String, StreamPassword>> {
+    STREAM_PASSWORDS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn is_password_protected(value: &str) -> bool {
+    matches!(value.trim().to_ascii_uppercase().as_str(), "Y" | "1" | "TRUE")
+}
+
+fn stream_password_for(account: &str, bno: &str) -> Option<String> {
+    let key = account.to_ascii_lowercase();
+    let Ok(mut passwords) = stream_passwords().lock() else {
+        return None;
+    };
+    match passwords.get(&key) {
+        Some(item) if item.bno == bno => Some(item.value.clone()),
+        Some(_) => {
+            passwords.remove(&key);
+            None
+        }
+        None => None,
+    }
+}
+
+fn clear_stream_password(account: &str) {
+    if let Ok(mut passwords) = stream_passwords().lock() {
+        passwords.remove(&account.to_ascii_lowercase());
+    }
+}
+
+fn clear_all_stream_passwords() {
+    if let Ok(mut passwords) = stream_passwords().lock() {
+        passwords.clear();
+    }
+}
+
+struct ChannelState {''',
+)
+
+replace(
+    nw,
+    '''        Ok(())
+    }
+}
+
+async fn run_native_watcher(''',
+    '''        Ok(())
+    }
+
+    pub async fn channel_password(&self, account: String, password: String) -> Result<()> {
+        let account = account.trim().to_string();
+        if account.is_empty() {
+            bail!("channel account is empty");
+        }
+        if password.is_empty() {
+            bail!("stream password is empty");
+        }
+        let bno = {
+            let snapshot = self.snapshot.read().await;
+            let channel = snapshot
+                .channels
+                .iter()
+                .find(|channel| channel.account.eq_ignore_ascii_case(&account))
+                .ok_or_else(|| anyhow!("channel not found: {account}"))?;
+            if channel.status != "PASSWORD_REQUIRED" {
+                bail!("channel is not waiting for a stream password");
+            }
+            channel
+                .bno
+                .clone()
+                .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?
+        };
+        {
+            let mut passwords = stream_passwords()
+                .lock()
+                .map_err(|_| anyhow!("stream password memory store is unavailable"))?;
+            passwords.insert(
+                account.to_ascii_lowercase(),
+                StreamPassword {
+                    bno,
+                    value: password,
+                },
+            );
+        }
+        self.logs
+            .push(format!(
+                "[RUST:AUTH] stream password supplied account={} (memory only)",
+                account
+            ))
+            .await;
+        self.channel_action(account, "recheck").await
+    }
+}
+
+async fn run_native_watcher(''',
+)
+
+replace(
+    nw,
+    '''    let mut last_channel_signature = channel_signature(&initial_channels);
+    let mut states = HashMap::new();''',
+    '''    clear_all_stream_passwords();
+    let mut last_channel_signature = channel_signature(&initial_channels);
+    let mut states = HashMap::new();''',
+)
+
+replace(
+    nw,
+    '''    for state in states.values_mut() {
+        stop_state_recording(state, "WATCHER EXIT", &recorder, &logs).await;
+    }
+    update_snapshot(&states, &snapshot).await;
+    Ok(())''',
+    '''    for state in states.values_mut() {
+        stop_state_recording(state, "WATCHER EXIT", &recorder, &logs).await;
+    }
+    clear_all_stream_passwords();
+    update_snapshot(&states, &snapshot).await;
+    Ok(())''',
+)
+
+replace(
+    nw,
+    '''            Ok(LiveResult::Offline) => {
+                state.status = "OFFLINE".into();
+                state.last_bno = None;
+                state.detail = None;
+            }''',
+    '''            Ok(LiveResult::Offline) => {
+                clear_stream_password(&state.channel.account);
+                state.status = "OFFLINE".into();
+                state.last_bno = None;
+                state.detail = None;
+            }''',
+)
+
+replace(
+    nw,
+    '''                if state.suppressed_bno.as_deref() == Some(live.bno.as_str()) {''',
+    '''                if !is_password_protected(&live.bpwd) {
+                    clear_stream_password(&state.channel.account);
+                } else if stream_password_for(&state.channel.account, &live.bno).is_none() {
+                    state.status = "PASSWORD_REQUIRED".into();
+                    state.last_bno = Some(live.bno.clone());
+                    state.detail = Some("방송 비밀번호 입력이 필요합니다. 비밀번호는 현재 방송 동안 메모리에만 유지됩니다.".into());
+                    continue;
+                }
+
+                if state.suppressed_bno.as_deref() == Some(live.bno.as_str()) {''',
+)
+
+replace(
+    nw,
+    '''                    Err(err) => {
+                        state.status = "ERROR".into();
+                        state.detail = Some(err.to_string());
+                        state.next_check = Instant::now() + Duration::from_secs(config.retry_interval.max(1));
+                        logs.push(format!("[RUST:ERR] record start failed {}: {err:#}", state.channel.account)).await;
+                    }''',
+    '''                    Err(err) => {
+                        state.next_check = Instant::now() + Duration::from_secs(config.retry_interval.max(1));
+                        if is_password_protected(&live.bpwd) {
+                            clear_stream_password(&state.channel.account);
+                            state.status = "PASSWORD_REQUIRED".into();
+                            state.last_bno = Some(live.bno.clone());
+                            state.detail = Some("방송 비밀번호가 올바르지 않거나 보호 스트림 확인에 실패했습니다. 다시 입력하세요.".into());
+                            logs.push(format!("[RUST:WARN] protected stream resolve failed {}; password cleared: {err:#}", state.channel.account)).await;
+                        } else {
+                            state.status = "ERROR".into();
+                            state.detail = Some(err.to_string());
+                            logs.push(format!("[RUST:ERR] record start failed {}: {err:#}", state.channel.account)).await;
+                        }
+                    }''',
+)
+
+replace(
+    nw,
+    '''    ) -> Result<StreamInfo> {
+        let attempts = config.worker_max_retry.max(1);
+        let mut last_error = String::new();''',
+    '''    ) -> Result<StreamInfo> {
+        let attempts = config.worker_max_retry.max(1);
+        let stream_password = stream_password_for(&channel.account, &live.bno).unwrap_or_default();
+        let mut last_error = String::new();''',
+)
+
+replace(
+    nw,
+    '''                "password": live.bpwd,
+                "cookie": cookies,
+                "bid": channel.account,
+                "bpwd": live.bpwd,''',
+    '''                "password": stream_password.as_str(),
+                "cookie": cookies,
+                "bid": channel.account,
+                "bpwd": stream_password.as_str(),''',
+)
+
+app = "rust-web/web/app.js"
+replace(
+    app,
+    "AUTH:'인증 필요',LIVE:'방송중'",
+    "AUTH:'인증 필요',PASSWORD_REQUIRED:'비밀번호 필요',LIVE:'방송중'",
+)
+
+old_runtime = '''function runtimeRow(c){const tr=document.createElement('tr');const detail=[c.title,c.file,c.detail].filter(Boolean).map(esc).join('<br>');const klass=c.status==='RECORDING'?'ok':(c.status==='OFFLINE'||c.status==='DISABLED'?'muted':(c.status==='PAUSED'?'warn':(c.status==='ERROR'||c.status==='LOW_DISK'||c.status==='STALLED'?'bad':'')));const stopButton=c.status==='PAUSED'?'<button class="mini resume">재개</button>':(c.status==='RECORDING'?'<button class="mini danger stopOne">현재 방송 중지</button>':'');tr.innerHTML=`<td class="${klass}"><b>${esc(statusText(c.status))}</b></td><td>${esc(c.name)}</td><td class="mono">${esc(c.account)}</td><td class="smallcell">${detail||'-'}</td><td>${bytes(c.size_bytes)}</td><td><button class="mini recheck">재확인</button> ${stopButton}</td>`;tr.querySelector('.recheck').onclick=()=>channelAction(c.account,'recheck');const r=tr.querySelector('.resume');if(r)r.onclick=()=>channelAction(c.account,'resume');const s=tr.querySelector('.stopOne');if(s)s.onclick=()=>channelAction(c.account,'stop');return tr}
+'''
+new_runtime = '''function runtimeRow(c){const tr=document.createElement('tr');const detail=[c.title,c.file,c.detail].filter(Boolean).map(esc).join('<br>');const klass=c.status==='RECORDING'?'ok':(c.status==='OFFLINE'||c.status==='DISABLED'?'muted':(c.status==='PAUSED'||c.status==='PASSWORD_REQUIRED'?'warn':(c.status==='ERROR'||c.status==='LOW_DISK'||c.status==='STALLED'?'bad':'')));const stopButton=c.status==='PAUSED'?'<button class="mini resume">재개</button>':(c.status==='RECORDING'?'<button class="mini danger stopOne">현재 방송 중지</button>':(c.status==='PASSWORD_REQUIRED'?'<button class="mini streamPassword">비밀번호 입력</button>':''));tr.innerHTML=`<td class="${klass}"><b>${esc(statusText(c.status))}</b></td><td>${esc(c.name)}</td><td class="mono">${esc(c.account)}</td><td class="smallcell">${detail||'-'}</td><td>${bytes(c.size_bytes)}</td><td><button class="mini recheck">재확인</button> ${stopButton}</td>`;tr.querySelector('.recheck').onclick=()=>channelAction(c.account,'recheck');const r=tr.querySelector('.resume');if(r)r.onclick=()=>channelAction(c.account,'resume');const s=tr.querySelector('.stopOne');if(s)s.onclick=()=>channelAction(c.account,'stop');const p=tr.querySelector('.streamPassword');if(p)p.onclick=()=>channelPassword(c.account);return tr}
+'''
+replace(app, old_runtime, new_runtime)
+
+replace(
+    app,
+    '''async function channelAction(account,action){try{await api('/api/watcher/channel/'+encodeURIComponent(account)+'/'+action,{method:'POST'});toast('채널 명령 전달');setTimeout(status,250)}catch(e){alert(e.message)}}
+''',
+    '''async function channelAction(account,action){try{await api('/api/watcher/channel/'+encodeURIComponent(account)+'/'+action,{method:'POST'});toast('채널 명령 전달');setTimeout(status,250)}catch(e){alert(e.message)}}
+async function channelPassword(account){const value=prompt('이 방송의 비밀번호를 입력하세요.\\n비밀번호는 SQLite/파일에 저장되지 않고 현재 방송 동안 메모리에만 유지됩니다.');if(value===null)return;if(!value){alert('비밀번호를 입력하세요.');return}try{await api('/api/watcher/channel/'+encodeURIComponent(account)+'/password',{method:'POST',body:value});toast('방송 비밀번호 전달');setTimeout(status,250)}catch(e){alert(e.message)}}
+''',
+)
+
+p10 = "rust-web/web/phase10.js"
+replace(
+    p10,
+    ".p10-overlay{position:fixed;inset:0;z-index:1000;background:rgba(2,6,12,.82);display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(5px)}",
+    ".p10-overlay{position:fixed;inset:0;z-index:1000;background:rgba(2,6,12,.82);display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(5px)}\n  .p10-overlay[hidden]{display:none!important}",
+)
