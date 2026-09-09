@@ -484,9 +484,23 @@ async fn run_native_watcher(
     for state in states.values_mut() {
         stop_state_recording(state, "WATCHER EXIT", &recorder, &logs).await;
     }
+    mark_watcher_stopped(&mut states);
     clear_all_stream_passwords();
     update_snapshot(&states, &snapshot).await;
     Ok(())
+}
+
+fn mark_watcher_stopped(states: &mut HashMap<String, ChannelState>) {
+    for state in states.values_mut() {
+        if state.channel.enabled {
+            state.status = "WATCHER_STOPPED".into();
+            state.last_bno = None;
+            state.suppressed_bno = None;
+            state.detail = None;
+        } else {
+            state.status = "DISABLED".into();
+        }
+    }
 }
 
 async fn apply_channels(
@@ -1433,5 +1447,38 @@ mod tests {
             outdir: "".into(),
         }];
         assert_eq!(channel_signature(&a), channel_signature(&b));
+    }
+
+    #[test]
+    fn watcher_exit_replaces_paused_state_and_clears_runtime_markers() {
+        let enabled = Channel {
+            enabled: true,
+            name: "Live".into(),
+            account: "live".into(),
+            outdir: "".into(),
+        };
+        let disabled = Channel {
+            enabled: false,
+            name: "Disabled".into(),
+            account: "disabled".into(),
+            outdir: "".into(),
+        };
+        let mut states = HashMap::new();
+        let mut live = ChannelState::new(enabled);
+        live.status = "PAUSED".into();
+        live.last_bno = Some("123".into());
+        live.suppressed_bno = Some("123".into());
+        live.detail = Some("old detail".into());
+        states.insert("live".into(), live);
+        states.insert("disabled".into(), ChannelState::new(disabled));
+
+        mark_watcher_stopped(&mut states);
+
+        let live = states.get("live").unwrap();
+        assert_eq!(live.status, "WATCHER_STOPPED");
+        assert!(live.last_bno.is_none());
+        assert!(live.suppressed_bno.is_none());
+        assert!(live.detail.is_none());
+        assert_eq!(states.get("disabled").unwrap().status, "DISABLED");
     }
 }
