@@ -1,0 +1,59 @@
+name: Phase 10.2 settings UX validation
+
+on:
+  push:
+    branches: [phase10.2-settings-korean-ux]
+    paths:
+      - .github/workflows/phase10-2-settings-ux-check.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase10.2-settings-korean-ux
+          fetch-depth: 0
+      - name: Apply Phase 10.2 patch
+        shell: cmd
+        run: python .github\phase10_2_settings_ux_patch.py
+      - name: Static web sanity
+        shell: cmd
+        run: |
+          findstr /C:"방송 확인 주기" rust-web\web\phase8.js >nul || exit /b 1
+          findstr /C:"data-settings-tab=\"advanced\"" rust-web\web\index.html >nul || exit /b 1
+          findstr /C:"data-app-tab=\"diagnostics\"" rust-web\web\index.html >nul && exit /b 1 || exit /b 0
+      - name: Rust format
+        shell: cmd
+        run: cargo fmt --manifest-path rust-web\Cargo.toml
+      - name: Rust unit tests
+        shell: cmd
+        run: cargo test --locked --manifest-path rust-web\Cargo.toml
+      - name: Rust clippy
+        shell: cmd
+        run: cargo clippy --locked --manifest-path rust-web\Cargo.toml -- -D warnings
+      - name: Windows native compile check
+        shell: cmd
+        run: cargo check --locked --manifest-path rust-web\Cargo.toml
+      - name: Windows portable package smoke
+        shell: cmd
+        run: PACKAGE_RUST_WEB.bat
+      - name: Verify portable package
+        shell: cmd
+        run: |
+          if not exist dist\soop-recorder\soop-server.exe exit /b 1
+          if not exist dist\soop-recorder\soop-launcher.exe exit /b 1
+          if not exist dist\soop-recorder\RUN.bat exit /b 1
+          if not exist dist\soop-recorder\SHA256SUMS.txt exit /b 1
+      - name: Commit validated source
+        shell: cmd
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rust-web\web\phase8.js rust-web\web\index.html rust-web\web\phase10.js rust-web\web\style.css
+          git rm .github\phase10_2_settings_ux_patch.py
+          git commit -m "Phase 10.2: Korean settings UX and diagnostics integration"
+          git push origin HEAD:phase10.2-settings-korean-ux
