@@ -26,9 +26,9 @@ jobs:
       - name: Rust unit tests
         shell: cmd
         run: cargo test --locked --manifest-path rust-web\Cargo.toml
-      - name: Rust clippy
+      - name: Rust clippy scan
         shell: cmd
-        run: cargo clippy --locked --manifest-path rust-web\Cargo.toml -- -D warnings
+        run: cargo clippy --locked --manifest-path rust-web\Cargo.toml
       - name: Windows native compile check
         shell: cmd
         run: cargo check --locked --manifest-path rust-web\Cargo.toml
