@@ -1,0 +1,31 @@
+name: Phase 10.1 bootstrap
+
+on:
+  push:
+    branches: [phase10.1-auth-overlay-fix]
+    paths:
+      - .github/workflows/phase10-1-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase10.1-auth-overlay-fix
+          fetch-depth: 0
+      - name: Switch implementation workflow to Windows PowerShell
+        run: |
+          $path = '.github/workflows/phase10-1-implement.yml'
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          $text = $text.Replace('shell: pwsh','shell: powershell')
+          [System.IO.File]::WriteAllText((Resolve-Path $path), $text, [System.Text.UTF8Encoding]::new($false))
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add $path
+          git rm .github/workflows/phase10-1-bootstrap.yml
+          git commit -m 'ci: use Windows PowerShell for phase10.1 validation'
+          git push origin HEAD:phase10.1-auth-overlay-fix
