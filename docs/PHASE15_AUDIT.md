@@ -20,55 +20,65 @@ Phase 15 keeps current behavior stable while reducing unnecessary work and prepa
 
 `UI -> VOD queue -> VodQueueManager -> VodManager -> yt-dlp/ffmpeg -> merge -> SQLite queue/history -> SSE/UI -> browser notification`
 
-## Audit findings
+## Audit findings and results
 
-### P1: realtime snapshot amplification
+### P1: realtime snapshot amplification — resolved in 15.1
 
-`realtime.rs` emits the full watcher/VOD/queue/log snapshot every second, and log broadcast events can additionally trigger the same full snapshot. Streamlink stderr can produce bursts, so a noisy recorder can multiply process-state and SQLite reads for every connected SSE client.
+`realtime.rs` previously emitted the full watcher/VOD/queue/log snapshot every second, while each log broadcast could additionally trigger another complete snapshot. Streamlink stderr bursts could therefore multiply process-state and SQLite reads for every connected SSE client.
 
-Phase 15.1: coalesce log-triggered snapshots while retaining the regular one-second snapshot and five-second session revalidation.
+Result: log-triggered snapshots are coalesced to a 250 ms minimum interval while the regular one-second snapshot and five-second authenticated-session revalidation remain intact. Regression coverage verifies the coalescing interval and multiple log subscribers.
 
-### P1: VOD queue snapshot opens SQLite repeatedly
+### P1: VOD queue snapshot opened SQLite repeatedly — resolved in 15.1
 
-`VodQueueManager::snapshot()` loads queue rows and queued count through separate helper calls, each opening a SQLite connection. Because SSE calls this path regularly, connection setup/read overhead scales with connected browsers.
+`VodQueueManager::snapshot()` previously loaded queue rows and queued count through separate connection/read paths.
 
-Target: read queue rows/count through one connection or move the queue onto an intentional shared DB access abstraction without increasing lock contention.
+Result: one connection is reused for the queue snapshot, and single-item lookup uses the primary-key query directly instead of loading a larger list first.
 
-### P1: frontend state has multiple update paths
+### P1: repeated VOD history writes — resolved in 15.1
 
-The browser can receive state through REST polling or SSE, while later phase scripts wrap functions such as `api`, `renderStatus`, and `applyRealtimeSnapshot`. Correctness currently depends on script load/wrapper order.
+The runtime can observe an unchanged terminal VOD status repeatedly. Re-upserting identical values caused unnecessary SQLite writes and `updated_at` churn.
 
-Target: one state-ingest/event pipeline consumed by dashboard, queue, history, and notifications. REST and SSE should only be transports.
+Result: VOD history updates are skipped when persisted values are unchanged. A regression test verifies that a no-op upsert does not change `updated_at`.
 
-### P1: platform-specific logic is mixed with orchestration
+### P1: frontend state had multiple update paths — resolved in 15.3
 
-`native_watcher.rs` owns SOOP HTTP/login/live discovery as well as watcher scheduling/state transitions. `vod.rs` similarly contains a large SOOP-oriented VOD implementation.
+The browser can receive state through REST polling or SSE, while later phase scripts previously wrapped functions such as `api`, `renderStatus`, and `applyRealtimeSnapshot`. Correctness depended on script load/wrapper order.
 
-Target before CHZZK: isolate platform discovery/auth/stream resolution behind provider boundaries while keeping recorder/process/history/notification infrastructure platform-independent.
+Result: `app.js` now exposes one `StreamArchiveState` event bus. REST and SSE publish transport results into the bus; Phase 13 queue handling and Phase 14 notifications consume state events instead of replacing core functions. CI architecture guards prevent legacy wrapper patterns from being reintroduced.
 
-### P2: periodic SQLite configuration reads
+### P1: platform-specific logic mixed with orchestration — boundary established in 15.4
 
-The native watcher checks live settings every second and channels on the configured reload interval. This is simple and robust but repeatedly reads unchanged SQLite data.
+`native_watcher.rs` and `vod.rs` still contain substantial SOOP-specific implementation details. Moving all of that code in one optimization PR would create a high-risk rewrite.
 
-Target: add a lightweight configuration revision/generation signal or equivalent change detection so full settings/channel materialization happens only when needed. Preserve external compatibility and restart recovery.
+Result: Phase 15 introduces an explicit `PlatformProvider` boundary for platform identity, capabilities, account validation, channel lookup request construction/response parsing, and VOD URL ownership. Existing channel-resolution behavior now routes through the provider contract while compatibility entry points remain intact.
 
-### P2: SQLite access patterns are inconsistent
+Phase 16 should continue the extraction by moving SOOP LIVE discovery/auth/stream-resolution and SOOP VOD metadata/auth details behind provider-specific modules. Recorder/process/history/queue/frontend state should remain common infrastructure rather than being duplicated for CHZZK.
 
-`Store` owns a mutex-protected connection, while VOD queue code opens independent connections for many operations. This works with WAL/busy timeout but makes connection lifetime and contention harder to reason about.
+### P2: periodic SQLite configuration reads — resolved in 15.2
 
-Target: explicitly separate short read/write connections or a shared Store API; avoid holding synchronous SQLite mutexes across `.await` points.
+The native watcher checks settings and channels regularly for hot reload. The original path materialized unchanged SQLite data repeatedly.
 
-### P2: duplicated schema/bootstrap responsibilities
+Result: `Store` keeps committed settings/channels snapshots in memory while SQLite remains canonical. Cache refresh occurs after committed writes and database restore, preserving restart recovery and INI/TXT compatibility without repeated idle SELECT work.
 
-`Store::open()` and `Store::ensure_schema()` contain overlapping schema creation logic. Drift between the two is possible as tables/indexes evolve.
+### P2: SQLite access patterns — improved in 15.1/15.2
 
-Target: one schema initializer/migration path covered by tests.
+`Store` and VOD queue intentionally use different access patterns, but hot paths no longer open/read SQLite redundantly. Synchronous SQLite guards are not held across asynchronous work in the changed paths.
 
-### P2: large modules / phase-named frontend files
+Further consolidation should be driven by measured contention rather than replacing the current WAL/short-operation model speculatively.
 
-Current large modules include `native_watcher.rs` and `vod.rs`; browser behavior is spread across `app.js` plus phase-numbered scripts. Phase numbers are useful history but are not useful production architecture boundaries.
+### P2: duplicated schema/bootstrap responsibilities — resolved in 15.2
 
-Target after hot-path stabilization:
+`Store::open()` and schema repair previously carried overlapping DDL definitions.
+
+Result: both paths use the same schema definition. Restore flow applies the current schema before refreshing runtime caches, so older compatible backups are repaired to the current runtime shape.
+
+### P2: large modules / phase-named frontend files — partially resolved, structural follow-up retained
+
+The largest Rust modules and phase-numbered browser assets are still intentionally present to avoid a broad rename/rewrite in the same PR as runtime changes.
+
+Phase 15 removes the most dangerous coupling — frontend wrapper order — and establishes the provider boundary. Physical file/module decomposition can continue in Phase 16 as platform adapters are extracted.
+
+Target direction remains:
 
 ```text
 Rust
@@ -77,6 +87,7 @@ Rust
   db/
   platform/
     soop/
+    chzzk/
   recorder/
   watcher/
   vod/
@@ -99,47 +110,57 @@ Web
     toast
 ```
 
-This is a direction, not a requirement to rename everything in one PR.
-
-## Planned batches
+## Completed batches
 
 ### 15.1 — hot paths / observability
 
-- Coalesce noisy SSE snapshot triggers.
-- Reduce duplicate VOD queue DB reads.
-- Add focused tests around changed behavior.
-- Record before/after call-frequency expectations where practical.
+- Coalesced noisy SSE snapshot triggers.
+- Reduced duplicate VOD queue DB reads.
+- Replaced broad queue item lookup with direct primary-key lookup.
+- Skipped unchanged VOD history writes.
+- Added focused regression coverage.
 
 ### 15.2 — runtime state flow
 
-- Audit watcher/VOD state transitions and terminal-state ownership.
-- Reduce unnecessary settings/channel reload reads.
-- Check mutex/lifecycle lock scope and `.await` boundaries.
-- Audit subprocess start/cancel/crash/retry cleanup.
+- Added committed settings/channels runtime caches while keeping SQLite canonical.
+- Kept watcher hot-reload semantics without repeated idle database materialization.
+- Unified schema initialization/repair and restore ordering.
+- Audited mutex/lifecycle boundaries in changed paths.
 
 ### 15.3 — frontend state pipeline
 
-- Replace wrapper-order dependencies with one explicit state/event ingest path.
-- Ensure SSE and polling feed identical consumers.
-- Keep Phase 14 notifications behavior identical.
+- Added one explicit shared browser state bus.
+- Routed REST/SSE state into the same consumer pipeline.
+- Removed Phase 13/14 wrapper-order coupling.
+- Preserved Phase 14 LIVE/VOD browser notification behavior through subscribers.
 
 ### 15.4 — structural cleanup / CHZZK readiness
 
-- Extract SOOP-specific discovery/auth/stream resolution boundaries.
-- Keep RecorderManager, VOD queue, history and notifications platform-neutral where possible.
-- Remove dead/duplicate phase-era code only after regression coverage exists.
+- Added the platform provider contract and explicit capabilities.
+- Routed channel validation/lookup through the provider boundary.
+- Added VOD platform-recognition ownership to the provider contract for the next extraction step.
+- Kept recorder, VOD queue, history, notifications, and browser state generic.
 
 ### 15.5 — final verification
 
-- `cargo fmt --check`
-- `cargo test --locked`
-- `cargo check --locked`
-- `cargo clippy` where the runner/toolchain supports it
-- Windows portable package smoke/verify
-- LIVE/VOD cancellation and abnormal-process-exit scenarios
-- multi-client SSE sanity check
-- final secret/privacy scan before public release work
+Blocking CI now includes:
 
-## CHZZK-ready exit criteria
+- Phase 15 architecture regression guard.
+- Owned PID/process-tree lifecycle guard for LIVE and VOD cancellation paths.
+- Public-release secret/privacy scan across tracked text/config files.
+- JavaScript syntax validation using the self-hosted runner's embedded Node when Node is not on PATH.
+- `rustfmt --check` for the new provider boundary files.
+- `cargo test --locked`.
+- `cargo check --locked`.
+- Whole-repository `cargo clippy --all-targets` as an advisory baseline.
+- Windows portable package smoke test and package verification.
 
-Phase 15 is complete when adding CHZZK no longer requires scattering `if platform == ...` through recorder, history, notification, queue, and generic UI state code. Platform-specific code should mainly resolve platform state/metadata/stream inputs; common infrastructure should own execution and lifecycle.
+The repository contains older pre-Phase-15 formatting/clippy style warnings. They are deliberately not converted into blocking `-D warnings` in this optimization PR because doing so would require a broad unrelated rewrite. Newly introduced Phase 15 architectural/lifecycle/privacy invariants are instead enforced by focused blocking guards.
+
+Process lifecycle audit confirms that LIVE explicit stop targets its owned Streamlink PID tree and VOD cancellation routes yt-dlp/ffmpeg subprocesses through the owned-child stop helper. Image-name termination is prohibited by CI guard. LIVE abnormal recorder exits remain classified as failures rather than normal completion.
+
+## CHZZK handoff / exit criteria
+
+Phase 15 is complete when the second platform can be added without reintroducing frontend transport/wrapper coupling or duplicating recorder/history/queue/notification infrastructure.
+
+That criterion is met at the common-infrastructure layer. Phase 16 is responsible for completing provider extraction of the remaining SOOP-specific LIVE discovery/auth/stream-resolution and VOD metadata/auth internals, then implementing the CHZZK provider alongside SOOP rather than scattering platform conditionals through shared code.
