@@ -155,6 +155,18 @@ mod tests {
         assert_eq!(logs.tail(1).await, vec!["realtime-test"]);
     }
 
+    #[tokio::test]
+    async fn log_buffer_notifies_multiple_realtime_subscribers() {
+        let logs = LogBuffer::new();
+        let mut first = logs.subscribe();
+        let mut second = logs.subscribe();
+
+        logs.push("multi-client-realtime-test").await;
+
+        assert!(first.recv().await.is_ok());
+        assert!(second.recv().await.is_ok());
+    }
+
     #[test]
     fn event_snapshots_are_coalesced_below_periodic_interval() {
         assert!(MIN_EVENT_SNAPSHOT_INTERVAL > Duration::ZERO);
