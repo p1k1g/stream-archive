@@ -148,7 +148,6 @@ async fn main() -> Result<()> {
             .await;
     }
 
-    // Phase 11 keeps REST compatibility and adds one authenticated SSE stream for realtime UI updates.
     spawn_vod_history_sync(store.clone(), vod.clone(), logs.clone());
     backup::spawn_auto_backup(backups.clone(), logs.clone());
     vod_queue.clone().spawn();
@@ -348,6 +347,9 @@ fn materialize_primary_files(store: &Store, backend_dir: &Path) -> Result<()> {
         "# ENABLED|NAME|ACCOUNT|OUTDIR".to_string(),
     ];
     for channel in channels {
+        if channel.platform != support::platform::PlatformId::Soop {
+            continue;
+        }
         channel_lines.push(format!(
             "{}|{}|{}|{}",
             if channel.enabled { "Y" } else { "N" },
