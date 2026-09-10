@@ -118,7 +118,7 @@ pub(crate) async fn api_events(
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
+                },
                 _ = sleep_until(next_event_snapshot), if log_snapshot_pending => {
                     log_snapshot_pending = false;
                     true
