@@ -1,6 +1,7 @@
 use crate::{
     backend::{HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS},
     model::Channel,
+    support::platform::PlatformId,
 };
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, HashSet};
@@ -57,7 +58,7 @@ pub fn validate_secret_updates(updates: &BTreeMap<String, String>) -> Result<()>
 }
 
 pub fn validate_channels(channels: &[Channel]) -> Result<()> {
-    let mut accounts = HashSet::new();
+    let mut identities = HashSet::new();
     for channel in channels {
         validate_single_line(&channel.name, 200, "channel name")?;
         validate_single_line(&channel.account, 200, "channel account")?;
@@ -77,8 +78,16 @@ pub fn validate_channels(channels: &[Channel]) -> Result<()> {
                 bail!("{label} cannot contain '|'");
             }
         }
-        if !accounts.insert(channel.account.trim().to_ascii_lowercase()) {
-            bail!("duplicate channel account: {}", channel.account);
+        let identity = (
+            channel.platform,
+            channel.account.trim().to_ascii_lowercase(),
+        );
+        if !identities.insert(identity) {
+            bail!(
+                "duplicate channel identity: {}/{}",
+                channel.platform,
+                channel.account
+            );
         }
     }
     Ok(())
@@ -152,12 +161,14 @@ mod tests {
     fn rejects_duplicate_channel_accounts_case_insensitively() {
         let channels = vec![
             Channel {
+                platform: PlatformId::Soop,
                 enabled: true,
                 name: "A".into(),
                 account: "User".into(),
                 outdir: String::new(),
             },
             Channel {
+                platform: PlatformId::Soop,
                 enabled: true,
                 name: "B".into(),
                 account: "user".into(),
@@ -165,6 +176,15 @@ mod tests {
             },
         ];
         assert!(validate_channels(&channels).is_err());
+    }
+
+    #[test]
+    fn legacy_channel_json_defaults_to_soop() {
+        let channel: Channel = serde_json::from_str(
+            r#"{"enabled":true,"name":"Legacy","account":"legacy","outdir":""}"#,
+        )
+        .unwrap();
+        assert_eq!(channel.platform, PlatformId::Soop);
     }
 
     #[test]
