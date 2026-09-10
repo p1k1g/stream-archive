@@ -34,7 +34,29 @@ jobs:
         run: |
           rustc --version
           cargo --version
+          cargo clippy --version
+          node --version
           git --version
+
+      - name: Phase 15 architecture guard
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./maintenance/Test-Phase15Architecture.ps1
+
+      - name: Public release safety scan
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./maintenance/Test-PublicReleaseSafety.ps1
+
+      - name: JavaScript syntax check
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          Get-ChildItem ./rust-web/web -Filter *.js | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $($_.Name)" }
+          }
+
+      - name: Rust format check
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: cargo fmt --manifest-path rust-web/Cargo.toml -- --check
 
       - name: Rust unit tests
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -43,6 +65,10 @@ jobs:
       - name: Windows native compile check
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: cargo check --locked --manifest-path rust-web/Cargo.toml
+
+      - name: Rust clippy
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets -- -D warnings
 
       - name: Windows portable package smoke
         shell: cmd
