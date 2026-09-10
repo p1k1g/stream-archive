@@ -2,49 +2,63 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SOOP Recorder</title><link rel="stylesheet" href="/style.css?v=p13-queue1">
+<title>Stream Archive</title>
+<script>(()=>{try{const k='streamArchiveTheme',v=localStorage.getItem(k)||'system',p=['system','light','dark'].includes(v)?v:'system',r=p==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):p;document.documentElement.dataset.theme=r;document.documentElement.dataset.themePreference=p}catch{}})()</script>
+<link rel="stylesheet" href="/style.css?v=p13-5-theme1">
 </head>
 <body>
-<header><div><h1>SOOP Recorder</h1><small>Rust Web Phase 13 · VOD 큐 / 알림<span id="realtimeState" class="muted" aria-live="polite"> · 연결 준비</span></small></div><button id="tokenBtn">복구 토큰</button></header>
-<nav id="appTabs" class="app-tabs" role="tablist" aria-label="SOOP Recorder 기능">
-  <button type="button" role="tab" data-app-tab="dashboard" class="active" aria-selected="true">대시보드</button>
-  <button type="button" role="tab" data-app-tab="channels" aria-selected="false">채널</button>
-  <button type="button" role="tab" data-app-tab="vod" aria-selected="false">VOD</button>
-  <button type="button" role="tab" data-app-tab="history" aria-selected="false">기록</button>
-  <button type="button" role="tab" data-app-tab="settings" aria-selected="false">설정</button>
-</nav>
+<aside class="p135-sidebar">
+  <div class="p135-brand"><div class="p135-brand-mark">SA</div><div><strong>Stream Archive</strong><small>LIVE &amp; VOD Manager</small></div></div>
+  <nav id="appTabs" class="app-tabs" role="tablist" aria-label="Stream Archive 기능">
+    <button type="button" role="tab" data-app-tab="dashboard" class="active" aria-selected="true"><span class="p135-nav-icon" aria-hidden="true">⌂</span><span>대시보드</span></button>
+    <button type="button" role="tab" data-app-tab="channels" aria-selected="false"><span class="p135-nav-icon" aria-hidden="true">◎</span><span>채널</span></button>
+    <button type="button" role="tab" data-app-tab="vod" aria-selected="false"><span class="p135-nav-icon" aria-hidden="true">▶</span><span>VOD</span></button>
+    <button type="button" role="tab" data-app-tab="history" aria-selected="false"><span class="p135-nav-icon" aria-hidden="true">◷</span><span>기록</span></button>
+    <button type="button" role="tab" data-app-tab="settings" aria-selected="false"><span class="p135-nav-icon" aria-hidden="true">⚙</span><span>설정</span></button>
+  </nav>
+  <div class="p135-platform-card">
+    <span class="p135-platform-label">연결 플랫폼</span>
+    <strong><i></i> SOOP</strong>
+    <small>현재 활성 · 추후 다른 스트리밍 플랫폼 확장 예정</small>
+  </div>
+</aside>
+<div class="p135-workspace">
+<header><div><h1>Stream Archive</h1><small>멀티플랫폼 LIVE &amp; VOD 아카이브<span id="realtimeState" class="muted" aria-live="polite"> · 연결 준비</span></small></div><button id="tokenBtn" class="secondary">복구 토큰</button></header>
 <main>
 <div class="tab-page" data-tab-page="dashboard">
-<section>
-  <div class="title"><h2>Watcher</h2><b id="watcher">확인 중</b></div>
-  <div class="summary"><span>Engine <b id="engine">-</b></span><span>채널 <b id="channelCount">0</b></span><span>REC <b id="recCount">0</b></span><span>OFFLINE <b id="offlineCount">0</b></span><span>ERROR <b id="errorCount">0</b></span></div>
-  <p class="mono">Backend: <span id="backend">-</span></p>
-  <button id="start">시작</button> <button id="stop" class="danger">중지</button>
+<div class="p135-page-head"><div><span class="p135-eyebrow">OVERVIEW</span><h2>대시보드</h2><p>방송 감시, 저장공간, 실행 상태를 한눈에 확인합니다.</p></div><span class="p135-status-pill">● LOCAL</span></div>
+<section class="p135-watcher-card">
+  <div class="title"><div><span class="p135-section-kicker">LIVE MONITOR</span><h2>방송 감시</h2></div><b id="watcher">확인 중</b></div>
+  <div class="summary"><span>Engine <b id="engine">-</b></span><span>감시 채널 <b id="channelCount">0</b></span><span>현재 녹화 <b id="recCount">0</b></span><span>OFFLINE <b id="offlineCount">0</b></span><span>ERROR <b id="errorCount">0</b></span></div>
+  <p class="mono p135-backend-line">Backend: <span id="backend">-</span></p>
+  <div class="p135-action-row"><button id="start">감시 시작</button> <button id="stop" class="danger">감시 중지</button></div>
 </section>
-<section>
-  <div class="title"><h2>저장소 / 디스크</h2><button id="p8RefreshStorage">새로고침</button></div>
+<section class="p135-storage-card">
+  <div class="title"><div><span class="p135-section-kicker">STORAGE</span><h2>저장소 / 디스크</h2></div><button id="p8RefreshStorage" class="secondary">새로고침</button></div>
   <div class="summary"><span>최소 여유공간 <b id="p8StorageThreshold">-</b></span><span>SQLite 크기 <b id="p8DbSize">-</b></span></div>
   <div class="table"><table><thead><tr><th>상태</th><th>용도</th><th>경로</th><th>남은 공간 / 사용률</th></tr></thead><tbody id="p8StorageVolumes"></tbody></table></div>
   <p class="hint">같은 드라이브를 여러 LIVE 채널이 사용하는 경우 하나의 저장소로 묶어서 표시합니다. WARN은 MIN_FREE_SPACE_GB의 2배 이하, CRITICAL은 기준 이하입니다.</p>
 </section>
-<section>
-  <div class="title"><h2>실시간 상태</h2><button id="refreshStatus">새로고침</button></div>
+<section class="p135-runtime-card">
+  <div class="title"><div><span class="p135-section-kicker">NOW</span><h2>실시간 상태</h2></div><button id="refreshStatus" class="secondary">새로고침</button></div>
   <div class="table"><table><thead><tr><th>상태</th><th>이름</th><th>계정</th><th>방송/파일</th><th>크기</th><th>제어</th></tr></thead><tbody id="runtime"></tbody></table></div>
 </section>
-<section><div class="title"><h2>로그</h2><button id="refreshLogs">새로고침</button></div><pre id="logs">로딩 중...</pre></section>
+<section class="p135-log-card"><div class="title"><div><span class="p135-section-kicker">ACTIVITY</span><h2>최근 활동 로그</h2></div><button id="refreshLogs" class="secondary">새로고침</button></div><pre id="logs">로딩 중...</pre></section>
 </div>
 
 <div class="tab-page" data-tab-page="channels" hidden>
+<div class="p135-page-head"><div><span class="p135-eyebrow">CHANNELS</span><h2>채널 관리</h2><p>자동 녹화할 채널과 저장 경로를 한 곳에서 관리합니다.</p></div></div>
 <section>
-  <div class="title"><h2>채널</h2><div><button id="add">+ 추가</button> <button id="restoreChannels">백업 복구</button> <button id="saveChannels">저장</button><input id="channelBackupFile" type="file" accept=".txt,.bak,text/plain" hidden></div></div>
+  <div class="title"><div><span class="p135-section-kicker">WATCH LIST</span><h2>감시 채널</h2></div><div><button id="add">+ 채널 추가</button> <button id="restoreChannels" class="secondary">백업 복구</button> <button id="saveChannels">저장</button><input id="channelBackupFile" type="file" accept=".txt,.bak,text/plain" hidden></div></div>
   <div class="table"><table><thead><tr><th>사용</th><th>이름</th><th>계정</th><th>출력경로</th><th></th></tr></thead><tbody id="channels"></tbody></table></div>
   <p class="hint">기존 SOOP_LIVE_CHANNELS.txt 또는 .bak 파일을 선택하면 SQLite 채널 목록으로 복구합니다.</p>
 </section>
 </div>
 
 <div class="tab-page" data-tab-page="vod" hidden>
-<section>
-  <div class="title"><h2>VOD</h2><div><button id="vodAnalyze">분석</button> <button id="vodDownload">다운로드</button> <button id="vodCancel" class="danger">취소</button></div></div>
+<div class="p135-page-head"><div><span class="p135-eyebrow">VOD</span><h2>VOD 다운로드</h2><p>VOD를 분석하고 큐에 쌓아 한 건씩 안정적으로 다운로드합니다.</p></div></div>
+<section class="p135-vod-input">
+  <div class="title"><div><span class="p135-section-kicker">NEW JOB</span><h2>새 다운로드</h2></div><div><button id="vodAnalyze" class="secondary">분석</button> <button id="vodDownload">다운로드</button> <button id="vodCancel" class="danger">취소</button></div></div>
   <div class="grid">
     <label>VOD URL<input id="vodUrl" placeholder="https://vod.sooplive.com/player/..."></label>
     <label>출력 폴더<input id="vodOutput" placeholder="C:\SOOP_VOD"></label>
@@ -60,8 +74,8 @@
   <p id="p8VodStorage" class="hint">VOD 출력 폴더를 입력하면 남은 공간을 확인합니다.</p>
   <p id="vodMessage" class="hint"></p><p id="vodMeta" class="mono"></p><p id="vodOutputFile" class="mono"></p>
 </section>
-<section>
-  <div class="title"><h2>VOD 다운로드 큐</h2><div><button id="vodNotify" type="button">브라우저 알림 켜기</button> <button id="p13QueueRefresh" type="button">새로고침</button></div></div>
+<section class="p135-vod-queue">
+  <div class="title"><div><span class="p135-section-kicker">QUEUE</span><h2>다운로드 큐</h2></div><div><button id="vodNotify" type="button" class="secondary">브라우저 알림 켜기</button> <button id="p13QueueRefresh" type="button" class="secondary">새로고침</button></div></div>
   <div class="summary"><span>실행 <b id="p13QueueActive">0</b></span><span>대기 <b id="p13QueueWaiting">0</b></span><span>처리 방식 <b>1건씩 순차 실행</b></span></div>
   <p class="hint">위의 <b>큐에 추가</b>를 누르면 여러 VOD를 저장해 두고 한 건씩 순서대로 다운로드합니다. 실패·취소·서버 재시작으로 중단된 작업은 재시도할 수 있습니다. 브라우저 알림은 현재 브라우저에만 저장됩니다.</p>
   <div class="table"><table><thead><tr><th>상태</th><th>VOD</th><th>시도</th><th>진행</th><th>메시지 / 결과</th><th>제어</th></tr></thead><tbody id="p13QueueRows"></tbody></table></div>
@@ -69,8 +83,9 @@
 </div>
 
 <div class="tab-page" data-tab-page="history" hidden>
+<div class="p135-page-head"><div><span class="p135-eyebrow">HISTORY</span><h2>기록</h2><p>LIVE 녹화와 VOD 작업 이력을 검색하고 내보냅니다.</p></div></div>
 <section>
-  <div class="title"><h2>History 검색</h2><div><button id="p8ExportHistory">CSV</button> <button id="p8ClearHistory">초기화</button> <button id="p8ApplyHistory">조회</button></div></div>
+  <div class="title"><div><span class="p135-section-kicker">FILTER</span><h2>기록 검색</h2></div><div><button id="p8ExportHistory" class="secondary">CSV</button> <button id="p8ClearHistory" class="secondary">초기화</button> <button id="p8ApplyHistory">조회</button></div></div>
   <div class="grid">
     <label>검색<input id="p8HistoryQ" placeholder="채널, 계정, 제목, 파일, URL"></label>
     <label>상태<input id="p8HistoryStatus" placeholder="예: COMPLETE / INTERRUPTED"></label>
@@ -90,8 +105,9 @@
 </div>
 
 <div class="tab-page" data-tab-page="settings" hidden>
+<div class="p135-page-head"><div><span class="p135-eyebrow">SETTINGS</span><h2>설정</h2><p>녹화, 외부 도구, 인증, 백업과 고급 설정을 관리합니다.</p></div></div>
 <section>
-  <div class="title"><h2>설정</h2><div><button id="importSettings">이전 설정 가져오기</button> <button id="saveSettings">저장</button><input id="settingsImportFile" type="file" accept=".ini,.bak,text/plain" hidden></div></div>
+  <div class="title"><div><span class="p135-section-kicker">PREFERENCES</span><h2>환경 설정</h2></div><div><button id="importSettings" class="secondary">이전 설정 가져오기</button> <button id="saveSettings">저장</button><input id="settingsImportFile" type="file" accept=".ini,.bak,text/plain" hidden></div></div>
   <nav id="settingsTabs" class="settings-tabs" role="tablist" aria-label="설정 분류">
     <button type="button" role="tab" data-settings-tab="general" class="active" aria-selected="true">기본</button>
     <button type="button" role="tab" data-settings-tab="watcher" aria-selected="false">방송 / 녹화</button>
@@ -113,14 +129,14 @@
     <p class="hint">저장된 값은 API/화면으로 다시 노출하지 않습니다. Windows CurrentUser DPAPI로 암호화하며 기존 dpapi:v1 값과 호환됩니다.</p>
   </div>
   <div id="p12BackupPanel" hidden>
-    <div class="title inner-title"><h3>데이터 백업 / 복원</h3><div><button id="p12BackupRefresh">새로고침</button> <button id="p12BackupNow">지금 백업</button></div></div>
+    <div class="title inner-title"><h3>데이터 백업 / 복원</h3><div><button id="p12BackupRefresh" class="secondary">새로고침</button> <button id="p12BackupNow">지금 백업</button></div></div>
     <div class="summary"><span>백업 위치 <b id="p12BackupDir">-</b></span><span>정책 <b id="p12BackupPolicy">-</b></span></div>
-    <p class="hint">기본 백업 위치는 SOOP Recorder 폴더 바깥의 <code>soop-recorder-backups</code>입니다. 따라서 portable 패키지를 다시 만들거나 <code>soop-recorder</code> 폴더를 교체해도 백업이 같이 삭제되지 않습니다. 필요하면 SOOP_BACKUP_DIR 환경변수로 위치를 바꿀 수 있습니다.</p>
+    <p class="hint">기본 백업 위치는 프로그램 폴더 바깥의 <code>soop-recorder-backups</code>입니다. 따라서 portable 패키지를 다시 만들거나 프로그램 폴더를 교체해도 백업이 같이 삭제되지 않습니다. 필요하면 SOOP_BACKUP_DIR 환경변수로 위치를 바꿀 수 있습니다.</p>
     <div class="table"><table><thead><tr><th>생성</th><th>종류</th><th>파일</th><th>크기</th><th>SHA-256</th><th>무결성</th><th></th></tr></thead><tbody id="p12BackupRows"></tbody></table></div>
     <p class="hint">복원은 Watcher와 VOD가 모두 중지되고 VOD 다운로드 큐가 비어 있는 상태에서만 가능합니다. 복원 직전에 현재 DB를 자동 안전백업하고, 과거 로그인 세션이 되살아나지 않도록 모든 세션을 무효화합니다.</p>
   </div>
   <div id="p102AdvancedPanel" hidden>
-    <div class="title inner-title"><h3>서버 / 진단 정보</h3><button id="refreshDiagnostics">새로고침</button></div>
+    <div class="title inner-title"><h3>서버 / 진단 정보</h3><button id="refreshDiagnostics" class="secondary">새로고침</button></div>
     <div class="summary"><span>수신 주소 <b id="diagBind">-</b></span><span>Watcher 설정 원본 <b id="diagSource">-</b></span><span>로컬 전용 <b id="diagLoopback">-</b></span></div>
     <p class="mono">SQLite DB: <span id="diagDb">-</span></p>
     <p id="diagRemote" class="hint">진단 중...</p>
@@ -130,7 +146,9 @@
 </section>
 </div>
 
-</main><div id="toast"></div><script src="/phase10.js?v=p13-queue1"></script><script src="/app.js?v=p13-queue1"></script><script src="/phase8.js?v=p13-queue1"></script><script src="/phase9_1.js?v=p13-queue1"></script>
+</main>
+</div>
+<div id="toast"></div><script src="/phase10.js?v=p13-5-auth1"></script><script src="/app.js?v=p13-queue1"></script><script src="/phase8.js?v=p13-queue1"></script><script src="/phase9_1.js?v=p13-queue1"></script>
 <script src="/phase12.js?v=p13-queue1"></script>
-<script src="/phase13.js?v=p13-1-stability1"></script>
+<script src="/phase13.js?v=p13-5-theme1"></script>
 </body></html>
