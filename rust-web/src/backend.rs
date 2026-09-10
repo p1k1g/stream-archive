@@ -1,4 +1,4 @@
-use crate::model::Channel;
+use crate::{model::Channel, support::platform::PlatformId};
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use atomic_write_file::AtomicWriteFile;
@@ -323,6 +323,7 @@ pub fn read_channels(path: &Path) -> Result<Vec<Channel>> {
             bail!("invalid channel line {} in {}", index + 1, path.display());
         }
         channels.push(Channel {
+            platform: PlatformId::Soop,
             enabled: parts[0].trim().eq_ignore_ascii_case("Y"),
             name: parts[1].trim().to_string(),
             account: parts[2].trim().to_string(),
@@ -338,6 +339,9 @@ pub fn write_channels(path: &Path, channels: &[Channel]) -> Result<()> {
     let mut accounts = HashSet::new();
     for channel in channels {
         validate_channel(channel)?;
+        if channel.platform != PlatformId::Soop {
+            continue;
+        }
         let account_key = channel.account.to_ascii_lowercase();
         if !accounts.insert(account_key) {
             bail!("duplicate channel account: {}", channel.account);
@@ -465,6 +469,7 @@ mod tests {
             fs::write(&path, content).unwrap();
             let channels = read_channels(&path).unwrap();
             assert_eq!(channels.len(), 2);
+            assert_eq!(channels[0].platform, PlatformId::Soop);
             assert_eq!(channels[0].account, "a");
             assert_eq!(channels[1].outdir, "D:\\B");
         }
@@ -497,6 +502,7 @@ mod tests {
         fs::write(&path, "Y|Old|old|\r\n").unwrap();
 
         let channels = vec![Channel {
+            platform: PlatformId::Soop,
             enabled: true,
             name: "New".into(),
             account: "new".into(),
@@ -511,12 +517,14 @@ mod tests {
 
         let dup = vec![
             Channel {
+                platform: PlatformId::Soop,
                 enabled: true,
                 name: "A".into(),
                 account: "same".into(),
                 outdir: "".into(),
             },
             Channel {
+                platform: PlatformId::Soop,
                 enabled: true,
                 name: "B".into(),
                 account: "SAME".into(),
