@@ -11,6 +11,7 @@ const p14LiveStates=new Map();
 const p14VodStates=new Map();
 let p14Panel=null;
 let p14TabButton=null;
+let p14TrackingInstalled=false;
 
 function p14LoadConfig(){
   let saved=null;
@@ -83,21 +84,12 @@ function p14TrackVod(snapshot){
   p14VodStates.clear();next.forEach((v,k)=>p14VodStates.set(k,v));
 }
 function p14InstallTracking(){
-  if(typeof window.renderStatus==='function'&&!window.renderStatus.__p14Wrapped){
-    const base=window.renderStatus;
-    const wrapped=function(d){const r=base(d);try{p14TrackLive(d?.watcher)}catch(e){console.warn('Phase14 LIVE tracking failed',e)}return r};
-    wrapped.__p14Wrapped=true;window.renderStatus=wrapped;
-  }
-  if(typeof window.api==='function'&&!window.api.__p14Wrapped){
-    const base=window.api;
-    const wrapped=async function(path,opt={}){const result=await base(path,opt);try{const method=String(opt?.method||'GET').toUpperCase();if(path==='/api/vod/queue'&&method==='GET')p14TrackVod(result)}catch(e){console.warn('Phase14 VOD REST tracking failed',e)}return result};
-    wrapped.__p14Wrapped=true;window.api=wrapped;
-  }
-  if(typeof window.applyRealtimeSnapshot==='function'&&!window.applyRealtimeSnapshot.__p14Wrapped){
-    const base=window.applyRealtimeSnapshot;
-    const wrapped=function(data){const r=base(data);try{if(data?.queue)p14TrackVod(data.queue)}catch(e){console.warn('Phase14 VOD SSE tracking failed',e)}return r};
-    wrapped.__p14Wrapped=true;window.applyRealtimeSnapshot=wrapped;
-  }
+  if(p14TrackingInstalled)return;
+  const bus=window.StreamArchiveState;
+  if(!bus?.subscribe){console.warn('Phase14 state bus unavailable');return}
+  p14TrackingInstalled=true;
+  bus.subscribe('status',d=>{try{p14TrackLive(d?.watcher)}catch(e){console.warn('Phase14 LIVE tracking failed',e)}},{replay:true});
+  bus.subscribe('queue',snapshot=>{try{p14TrackVod(snapshot)}catch(e){console.warn('Phase14 VOD tracking failed',e)}},{replay:true});
 }
 function p14Option(key,title,desc){return `<div class="p14-notify-option"><div><strong>${title}</strong><small>${desc}</small></div><label class="p14-switch" title="${title}"><input type="checkbox" data-p14-key="${key}"></label></div>`}
 function p14BuildPanel(){
