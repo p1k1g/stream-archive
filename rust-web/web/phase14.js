@@ -177,3 +177,145 @@ function p14RemoveLegacyVodUi(){
 function p14Init(){p14RemoveLegacyVodUi();p14InstallSettingsTab();p14InstallTracking();window.addEventListener('focus',p14RenderSettings)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',p14Init,{once:true});else p14Init();
 })();
+
+(()=>{
+'use strict';
+
+const P166_STATUS={IDLE:'대기',READY:'대기',QUEUED:'대기',ANALYZING:'분석 중',RUNNING:'진행 중',MERGING:'병합 중',COMPLETED:'완료',FAILED:'실패',INTERRUPTED:'비정상 종료',CANCELLED:'취소',STOPPED:'중지'};
+const P166_REASON={
+  'WATCHER EXIT':'감시 종료',
+  'CHANNEL REMOVED':'채널 삭제',
+  'CHANNEL DISABLED':'채널 비활성화',
+  'USER CHANNEL STOP':'사용자 중지',
+  'BROADCAST ENDED':'방송 종료',
+  'BROADCAST CHANGED':'방송 변경',
+  'LOW DISK SPACE':'디스크 공간 부족',
+  'RECORD STALLED':'녹화 정지 감지',
+  'NORMAL':'정상 종료'
+};
+
+function p166TranslateStatus(value){return P166_STATUS[String(value||'').trim()]||value}
+function p166TranslateReason(value){
+  const raw=String(value||'').trim();
+  if(P166_REASON[raw])return P166_REASON[raw];
+  const match=raw.match(/^RECORDER EXIT CODE=(.+)$/);
+  if(match)return `녹화 프로세스 비정상 종료 (코드: ${match[1]})`;
+  return value;
+}
+function p166PatchStatusText(){
+  const base=window.statusText;
+  if(typeof base==='function'&&!base.__phase166){
+    const wrapped=function(value){return P166_STATUS[value]||base(value)};
+    wrapped.__phase166=true;
+    window.statusText=wrapped;
+  }
+}
+function p166TranslateTextNodes(root,translator){
+  if(!root)return;
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  const nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);
+  for(const node of nodes){
+    const raw=node.nodeValue||'';const trimmed=raw.trim();if(!trimmed)continue;
+    const translated=translator(trimmed);
+    if(translated!==trimmed){const start=raw.indexOf(trimmed);node.nodeValue=raw.slice(0,start)+translated+raw.slice(start+trimmed.length)}
+  }
+}
+function p166TranslateDynamicUi(){
+  for(const id of ['p13QueueRows','p8VodHistory']){
+    const body=document.getElementById(id);if(!body)continue;
+    body.querySelectorAll('tr td:first-child').forEach(cell=>p166TranslateTextNodes(cell,p166TranslateStatus));
+  }
+  const live=document.getElementById('p8LiveHistory');
+  if(live){
+    live.querySelectorAll('tr td:first-child').forEach(cell=>p166TranslateTextNodes(cell,p166TranslateStatus));
+    live.querySelectorAll('tr td:last-child').forEach(cell=>p166TranslateTextNodes(cell,p166TranslateReason));
+  }
+  const vodState=document.getElementById('vodState');if(vodState)vodState.textContent=p166TranslateStatus(vodState.textContent);
+  const watcher=document.getElementById('watcher');if(watcher){const raw=watcher.textContent.trim();if(raw==='RUNNING')watcher.textContent='감시 중';else if(raw==='STOPPED')watcher.textContent='중지'}
+}
+function p166ObserveDynamicUi(){
+  const targets=['p13QueueRows','p8VodHistory','p8LiveHistory','vodState','watcher'].map(id=>document.getElementById(id)).filter(Boolean);
+  const observer=new MutationObserver(()=>p166TranslateDynamicUi());
+  targets.forEach(el=>observer.observe(el,{childList:true,subtree:true,characterData:true}));
+  p166TranslateDynamicUi();
+}
+function p166PolishDashboard(){
+  const card=document.querySelector('.p135-watcher-card');if(!card)return;
+  const spans=[...card.querySelectorAll('.summary>span')];
+  if(spans[3]){for(const node of spans[3].childNodes){if(node.nodeType===Node.TEXT_NODE&&node.nodeValue.includes('OFFLINE'))node.nodeValue=node.nodeValue.replace('OFFLINE','오프라인')}}
+  if(spans[4]){for(const node of spans[4].childNodes){if(node.nodeType===Node.TEXT_NODE&&node.nodeValue.includes('ERROR'))node.nodeValue=node.nodeValue.replace('ERROR','오류')}}
+}
+function p166InstallChannelScroll(){document.getElementById('channels')?.closest('.table')?.classList.add('p166-channel-scroll')}
+function p166InstallHistoryLayout(){
+  const page=document.querySelector('[data-tab-page="history"]');if(!page||page.classList.contains('p166-history-layout'))return;
+  const sections=[...page.children].filter(el=>el.tagName==='SECTION');const left=sections[0];if(!left)return;
+  const headings=[...left.querySelectorAll(':scope > h3')];if(headings.length<2)return;
+  const liveHeading=headings[0],vodHeading=headings[1];const liveTable=liveHeading.nextElementSibling,vodTable=vodHeading.nextElementSibling;
+  if(!liveTable?.classList.contains('table')||!vodTable?.classList.contains('table'))return;
+  page.classList.add('p166-history-layout');left.classList.add('p166-history-live');liveTable.classList.add('p166-history-scroll');
+  const right=document.createElement('section');right.className='p166-history-vod';
+  const title=document.createElement('div');title.className='title';title.innerHTML='<div><span class="p135-section-kicker">VOD HISTORY</span><h2>VOD 작업 이력</h2></div>';
+  vodHeading.remove();vodTable.classList.add('p166-history-scroll');right.append(title,vodTable);
+  const legacy=sections.find(section=>section.getAttribute('aria-hidden')==='true');
+  if(legacy)page.insertBefore(right,legacy);else page.appendChild(right);
+}
+async function p166LoadBackendDiagnostic(){
+  const target=document.getElementById('p166DiagBackend');if(!target)return;
+  try{const d=await api('/api/status');target.textContent=d?.backend_dir||'-'}catch(e){target.textContent='조회 실패'}
+}
+function p166InstallBackendDiagnostic(){
+  const panel=document.getElementById('p102AdvancedPanel');if(!panel||document.getElementById('p166DiagBackend'))return;
+  const db=document.getElementById('diagDb')?.closest('p');if(!db)return;
+  const line=document.createElement('p');line.className='mono p166-diag-line';line.innerHTML='Backend: <span id="p166DiagBackend">-</span>';db.insertAdjacentElement('afterend',line);
+  document.getElementById('refreshDiagnostics')?.addEventListener('click',()=>setTimeout(p166LoadBackendDiagnostic,0));
+  document.querySelector('[data-settings-tab="advanced"]')?.addEventListener('click',()=>setTimeout(p166LoadBackendDiagnostic,0));
+  p166LoadBackendDiagnostic();
+}
+async function p166LoadBackupPath(){
+  const input=document.getElementById('p166BackupDir'),note=document.getElementById('p166BackupDirNote');if(!input)return;
+  try{
+    const [settings,backups]=await Promise.all([api('/api/settings'),api('/api/backups')]);
+    input.value=settings?.values?.BACKUP_DIR||'';input.placeholder=backups?.directory||'기본 백업 위치';input.dataset.resolved=backups?.directory||'';
+    const editable=backups?.directory_editable!==false;
+    input.disabled=!editable;document.querySelectorAll('[data-p166-backup-action]').forEach(btn=>btn.disabled=!editable);
+    if(note)note.textContent=editable?'비워두면 프로그램 폴더 바깥의 기본 soop-recorder-backups 위치를 사용합니다. 위치 변경은 즉시 다음 백업/목록 조회부터 적용되며 기존 백업 파일은 자동 이동하지 않습니다.':'SOOP_BACKUP_DIR 환경변수가 설정되어 있어 UI에서 백업 위치를 변경할 수 없습니다.';
+  }catch(e){if(note)note.textContent='백업 위치 조회 실패: '+e.message}
+}
+async function p166PickBackupPath(){
+  const input=document.getElementById('p166BackupDir');if(!input)return;
+  try{
+    const result=await api('/api/local-picker',{method:'POST',body:JSON.stringify({kind:'folder',filter:'all',initial_path:input.value.trim()||input.dataset.resolved||''})});
+    if(result&&!result.cancelled&&result.path)input.value=result.path;
+  }catch(e){alert('폴더 선택 실패: '+e.message)}
+}
+async function p166SaveBackupPath(){
+  const input=document.getElementById('p166BackupDir');if(!input)return;
+  const value=input.value.trim();
+  try{
+    await api('/api/settings',{method:'PUT',body:JSON.stringify({BACKUP_DIR:value})});
+    await p166LoadBackupPath();
+    if(typeof window.p12LoadBackups==='function')await window.p12LoadBackups();
+    toast(value?'백업 위치 변경 완료':'기본 백업 위치로 변경 완료');
+  }catch(e){alert('백업 위치 저장 실패: '+e.message)}
+}
+function p166InstallBackupPath(){
+  const panel=document.getElementById('p12BackupPanel');if(!panel||document.getElementById('p166BackupDir'))return;
+  const summary=panel.querySelector('.summary');if(!summary)return;
+  const card=document.createElement('div');card.className='p166-backup-path-card';card.innerHTML=`
+    <label>백업 디렉토리<input id="p166BackupDir" type="text" placeholder="기본 백업 위치"></label>
+    <div class="p166-backup-path-actions"><button type="button" class="secondary" data-p166-backup-action="pick">폴더 선택</button><button type="button" class="secondary" data-p166-backup-action="default">기본 위치</button><button type="button" data-p166-backup-action="save">적용</button></div>
+    <p id="p166BackupDirNote" class="hint">백업 위치를 확인합니다.</p>`;
+  summary.insertAdjacentElement('afterend',card);
+  card.querySelector('[data-p166-backup-action="pick"]').addEventListener('click',p166PickBackupPath);
+  card.querySelector('[data-p166-backup-action="default"]').addEventListener('click',()=>{card.querySelector('#p166BackupDir').value=''});
+  card.querySelector('[data-p166-backup-action="save"]').addEventListener('click',p166SaveBackupPath);
+  const oldHint=card.nextElementSibling;if(oldHint?.classList.contains('hint'))oldHint.textContent='백업 디렉토리는 UI에서 변경할 수 있습니다. SOOP_BACKUP_DIR 환경변수가 설정된 경우 환경변수 위치가 우선하며 UI 입력은 잠깁니다.';
+  document.querySelector('[data-settings-tab="backup"]')?.addEventListener('click',()=>setTimeout(p166LoadBackupPath,0));
+  document.getElementById('p12BackupRefresh')?.addEventListener('click',()=>setTimeout(p166LoadBackupPath,0));
+  p166LoadBackupPath();
+}
+function p166Init(){
+  p166PatchStatusText();p166PolishDashboard();p166InstallChannelScroll();p166InstallHistoryLayout();p166InstallBackendDiagnostic();p166InstallBackupPath();p166ObserveDynamicUi();
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',p166Init,{once:true});else p166Init();
+})();
