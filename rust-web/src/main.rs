@@ -161,6 +161,8 @@ async fn main() -> Result<()> {
         .route("/phase10.js", get(phase10_js))
         .route("/phase12.js", get(phase12_js))
         .route("/phase13.js", get(phase13_js))
+        .route("/phase14.js", get(phase14_js))
+        .route("/phase14.css", get(phase14_css))
         .route("/style.css", get(style_css))
         .route("/api/auth/status", get(auth::api_status))
         .route("/api/auth/setup", post(auth::api_setup))
@@ -434,6 +436,18 @@ async fn phase13_js() -> impl IntoResponse {
     (
         [(CONTENT_TYPE, "application/javascript; charset=utf-8")],
         include_str!("../web/phase13.js"),
+    )
+}
+async fn phase14_js() -> impl IntoResponse {
+    (
+        [(CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        include_str!("../web/phase14.js"),
+    )
+}
+async fn phase14_css() -> impl IntoResponse {
+    (
+        [(CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../web/phase14.css"),
     )
 }
 async fn style_css() -> impl IntoResponse {
