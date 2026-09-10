@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use std::time::Duration;
 
-#[path = "platform.rs"]
+#[path = "platform/mod.rs"]
 pub mod platform;
 
 use platform::{PlatformId, default_platform, provider};
