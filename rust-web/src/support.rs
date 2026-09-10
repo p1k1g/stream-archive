@@ -17,7 +17,9 @@ pub async fn resolve_channel_name_for(platform: PlatformId, account: &str) -> Re
     provider.validate_account(account)?;
 
     let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36")
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+        )
         .timeout(Duration::from_secs(10))
         .no_proxy()
         .http1_only()
