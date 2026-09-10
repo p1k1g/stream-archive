@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::{fmt, str::FromStr};
 use url::Url;
 
+pub mod live;
 pub mod soop;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
