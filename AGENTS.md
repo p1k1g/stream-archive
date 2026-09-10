@@ -5,13 +5,19 @@
 ## Canonical runtime
 
 - `rust-web/src/main.rs`: Axum server/API orchestration
-- `rust-web/src/native_watcher.rs`: LIVE 상태 감시
+- `rust-web/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration
 - `rust-web/src/recorder.rs`: streamlink process ownership/lifecycle
-- `rust-web/src/vod.rs`: VOD analyze/download/merge lifecycle
+- `rust-web/src/platform/live.rs`: platform-neutral LIVE provider facade/session types
+- `rust-web/src/platform/soop/live.rs`: SOOP LIVE login/discovery/password/stream resolution
+- `rust-web/src/vod.rs`: public/legacy VOD compatibility facade
+- `rust-web/src/platform/vod.rs`: platform-neutral VOD lifecycle/dispatch
+- `rust-web/src/platform/soop/vod.rs`: SOOP VOD authentication/analyze/download/merge implementation
 - `rust-web/src/security.rs`: Windows DPAPI secret protection
 - `rust-web/src/store.rs`: SQLite persistence/history
 - `rust-web/src/backend.rs`: INI/TXT compatibility layer
 - `rust-web/web/*`: browser UI
+
+Provider-specific network/authentication/stream mechanics live under `rust-web/src/platform/<provider>/`; common queue/history/API orchestration must depend on the platform-neutral facades rather than a provider implementation directly.
 
 ## Runtime compatibility files
 
