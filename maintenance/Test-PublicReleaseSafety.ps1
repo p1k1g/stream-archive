@@ -13,8 +13,8 @@ try {
         @{ Name = 'OpenAI-style API key'; Pattern = 'sk-[A-Za-z0-9_-]{20,}' },
         @{ Name = 'AWS access key'; Pattern = 'AKIA[0-9A-Z]{16}' },
         @{ Name = 'Local developer user path'; Pattern = '(?i)C:\\Users\\pokga(?:\\|/)' },
-        @{ Name = 'Non-empty SOOP password assignment'; Pattern = '(?im)^\s*SOOP_PASSWORD\s*=\s*(?!\s*(?:$|<[^>]+>|CHANGE_ME|YOUR_[A-Z0-9_]+)\s*$).+' },
-        @{ Name = 'Non-empty Cloudflare API key assignment'; Pattern = '(?im)^\s*CLOUDFLARE_API_KEY\s*=\s*(?!\s*(?:$|<[^>]+>|CHANGE_ME|YOUR_[A-Z0-9_]+)\s*$).+' },
+        @{ Name = 'Non-empty SOOP password assignment'; Pattern = '(?im)^[ \t]*SOOP_PASSWORD[ \t]*=[ \t]*(?!<[^>\r\n]+>[ \t]*$)(?!CHANGE_ME[ \t]*$)(?!YOUR_[A-Z0-9_]+[ \t]*$)\S[^\r\n]*$' },
+        @{ Name = 'Non-empty Cloudflare API key assignment'; Pattern = '(?im)^[ \t]*CLOUDFLARE_API_KEY[ \t]*=[ \t]*(?!<[^>\r\n]+>[ \t]*$)(?!CHANGE_ME[ \t]*$)(?!YOUR_[A-Z0-9_]+[ \t]*$)\S[^\r\n]*$' },
         @{ Name = 'Discord webhook'; Pattern = 'https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9._-]+' },
         @{ Name = 'Teams legacy webhook'; Pattern = 'https://[^\s]+\.webhook\.office\.com/webhookb2/[A-Za-z0-9@/_-]+' }
     )
