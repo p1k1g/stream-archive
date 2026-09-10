@@ -80,7 +80,14 @@ impl LiveSession {
         match (self, &broadcast.payload) {
             (Self::Soop(session), BroadcastPayload::Soop(value)) => {
                 let stream = session
-                    .resolve_stream(account, value, config.worker_url, config.worker_api_key, config.max_retries, password)
+                    .resolve_stream(
+                        account,
+                        value,
+                        config.worker_url,
+                        config.worker_api_key,
+                        config.max_retries,
+                        password,
+                    )
                     .await?;
                 Ok(ResolvedStream {
                     quality: stream.quality,
