@@ -37,7 +37,7 @@ jobs:
           cargo clippy --version
           git --version
 
-      - name: Phase 15 architecture guard
+      - name: Phase 15/16 architecture guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./maintenance/Test-Phase15Architecture.ps1
 
@@ -71,11 +71,11 @@ jobs:
           }
 
       # The repository contains formatting drift in older untouched modules. Keep
-      # the provider boundary strict without turning architecture PRs into a
-      # whole-repository whitespace rewrite.
+      # the new/common provider boundary strict without turning architecture PRs
+      # into a whole-repository whitespace rewrite.
       - name: Rust format check (platform provider boundary)
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: rustfmt --edition 2024 --check rust-web/src/platform/mod.rs rust-web/src/platform/soop/mod.rs rust-web/src/support.rs
+        run: rustfmt --edition 2024 --check rust-web/src/platform/mod.rs rust-web/src/platform/live.rs rust-web/src/platform/vod.rs rust-web/src/platform/soop/mod.rs rust-web/src/support.rs
 
       - name: Rust unit tests
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
