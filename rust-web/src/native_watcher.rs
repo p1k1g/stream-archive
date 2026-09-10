@@ -4,17 +4,18 @@ use crate::{
     recorder::{RecorderConfig, RecorderManager, Recording, RecordingPoll},
     security::unprotect_secret,
     store,
+    support::platform::{
+        PlatformId,
+        live::{
+            LiveBroadcast, LiveProbe, LiveSession, StreamResolveConfig, ensure_supported, session_for,
+        },
+    },
 };
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Local, Utc};
-use regex::Regex;
-use reqwest::{
-    Client, Response,
-    header::{COOKIE, SET_COOKIE},
-};
-use serde_json::{Value, json};
+use reqwest::Client;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex as StdMutex, OnceLock},
@@ -41,25 +42,8 @@ struct WatcherConfig {
 }
 
 #[derive(Debug, Clone)]
-struct LiveInfo {
-    bno: String,
-    bj_nick: String,
-    title: String,
-    rmd: String,
-    bpwd: String,
-}
-
-#[derive(Debug, Clone)]
-struct StreamInfo {
-    quality: String,
-    cdn: String,
-    host: String,
-    playlist_url: String,
-}
-
-#[derive(Debug, Clone)]
 struct StreamPassword {
-    bno: String,
+    broadcast_id: String,
     value: String,
 }
 
@@ -69,20 +53,17 @@ fn stream_passwords() -> &'static StdMutex<HashMap<String, StreamPassword>> {
     STREAM_PASSWORDS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-fn is_password_protected(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_uppercase().as_str(),
-        "Y" | "1" | "TRUE"
-    )
+fn channel_key(platform: PlatformId, account: &str) -> String {
+    format!("{}:{}", platform.as_str(), account.trim().to_ascii_lowercase())
 }
 
-fn stream_password_for(account: &str, bno: &str) -> Option<String> {
-    let key = account.to_ascii_lowercase();
+fn stream_password_for(platform: PlatformId, account: &str, broadcast_id: &str) -> Option<String> {
+    let key = channel_key(platform, account);
     let Ok(mut passwords) = stream_passwords().lock() else {
         return None;
     };
     match passwords.get(&key) {
-        Some(item) if item.bno == bno => Some(item.value.clone()),
+        Some(item) if item.broadcast_id == broadcast_id => Some(item.value.clone()),
         Some(_) => {
             passwords.remove(&key);
             None
@@ -91,9 +72,9 @@ fn stream_password_for(account: &str, bno: &str) -> Option<String> {
     }
 }
 
-fn clear_stream_password(account: &str) {
+fn clear_stream_password(platform: PlatformId, account: &str) {
     if let Ok(mut passwords) = stream_passwords().lock() {
-        passwords.remove(&account.to_ascii_lowercase());
+        passwords.remove(&channel_key(platform, account));
     }
 }
 
@@ -107,8 +88,8 @@ struct ChannelState {
     channel: Channel,
     status: String,
     recording: Option<Recording>,
-    last_bno: Option<String>,
-    suppressed_bno: Option<String>,
+    last_broadcast_id: Option<String>,
+    suppressed_broadcast_id: Option<String>,
     next_check: Instant,
     detail: Option<String>,
 }
@@ -124,8 +105,8 @@ impl ChannelState {
             channel,
             status: status.into(),
             recording: None,
-            last_bno: None,
-            suppressed_bno: None,
+            last_broadcast_id: None,
+            suppressed_broadcast_id: None,
             next_check: Instant::now(),
             detail: None,
         }
@@ -183,6 +164,9 @@ impl NativeWatcherManager {
         let settings = db.live_settings_with_secrets()?;
         let config = WatcherConfig::from_values(&self.backend_dir, &settings)?;
         let channels = db.channels()?;
+        for channel in &channels {
+            ensure_supported(channel.platform)?;
+        }
         let (stop_tx, stop_rx) = oneshot::channel();
         let (command_tx, command_rx) = mpsc::channel(32);
         let backend_dir = self.backend_dir.clone();
@@ -195,7 +179,7 @@ impl NativeWatcherManager {
                 running: true,
                 pid: None,
                 last_exit_code: None,
-                engine: "rust-native-v4-sqlite",
+                engine: "rust-native-v5-multiplatform",
                 started_at: Some(Utc::now().to_rfc3339()),
                 channel_count: channels.len(),
                 recording_count: 0,
@@ -204,6 +188,7 @@ impl NativeWatcherManager {
                 channels: channels
                     .iter()
                     .map(|c| ChannelRuntimeStatus {
+                        platform: c.platform,
                         account: c.account.clone(),
                         name: c.name.clone(),
                         status: if c.enabled {
@@ -240,14 +225,12 @@ impl NativeWatcherManager {
         runtime.command_tx = Some(command_tx);
         runtime.task = Some(task);
         self.logs
-            .push("[RUST] native watcher v4 started (SQLite direct)")
+            .push("[RUST] native watcher v5 started (platform LIVE adapters)")
             .await;
         Ok(self.snapshot.read().await.clone())
     }
 
     pub async fn stop(&self) -> Result<WatcherStatus> {
-        // Keep the runtime mutex for the entire shutdown. Otherwise a concurrent Start/status
-        // request can install or remove a newer watcher while the previous task is still exiting.
         let mut runtime = self.runtime.lock().await;
         if let Some(tx) = runtime.stop_tx.take() {
             let _ = tx.send(());
@@ -257,15 +240,17 @@ impl NativeWatcherManager {
             finish_watcher_task(task, &self.logs, &self.snapshot, "stop").await;
         }
         self.snapshot.write().await.running = false;
-        self.logs.push("[RUST] native watcher v4 stopped").await;
+        self.logs.push("[RUST] native watcher v5 stopped").await;
         Ok(self.snapshot.read().await.clone())
     }
 
     pub async fn status(&self) -> Result<WatcherStatus> {
-        // Inspect and retire a finished task under one lock. The old two-lock sequence could
-        // observe an old finished task, then accidentally take a newly-started task.
         let mut runtime = self.runtime.lock().await;
-        if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
+        if runtime
+            .task
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
             if let Some(task) = runtime.task.take() {
                 finish_watcher_task(task, &self.logs, &self.snapshot, "status reap").await;
             }
@@ -304,37 +289,44 @@ impl NativeWatcherManager {
         if password.is_empty() {
             bail!("stream password is empty");
         }
-        let bno = {
+        let (platform, broadcast_id) = {
             let snapshot = self.snapshot.read().await;
-            let channel = snapshot
+            let mut matches = snapshot
                 .channels
                 .iter()
-                .find(|channel| channel.account.eq_ignore_ascii_case(&account))
+                .filter(|channel| channel.account.eq_ignore_ascii_case(&account));
+            let channel = matches
+                .next()
                 .ok_or_else(|| anyhow!("channel not found: {account}"))?;
+            if matches.next().is_some() {
+                bail!("channel account is ambiguous across platforms: {account}");
+            }
             if channel.status != "PASSWORD_REQUIRED" {
                 bail!("channel is not waiting for a stream password");
             }
-            channel
-                .bno
-                .clone()
-                .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?
+            (
+                channel.platform,
+                channel
+                    .bno
+                    .clone()
+                    .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?,
+            )
         };
         {
             let mut passwords = stream_passwords()
                 .lock()
                 .map_err(|_| anyhow!("stream password memory store is unavailable"))?;
             passwords.insert(
-                account.to_ascii_lowercase(),
+                channel_key(platform, &account),
                 StreamPassword {
-                    bno,
+                    broadcast_id,
                     value: password,
                 },
             );
         }
         self.logs
             .push(format!(
-                "[RUST:AUTH] stream password supplied account={} (memory only)",
-                account
+                "[RUST:AUTH] stream password supplied platform={platform} account={account} (memory only)"
             ))
             .await;
         self.channel_action(account, "recheck").await
@@ -385,26 +377,9 @@ async fn run_native_watcher(
         )
         .timeout(Duration::from_secs(15))
         .build()?;
-    let mut session = SoopSession::new(client);
+    let mut sessions = create_sessions(&initial_channels, &client)?;
+    refresh_soop_login(&mut sessions, &config, &logs, "initial").await;
     let recorder = RecorderManager::new(logs.clone());
-
-    if !config.soop_username.is_empty() && !config.soop_password.is_empty() {
-        match session
-            .login(&config.soop_username, &config.soop_password)
-            .await
-        {
-            Ok(login) => {
-                logs.push(format!("[RUST:AUTH] SOOP login OK : {login}"))
-                    .await
-            }
-            Err(err) => {
-                logs.push(format!(
-                    "[RUST:WARN] initial SOOP login failed; continuing: {err:#}"
-                ))
-                .await
-            }
-        }
-    }
 
     clear_all_stream_passwords();
     let mut last_channel_signature = channel_signature(&initial_channels);
@@ -414,11 +389,12 @@ async fn run_native_watcher(
     let mut next_setting_check = Instant::now();
 
     logs.push(format!(
-        "[RUST] watcher ready | source=sqlite check={}s reload={}s output={} streamlink={} secret_backend=native-dpapi",
+        "[RUST] watcher ready | source=sqlite check={}s reload={}s output={} streamlink={} provider_sessions={}",
         config.check_interval,
         config.reload_interval,
         config.output_dir.display(),
-        config.recorder.streamlink.display()
+        config.recorder.streamlink.display(),
+        sessions.len()
     ))
     .await;
 
@@ -443,11 +419,8 @@ async fn run_native_watcher(
                                     config = new_config;
                                     last_settings = values;
                                     logs.push("[RUST] SQLite settings hot reload applied").await;
-                                    if auth_changed && !config.soop_username.is_empty() && !config.soop_password.is_empty() {
-                                        match session.login(&config.soop_username, &config.soop_password).await {
-                                            Ok(login) => logs.push(format!("[RUST:AUTH] SOOP login refreshed : {login}")).await,
-                                            Err(err) => logs.push(format!("[RUST:WARN] SOOP login refresh failed: {err:#}")).await,
-                                        }
+                                    if auth_changed {
+                                        refresh_soop_login(&mut sessions, &config, &logs, "refresh").await;
                                     }
                                 }
                                 Err(err) => logs.push(format!("[RUST:WARN] SQLite settings reload rejected; previous values kept: {err:#}")).await,
@@ -464,18 +437,22 @@ async fn run_native_watcher(
                         Ok(channels) => {
                             let signature = channel_signature(&channels);
                             if signature != last_channel_signature {
-                                apply_channels(&mut states, channels, &recorder, &logs).await;
-                                last_channel_signature = signature;
-                                logs.push("[RUST] SQLite channel hot reload applied").await;
+                                if let Err(err) = ensure_sessions(&mut sessions, &channels, &client) {
+                                    logs.push(format!("[RUST:WARN] channel reload contains unsupported platform: {err:#}")).await;
+                                } else {
+                                    apply_channels(&mut states, channels, &recorder, &logs).await;
+                                    last_channel_signature = signature;
+                                    logs.push("[RUST] SQLite channel hot reload applied").await;
+                                }
                             }
                         }
                         Err(err) => logs.push(format!("[RUST:WARN] SQLite channel reload failed; previous list kept: {err:#}")).await,
                     }
                 }
 
-                check_recording_broadcasts(&mut states, &config, &mut session, &recorder, &logs).await;
+                check_recording_broadcasts(&mut states, &config, &mut sessions, &recorder, &logs).await;
                 monitor_recordings(&mut states, &config, &recorder, &logs).await;
-                poll_channels(&mut states, &config, &mut session, &recorder, &logs).await;
+                poll_channels(&mut states, &config, &mut sessions, &recorder, &logs).await;
                 update_snapshot(&states, &snapshot).await;
             }
         }
@@ -490,12 +467,64 @@ async fn run_native_watcher(
     Ok(())
 }
 
+fn create_sessions(channels: &[Channel], client: &Client) -> Result<HashMap<PlatformId, LiveSession>> {
+    let mut sessions = HashMap::new();
+    ensure_sessions(&mut sessions, channels, client)?;
+    Ok(sessions)
+}
+
+fn ensure_sessions(
+    sessions: &mut HashMap<PlatformId, LiveSession>,
+    channels: &[Channel],
+    client: &Client,
+) -> Result<()> {
+    let platforms = channels.iter().map(|c| c.platform).collect::<HashSet<_>>();
+    for platform in platforms {
+        ensure_supported(platform)?;
+        if let std::collections::hash_map::Entry::Vacant(entry) = sessions.entry(platform) {
+            entry.insert(LiveSession::new(platform, client.clone())?);
+        }
+    }
+    Ok(())
+}
+
+async fn refresh_soop_login(
+    sessions: &mut HashMap<PlatformId, LiveSession>,
+    config: &WatcherConfig,
+    logs: &LogBuffer,
+    context: &str,
+) {
+    if config.soop_username.is_empty() || config.soop_password.is_empty() {
+        return;
+    }
+    let Ok(session) = session_for(sessions, PlatformId::Soop) else {
+        return;
+    };
+    match session
+        .login(&config.soop_username, &config.soop_password)
+        .await
+    {
+        Ok(login) => {
+            logs.push(format!(
+                "[RUST:AUTH] SOOP login {context} OK : {login}"
+            ))
+            .await
+        }
+        Err(err) => {
+            logs.push(format!(
+                "[RUST:WARN] SOOP login {context} failed; continuing: {err:#}"
+            ))
+            .await
+        }
+    }
+}
+
 fn mark_watcher_stopped(states: &mut HashMap<String, ChannelState>) {
     for state in states.values_mut() {
         if state.channel.enabled {
             state.status = "WATCHER_STOPPED".into();
-            state.last_bno = None;
-            state.suppressed_bno = None;
+            state.last_broadcast_id = None;
+            state.suppressed_broadcast_id = None;
             state.detail = None;
         } else {
             state.status = "DISABLED".into();
@@ -511,7 +540,7 @@ async fn apply_channels(
 ) {
     let mut incoming = HashMap::new();
     for channel in channels {
-        incoming.insert(channel.account.to_ascii_lowercase(), channel);
+        incoming.insert(channel_key(channel.platform, &channel.account), channel);
     }
 
     let existing: Vec<String> = states.keys().cloned().collect();
@@ -519,8 +548,11 @@ async fn apply_channels(
         if !incoming.contains_key(&key) {
             if let Some(mut state) = states.remove(&key) {
                 stop_state_recording(&mut state, "CHANNEL REMOVED", recorder, logs).await;
-                logs.push(format!("[RUST] channel removed: {}", state.channel.account))
-                    .await;
+                logs.push(format!(
+                    "[RUST] channel removed: {}/{}",
+                    state.channel.platform, state.channel.account
+                ))
+                .await;
             }
         }
     }
@@ -542,6 +574,19 @@ async fn apply_channels(
     }
 }
 
+fn command_state_key(states: &HashMap<String, ChannelState>, account: &str) -> Result<String> {
+    let matches = states
+        .iter()
+        .filter(|(_, state)| state.channel.account.eq_ignore_ascii_case(account))
+        .map(|(key, _)| key.clone())
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [key] => Ok(key.clone()),
+        [] => bail!("channel command target not found: {account}"),
+        _ => bail!("channel account is ambiguous across platforms: {account}"),
+    }
+}
+
 async fn handle_command(
     command: WatcherCommand,
     states: &mut HashMap<String, ChannelState>,
@@ -553,42 +598,56 @@ async fn handle_command(
         WatcherCommand::Resume(account) => (account, "resume"),
         WatcherCommand::Recheck(account) => (account, "recheck"),
     };
-    let key = account.to_ascii_lowercase();
+    let key = match command_state_key(states, account) {
+        Ok(key) => key,
+        Err(err) => {
+            logs.push(format!("[RUST:WARN] {err}")).await;
+            return;
+        }
+    };
     let Some(state) = states.get_mut(&key) else {
-        logs.push(format!(
-            "[RUST:WARN] channel command target not found: {account}"
-        ))
-        .await;
         return;
     };
 
     match command {
         WatcherCommand::StopOnce(_) => {
-            state.suppressed_bno = state
-                .last_bno
+            state.suppressed_broadcast_id = state
+                .last_broadcast_id
                 .clone()
                 .or_else(|| state.recording.as_ref().map(|rec| rec.bno.clone()));
             stop_state_recording(state, "USER CHANNEL STOP", recorder, logs).await;
             state.status = "PAUSED".into();
         }
         WatcherCommand::Resume(_) => {
-            state.suppressed_bno = None;
+            state.suppressed_broadcast_id = None;
             state.status = "UNKNOWN".into();
             state.next_check = Instant::now();
         }
         WatcherCommand::Recheck(_) => state.next_check = Instant::now(),
     }
     logs.push(format!(
-        "[RUST] channel {action}: {}",
-        state.channel.account
+        "[RUST] channel {action}: {}/{}",
+        state.channel.platform, state.channel.account
     ))
     .await;
+}
+
+async fn login_for_auth_required(
+    platform: PlatformId,
+    session: &mut LiveSession,
+    config: &WatcherConfig,
+) -> Result<String> {
+    match platform {
+        PlatformId::Soop => session
+            .login(&config.soop_username, &config.soop_password)
+            .await,
+    }
 }
 
 async fn poll_channels(
     states: &mut HashMap<String, ChannelState>,
     config: &WatcherConfig,
-    session: &mut SoopSession,
+    sessions: &mut HashMap<PlatformId, LiveSession>,
     recorder: &RecorderManager,
     logs: &LogBuffer,
 ) {
@@ -597,60 +656,67 @@ async fn poll_channels(
         let Some(state) = states.get_mut(&key) else {
             continue;
         };
-        if !state.channel.enabled || state.recording.is_some() || Instant::now() < state.next_check
+        if !state.channel.enabled
+            || state.recording.is_some()
+            || Instant::now() < state.next_check
         {
             continue;
         }
         state.next_check = Instant::now() + Duration::from_secs(config.check_interval.max(1));
 
-        match session.live_info(&state.channel.account).await {
-            Ok(LiveResult::Offline) => {
-                clear_stream_password(&state.channel.account);
+        let platform = state.channel.platform;
+        let session = match session_for(sessions, platform) {
+            Ok(session) => session,
+            Err(err) => {
+                state.status = "ERROR".into();
+                state.detail = Some(err.to_string());
+                continue;
+            }
+        };
+        match session.probe(&state.channel.account).await {
+            Ok(LiveProbe::Offline) => {
+                clear_stream_password(platform, &state.channel.account);
                 state.status = "OFFLINE".into();
-                state.last_bno = None;
+                state.last_broadcast_id = None;
                 state.detail = None;
             }
-            Ok(LiveResult::AuthRequired) => {
+            Ok(LiveProbe::AuthRequired) => {
                 state.status = "AUTH".into();
-                match session
-                    .login(&config.soop_username, &config.soop_password)
-                    .await
-                {
+                match login_for_auth_required(platform, session, config).await {
                     Ok(_) => state.next_check = Instant::now(),
                     Err(err) => state.detail = Some(format!("login failed: {err}")),
                 }
             }
-            Ok(LiveResult::Live(live)) => {
+            Ok(LiveProbe::Live(live)) => {
                 if state
                     .channel
                     .name
                     .eq_ignore_ascii_case(&state.channel.account)
-                    && !live.bj_nick.is_empty()
+                    && !live.channel_name.is_empty()
                 {
-                    state.channel.name = live.bj_nick.clone();
+                    state.channel.name = live.channel_name.clone();
                 }
-                if !is_password_protected(&live.bpwd) {
-                    clear_stream_password(&state.channel.account);
-                } else if stream_password_for(&state.channel.account, &live.bno).is_none() {
+                if !live.password_required {
+                    clear_stream_password(platform, &state.channel.account);
+                } else if stream_password_for(platform, &state.channel.account, &live.id).is_none() {
                     state.status = "PASSWORD_REQUIRED".into();
-                    state.last_bno = Some(live.bno.clone());
+                    state.last_broadcast_id = Some(live.id.clone());
                     state.detail = Some("방송 비밀번호 입력이 필요합니다. 비밀번호는 현재 방송 동안 메모리에만 유지됩니다.".into());
                     continue;
                 }
 
-                if state.suppressed_bno.as_deref() == Some(live.bno.as_str()) {
+                if state.suppressed_broadcast_id.as_deref() == Some(live.id.as_str()) {
                     state.status = "PAUSED".into();
-                    state.last_bno = Some(live.bno);
+                    state.last_broadcast_id = Some(live.id);
                     continue;
                 }
-                if state.suppressed_bno.is_some() {
-                    state.suppressed_bno = None;
+                if state.suppressed_broadcast_id.is_some() {
+                    state.suppressed_broadcast_id = None;
                 }
 
-                match start_recording(&state.channel, &live, config, session, recorder, logs).await
-                {
+                match start_recording(&state.channel, &live, config, session, recorder, logs).await {
                     Ok(recording) => {
-                        state.last_bno = Some(live.bno);
+                        state.last_broadcast_id = Some(live.id);
                         state.status = "RECORDING".into();
                         state.detail = None;
                         state.recording = Some(recording);
@@ -658,18 +724,18 @@ async fn poll_channels(
                     Err(err) => {
                         state.next_check =
                             Instant::now() + Duration::from_secs(config.retry_interval.max(1));
-                        if is_password_protected(&live.bpwd) {
-                            clear_stream_password(&state.channel.account);
+                        if live.password_required {
+                            clear_stream_password(platform, &state.channel.account);
                             state.status = "PASSWORD_REQUIRED".into();
-                            state.last_bno = Some(live.bno.clone());
+                            state.last_broadcast_id = Some(live.id.clone());
                             state.detail = Some("방송 비밀번호가 올바르지 않거나 보호 스트림 확인에 실패했습니다. 다시 입력하세요.".into());
-                            logs.push(format!("[RUST:WARN] protected stream resolve failed {}; password cleared: {err:#}", state.channel.account)).await;
+                            logs.push(format!("[RUST:WARN] protected stream resolve failed {}/{}; password cleared: {err:#}", platform, state.channel.account)).await;
                         } else {
                             state.status = "ERROR".into();
                             state.detail = Some(err.to_string());
                             logs.push(format!(
-                                "[RUST:ERR] record start failed {}: {err:#}",
-                                state.channel.account
+                                "[RUST:ERR] record start failed {}/{}: {err:#}",
+                                platform, state.channel.account
                             ))
                             .await;
                         }
@@ -680,8 +746,8 @@ async fn poll_channels(
                 state.status = "ERROR".into();
                 state.detail = Some(err.to_string());
                 logs.push(format!(
-                    "[RUST:WARN] live check failed {}: {err:#}",
-                    state.channel.account
+                    "[RUST:WARN] live check failed {}/{}: {err:#}",
+                    platform, state.channel.account
                 ))
                 .await;
             }
@@ -692,7 +758,7 @@ async fn poll_channels(
 async fn check_recording_broadcasts(
     states: &mut HashMap<String, ChannelState>,
     config: &WatcherConfig,
-    session: &mut SoopSession,
+    sessions: &mut HashMap<PlatformId, LiveSession>,
     recorder: &RecorderManager,
     logs: &LogBuffer,
 ) {
@@ -701,7 +767,7 @@ async fn check_recording_broadcasts(
         let Some(state) = states.get_mut(&key) else {
             continue;
         };
-        let Some(recording_bno) = state.recording.as_ref().map(|rec| rec.bno.clone()) else {
+        let Some(recording_id) = state.recording.as_ref().map(|rec| rec.bno.clone()) else {
             continue;
         };
         if Instant::now() < state.next_check {
@@ -709,44 +775,56 @@ async fn check_recording_broadcasts(
         }
         state.next_check = Instant::now() + Duration::from_secs(config.check_interval.max(1));
 
-        match session.live_info(&state.channel.account).await {
-            Ok(LiveResult::Offline) => {
-                clear_stream_password(&state.channel.account);
+        let platform = state.channel.platform;
+        let session = match session_for(sessions, platform) {
+            Ok(session) => session,
+            Err(err) => {
+                logs.push(format!(
+                    "[RUST:WARN] LIVE session missing while recording {}/{}: {err:#}",
+                    platform, state.channel.account
+                ))
+                .await;
+                continue;
+            }
+        };
+        match session.probe(&state.channel.account).await {
+            Ok(LiveProbe::Offline) => {
+                clear_stream_password(platform, &state.channel.account);
                 stop_state_recording(state, "BROADCAST ENDED", recorder, logs).await;
                 state.status = "OFFLINE".into();
-                state.last_bno = None;
+                state.last_broadcast_id = None;
                 state.detail = None;
                 logs.push(format!(
-                    "[RUST] broadcast ended account={}",
+                    "[RUST] broadcast ended platform={platform} account={}",
                     state.channel.account
                 ))
                 .await;
             }
-            Ok(LiveResult::Live(live)) if live.bno != recording_bno => {
-                clear_stream_password(&state.channel.account);
+            Ok(LiveProbe::Live(live)) if live.id != recording_id => {
+                clear_stream_password(platform, &state.channel.account);
                 stop_state_recording(state, "BROADCAST CHANGED", recorder, logs).await;
                 state.status = "UNKNOWN".into();
-                state.last_bno = Some(live.bno);
+                state.last_broadcast_id = Some(live.id);
                 state.detail = None;
                 state.next_check = Instant::now();
                 logs.push(format!(
-                    "[RUST] broadcast number changed account={}; restarting discovery",
+                    "[RUST] broadcast id changed platform={platform} account={}; restarting discovery",
                     state.channel.account
                 ))
                 .await;
             }
-            Ok(LiveResult::Live(_)) => {}
-            Ok(LiveResult::AuthRequired) => {
+            Ok(LiveProbe::Live(_)) => {}
+            Ok(LiveProbe::AuthRequired) => {
                 logs.push(format!(
-                    "[RUST:WARN] live recheck requires SOOP auth while recording {}; keeping recorder running",
+                    "[RUST:WARN] live recheck requires {platform} auth while recording {}; keeping recorder running",
                     state.channel.account
                 ))
                 .await;
             }
             Err(err) => {
                 logs.push(format!(
-                    "[RUST:WARN] live recheck failed while recording {}; keeping recorder running: {err:#}",
-                    state.channel.account
+                    "[RUST:WARN] live recheck failed while recording {}/{}; keeping recorder running: {err:#}",
+                    platform, state.channel.account
                 ))
                 .await;
             }
@@ -797,8 +875,8 @@ async fn monitor_recordings(
                     state.next_check =
                         Instant::now() + Duration::from_secs(config.retry_interval.max(1));
                     logs.push(format!(
-                        "[RUST:ERR] recorder exited unexpectedly {}: {reason}",
-                        state.channel.account
+                        "[RUST:ERR] recorder exited unexpectedly {}/{}: {reason}",
+                        state.channel.platform, state.channel.account
                     ))
                     .await;
                 }
@@ -822,8 +900,8 @@ async fn monitor_recordings(
                 state.status = "ERROR".into();
                 state.detail = Some(format!("recorder monitor error: {err}"));
                 logs.push(format!(
-                    "[RUST:WARN] recorder monitor failed {}: {err:#}",
-                    state.channel.account
+                    "[RUST:WARN] recorder monitor failed {}/{}: {err:#}",
+                    state.channel.platform, state.channel.account
                 ))
                 .await;
             }
@@ -833,13 +911,21 @@ async fn monitor_recordings(
 
 async fn start_recording(
     channel: &Channel,
-    live: &LiveInfo,
+    live: &LiveBroadcast,
     config: &WatcherConfig,
-    session: &mut SoopSession,
+    session: &LiveSession,
     recorder: &RecorderManager,
     logs: &LogBuffer,
 ) -> Result<Recording> {
-    let stream = session.worker_playlist(channel, live, config).await?;
+    let password = stream_password_for(channel.platform, &channel.account, &live.id).unwrap_or_default();
+    let resolve_config = StreamResolveConfig {
+        worker_url: &config.worker_url,
+        worker_api_key: &config.worker_api_key,
+        max_retries: config.worker_max_retry,
+    };
+    let stream = session
+        .resolve_stream(&channel.account, live, &resolve_config, &password)
+        .await?;
     let output_dir = channel_output_dir(channel, &config.output_dir)?;
     let output_file = unique_output_file(
         &output_dir,
@@ -858,17 +944,18 @@ async fn start_recording(
     };
 
     logs.push(format!(
-        "[RUST] stream resolved account={} hls={} cdn={} host={}",
-        channel.account, stream.quality, stream.cdn, stream.host
+        "[RUST] stream resolved platform={} account={} hls={} cdn={} host={}",
+        channel.platform, channel.account, stream.quality, stream.cdn, stream.host
     ))
     .await;
 
     recorder
         .start(
             &config.recorder,
+            channel.platform,
             &stream_url,
             output_file,
-            live.bno.clone(),
+            live.id.clone(),
             live.title.clone(),
             &channel.name,
             &channel.account,
@@ -894,8 +981,8 @@ async fn stop_state_recording(
         Err(err) => {
             state.detail = Some(format!("stop failed: {err}"));
             logs.push(format!(
-                "[RUST:ERR] recorder stop failed {} pid={}: {err:#}",
-                state.channel.account, rec.pid
+                "[RUST:ERR] recorder stop failed {}/{} pid={}: {err:#}",
+                state.channel.platform, state.channel.account, rec.pid
             ))
             .await;
         }
@@ -907,7 +994,13 @@ async fn update_snapshot(
     snapshot: &Arc<RwLock<WatcherStatus>>,
 ) {
     let mut ordered: Vec<&ChannelState> = states.values().collect();
-    ordered.sort_by(|a, b| a.channel.name.cmp(&b.channel.name));
+    ordered.sort_by(|a, b| {
+        a.channel
+            .platform
+            .as_str()
+            .cmp(b.channel.platform.as_str())
+            .then_with(|| a.channel.name.cmp(&b.channel.name))
+    });
 
     let mut recording_count = 0;
     let mut offline_count = 0;
@@ -926,6 +1019,7 @@ async fn update_snapshot(
         }
         let rec = state.recording.as_ref();
         channels.push(ChannelRuntimeStatus {
+            platform: state.channel.platform,
             account: state.channel.account.clone(),
             name: state.channel.name.clone(),
             status: if !state.channel.enabled {
@@ -935,14 +1029,14 @@ async fn update_snapshot(
             },
             bno: rec
                 .map(|r| r.bno.clone())
-                .or_else(|| state.last_bno.clone()),
+                .or_else(|| state.last_broadcast_id.clone()),
             title: rec.map(|r| r.title.clone()),
             file: rec.map(|r| r.file.display().to_string()),
             size_bytes: rec
                 .and_then(|r| fs::metadata(&r.file).ok().map(|m| m.len()))
                 .unwrap_or(0),
             started_at: rec.map(|r| r.started_at.to_rfc3339()),
-            suppressed: state.suppressed_bno.is_some(),
+            suppressed: state.suppressed_broadcast_id.is_some(),
             detail: state.detail.clone(),
         });
     }
@@ -953,259 +1047,6 @@ async fn update_snapshot(
     s.offline_count = offline_count;
     s.error_count = error_count;
     s.channels = channels;
-}
-
-#[derive(Debug)]
-enum LiveResult {
-    Offline,
-    AuthRequired,
-    Live(LiveInfo),
-}
-
-struct SoopSession {
-    client: Client,
-    cookies: BTreeMap<String, String>,
-    bno_regex: Regex,
-}
-
-impl SoopSession {
-    fn new(client: Client) -> Self {
-        Self {
-            client,
-            cookies: BTreeMap::new(),
-            bno_regex: Regex::new(r"window\.nBroadNo\s*=\s*(\d+);").unwrap(),
-        }
-    }
-
-    fn cookie_header(&self) -> String {
-        self.cookies
-            .iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-
-    fn worker_cookie_header(&self) -> String {
-        const ALLOW: &[&str] = &[
-            "AuthTicket",
-            "BbsTicket",
-            "UserTicket",
-            "BbsSaveTicket",
-            "RDB",
-            "PdboxTicket",
-            "PdboxBbs",
-            "PdboxUser",
-            "PdboxSaveTicket",
-        ];
-        self.cookies
-            .iter()
-            .filter(|(key, _)| ALLOW.iter().any(|item| key.eq_ignore_ascii_case(item)))
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-
-    async fn login(&mut self, username: &str, password: &str) -> Result<String> {
-        if username.trim().is_empty() || password.trim().is_empty() {
-            bail!("SOOP username/password is empty");
-        }
-        self.cookies.clear();
-        let response = self
-            .client
-            .post("https://login.sooplive.com/app/LoginAction.php")
-            .header("Referer", "https://www.sooplive.com/")
-            .form(&[
-                ("szWork", "login"),
-                ("szType", "json"),
-                ("szUid", username),
-                ("szPassword", password),
-                ("isSaveId", "true"),
-                ("isSavePw", "false"),
-                ("isSaveJoin", "false"),
-                ("isLoginRetain", "Y"),
-            ])
-            .send()
-            .await?;
-        collect_cookies(&mut self.cookies, &response);
-        let value: Value = response.error_for_status()?.json().await?;
-        if value.get("RESULT").and_then(Value::as_i64) != Some(1) {
-            bail!("SOOP login failed RESULT={:?}", value.get("RESULT"));
-        }
-
-        let response = self
-            .client
-            .get("https://afevent2.sooplive.com/api/get_private_info.php")
-            .header("Referer", "https://www.sooplive.com/")
-            .header(COOKIE, self.cookie_header())
-            .send()
-            .await?;
-        collect_cookies(&mut self.cookies, &response);
-        let auth: Value = response.error_for_status()?.json().await?;
-        let login_id = auth
-            .pointer("/CHANNEL/LOGIN_ID")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        if login_id.is_empty() {
-            bail!("SOOP login verification failed");
-        }
-        Ok(login_id)
-    }
-
-    async fn live_info(&self, account: &str) -> Result<LiveResult> {
-        let channel_url = format!("https://play.sooplive.com/{account}");
-        let cookie = self.cookie_header();
-        let mut request = self
-            .client
-            .get(&channel_url)
-            .header("Referer", "https://play.sooplive.com/");
-        if !cookie.is_empty() {
-            request = request.header(COOKIE, cookie.clone());
-        }
-        let html = request.send().await?.error_for_status()?.text().await?;
-        let Some(captures) = self.bno_regex.captures(&html) else {
-            return Ok(LiveResult::Offline);
-        };
-        let bno = captures.get(1).unwrap().as_str().to_string();
-
-        let mut request = self
-            .client
-            .post("https://live.sooplive.com/afreeca/player_live_api.php")
-            .header("Referer", &channel_url)
-            .form(&[
-                ("from_api", "0"),
-                ("mode", "landing"),
-                ("player_type", "html5"),
-                ("stream_type", "common"),
-                ("type", "live"),
-                ("bid", account),
-                ("bno", bno.as_str()),
-                ("pwd", ""),
-            ]);
-        if !cookie.is_empty() {
-            request = request.header(COOKIE, cookie);
-        }
-        let value: Value = request.send().await?.error_for_status()?.json().await?;
-        let Some(channel) = value.get("CHANNEL") else {
-            return Ok(LiveResult::Offline);
-        };
-        if channel.get("RESULT").and_then(Value::as_i64) == Some(-6) {
-            return Ok(LiveResult::AuthRequired);
-        }
-        if channel.get("RESULT").and_then(Value::as_i64) != Some(1) {
-            return Ok(LiveResult::Offline);
-        }
-
-        let get = |key: &str| {
-            channel
-                .get(key)
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string()
-        };
-        let rmd = get("RMD");
-        let api_bno = get("BNO");
-        if rmd.is_empty() || api_bno.is_empty() {
-            return Ok(LiveResult::Offline);
-        }
-        Ok(LiveResult::Live(LiveInfo {
-            bno: api_bno,
-            bj_nick: get("BJNICK"),
-            title: get("TITLE"),
-            rmd,
-            bpwd: get("BPWD"),
-        }))
-    }
-
-    async fn worker_playlist(
-        &self,
-        channel: &Channel,
-        live: &LiveInfo,
-        config: &WatcherConfig,
-    ) -> Result<StreamInfo> {
-        let attempts = config.worker_max_retry.max(1);
-        let stream_password = stream_password_for(&channel.account, &live.bno).unwrap_or_default();
-        let mut last_error = String::new();
-        for attempt in 1..=attempts {
-            let cookies = self.worker_cookie_header();
-            let body = json!({
-                "account": channel.account,
-                "bno": live.bno,
-                "rmd": live.rmd,
-                "quality": "master",
-                "cq": "sd",
-                "password": stream_password.as_str(),
-                "cookie": cookies,
-                "bid": channel.account,
-                "bpwd": stream_password.as_str(),
-                "channel_url": format!("https://play.sooplive.com/{}", channel.account),
-                "soop_cookie_header": self.worker_cookie_header()
-            });
-            match self
-                .client
-                .post(&config.worker_url)
-                .header("X-API-Key", &config.worker_api_key)
-                .json(&body)
-                .send()
-                .await
-            {
-                Ok(response) => {
-                    let status = response.status();
-                    let text = response.text().await.unwrap_or_default();
-                    if status.is_success() {
-                        if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                            if value.get("success").and_then(Value::as_bool) == Some(true) {
-                                let playlist_url = value
-                                    .get("playlist_url")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .to_string();
-                                if !playlist_url.is_empty() {
-                                    return Ok(StreamInfo {
-                                        quality: value
-                                            .get("quality")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("master")
-                                            .to_string(),
-                                        cdn: value
-                                            .get("cdn")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        host: value
-                                            .get("host")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        playlist_url,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    last_error = format!("Worker HTTP {status}: {}", compact(&text, 240));
-                }
-                Err(err) => last_error = format!("Worker transport error: {err}"),
-            }
-            if attempt < attempts {
-                let delay = [2, 5, 10][(attempt - 1).min(2)];
-                tokio::time::sleep(Duration::from_secs(delay)).await;
-            }
-        }
-        bail!("{last_error}")
-    }
-}
-
-fn collect_cookies(target: &mut BTreeMap<String, String>, response: &Response) {
-    for value in response.headers().get_all(SET_COOKIE).iter() {
-        if let Ok(text) = value.to_str() {
-            if let Some(pair) = text.split(';').next() {
-                if let Some((name, value)) = pair.split_once('=') {
-                    target.insert(name.trim().to_string(), value.trim().to_string());
-                }
-            }
-        }
-    }
 }
 
 impl WatcherConfig {
@@ -1407,7 +1248,8 @@ fn channel_signature(channels: &[Channel]) -> String {
         .iter()
         .map(|channel| {
             format!(
-                "{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}",
+                channel.platform.as_str(),
                 if channel.enabled { "Y" } else { "N" },
                 channel.name,
                 channel.account.to_ascii_lowercase(),
@@ -1416,15 +1258,6 @@ fn channel_signature(channels: &[Channel]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn compact(text: &str, max: usize) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.chars().count() > max {
-        format!("{}...", compact.chars().take(max).collect::<String>())
-    } else {
-        compact
-    }
 }
 
 fn default_output_dir() -> String {
@@ -1439,6 +1272,16 @@ fn default_output_dir() -> String {
 mod tests {
     use super::*;
 
+    fn channel(name: &str, account: &str) -> Channel {
+        Channel {
+            platform: PlatformId::Soop,
+            enabled: true,
+            name: name.into(),
+            account: account.into(),
+            outdir: String::new(),
+        }
+    }
+
     #[test]
     fn safe_filename_replaces_windows_reserved_chars() {
         assert_eq!(safe_name("a:b/c*?d", 80), "a_b_c__d");
@@ -1447,24 +1290,17 @@ mod tests {
 
     #[test]
     fn channel_signature_is_case_insensitive_for_accounts() {
-        let a = vec![Channel {
-            enabled: true,
-            name: "A".into(),
-            account: "UserA".into(),
-            outdir: "".into(),
-        }];
-        let b = vec![Channel {
-            enabled: true,
-            name: "A".into(),
-            account: "usera".into(),
-            outdir: "".into(),
-        }];
+        let a = vec![channel("A", "UserA")];
+        let b = vec![channel("A", "usera")];
         assert_eq!(channel_signature(&a), channel_signature(&b));
     }
 
     #[test]
     fn recorder_exit_outcome_distinguishes_crashes() {
-        assert_eq!(recording_exit_outcome(Some(0)), (true, "NORMAL".to_string()));
+        assert_eq!(
+            recording_exit_outcome(Some(0)),
+            (true, "NORMAL".to_string())
+        );
         assert_eq!(
             recording_exit_outcome(Some(23)),
             (false, "RECORDER EXIT CODE=23".to_string())
@@ -1477,34 +1313,40 @@ mod tests {
 
     #[test]
     fn watcher_exit_replaces_paused_state_and_clears_runtime_markers() {
-        let enabled = Channel {
-            enabled: true,
-            name: "Live".into(),
-            account: "live".into(),
-            outdir: "".into(),
-        };
-        let disabled = Channel {
-            enabled: false,
-            name: "Disabled".into(),
-            account: "disabled".into(),
-            outdir: "".into(),
-        };
+        let mut disabled = channel("Disabled", "disabled");
+        disabled.enabled = false;
         let mut states = HashMap::new();
-        let mut live = ChannelState::new(enabled);
+        let mut live = ChannelState::new(channel("Live", "live"));
         live.status = "PAUSED".into();
-        live.last_bno = Some("123".into());
-        live.suppressed_bno = Some("123".into());
+        live.last_broadcast_id = Some("123".into());
+        live.suppressed_broadcast_id = Some("123".into());
         live.detail = Some("old detail".into());
-        states.insert("live".into(), live);
-        states.insert("disabled".into(), ChannelState::new(disabled));
+        states.insert(channel_key(PlatformId::Soop, "live"), live);
+        states.insert(
+            channel_key(PlatformId::Soop, "disabled"),
+            ChannelState::new(disabled),
+        );
 
         mark_watcher_stopped(&mut states);
 
-        let live = states.get("live").unwrap();
+        let live = states
+            .get(&channel_key(PlatformId::Soop, "live"))
+            .unwrap();
         assert_eq!(live.status, "WATCHER_STOPPED");
-        assert!(live.last_bno.is_none());
-        assert!(live.suppressed_bno.is_none());
+        assert!(live.last_broadcast_id.is_none());
+        assert!(live.suppressed_broadcast_id.is_none());
         assert!(live.detail.is_none());
-        assert_eq!(states.get("disabled").unwrap().status, "DISABLED");
+        assert_eq!(
+            states
+                .get(&channel_key(PlatformId::Soop, "disabled"))
+                .unwrap()
+                .status,
+            "DISABLED"
+        );
+    }
+
+    #[test]
+    fn channel_key_namespaces_accounts_by_platform() {
+        assert_eq!(channel_key(PlatformId::Soop, "User"), "SOOP:user");
     }
 }
