@@ -508,7 +508,18 @@ impl Store {
                  message=excluded.message,
                  started_at=COALESCE(vod_jobs.started_at, excluded.started_at),
                  finished_at=COALESCE(excluded.finished_at, vod_jobs.finished_at),
-                 updated_at=excluded.updated_at"#,
+                 updated_at=excluded.updated_at
+               WHERE
+                 (excluded.kind<>'JOB' AND excluded.kind IS NOT vod_jobs.kind)
+                 OR (excluded.vod_url<>'' AND excluded.vod_url IS NOT vod_jobs.vod_url)
+                 OR (excluded.title<>'' AND excluded.title IS NOT vod_jobs.title)
+                 OR (excluded.streamer<>'' AND excluded.streamer IS NOT vod_jobs.streamer)
+                 OR excluded.part_count>vod_jobs.part_count
+                 OR excluded.state IS NOT vod_jobs.state
+                 OR (excluded.output_file IS NOT NULL AND excluded.output_file IS NOT vod_jobs.output_file)
+                 OR excluded.message IS NOT vod_jobs.message
+                 OR (vod_jobs.started_at IS NULL AND excluded.started_at IS NOT NULL)
+                 OR (excluded.finished_at IS NOT NULL AND excluded.finished_at IS NOT vod_jobs.finished_at)"#,
             params![
                 id,
                 kind,
@@ -558,4 +569,68 @@ fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
         }
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn completed_vod_status(message: &str) -> VodJobStatus {
+        VodJobStatus {
+            state: "COMPLETED".into(),
+            running: false,
+            job_id: Some("vod-history-test".into()),
+            message: message.into(),
+            current_part: 1,
+            part_count: 1,
+            percent: 100.0,
+            output_file: Some("C:\\SOOP_VOD\\done.mp4".into()),
+            started_at: Some("2026-09-10T00:00:00Z".into()),
+            finished_at: Some("2026-09-10T00:01:00Z".into()),
+            analysis: None,
+        }
+    }
+
+    #[test]
+    fn unchanged_vod_history_upsert_does_not_touch_updated_at() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("soop.db")).unwrap();
+        let status = completed_vod_status("완료");
+        store.upsert_vod(&status).unwrap();
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "UPDATE vod_jobs SET updated_at='sentinel' WHERE id='vod-history-test'",
+                [],
+            )
+            .unwrap();
+        }
+
+        store.upsert_vod(&status).unwrap();
+        let unchanged: String = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT updated_at FROM vod_jobs WHERE id='vod-history-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unchanged, "sentinel");
+
+        let mut changed = status.clone();
+        changed.message = "완료됨".into();
+        store.upsert_vod(&changed).unwrap();
+        let changed_at: String = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT updated_at FROM vod_jobs WHERE id='vod-history-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(changed_at, "sentinel");
+    }
 }
