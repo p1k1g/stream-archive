@@ -3,6 +3,16 @@
 labels.QUEUED='대기';labels.RUNNING='진행중';labels.STARTING='시작중';labels.CANCELLING='취소중';
 labels.INTERRUPTED='중단됨';
 
+const p135ThemeKey='streamArchiveTheme';
+const p135ThemeOrder=['system','light','dark'];
+let p135ThemeMedia=null;
+function p135StoredTheme(){const v=localStorage.getItem(p135ThemeKey);return p135ThemeOrder.includes(v)?v:'system'}
+function p135ResolvedTheme(pref=p135StoredTheme()){return pref==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):pref}
+function p135ThemeLabel(pref=p135StoredTheme()){return pref==='dark'?'🌙 다크':pref==='light'?'☀️ 라이트':'◐ 시스템'}
+function p135ApplyTheme(pref=p135StoredTheme(),persist=false){if(!p135ThemeOrder.includes(pref))pref='system';if(persist)localStorage.setItem(p135ThemeKey,pref);document.documentElement.dataset.theme=p135ResolvedTheme(pref);document.documentElement.dataset.themePreference=pref;const btn=document.getElementById('p135ThemeToggle');if(btn){btn.textContent=p135ThemeLabel(pref);btn.title=`테마: ${pref==='system'?'시스템 설정 사용':pref==='light'?'라이트':'다크'}`;btn.setAttribute('aria-label',btn.title)}const select=document.getElementById('p135ThemeSelect');if(select)select.value=pref}
+function p135CycleTheme(){const current=p135StoredTheme();const next=p135ThemeOrder[(p135ThemeOrder.indexOf(current)+1)%p135ThemeOrder.length];p135ApplyTheme(next,true);toast(`테마: ${next==='system'?'시스템':next==='light'?'라이트':'다크'}`)}
+function p135InstallThemeUi(){p135ApplyTheme();const header=document.querySelector('.p135-workspace > header');if(header&&!document.getElementById('p135ThemeToggle')){const btn=document.createElement('button');btn.id='p135ThemeToggle';btn.type='button';btn.className='secondary p135-theme-toggle';btn.addEventListener('click',p135CycleTheme);const token=document.getElementById('tokenBtn');if(token&&token.parentElement===header)header.insertBefore(btn,token);else header.appendChild(btn)}const settingsPage=document.querySelector('[data-tab-page="settings"] section');const settingsTabs=document.getElementById('settingsTabs');if(settingsPage&&settingsTabs&&!document.getElementById('p135ThemePreference')){const box=document.createElement('div');box.id='p135ThemePreference';box.className='p135-theme-preference';box.innerHTML='<div><strong>화면 테마</strong><small>이 브라우저에만 저장됩니다. 시스템을 선택하면 Windows/브라우저 테마를 자동으로 따릅니다.</small></div><label>테마<select id="p135ThemeSelect"><option value="system">시스템 설정</option><option value="light">라이트</option><option value="dark">다크</option></select></label>';settingsTabs.insertAdjacentElement('afterend',box);box.querySelector('#p135ThemeSelect')?.addEventListener('change',e=>p135ApplyTheme(e.target.value,true))}p135ApplyTheme();p135ThemeMedia=matchMedia('(prefers-color-scheme: dark)');const sync=()=>{if(p135StoredTheme()==='system')p135ApplyTheme('system')};if(p135ThemeMedia.addEventListener)p135ThemeMedia.addEventListener('change',sync);else p135ThemeMedia.addListener?.(sync)}
+
 let p13QueueSeen=false;
 const p13QueueStates=new Map();
 let p13LiveSeen=false;
@@ -36,6 +46,7 @@ const download=$('vodDownload');if(download){download.textContent='큐에 추가
 const cancel=$('vodCancel');if(cancel)cancel.textContent='현재 작업 취소';
 $('p13QueueRefresh')?.addEventListener('click',p13LoadQueue);
 $('vodNotify')?.addEventListener('click',p13ToggleNotify);
+p135InstallThemeUi();
 p13UpdateNotifyButton();
 p13LoadQueue();
 setInterval(()=>{if(!realtimeConnected)p13LoadQueue()},3000);
