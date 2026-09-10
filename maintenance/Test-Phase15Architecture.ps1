@@ -4,7 +4,8 @@ $root = Split-Path $PSScriptRoot -Parent
 $app = Get-Content -LiteralPath (Join-Path $root 'rust-web\web\app.js') -Raw -Encoding UTF8
 $phase13 = Get-Content -LiteralPath (Join-Path $root 'rust-web\web\phase13.js') -Raw -Encoding UTF8
 $phase14 = Get-Content -LiteralPath (Join-Path $root 'rust-web\web\phase14.js') -Raw -Encoding UTF8
-$platform = Get-Content -LiteralPath (Join-Path $root 'rust-web\src\platform.rs') -Raw -Encoding UTF8
+$platform = Get-Content -LiteralPath (Join-Path $root 'rust-web\src\platform\mod.rs') -Raw -Encoding UTF8
+$platformSoop = Get-Content -LiteralPath (Join-Path $root 'rust-web\src\platform\soop\mod.rs') -Raw -Encoding UTF8
 $support = Get-Content -LiteralPath (Join-Path $root 'rust-web\src\support.rs') -Raw -Encoding UTF8
 
 function Assert-Contains([string]$Text, [string]$Pattern, [string]$Message) {
@@ -35,7 +36,9 @@ Assert-NotContains $phase14 'window\.applyRealtimeSnapshot\s*=' 'Phase14 must no
 Assert-NotContains $phase14 '__p14Wrapped' 'Legacy Phase14 wrapper markers must stay removed.'
 
 Assert-Contains $platform 'trait\s+PlatformProvider' 'Platform provider boundary is missing.'
-Assert-Contains $platform 'fn\s+accepts_vod_url' 'Platform provider must own VOD URL recognition.'
+Assert-Contains $platform 'mod\s+soop' 'SOOP provider module must be registered.'
+Assert-Contains $platform 'fn\s+detect_vod_platform' 'Platform registry must own VOD platform detection.'
+Assert-Contains $platformSoop 'fn\s+accepts_vod_url' 'SOOP provider must own SOOP VOD URL recognition.'
 Assert-Contains $support 'provider\(platform\)' 'Channel lookup must route through the platform provider.'
 
-Write-Host 'Phase 15 architecture regression checks passed.'
+Write-Host 'Phase 15/16 architecture regression checks passed.'
