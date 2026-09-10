@@ -20,7 +20,9 @@ use windows_sys::Win32::UI::{
 };
 
 #[cfg(windows)]
-const SOOP_MARKER: &str = "<title>SOOP Recorder</title>";
+const APP_MARKER: &str = "<title>Stream Archive</title>";
+#[cfg(windows)]
+const LEGACY_MARKER: &str = "SOOP Recorder";
 
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,7 +63,10 @@ fn probe(addr: SocketAddr) -> Probe {
     }
     let mut response = String::new();
     let _ = stream.take(32 * 1024).read_to_string(&mut response);
-    if response.contains(SOOP_MARKER) || response.contains("SOOP Recorder") {
+    if response.contains(APP_MARKER)
+        || response.contains("Stream Archive")
+        || response.contains(LEGACY_MARKER)
+    {
         Probe::Soop
     } else {
         Probe::Other
@@ -93,7 +98,7 @@ fn shell_open(file: &OsStr, directory: Option<&Path>) -> Result<(), String> {
 
 #[cfg(windows)]
 fn show_error(message: &str) {
-    let title = wide("SOOP Recorder");
+    let title = wide("Stream Archive");
     let message = wide(message);
     unsafe {
         MessageBoxW(
@@ -123,7 +128,7 @@ fn run() -> Result<(), String> {
         }
         Probe::Other => {
             return Err(format!(
-                "127.0.0.1:{} 포트를 다른 프로그램이 사용 중입니다.\nSOOP Recorder를 시작할 수 없습니다.",
+                "127.0.0.1:{} 포트를 다른 프로그램이 사용 중입니다.\nStream Archive를 시작할 수 없습니다.",
                 addr.port()
             ));
         }
@@ -152,7 +157,7 @@ fn run() -> Result<(), String> {
     }
 
     Err(format!(
-        "SOOP Recorder 서버가 15초 안에 준비되지 않았습니다.\n서버 콘솔의 오류 메시지를 확인하세요.\n접속 주소: {url}"
+        "Stream Archive 서버가 15초 안에 준비되지 않았습니다.\n서버 콘솔의 오류 메시지를 확인하세요.\n접속 주소: {url}"
     ))
 }
 
