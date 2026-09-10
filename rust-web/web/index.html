@@ -2,10 +2,10 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SOOP Recorder</title><link rel="stylesheet" href="/style.css?v=p12-backup1">
+<title>SOOP Recorder</title><link rel="stylesheet" href="/style.css?v=p13-queue1">
 </head>
 <body>
-<header><div><h1>SOOP Recorder</h1><small>Rust Web Phase 12 · 백업 / 보관<span id="realtimeState" class="muted" aria-live="polite"> · 연결 준비</span></small></div><button id="tokenBtn">복구 토큰</button></header>
+<header><div><h1>SOOP Recorder</h1><small>Rust Web Phase 13 · VOD 큐 / 알림<span id="realtimeState" class="muted" aria-live="polite"> · 연결 준비</span></small></div><button id="tokenBtn">복구 토큰</button></header>
 <nav id="appTabs" class="app-tabs" role="tablist" aria-label="SOOP Recorder 기능">
   <button type="button" role="tab" data-app-tab="dashboard" class="active" aria-selected="true">대시보드</button>
   <button type="button" role="tab" data-app-tab="channels" aria-selected="false">채널</button>
@@ -60,6 +60,12 @@
   <p id="p8VodStorage" class="hint">VOD 출력 폴더를 입력하면 남은 공간을 확인합니다.</p>
   <p id="vodMessage" class="hint"></p><p id="vodMeta" class="mono"></p><p id="vodOutputFile" class="mono"></p>
 </section>
+<section>
+  <div class="title"><h2>VOD 다운로드 큐</h2><div><button id="vodNotify" type="button">브라우저 알림 켜기</button> <button id="p13QueueRefresh" type="button">새로고침</button></div></div>
+  <div class="summary"><span>실행 <b id="p13QueueActive">0</b></span><span>대기 <b id="p13QueueWaiting">0</b></span><span>처리 방식 <b>1건씩 순차 실행</b></span></div>
+  <p class="hint">위의 <b>큐에 추가</b>를 누르면 여러 VOD를 저장해 두고 한 건씩 순서대로 다운로드합니다. 실패·취소·서버 재시작으로 중단된 작업은 재시도할 수 있습니다. 브라우저 알림은 현재 브라우저에만 저장됩니다.</p>
+  <div class="table"><table><thead><tr><th>상태</th><th>VOD</th><th>시도</th><th>진행</th><th>메시지 / 결과</th><th>제어</th></tr></thead><tbody id="p13QueueRows"></tbody></table></div>
+</section>
 </div>
 
 <div class="tab-page" data-tab-page="history" hidden>
@@ -111,7 +117,7 @@
     <div class="summary"><span>백업 위치 <b id="p12BackupDir">-</b></span><span>정책 <b id="p12BackupPolicy">-</b></span></div>
     <p class="hint">기본 백업 위치는 SOOP Recorder 폴더 바깥의 <code>soop-recorder-backups</code>입니다. 따라서 portable 패키지를 다시 만들거나 <code>soop-recorder</code> 폴더를 교체해도 백업이 같이 삭제되지 않습니다. 필요하면 SOOP_BACKUP_DIR 환경변수로 위치를 바꿀 수 있습니다.</p>
     <div class="table"><table><thead><tr><th>생성</th><th>종류</th><th>파일</th><th>크기</th><th>SHA-256</th><th>무결성</th><th></th></tr></thead><tbody id="p12BackupRows"></tbody></table></div>
-    <p class="hint">복원은 Watcher와 VOD가 모두 중지된 상태에서만 가능합니다. 복원 직전에 현재 DB를 자동 안전백업하고, 과거 로그인 세션이 되살아나지 않도록 모든 세션을 무효화합니다.</p>
+    <p class="hint">복원은 Watcher와 VOD가 모두 중지되고 VOD 다운로드 큐가 비어 있는 상태에서만 가능합니다. 복원 직전에 현재 DB를 자동 안전백업하고, 과거 로그인 세션이 되살아나지 않도록 모든 세션을 무효화합니다.</p>
   </div>
   <div id="p102AdvancedPanel" hidden>
     <div class="title inner-title"><h3>서버 / 진단 정보</h3><button id="refreshDiagnostics">새로고침</button></div>
@@ -124,6 +130,7 @@
 </section>
 </div>
 
-</main><div id="toast"></div><script src="/phase10.js?v=p12-backup1"></script><script src="/app.js?v=p12-backup1"></script><script src="/phase8.js?v=p12-backup1"></script><script src="/phase9_1.js?v=p12-backup1"></script>
-<script src="/phase12.js?v=p12-backup1"></script>
+</main><div id="toast"></div><script src="/phase10.js?v=p13-queue1"></script><script src="/app.js?v=p13-queue1"></script><script src="/phase8.js?v=p13-queue1"></script><script src="/phase9_1.js?v=p13-queue1"></script>
+<script src="/phase12.js?v=p13-queue1"></script>
+<script src="/phase13.js?v=p13-queue1"></script>
 </body></html>

@@ -6,22 +6,22 @@ use crate::{
     },
     security::unprotect_secret,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use regex::Regex;
 use reqwest::{
-    header::{COOKIE, REFERER, SET_COOKIE},
     Client, Response,
+    header::{COOKIE, REFERER, SET_COOKIE},
 };
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -34,7 +34,8 @@ use tokio::{
 use url::Url;
 use uuid::Uuid;
 
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36";
+const USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36";
 const CF_NAMES: &[&str] = &[
     "CloudFront-Key-Pair-Id",
     "CloudFront-Policy",
@@ -92,8 +93,7 @@ impl CookieJar {
         let mut items = Vec::new();
         for raw in text.lines() {
             let line = raw.trim_end();
-            if line.trim().is_empty()
-                || (line.starts_with('#') && !line.starts_with("#HttpOnly_"))
+            if line.trim().is_empty() || (line.starts_with('#') && !line.starts_with("#HttpOnly_"))
             {
                 continue;
             }
@@ -126,7 +126,11 @@ impl CookieJar {
             out.push_str(&format!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 c.domain,
-                if c.include_subdomains { "TRUE" } else { "FALSE" },
+                if c.include_subdomains {
+                    "TRUE"
+                } else {
+                    "FALSE"
+                },
                 c.path,
                 if c.secure { "TRUE" } else { "FALSE" },
                 c.expires,
@@ -134,8 +138,7 @@ impl CookieJar {
                 sanitize_cookie_field(&c.value)
             ));
         }
-        fs::write(path, out)
-            .with_context(|| format!("Cookie 파일 저장 실패: {}", path.display()))
+        fs::write(path, out).with_context(|| format!("Cookie 파일 저장 실패: {}", path.display()))
     }
 
     fn header_for(&self, url: &str) -> Result<String> {
@@ -255,11 +258,14 @@ impl Drop for JobDirGuard {
     }
 }
 
+const TERMINAL_CACHE_LIMIT: usize = 32;
+
 pub struct VodManager {
     backend_dir: PathBuf,
     logs: LogBuffer,
     runtime: Mutex<JobRuntime>,
     status: Arc<RwLock<VodJobStatus>>,
+    terminal: Arc<Mutex<VecDeque<(String, VodJobStatus)>>>,
 }
 
 impl VodManager {
@@ -272,22 +278,27 @@ impl VodManager {
                 cancel: Arc::new(AtomicBool::new(false)),
             }),
             status: Arc::new(RwLock::new(VodJobStatus::default())),
+            terminal: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
     pub async fn status(&self) -> VodJobStatus {
-        let finished = {
-            self.runtime
-                .lock()
-                .await
-                .task
-                .as_ref()
-                .is_some_and(|t| t.is_finished())
-        };
-        if finished {
-            self.runtime.lock().await.task.take();
+        {
+            let mut runtime = self.runtime.lock().await;
+            if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
+                runtime.task.take();
+            }
         }
         self.status.read().await.clone()
+    }
+
+    pub async fn terminal_status(&self, job_id: &str) -> Option<VodJobStatus> {
+        let terminal = self.terminal.lock().await;
+        terminal
+            .iter()
+            .rev()
+            .find(|(id, _)| id == job_id)
+            .map(|(_, status)| status.clone())
     }
 
     pub async fn analyze(&self, req: VodAnalyzeRequest) -> Result<VodJobStatus> {
@@ -309,7 +320,9 @@ impl VodManager {
         let backend = self.backend_dir.clone();
         let logs = self.logs.clone();
         let status = self.status.clone();
+        let terminal = self.terminal.clone();
         let job_id = Uuid::new_v4().to_string();
+        let terminal_job_id = job_id.clone();
         {
             let mut s = status.write().await;
             *s = VodJobStatus {
@@ -330,18 +343,26 @@ impl VodManager {
                     run_download(&backend, req, &logs, &status, &cancel).await
                 }
             };
-            let mut s = status.write().await;
-            s.running = false;
-            s.finished_at = Some(Utc::now().to_rfc3339());
-            if cancel.load(Ordering::SeqCst) {
-                s.state = "CANCELLED".into();
-                s.message = "VOD 작업이 취소되었습니다.".into();
-                logs.push("[VOD] job cancelled").await;
-            } else if let Err(err) = result {
-                s.state = "FAILED".into();
-                s.message = redact(&format!("{err:#}"));
-                logs.push(format!("[VOD:ERR] {}", s.message)).await;
+            let final_status = {
+                let mut s = status.write().await;
+                s.running = false;
+                s.finished_at = Some(Utc::now().to_rfc3339());
+                if cancel.load(Ordering::SeqCst) {
+                    s.state = "CANCELLED".into();
+                    s.message = "VOD 작업이 취소되었습니다.".into();
+                    logs.push("[VOD] job cancelled").await;
+                } else if let Err(err) = result {
+                    s.state = "FAILED".into();
+                    s.message = redact(&format!("{err:#}"));
+                    logs.push(format!("[VOD:ERR] {}", s.message)).await;
+                }
+                s.clone()
+            };
+            let mut terminal = terminal.lock().await;
+            if terminal.len() >= TERMINAL_CACHE_LIMIT {
+                terminal.pop_front();
             }
+            terminal.push_back((terminal_job_id, final_status));
         });
         runtime.task = Some(task);
         Ok(self.status.read().await.clone())
@@ -450,13 +471,7 @@ async fn run_analysis(
     Ok(view)
 }
 
-async fn run_download(
-    backend: &Path,
-    req: VodDownloadRequest,
-    logs: &LogBuffer,
-    status: &Arc<RwLock<VodJobStatus>>,
-    cancel: &AtomicBool,
-) -> Result<()> {
+pub(crate) fn validate_download_request(req: &VodDownloadRequest) -> Result<()> {
     validate_url(&req.vod_url)?;
     validate_retries(req.max_retries)?;
     if !req.quality.is_empty()
@@ -469,6 +484,17 @@ async fn run_download(
     if req.output_directory.trim().is_empty() {
         bail!("VOD 출력 폴더가 비어 있습니다.");
     }
+    Ok(())
+}
+
+async fn run_download(
+    backend: &Path,
+    req: VodDownloadRequest,
+    logs: &LogBuffer,
+    status: &Arc<RwLock<VodJobStatus>>,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    validate_download_request(&req)?;
     let tools = resolve_tools(backend, &req.yt_dlp_path, &req.ffmpeg_path)?;
     let output_dir = PathBuf::from(&req.output_directory);
     fs::create_dir_all(&output_dir)?;
@@ -659,16 +685,7 @@ async fn run_download(
         return Ok(());
     }
     let final_file = if files.len() > 1 && req.merge {
-        merge_parts(
-            &tools,
-            &metadata,
-            &files,
-            &output_dir,
-            status,
-            cancel,
-            logs,
-        )
-        .await?
+        merge_parts(&tools, &metadata, &files, &output_dir, status, cancel, logs).await?
     } else {
         files
             .first()
@@ -1057,16 +1074,7 @@ async fn download_part(
         args.push(ffmpeg.display().to_string());
     }
     args.push(url.into());
-    run_progress(
-        &tools.yt_dlp,
-        &args,
-        part,
-        part_count,
-        status,
-        cancel,
-        logs,
-    )
-    .await?;
+    run_progress(&tools.yt_dlp, &args, part, part_count, status, cancel, logs).await?;
     if !cancel.load(Ordering::SeqCst) && !output.is_file() {
         bail!("yt-dlp 완료 후 출력 파일이 없습니다.");
     }
@@ -1086,10 +1094,7 @@ async fn merge_parts(
         .ffmpeg
         .as_ref()
         .ok_or_else(|| anyhow!("ffmpeg를 찾을 수 없어 PART를 병합할 수 없습니다."))?;
-    let concat = output_dir.join(format!(
-        ".soop-vod-concat-{}.txt",
-        Uuid::new_v4().simple()
-    ));
+    let concat = output_dir.join(format!(".soop-vod-concat-{}.txt", Uuid::new_v4().simple()));
     let lines = files
         .iter()
         .map(|p| ffconcat_line(p))
@@ -1154,8 +1159,14 @@ async fn run_progress(
         .stderr(Stdio::piped())
         .kill_on_drop(false)
         .spawn()?;
-    let stdout = child.stdout.take().ok_or_else(|| anyhow!("yt-dlp stdout 없음"))?;
-    let stderr = child.stderr.take().ok_or_else(|| anyhow!("yt-dlp stderr 없음"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("yt-dlp stdout 없음"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("yt-dlp stderr 없음"))?;
     let err_lines = Arc::new(Mutex::new(Vec::<String>::new()));
     let err_copy = err_lines.clone();
     let log_copy = logs.clone();
@@ -1232,8 +1243,14 @@ async fn run_capture(
         .kill_on_drop(false)
         .spawn()
         .with_context(|| format!("{label} 실행 실패"))?;
-    let mut stdout = child.stdout.take().ok_or_else(|| anyhow!("{label} stdout 없음"))?;
-    let mut stderr = child.stderr.take().ok_or_else(|| anyhow!("{label} stderr 없음"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("{label} stdout 없음"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("{label} stderr 없음"))?;
     let stdout_task = tokio::spawn(async move {
         let mut bytes = Vec::new();
         stdout.read_to_end(&mut bytes).await.map(|_| bytes)
@@ -1292,7 +1309,9 @@ async fn stop_child(child: &mut Child) {
 
 fn collect_set_cookies(jar: &mut CookieJar, response: &Response, default_domain: &str) {
     for value in response.headers().get_all(SET_COOKIE).iter() {
-        let Ok(text) = value.to_str() else { continue; };
+        let Ok(text) = value.to_str() else {
+            continue;
+        };
         if let Some(cookie) = parse_set_cookie(text, default_domain) {
             jar.upsert(cookie);
         }
@@ -1343,9 +1362,15 @@ fn collect_cloudfront_headers(
     let parsed = Url::parse(manifest_url)?;
     let host = parsed.host_str().unwrap_or("").to_string();
     for value in response.headers().get_all(SET_COOKIE).iter() {
-        let Ok(text) = value.to_str() else { continue; };
-        let Some(pair) = text.split(';').next() else { continue; };
-        let Some((name, value)) = pair.split_once('=') else { continue; };
+        let Ok(text) = value.to_str() else {
+            continue;
+        };
+        let Some(pair) = text.split(';').next() else {
+            continue;
+        };
+        let Some((name, value)) = pair.split_once('=') else {
+            continue;
+        };
         if name.to_ascii_lowercase().starts_with("cloudfront-") {
             jar.upsert(NetscapeCookie {
                 domain: host.clone(),
@@ -1536,9 +1561,7 @@ fn parse_duration_string(value: &str) -> Option<u64> {
     match parts.as_slice() {
         [m, s] => Some(m.parse::<u64>().ok()? * 60 + s.parse::<u64>().ok()?),
         [h, m, s] => Some(
-            h.parse::<u64>().ok()? * 3600
-                + m.parse::<u64>().ok()? * 60
-                + s.parse::<u64>().ok()?,
+            h.parse::<u64>().ok()? * 3600 + m.parse::<u64>().ok()? * 60 + s.parse::<u64>().ok()?,
         ),
         _ => None,
     }
@@ -1577,17 +1600,9 @@ fn read_ini(path: &Path) -> Result<BTreeMap<String, String>> {
 
 fn resolve_tools(backend: &Path, yt_dlp: &str, ffmpeg: &str) -> Result<Tools> {
     let vod = backend.join("vod");
-    let yt_dlp = resolve_executable(
-        yt_dlp,
-        &[vod.join("yt-dlp.exe")],
-        &["yt-dlp.exe", "yt-dlp"],
-    )
-    .ok_or_else(|| anyhow!("yt-dlp를 찾을 수 없습니다."))?;
-    let ffmpeg = resolve_executable(
-        ffmpeg,
-        &[vod.join("ffmpeg.exe")],
-        &["ffmpeg.exe", "ffmpeg"],
-    );
+    let yt_dlp = resolve_executable(yt_dlp, &[vod.join("yt-dlp.exe")], &["yt-dlp.exe", "yt-dlp"])
+        .ok_or_else(|| anyhow!("yt-dlp를 찾을 수 없습니다."))?;
+    let ffmpeg = resolve_executable(ffmpeg, &[vod.join("ffmpeg.exe")], &["ffmpeg.exe", "ffmpeg"]);
     Ok(Tools { yt_dlp, ffmpeg })
 }
 
@@ -1642,7 +1657,28 @@ fn safe_name(value: &str) -> String {
     let upper = safe.to_ascii_uppercase();
     if matches!(
         upper.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     ) {
         safe.insert(0, '_');
     }
@@ -1675,7 +1711,9 @@ fn incomplete_artifacts(target: &Path) -> Vec<PathBuf> {
             paths.push(path);
         }
     }
-    if let (Some(parent), Some(name)) = (target.parent(), target.file_name().and_then(|v| v.to_str())) {
+    if let (Some(parent), Some(name)) =
+        (target.parent(), target.file_name().and_then(|v| v.to_str()))
+    {
         if let Ok(entries) = fs::read_dir(parent) {
             for entry in entries.flatten() {
                 let file_name = entry.file_name();
