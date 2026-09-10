@@ -1,0 +1,107 @@
+use anyhow::{Result, bail};
+use reqwest::{Client, RequestBuilder};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{fmt, str::FromStr};
+use url::Url;
+
+pub mod soop;
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum PlatformId {
+    #[default]
+    Soop,
+}
+
+impl PlatformId {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Soop => "SOOP",
+        }
+    }
+}
+
+impl fmt::Display for PlatformId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PlatformId {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "" | "SOOP" => Ok(Self::Soop),
+            other => bail!("지원하지 않는 플랫폼입니다: {other}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PlatformCapabilities {
+    pub channel_lookup: bool,
+    pub live: bool,
+    pub vod: bool,
+}
+
+pub trait PlatformProvider: Send + Sync {
+    fn id(&self) -> PlatformId;
+    fn display_name(&self) -> &'static str;
+    fn capabilities(&self) -> PlatformCapabilities;
+    fn validate_account(&self, account: &str) -> Result<()>;
+    fn channel_lookup_request(&self, client: &Client, account: &str) -> RequestBuilder;
+    fn parse_channel_name(&self, account: &str, value: &Value) -> Result<String>;
+    fn accepts_vod_url(&self, url: &Url) -> bool;
+}
+
+pub fn provider(id: PlatformId) -> &'static dyn PlatformProvider {
+    match id {
+        PlatformId::Soop => &soop::SOOP,
+    }
+}
+
+pub const fn default_platform() -> PlatformId {
+    PlatformId::Soop
+}
+
+pub fn detect_vod_platform(raw_url: &str) -> Result<PlatformId> {
+    let url = Url::parse(raw_url)?;
+    for id in [PlatformId::Soop] {
+        if provider(id).accepts_vod_url(&url) {
+            return Ok(id);
+        }
+    }
+    bail!("지원하지 않는 VOD URL입니다.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_id_defaults_to_soop_for_legacy_data() {
+        assert_eq!(PlatformId::default(), PlatformId::Soop);
+        assert_eq!("SOOP".parse::<PlatformId>().unwrap(), PlatformId::Soop);
+        assert_eq!("soop".parse::<PlatformId>().unwrap(), PlatformId::Soop);
+        assert!("CHZZK".parse::<PlatformId>().is_err());
+    }
+
+    #[test]
+    fn detects_soop_vod_urls_without_accepting_other_hosts() {
+        assert_eq!(
+            detect_vod_platform("https://vod.sooplive.com/player/123456789").unwrap(),
+            PlatformId::Soop
+        );
+        assert!(detect_vod_platform("https://example.com/player/123456789").is_err());
+    }
+
+    #[test]
+    fn provider_capabilities_are_explicit() {
+        let capabilities = provider(default_platform()).capabilities();
+        assert!(capabilities.channel_lookup && capabilities.live && capabilities.vod);
+        assert_eq!(provider(default_platform()).id().as_str(), "SOOP");
+        assert_eq!(provider(default_platform()).display_name(), "SOOP");
+    }
+}
