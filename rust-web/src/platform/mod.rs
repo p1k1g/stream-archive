@@ -7,6 +7,7 @@ use url::Url;
 
 pub mod live;
 pub mod soop;
+pub mod vod;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]

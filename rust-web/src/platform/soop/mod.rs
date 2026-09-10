@@ -5,6 +5,7 @@ use serde_json::Value;
 use url::Url;
 
 pub mod live;
+pub mod vod;
 
 pub(crate) static SOOP: SoopProvider = SoopProvider;
 
