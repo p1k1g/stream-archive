@@ -1,8 +1,11 @@
+use crate::support::platform::PlatformId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Channel {
+    #[serde(default)]
+    pub platform: PlatformId,
     pub enabled: bool,
     pub name: String,
     pub account: String,
@@ -11,6 +14,7 @@ pub struct Channel {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ChannelRuntimeStatus {
+    pub platform: PlatformId,
     pub account: String,
     pub name: String,
     pub status: String,
@@ -81,6 +85,7 @@ pub struct ChannelLookupResponse {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct LiveHistoryItem {
+    pub platform: PlatformId,
     pub id: String,
     pub account: String,
     pub channel_name: String,
@@ -97,6 +102,7 @@ pub struct LiveHistoryItem {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct VodHistoryItem {
+    pub platform: PlatformId,
     pub id: String,
     pub kind: String,
     pub vod_url: String,
@@ -198,6 +204,7 @@ pub struct VodAnalysisView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VodJobStatus {
+    pub platform: PlatformId,
     pub state: String,
     pub running: bool,
     pub job_id: Option<String>,
@@ -214,6 +221,7 @@ pub struct VodJobStatus {
 impl Default for VodJobStatus {
     fn default() -> Self {
         Self {
+            platform: PlatformId::default(),
             state: "IDLE".to_string(),
             running: false,
             job_id: None,
@@ -231,6 +239,7 @@ impl Default for VodJobStatus {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct VodQueueItem {
+    pub platform: PlatformId,
     pub id: String,
     pub vod_url: String,
     pub output_directory: String,

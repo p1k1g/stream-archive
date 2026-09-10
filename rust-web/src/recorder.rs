@@ -1,4 +1,9 @@
-use crate::{backend::LogBuffer, model::LiveHistoryItem, store};
+use crate::{
+    backend::LogBuffer,
+    model::LiveHistoryItem,
+    store,
+    support::platform::PlatformId,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use std::{
@@ -55,9 +60,11 @@ impl RecorderManager {
         Self { logs }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
         config: &RecorderConfig,
+        platform: PlatformId,
         stream_url: &str,
         output_file: PathBuf,
         bno: String,
@@ -89,27 +96,19 @@ impl RecorderManager {
             .arg("--output")
             .arg(&output_file)
             .arg("--force")
-            // Streamlink's progress renderer expects an interactive Windows console.
-            // The recorder pipes stderr, so disable progress rendering but keep log output.
             .arg("--progress")
             .arg("no")
             .arg("--hls-live-edge")
             .arg("3")
             .arg("--stream-segment-threads")
             .arg("3")
-            // Disable Streamlink's segment-duration-based early deadline. RecorderManager
-            // owns liveness via file growth and RECORD_STALL_TIMEOUT.
             .arg("--stream-segmented-queue-deadline")
             .arg("0")
-            // Keep Streamlink's generic read timeout just beyond RecorderManager's stall
-            // threshold so the Rust monitor gets the first chance to classify a stall.
             .arg("--stream-timeout")
             .arg(stream_timeout.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            // If the watcher task panics or is otherwise dropped unexpectedly, do not leave
-            // an unmanaged Streamlink process recording after the UI reports STOPPED.
             .kill_on_drop(true);
         if let Some(parent) = config.streamlink.parent() {
             if parent.is_dir() {
@@ -145,6 +144,7 @@ impl RecorderManager {
         let history_id = Uuid::new_v4().to_string();
         if let Ok(db) = store::global() {
             if let Err(err) = db.start_live(&LiveHistoryItem {
+                platform,
                 id: history_id.clone(),
                 account: account.to_string(),
                 channel_name: channel.to_string(),
@@ -166,7 +166,7 @@ impl RecorderManager {
 
         self.logs
             .push(format!(
-                "[RUST] RECORD START channel={channel} account={account} bno={bno} pid={pid} file={}",
+                "[RUST] RECORD START platform={platform} channel={channel} account={account} bno={bno} pid={pid} file={}",
                 output_file.display()
             ))
             .await;

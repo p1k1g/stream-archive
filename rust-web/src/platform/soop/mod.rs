@@ -1,62 +1,15 @@
+use super::{PlatformCapabilities, PlatformId, PlatformProvider};
 use anyhow::{Result, bail};
 use reqwest::{Client, RequestBuilder};
-use serde::Serialize;
 use serde_json::Value;
 use url::Url;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum PlatformId {
-    Soop,
-}
+pub mod live;
+pub mod vod;
 
-impl PlatformId {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Soop => "SOOP",
-        }
-    }
-}
+pub(crate) static SOOP: SoopProvider = SoopProvider;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct PlatformCapabilities {
-    pub channel_lookup: bool,
-    pub live: bool,
-    pub vod: bool,
-}
-
-pub trait PlatformProvider: Send + Sync {
-    fn id(&self) -> PlatformId;
-    fn display_name(&self) -> &'static str;
-    fn capabilities(&self) -> PlatformCapabilities;
-    fn validate_account(&self, account: &str) -> Result<()>;
-    fn channel_lookup_request(&self, client: &Client, account: &str) -> RequestBuilder;
-    fn parse_channel_name(&self, account: &str, value: &Value) -> Result<String>;
-    fn accepts_vod_url(&self, url: &Url) -> bool;
-}
-
-pub fn provider(id: PlatformId) -> &'static dyn PlatformProvider {
-    match id {
-        PlatformId::Soop => &SOOP,
-    }
-}
-
-pub fn default_platform() -> PlatformId {
-    PlatformId::Soop
-}
-
-pub fn detect_vod_platform(raw_url: &str) -> Result<PlatformId> {
-    let url = Url::parse(raw_url)?;
-    for id in [PlatformId::Soop] {
-        if provider(id).accepts_vod_url(&url) {
-            return Ok(id);
-        }
-    }
-    bail!("지원하지 않는 VOD URL입니다.")
-}
-
-struct SoopProvider;
-static SOOP: SoopProvider = SoopProvider;
+pub(crate) struct SoopProvider;
 
 impl PlatformProvider for SoopProvider {
     fn id(&self) -> PlatformId {
@@ -134,44 +87,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn soop_provider_parses_current_nickname_shape() {
+    fn parses_current_nickname_shape() {
         let value = serde_json::json!({
             "RESULT": 1,
             "DATA": {"user_id": "1004ysus", "user_nick": "테스트닉"}
         });
         assert_eq!(
-            provider(PlatformId::Soop)
-                .parse_channel_name("1004ysus", &value)
-                .unwrap(),
+            SOOP.parse_channel_name("1004ysus", &value).unwrap(),
             "테스트닉"
         );
     }
 
     #[test]
-    fn soop_provider_keeps_legacy_nickname_fallback() {
+    fn keeps_legacy_nickname_fallback() {
         let value = serde_json::json!({"RESULT": 1, "station_name": "구형닉"});
-        assert_eq!(
-            provider(PlatformId::Soop)
-                .parse_channel_name("legacy", &value)
-                .unwrap(),
-            "구형닉"
-        );
-    }
-
-    #[test]
-    fn detects_soop_vod_urls_without_accepting_other_hosts() {
-        assert_eq!(
-            detect_vod_platform("https://vod.sooplive.com/player/123456789").unwrap(),
-            PlatformId::Soop
-        );
-        assert!(detect_vod_platform("https://example.com/player/123456789").is_err());
-    }
-
-    #[test]
-    fn provider_capabilities_are_explicit() {
-        let capabilities = provider(default_platform()).capabilities();
-        assert!(capabilities.channel_lookup && capabilities.live && capabilities.vod);
-        assert_eq!(provider(default_platform()).id().as_str(), "SOOP");
-        assert_eq!(provider(default_platform()).display_name(), "SOOP");
+        assert_eq!(SOOP.parse_channel_name("legacy", &value).unwrap(), "구형닉");
     }
 }

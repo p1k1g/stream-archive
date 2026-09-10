@@ -5,6 +5,7 @@ use crate::{
     model::{VodDownloadRequest, VodJobStatus, VodQueueItem, VodQueueSnapshot},
     primary_config::apply_vod_tool_defaults,
     store::Store,
+    support::platform::{PlatformId, detect_vod_platform},
     vod::{VodManager, validate_download_request},
 };
 use anyhow::{Context, Result, bail};
@@ -83,6 +84,7 @@ impl VodQueueManager {
 
     pub async fn enqueue(&self, req: VodDownloadRequest) -> Result<VodQueueItem> {
         validate_download_request(&req)?;
+        let platform = detect_vod_platform(&req.vod_url)?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         let request_json = serde_json::to_string(&req)?;
@@ -98,14 +100,24 @@ impl VodQueueManager {
                 bail!("VOD 다운로드 큐는 실행/대기 작업을 최대 {QUEUE_LIMIT}건까지 보관합니다.");
             }
             tx.execute(
-                r#"INSERT INTO vod_queue(id,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at)
-                   VALUES(?1,?2,?3,?4,'QUEUED',0,'대기 중',?5,?5)"#,
-                params![id, request_json, req.vod_url, req.output_directory, now],
+                r#"INSERT INTO vod_queue(id,platform,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at)
+                   VALUES(?1,?2,?3,?4,?5,'QUEUED',0,'대기 중',?6,?6)"#,
+                params![
+                    id,
+                    platform.as_str(),
+                    request_json,
+                    req.vod_url,
+                    req.output_directory,
+                    now
+                ],
             )?;
             tx.commit()?;
         }
         self.logs
-            .push(format!("[VOD_QUEUE] queued id={id} url={}", req.vod_url))
+            .push(format!(
+                "[VOD_QUEUE] queued id={id} platform={platform} url={}",
+                req.vod_url
+            ))
             .await;
         self.item(&id)?.context("queued item disappeared")
     }
@@ -113,10 +125,6 @@ impl VodQueueManager {
     pub async fn snapshot(&self) -> Result<VodQueueSnapshot> {
         let active_id = self.active_id.lock().await.clone();
         let current = self.vod.status().await;
-
-        // Realtime snapshots are requested frequently, so keep queue rows and the
-        // queued count on one short-lived SQLite connection instead of opening the
-        // database twice for every SSE client/tick.
         let conn = self.conn()?;
         let mut items = Self::list_items_from_conn(&conn)?;
         let queued_count: i64 = conn.query_row(
@@ -204,7 +212,9 @@ impl VodQueueManager {
         if changed == 0 {
             bail!("대기/실행 중인 작업은 먼저 취소하세요.");
         }
-        self.logs.push(format!("[VOD_QUEUE] removed id={id}")).await;
+        self.logs
+            .push(format!("[VOD_QUEUE] removed id={id}"))
+            .await;
         Ok(())
     }
 
@@ -272,8 +282,8 @@ impl VodQueueManager {
             let _ = self.mark_running(&claimed.id);
             self.logs
                 .push(format!(
-                    "[VOD_QUEUE] started id={} job={job_id}",
-                    claimed.id
+                    "[VOD_QUEUE] started id={} job={job_id} platform={}",
+                    claimed.id, started.platform
                 ))
                 .await;
 
@@ -329,7 +339,12 @@ impl VodQueueManager {
             .query_row(
                 "SELECT id,request_json FROM vod_queue WHERE state='QUEUED' ORDER BY created_at,id LIMIT 1",
                 [],
-                |row| Ok(ClaimedItem { id: row.get(0)?, request_json: row.get(1)? }),
+                |row| {
+                    Ok(ClaimedItem {
+                        id: row.get(0)?,
+                        request_json: row.get(1)?,
+                    })
+                },
             )
             .optional()?;
         let Some(row) = row else {
@@ -371,8 +386,17 @@ impl VodQueueManager {
             .map(|a| (a.title.as_str(), a.streamer.as_str()))
             .unwrap_or(("", ""));
         self.conn()?.execute(
-            "UPDATE vod_queue SET state=?2, message=?3, title=CASE WHEN ?4='' THEN title ELSE ?4 END, streamer=CASE WHEN ?5='' THEN streamer ELSE ?5 END, output_file=COALESCE(?6,output_file), finished_at=?7, updated_at=?7 WHERE id=?1",
-            params![id, status.state, status.message, title, streamer, status.output_file, now],
+            "UPDATE vod_queue SET platform=?2, state=?3, message=?4, title=CASE WHEN ?5='' THEN title ELSE ?5 END, streamer=CASE WHEN ?6='' THEN streamer ELSE ?6 END, output_file=COALESCE(?7,output_file), finished_at=?8, updated_at=?8 WHERE id=?1",
+            params![
+                id,
+                status.platform.as_str(),
+                status.state,
+                status.message,
+                title,
+                streamer,
+                status.output_file,
+                now
+            ],
         )?;
         Ok(())
     }
@@ -384,7 +408,7 @@ impl VodQueueManager {
 
     fn list_items_from_conn(conn: &Connection) -> Result<Vec<VodQueueItem>> {
         let mut stmt = conn.prepare(
-            r#"SELECT id,vod_url,output_directory,state,attempts,message,title,streamer,output_file,created_at,started_at,finished_at,updated_at
+            r#"SELECT platform,id,vod_url,output_directory,state,attempts,message,title,streamer,output_file,created_at,started_at,finished_at,updated_at
                FROM vod_queue ORDER BY
                  CASE state WHEN 'RUNNING' THEN 0 WHEN 'STARTING' THEN 0 WHEN 'CANCELLING' THEN 0 WHEN 'QUEUED' THEN 1 ELSE 2 END,
                  created_at DESC LIMIT ?1"#,
@@ -397,7 +421,7 @@ impl VodQueueManager {
     fn item(&self, id: &str) -> Result<Option<VodQueueItem>> {
         let conn = self.conn()?;
         conn.query_row(
-            r#"SELECT id,vod_url,output_directory,state,attempts,message,title,streamer,output_file,created_at,started_at,finished_at,updated_at
+            r#"SELECT platform,id,vod_url,output_directory,state,attempts,message,title,streamer,output_file,created_at,started_at,finished_at,updated_at
                FROM vod_queue WHERE id=?1"#,
             params![id],
             queue_item_from_row,
@@ -407,28 +431,34 @@ impl VodQueueManager {
     }
 }
 
+fn stored_platform(value: String) -> PlatformId {
+    value.parse().unwrap_or_default()
+}
+
 fn queue_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VodQueueItem> {
     Ok(VodQueueItem {
-        id: row.get(0)?,
-        vod_url: row.get(1)?,
-        output_directory: row.get(2)?,
-        state: row.get(3)?,
-        attempts: row.get::<_, i64>(4)?.max(0) as u32,
-        message: row.get(5)?,
-        title: row.get(6)?,
-        streamer: row.get(7)?,
+        platform: stored_platform(row.get(0)?),
+        id: row.get(1)?,
+        vod_url: row.get(2)?,
+        output_directory: row.get(3)?,
+        state: row.get(4)?,
+        attempts: row.get::<_, i64>(5)?.max(0) as u32,
+        message: row.get(6)?,
+        title: row.get(7)?,
+        streamer: row.get(8)?,
         current_part: 0,
         part_count: 0,
         percent: 0.0,
-        output_file: row.get(8)?,
-        created_at: row.get(9)?,
-        started_at: row.get(10)?,
-        finished_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        output_file: row.get(9)?,
+        created_at: row.get(10)?,
+        started_at: row.get(11)?,
+        finished_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
 fn apply_runtime_status(item: &mut VodQueueItem, status: &VodJobStatus) {
+    item.platform = status.platform;
     item.state = if status.running {
         "RUNNING".into()
     } else {
@@ -480,9 +510,6 @@ pub(crate) async fn api_cancel(
     AxumPath(id): AxumPath<String>,
 ) -> ApiResult<Json<Value>> {
     authorize(&headers, &state)?;
-    // Match guarded restore's lifecycle -> config lock order. Holding lifecycle
-    // through VodManager::cancel prevents another direct/queued job from starting
-    // while the owned yt-dlp/ffmpeg process is still shutting down.
     let _lifecycle_guard = state.lifecycle_lock.lock().await;
     let _config_guard = state.config_write_lock.lock().await;
     state
@@ -554,6 +581,7 @@ mod tests {
         let vod = Arc::new(VodManager::new(backend, logs.clone()));
         let queue = VodQueueManager::new(store, vod, logs, Arc::new(Mutex::new(()))).unwrap();
         let item = queue.enqueue(request("C:\\SOOP_VOD")).await.unwrap();
+        assert_eq!(item.platform, PlatformId::Soop);
         assert_eq!(queue.snapshot().await.unwrap().queued_count, 1);
         queue.cancel(&item.id).await.unwrap();
         assert_eq!(queue.item(&item.id).unwrap().unwrap().state, "CANCELLED");
@@ -579,8 +607,8 @@ mod tests {
             let id = format!("queued-{i:03}");
             let now = format!("2026-09-09T00:{:02}:00Z", i % 60);
             conn.execute(
-                r#"INSERT INTO vod_queue(id,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at)
-                   VALUES(?1,?2,'https://vod.sooplive.com/player/123456789','C:\SOOP_VOD','QUEUED',0,'대기 중',?3,?3)"#,
+                r#"INSERT INTO vod_queue(id,platform,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at)
+                   VALUES(?1,'SOOP',?2,'https://vod.sooplive.com/player/123456789','C:\SOOP_VOD','QUEUED',0,'대기 중',?3,?3)"#,
                 params![id, request_json, now],
             )
             .unwrap();
