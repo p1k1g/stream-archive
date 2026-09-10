@@ -5,6 +5,7 @@ use crate::{
     },
     model::{Channel, LiveHistoryItem, VodJobStatus},
     primary_config::VOD_TOOL_KEYS,
+    support::platform::PlatformId,
     vod_tool_settings,
 };
 use anyhow::{Context, Result};
@@ -33,15 +34,18 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 CREATE TABLE IF NOT EXISTS channels (
-    account TEXT PRIMARY KEY COLLATE NOCASE,
+    platform TEXT NOT NULL COLLATE NOCASE DEFAULT 'SOOP',
+    account TEXT NOT NULL COLLATE NOCASE,
     name TEXT NOT NULL,
     enabled INTEGER NOT NULL,
     outdir TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(platform, account)
 );
 
 CREATE TABLE IF NOT EXISTS live_recordings (
     id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL DEFAULT 'SOOP',
     account TEXT NOT NULL,
     channel_name TEXT NOT NULL,
     bno TEXT,
@@ -59,6 +63,7 @@ CREATE INDEX IF NOT EXISTS ix_live_recordings_started
 
 CREATE TABLE IF NOT EXISTS vod_jobs (
     id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL DEFAULT 'SOOP',
     kind TEXT NOT NULL,
     vod_url TEXT,
     title TEXT,
@@ -76,6 +81,7 @@ CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
 
 CREATE TABLE IF NOT EXISTS vod_queue (
     id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL DEFAULT 'SOOP',
     request_json TEXT NOT NULL,
     vod_url TEXT NOT NULL,
     output_directory TEXT NOT NULL,
@@ -141,12 +147,14 @@ impl Store {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create data directory {}", parent.display()))?;
         }
-        let conn = Connection::open(&path)
+        let mut conn = Connection::open(&path)
             .with_context(|| format!("failed to open SQLite database {}", path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;
+        conn.execute_batch(SCHEMA_SQL)?;
+        ensure_multiplatform_schema(&mut conn)?;
         conn.execute_batch(SCHEMA_SQL)?;
         let settings_cache = load_all_settings_from_conn(&conn)?;
         let channels_cache = load_channels_from_conn(&conn)?;
@@ -197,8 +205,10 @@ impl Store {
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
         target.execute_batch("PRAGMA foreign_keys=ON;")?;
-        // A valid older backup may predate a newer table/index. Restore the data
-        // first, then bring it to the current schema before refreshing caches.
+        // A valid older backup may predate newer tables/columns. Restore first,
+        // then upgrade it to the current multi-platform schema before cache refresh.
+        target.execute_batch(SCHEMA_SQL)?;
+        ensure_multiplatform_schema(&mut target)?;
         target.execute_batch(SCHEMA_SQL)?;
         target.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         self.refresh_config_cache_from_conn(&target)?;
@@ -206,8 +216,10 @@ impl Store {
     }
 
     pub fn ensure_schema(&self) -> Result<()> {
-        let conn = self.conn()?;
+        let mut conn = self.conn()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch(SCHEMA_SQL)?;
+        ensure_multiplatform_schema(&mut conn)?;
         conn.execute_batch(SCHEMA_SQL)?;
         self.refresh_config_cache_from_conn(&conn)?;
         drop(conn);
@@ -362,14 +374,11 @@ impl Store {
         tx.execute("DELETE FROM channels", [])?;
         for channel in channels {
             tx.execute(
-                "INSERT INTO channels(account,name,enabled,outdir,updated_at) VALUES(?1,?2,?3,?4,?5)",
-                params![channel.account, channel.name, i64::from(channel.enabled), channel.outdir, now],
+                "INSERT INTO channels(platform,account,name,enabled,outdir,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![channel.platform.as_str(), channel.account, channel.name, i64::from(channel.enabled), channel.outdir, now],
             )?;
         }
         tx.commit()?;
-        // Keep the hot-read cache behavior identical to a fresh Store::open():
-        // API saves must immediately expose the same NOCASE ordering that SQLite
-        // returns after restart/restore instead of temporarily preserving request order.
         let sorted_channels = load_channels_from_conn(&conn)?;
         *self
             .channels_cache
@@ -407,8 +416,8 @@ impl Store {
     pub fn start_live(&self, item: &LiveHistoryItem) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
-            "INSERT OR IGNORE INTO live_recordings(id,account,channel_name,bno,title,file_path,started_at,status) VALUES(?1,?2,?3,?4,?5,?6,?7,'RECORDING')",
-            params![item.id, item.account, item.channel_name, item.bno, item.title, item.file_path, item.started_at],
+            "INSERT OR IGNORE INTO live_recordings(id,platform,account,channel_name,bno,title,file_path,started_at,status) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'RECORDING')",
+            params![item.id, item.platform.as_str(), item.account, item.channel_name, item.bno, item.title, item.file_path, item.started_at],
         )?;
         Ok(())
     }
@@ -446,9 +455,10 @@ impl Store {
         };
         let conn = self.conn()?;
         conn.execute(
-            r#"INSERT INTO vod_jobs(id,kind,vod_url,title,streamer,part_count,state,output_file,message,started_at,finished_at,updated_at)
-               VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+            r#"INSERT INTO vod_jobs(id,platform,kind,vod_url,title,streamer,part_count,state,output_file,message,started_at,finished_at,updated_at)
+               VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
                ON CONFLICT(id) DO UPDATE SET
+                 platform=excluded.platform,
                  kind=CASE WHEN excluded.kind='JOB' THEN vod_jobs.kind ELSE excluded.kind END,
                  vod_url=CASE WHEN excluded.vod_url='' THEN vod_jobs.vod_url ELSE excluded.vod_url END,
                  title=CASE WHEN excluded.title='' THEN vod_jobs.title ELSE excluded.title END,
@@ -461,7 +471,8 @@ impl Store {
                  finished_at=COALESCE(excluded.finished_at, vod_jobs.finished_at),
                  updated_at=excluded.updated_at
                WHERE
-                 (excluded.kind<>'JOB' AND excluded.kind IS NOT vod_jobs.kind)
+                 excluded.platform IS NOT vod_jobs.platform
+                 OR (excluded.kind<>'JOB' AND excluded.kind IS NOT vod_jobs.kind)
                  OR (excluded.vod_url<>'' AND excluded.vod_url IS NOT vod_jobs.vod_url)
                  OR (excluded.title<>'' AND excluded.title IS NOT vod_jobs.title)
                  OR (excluded.streamer<>'' AND excluded.streamer IS NOT vod_jobs.streamer)
@@ -473,6 +484,7 @@ impl Store {
                  OR (excluded.finished_at IS NOT NULL AND excluded.finished_at IS NOT vod_jobs.finished_at)"#,
             params![
                 id,
+                status.platform.as_str(),
                 kind,
                 vod_url,
                 title,
@@ -499,6 +511,95 @@ impl Store {
     }
 }
 
+fn ensure_multiplatform_schema(conn: &mut Connection) -> Result<()> {
+    migrate_channels_to_composite_identity(conn)?;
+    add_platform_column_if_missing(conn, "live_recordings")?;
+    add_platform_column_if_missing(conn, "vod_jobs")?;
+    add_platform_column_if_missing(conn, "vod_queue")?;
+    Ok(())
+}
+
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<(String, i64)>> {
+    let sql = match table {
+        "channels" => "PRAGMA table_info(channels)",
+        "live_recordings" => "PRAGMA table_info(live_recordings)",
+        "vod_jobs" => "PRAGMA table_info(vod_jobs)",
+        "vod_queue" => "PRAGMA table_info(vod_queue)",
+        _ => anyhow::bail!("unsupported schema table: {table}"),
+    };
+    let mut stmt = conn.prepare(sql)?;
+    stmt.query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+fn add_platform_column_if_missing(conn: &Connection, table: &str) -> Result<()> {
+    if table_columns(conn, table)?
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("platform"))
+    {
+        return Ok(());
+    }
+    let sql = match table {
+        "live_recordings" => {
+            "ALTER TABLE live_recordings ADD COLUMN platform TEXT NOT NULL DEFAULT 'SOOP'"
+        }
+        "vod_jobs" => "ALTER TABLE vod_jobs ADD COLUMN platform TEXT NOT NULL DEFAULT 'SOOP'",
+        "vod_queue" => "ALTER TABLE vod_queue ADD COLUMN platform TEXT NOT NULL DEFAULT 'SOOP'",
+        _ => anyhow::bail!("unsupported platform column table: {table}"),
+    };
+    conn.execute_batch(sql)?;
+    Ok(())
+}
+
+fn migrate_channels_to_composite_identity(conn: &mut Connection) -> Result<()> {
+    let columns = table_columns(conn, "channels")?;
+    let has_platform = columns
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("platform"));
+    let platform_pk = columns
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("platform"))
+        .map(|(_, pk)| *pk)
+        .unwrap_or(0);
+    let account_pk = columns
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("account"))
+        .map(|(_, pk)| *pk)
+        .unwrap_or(0);
+    if has_platform && platform_pk == 1 && account_pk == 2 {
+        return Ok(());
+    }
+
+    let platform_expr = if has_platform {
+        "COALESCE(NULLIF(platform,''),'SOOP')"
+    } else {
+        "'SOOP'"
+    };
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        r#"DROP TABLE IF EXISTS channels_v16;
+        CREATE TABLE channels_v16 (
+            platform TEXT NOT NULL COLLATE NOCASE DEFAULT 'SOOP',
+            account TEXT NOT NULL COLLATE NOCASE,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            outdir TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(platform, account)
+        );"#,
+    )?;
+    tx.execute(
+        &format!(
+            "INSERT OR REPLACE INTO channels_v16(platform,account,name,enabled,outdir,updated_at) SELECT {platform_expr},account,name,enabled,outdir,updated_at FROM channels"
+        ),
+        [],
+    )?;
+    tx.execute_batch("DROP TABLE channels; ALTER TABLE channels_v16 RENAME TO channels;")?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn load_all_settings_from_conn(conn: &Connection) -> Result<BTreeMap<String, String>> {
     let mut stmt = conn.prepare("SELECT key,value FROM settings ORDER BY key")?;
     stmt.query_map([], |row| {
@@ -510,18 +611,30 @@ fn load_all_settings_from_conn(conn: &Connection) -> Result<BTreeMap<String, Str
 
 fn load_channels_from_conn(conn: &Connection) -> Result<Vec<Channel>> {
     let mut stmt = conn.prepare(
-        "SELECT name,account,enabled,outdir FROM channels ORDER BY name COLLATE NOCASE, account COLLATE NOCASE",
+        "SELECT platform,name,account,enabled,outdir FROM channels ORDER BY platform COLLATE NOCASE, name COLLATE NOCASE, account COLLATE NOCASE",
     )?;
-    stmt.query_map([], |row| {
-        Ok(Channel {
-            name: row.get(0)?,
-            account: row.get(1)?,
-            enabled: row.get::<_, i64>(2)? != 0,
-            outdir: row.get(3)?,
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(platform, name, account, enabled, outdir)| {
+            Ok(Channel {
+                platform: platform.parse::<PlatformId>()?,
+                name,
+                account,
+                enabled: enabled != 0,
+                outdir,
+            })
         })
-    })?
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(Into::into)
+        .collect()
 }
 
 fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
@@ -552,6 +665,7 @@ mod tests {
 
     fn completed_vod_status(message: &str) -> VodJobStatus {
         VodJobStatus {
+            platform: PlatformId::Soop,
             state: "COMPLETED".into(),
             running: false,
             job_id: Some("vod-history-test".into()),
@@ -566,6 +680,16 @@ mod tests {
         }
     }
 
+    fn channel(name: &str, account: &str) -> Channel {
+        Channel {
+            platform: PlatformId::Soop,
+            enabled: true,
+            name: name.into(),
+            account: account.into(),
+            outdir: String::new(),
+        }
+    }
+
     #[test]
     fn runtime_config_cache_tracks_committed_writes() {
         let dir = tempdir().unwrap();
@@ -576,14 +700,9 @@ mod tests {
                 "test",
             )
             .unwrap();
-        store
-            .sync_channels(&[Channel {
-                enabled: true,
-                name: "Cached".into(),
-                account: "cached-account".into(),
-                outdir: "C:\\cached-live".into(),
-            }])
-            .unwrap();
+        let mut cached = channel("Cached", "cached-account");
+        cached.outdir = "C:\\cached-live".into();
+        store.sync_channels(&[cached]).unwrap();
 
         assert_eq!(
             store.setting_value("OUTPUT_DIR").unwrap().as_deref(),
@@ -591,6 +710,7 @@ mod tests {
         );
         let channels = store.channels().unwrap();
         assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].platform, PlatformId::Soop);
         assert_eq!(channels[0].account, "cached-account");
     }
 
@@ -601,24 +721,9 @@ mod tests {
         let store = Store::open(db_path.clone()).unwrap();
         store
             .sync_channels(&[
-                Channel {
-                    enabled: true,
-                    name: "Zulu".into(),
-                    account: "z".into(),
-                    outdir: String::new(),
-                },
-                Channel {
-                    enabled: true,
-                    name: "alpha".into(),
-                    account: "b".into(),
-                    outdir: String::new(),
-                },
-                Channel {
-                    enabled: true,
-                    name: "ALPHA".into(),
-                    account: "a".into(),
-                    outdir: String::new(),
-                },
+                channel("Zulu", "z"),
+                channel("alpha", "b"),
+                channel("ALPHA", "a"),
             ])
             .unwrap();
 
@@ -638,6 +743,49 @@ mod tests {
             .map(|channel| channel.account)
             .collect::<Vec<_>>();
         assert_eq!(after_restart, immediate);
+    }
+
+    #[test]
+    fn legacy_schema_is_promoted_to_soop_platform_identity() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"CREATE TABLE channels (
+                    account TEXT PRIMARY KEY COLLATE NOCASE,
+                    name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    outdir TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO channels(account,name,enabled,outdir,updated_at)
+                VALUES('legacy','Legacy',1,'','2026-09-10T00:00:00Z');"#,
+            )
+            .unwrap();
+        }
+        let store = Store::open(db_path).unwrap();
+        let channels = store.channels().unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].platform, PlatformId::Soop);
+        assert_eq!(channels[0].account, "legacy");
+
+        let conn = store.conn().unwrap();
+        let columns = table_columns(&conn, "channels").unwrap();
+        assert_eq!(
+            columns
+                .iter()
+                .find(|(name, _)| name == "platform")
+                .map(|(_, pk)| *pk),
+            Some(1)
+        );
+        assert_eq!(
+            columns
+                .iter()
+                .find(|(name, _)| name == "account")
+                .map(|(_, pk)| *pk),
+            Some(2)
+        );
     }
 
     #[test]
