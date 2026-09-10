@@ -14,7 +14,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock},
 };
 
 static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
@@ -23,6 +23,8 @@ static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
 pub struct Store {
     inner: Arc<Mutex<Connection>>,
     path: PathBuf,
+    settings_cache: Arc<RwLock<BTreeMap<String, String>>>,
+    channels_cache: Arc<RwLock<Vec<Channel>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,10 +150,14 @@ impl Store {
                 ON vod_queue(state, created_at);
             "#,
         )?;
+        let settings_cache = load_all_settings_from_conn(&conn)?;
+        let channels_cache = load_channels_from_conn(&conn)?;
 
         let store = Self {
             inner: Arc::new(Mutex::new(conn)),
             path,
+            settings_cache: Arc::new(RwLock::new(settings_cache)),
+            channels_cache: Arc::new(RwLock::new(channels_cache)),
         };
         store.recover_interrupted()?;
         Ok(store)
@@ -193,6 +199,7 @@ impl Store {
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
         target.execute_batch("PRAGMA foreign_keys=ON; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        self.refresh_config_cache_from_conn(&target)?;
         Ok(())
     }
 
@@ -277,6 +284,7 @@ impl Store {
                 ON vod_queue(state, created_at);
             "#,
         )?;
+        self.refresh_config_cache_from_conn(&conn)?;
         drop(conn);
         self.recover_interrupted()?;
         Ok(())
@@ -286,6 +294,20 @@ impl Store {
         self.inner
             .lock()
             .map_err(|_| anyhow::anyhow!("SQLite connection mutex poisoned"))
+    }
+
+    fn refresh_config_cache_from_conn(&self, conn: &Connection) -> Result<()> {
+        let settings = load_all_settings_from_conn(conn)?;
+        let channels = load_channels_from_conn(conn)?;
+        *self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))? = settings;
+        *self
+            .channels_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))? = channels;
+        Ok(())
     }
 
     fn recover_interrupted(&self) -> Result<()> {
@@ -354,17 +376,13 @@ impl Store {
     }
 
     pub fn settings_for_keys(&self, keys: &[&str]) -> Result<BTreeMap<String, String>> {
-        let wanted: HashSet<&str> = keys.iter().copied().collect();
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare("SELECT key,value FROM settings ORDER BY key")?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows
-            .into_iter()
-            .filter(|(key, _)| wanted.contains(key.as_str()))
+        let cache = self
+            .settings_cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        Ok(keys
+            .iter()
+            .filter_map(|key| cache.get(*key).map(|value| ((*key).to_string(), value.clone())))
             .collect())
     }
 
@@ -384,20 +402,11 @@ impl Store {
     }
 
     pub fn channels(&self) -> Result<Vec<Channel>> {
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT name,account,enabled,outdir FROM channels ORDER BY name COLLATE NOCASE, account COLLATE NOCASE",
-        )?;
-        stmt.query_map([], |row| {
-            Ok(Channel {
-                name: row.get(0)?,
-                account: row.get(1)?,
-                enabled: row.get::<_, i64>(2)? != 0,
-                outdir: row.get(3)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        Ok(self
+            .channels_cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))?
+            .clone())
     }
 
     pub fn sync_settings(&self, values: &BTreeMap<String, String>, source: &str) -> Result<()> {
@@ -411,6 +420,13 @@ impl Store {
             )?;
         }
         tx.commit()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        for (key, value) in values {
+            cache.insert(key.clone(), value.clone());
+        }
         Ok(())
     }
 
@@ -426,6 +442,10 @@ impl Store {
             )?;
         }
         tx.commit()?;
+        *self
+            .channels_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))? = channels.to_vec();
         Ok(())
     }
 
@@ -448,9 +468,11 @@ impl Store {
     }
 
     fn settings_count(&self) -> Result<usize> {
-        let conn = self.conn()?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM settings", [], |row| row.get(0))?;
-        Ok(count.max(0) as usize)
+        Ok(self
+            .settings_cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?
+            .len())
     }
 
     pub fn start_live(&self, item: &LiveHistoryItem) -> Result<()> {
@@ -539,15 +561,38 @@ impl Store {
     }
 
     pub fn setting_value(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn()?;
-        conn.query_row(
-            "SELECT value FROM settings WHERE key=?1",
-            params![key],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(Into::into)
+        Ok(self
+            .settings_cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?
+            .get(key)
+            .cloned())
     }
+}
+
+fn load_all_settings_from_conn(conn: &Connection) -> Result<BTreeMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT key,value FROM settings ORDER BY key")?;
+    stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?
+    .collect::<rusqlite::Result<BTreeMap<_, _>>>()
+    .map_err(Into::into)
+}
+
+fn load_channels_from_conn(conn: &Connection) -> Result<Vec<Channel>> {
+    let mut stmt = conn.prepare(
+        "SELECT name,account,enabled,outdir FROM channels ORDER BY name COLLATE NOCASE, account COLLATE NOCASE",
+    )?;
+    stmt.query_map([], |row| {
+        Ok(Channel {
+            name: row.get(0)?,
+            account: row.get(1)?,
+            enabled: row.get::<_, i64>(2)? != 0,
+            outdir: row.get(3)?,
+        })
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(Into::into)
 }
 
 fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
@@ -590,6 +635,34 @@ mod tests {
             finished_at: Some("2026-09-10T00:01:00Z".into()),
             analysis: None,
         }
+    }
+
+    #[test]
+    fn runtime_config_cache_tracks_committed_writes() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("soop.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([("OUTPUT_DIR".into(), "C:\\cached-live".into())]),
+                "test",
+            )
+            .unwrap();
+        store
+            .sync_channels(&[Channel {
+                enabled: true,
+                name: "Cached".into(),
+                account: "cached-account".into(),
+                outdir: "C:\\cached-live".into(),
+            }])
+            .unwrap();
+
+        assert_eq!(
+            store.setting_value("OUTPUT_DIR").unwrap().as_deref(),
+            Some("C:\\cached-live")
+        );
+        let channels = store.channels().unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].account, "cached-account");
     }
 
     #[test]
