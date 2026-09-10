@@ -43,6 +43,26 @@ function injectStyle(){
   .p10-card h2{margin:0 0 8px;color:#edf2f7}.p10-card p{color:#9da9b7}.p10-card label{display:flex;flex-direction:column;gap:6px;margin:12px 0;color:#b8c3cf;font-size:13px}
   .p10-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}.p10-error{min-height:20px;color:#ff8f9b;margin-top:8px;font-size:13px}
   .p10-authbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}.p10-user{color:#9fe3b0;font-size:13px;white-space:nowrap}
+
+  /* Phase 13.5 final layout bridge. This style is injected after phase13.js. */
+  .p135-vod-queue th:last-child,.p135-vod-queue td:last-child{width:132px;min-width:132px;white-space:nowrap;word-break:keep-all}
+  .p135-vod-queue td:last-child .mini{display:inline-flex;align-items:center;justify-content:center;min-width:54px;white-space:nowrap;word-break:keep-all;margin:2px}
+
+  @media(min-width:1261px){
+    [data-tab-page="vod"]{align-items:stretch}
+    [data-tab-page="vod"]>.p135-vod-input,[data-tab-page="vod"]>.p135-vod-queue{grid-column:span 6;height:clamp(620px,calc(100vh - 220px),720px);min-height:620px;overflow:hidden}
+    [data-tab-page="vod"]>.p135-vod-queue{display:flex;flex-direction:column;min-height:0}
+    [data-tab-page="vod"]>.p135-vod-queue>.table{flex:1 1 auto;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain}
+    [data-tab-page="vod"]>.p135-vod-queue table{min-width:720px}
+  }
+
+  @media(max-width:620px){
+    .p135-workspace>header .p135-header-actions{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr))!important;gap:8px!important;width:100%!important}
+    .p135-workspace>header .p135-header-actions>.p10-authbar{display:contents!important}
+    .p135-workspace>header .p135-header-actions .p10-user,.p135-workspace>header .p135-header-actions .p10-authbar>.muted{grid-column:1/-1!important;margin:0!important;white-space:normal!important}
+    .p135-workspace>header .p135-header-actions .p10-authbar>button{grid-column:span 2!important;width:100%!important;min-width:0!important;white-space:nowrap!important}
+    .p135-workspace>header .p135-header-actions>#tokenBtn,.p135-workspace>header .p135-header-actions>.p135-theme-toggle{grid-column:span 3!important;width:100%!important;min-width:0!important}
+  }
   `;
   document.head.appendChild(style);
 }
@@ -114,9 +134,19 @@ function showPasswordChange(){
   const root=makeOverlay();root.hidden=false;root.innerHTML=`<div class="p10-card"><h2>비밀번호 변경</h2><form><label>현재 비밀번호<input name="current" type="password" autocomplete="current-password" required></label><label>새 비밀번호<input name="next" type="password" autocomplete="new-password" minlength="4" maxlength="128" required></label><label>새 비밀번호 확인<input name="confirm" type="password" autocomplete="new-password" minlength="4" maxlength="128" required></label><div class="p10-error"></div><div class="p10-actions"><button type="button" class="cancel">취소</button><button type="submit">변경</button></div></form></div>`;
   const card=root.querySelector('.p10-card');card.querySelector('.cancel').onclick=()=>root.hidden=true;card.querySelector('form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);const next=String(f.get('next')||''),confirm=String(f.get('confirm')||'');if(next!==confirm){errorText(card,'새 비밀번호 확인이 일치하지 않습니다.');return}const submit=card.querySelector('button[type=submit]');submit.disabled=true;try{const result=await nativeJson('/api/auth/change-password',{method:'POST',headers:jsonHeaders({'X-CSRF-Token':csrf}),body:JSON.stringify({current_password:String(f.get('current')||''),new_password:next,new_password_confirm:confirm})});csrf=result.csrf_token||'';sessionStorage.setItem('soopCsrf',csrf);authState={configured:true,...result};root.hidden=true;renderAuthBar();alert('비밀번호를 변경했습니다. 다른 브라우저의 기존 세션은 모두 로그아웃되었습니다.')}catch(err){errorText(card,err.message)}finally{submit.disabled=false}};
 }
+function installPhase135HeaderGroup(header){
+  if(!header?.closest('.p135-workspace')||!authBar)return;
+  const token=document.getElementById('tokenBtn');
+  const theme=document.getElementById('p135ThemeToggle');
+  if(!token||!theme)return;
+  let group=header.querySelector('.p135-header-actions');
+  if(!group){group=document.createElement('div');group.className='p135-header-actions';header.appendChild(group)}
+  group.append(authBar,token,theme);
+}
 function renderAuthBar(){
   if(!document.body)return;injectStyle();const header=document.querySelector('header');if(!header)return;
   if(!authBar){authBar=document.createElement('div');authBar.className='p10-authbar';const tokenButton=document.getElementById('tokenBtn');if(tokenButton&&tokenButton.parentElement===header)header.insertBefore(authBar,tokenButton);else header.appendChild(authBar)}
+  installPhase135HeaderGroup(header);
   authBar.replaceChildren();
   if(isRecoveryMode()){
     const label=document.createElement('span');label.className='p10-user';label.textContent='복구 토큰 모드';const back=document.createElement('button');back.type='button';back.textContent='ID/PW 사용';back.onclick=()=>{setSessionMode();location.reload()};authBar.append(label,back);return;
