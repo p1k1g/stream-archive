@@ -58,14 +58,15 @@ Assert-Contains $support 'provider\(platform\)' 'Channel lookup must route throu
 Assert-NotContains $watcher 'https?://[^\s"'']*sooplive\.com|player_live_api\.php|LoginAction\.php' 'Native watcher must not contain direct SOOP network endpoints.'
 Assert-Contains $platformSoopLive 'player_live_api\.php' 'SOOP LIVE provider must own SOOP live discovery endpoints.'
 Assert-NotContains $vodFacade 'sooplive\.com|CloudFront|yt-dlp|ffmpeg|taskkill\.exe' 'Root VOD facade must stay platform/process neutral.'
-# The common dispatcher may contain provider URLs in routing tests, but it must
-# never own provider authentication, signed-cookie, or HTTP endpoint mechanics.
+# Common routing may contain provider URLs in tests, but must never implement
+# provider authentication, signed-cookie, or direct provider endpoint mechanics.
 Assert-NotContains $platformVod 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'Common VOD facade must not own provider network/auth implementation details.'
 Assert-Contains $platformSoopVod 'private_auth\.php' 'SOOP VOD provider must own SOOP authorization.'
 Assert-Contains $platformSoopVod 'vod\.sooplive\.com' 'SOOP VOD provider must own SOOP VOD endpoints.'
 
-# Queue/orchestration may identify a provider but must not implement provider networking/auth.
+# Queue/orchestration may identify a provider and include routing fixtures in
+# tests, but must not contain provider authentication/network implementation.
 Assert-Contains $queue 'detect_vod_platform' 'VOD queue must persist detected platform identity.'
-Assert-NotContains $queue 'sooplive\.com|CloudFront|private_auth\.php|LoginAction\.php' 'VOD queue must remain provider-neutral.'
+Assert-NotContains $queue 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'VOD queue must remain provider-neutral.'
 
 Write-Host 'Phase 15/16 architecture regression checks passed.'
