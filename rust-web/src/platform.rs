@@ -122,8 +122,10 @@ impl PlatformProvider for SoopProvider {
     }
 
     fn accepts_vod_url(&self, url: &Url) -> bool {
-        matches!(url.host_str(), Some("vod.sooplive.com" | "www.sooplive.com" | "sooplive.com"))
-            && (url.path().contains("/player/") || url.path().contains("/station/video/"))
+        matches!(
+            url.host_str(),
+            Some("vod.sooplive.com" | "www.sooplive.com" | "sooplive.com")
+        ) && (url.path().contains("/player/") || url.path().contains("/station/video/"))
     }
 }
 
