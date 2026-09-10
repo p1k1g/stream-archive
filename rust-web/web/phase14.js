@@ -181,7 +181,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 (()=>{
 'use strict';
 
-const P166_STATUS={IDLE:'대기',READY:'대기',QUEUED:'대기',ANALYZING:'분석 중',RUNNING:'진행 중',MERGING:'병합 중',COMPLETED:'완료',FAILED:'실패',INTERRUPTED:'비정상 종료',CANCELLED:'취소',STOPPED:'중지'};
+const P166_STATUS={IDLE:'대기',READY:'대기',QUEUED:'대기',STARTING:'준비 중',ANALYZING:'분석 중',DOWNLOADING:'다운로드 중',REFRESHING:'인증 갱신 중',RUNNING:'진행 중',MERGING:'병합 중',CANCELLING:'취소 중',COMPLETED:'완료',FAILED:'실패',INTERRUPTED:'비정상 종료',CANCELLED:'취소',STOPPED:'중지'};
 const P166_REASON={
   'WATCHER EXIT':'감시 종료',
   'CHANNEL REMOVED':'채널 삭제',
@@ -230,7 +230,8 @@ function p166TranslateDynamicUi(){
     live.querySelectorAll('tr td:first-child').forEach(cell=>p166TranslateTextNodes(cell,p166TranslateStatus));
     live.querySelectorAll('tr td:last-child').forEach(cell=>p166TranslateTextNodes(cell,p166TranslateReason));
   }
-  const vodState=document.getElementById('vodState');if(vodState)vodState.textContent=p166TranslateStatus(vodState.textContent);
+  const vodState=document.getElementById('vodState');
+  if(vodState){const translated=p166TranslateStatus(vodState.textContent);if(translated!==vodState.textContent)vodState.textContent=translated}
   const watcher=document.getElementById('watcher');if(watcher){const raw=watcher.textContent.trim();if(raw==='RUNNING')watcher.textContent='감시 중';else if(raw==='STOPPED')watcher.textContent='중지'}
 }
 function p166ObserveDynamicUi(){
