@@ -90,8 +90,13 @@ function p14InstallTracking(){
   }
   if(typeof window.api==='function'&&!window.api.__p14Wrapped){
     const base=window.api;
-    const wrapped=async function(path,opt={}){const result=await base(path,opt);try{const method=String(opt?.method||'GET').toUpperCase();if(path==='/api/vod/queue'&&method==='GET')p14TrackVod(result)}catch(e){console.warn('Phase14 VOD tracking failed',e)}return result};
+    const wrapped=async function(path,opt={}){const result=await base(path,opt);try{const method=String(opt?.method||'GET').toUpperCase();if(path==='/api/vod/queue'&&method==='GET')p14TrackVod(result)}catch(e){console.warn('Phase14 VOD REST tracking failed',e)}return result};
     wrapped.__p14Wrapped=true;window.api=wrapped;
+  }
+  if(typeof window.applyRealtimeSnapshot==='function'&&!window.applyRealtimeSnapshot.__p14Wrapped){
+    const base=window.applyRealtimeSnapshot;
+    const wrapped=function(data){const r=base(data);try{if(data?.queue)p14TrackVod(data.queue)}catch(e){console.warn('Phase14 VOD SSE tracking failed',e)}return r};
+    wrapped.__p14Wrapped=true;window.applyRealtimeSnapshot=wrapped;
   }
 }
 function p14Option(key,title,desc){return `<div class="p14-notify-option"><div><strong>${title}</strong><small>${desc}</small></div><label class="p14-switch" title="${title}"><input type="checkbox" data-p14-key="${key}"></label></div>`}
