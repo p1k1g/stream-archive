@@ -754,6 +754,14 @@ async fn check_recording_broadcasts(
     }
 }
 
+fn recording_exit_outcome(code: Option<i32>) -> (bool, String) {
+    match code {
+        Some(0) => (true, "NORMAL".to_string()),
+        Some(code) => (false, format!("RECORDER EXIT CODE={code}")),
+        None => (false, "RECORDER EXIT CODE=unknown".to_string()),
+    }
+}
+
 async fn monitor_recordings(
     states: &mut HashMap<String, ChannelState>,
     config: &WatcherConfig,
@@ -773,22 +781,27 @@ async fn monitor_recordings(
         match poll {
             Ok(RecordingPoll::Running) => {}
             Ok(RecordingPoll::Exited(code)) => {
+                let (normal_exit, reason) = recording_exit_outcome(code);
                 if let Some(rec) = state.recording.take() {
-                    let reason = if code.unwrap_or(0) == 0 {
-                        "NORMAL".to_string()
-                    } else {
-                        format!(
-                            "RECORDER EXIT CODE={}",
-                            code.map(|v| v.to_string())
-                                .unwrap_or_else(|| "unknown".into())
-                        )
-                    };
                     recorder
                         .log_finished(&state.channel.name, &state.channel.account, &rec, &reason)
                         .await;
                 }
-                state.status = "UNKNOWN".into();
-                state.next_check = Instant::now();
+                if normal_exit {
+                    state.status = "UNKNOWN".into();
+                    state.detail = None;
+                    state.next_check = Instant::now();
+                } else {
+                    state.status = "ERROR".into();
+                    state.detail = Some(reason.clone());
+                    state.next_check =
+                        Instant::now() + Duration::from_secs(config.retry_interval.max(1));
+                    logs.push(format!(
+                        "[RUST:ERR] recorder exited unexpectedly {}: {reason}",
+                        state.channel.account
+                    ))
+                    .await;
+                }
             }
             Ok(RecordingPoll::LowDisk(free)) => {
                 state.status = "LOW_DISK".into();
@@ -1447,6 +1460,19 @@ mod tests {
             outdir: "".into(),
         }];
         assert_eq!(channel_signature(&a), channel_signature(&b));
+    }
+
+    #[test]
+    fn recorder_exit_outcome_distinguishes_crashes() {
+        assert_eq!(recording_exit_outcome(Some(0)), (true, "NORMAL".to_string()));
+        assert_eq!(
+            recording_exit_outcome(Some(23)),
+            (false, "RECORDER EXIT CODE=23".to_string())
+        );
+        assert_eq!(
+            recording_exit_outcome(None),
+            (false, "RECORDER EXIT CODE=unknown".to_string())
+        );
     }
 
     #[test]
