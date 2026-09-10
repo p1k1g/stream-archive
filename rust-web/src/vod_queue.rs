@@ -113,27 +113,29 @@ impl VodQueueManager {
     pub async fn snapshot(&self) -> Result<VodQueueSnapshot> {
         let active_id = self.active_id.lock().await.clone();
         let current = self.vod.status().await;
-        let mut items = self.list_items()?;
+
+        // Realtime snapshots are requested frequently, so keep queue rows and the
+        // queued count on one short-lived SQLite connection instead of opening the
+        // database twice for every SSE client/tick.
+        let conn = self.conn()?;
+        let mut items = Self::list_items_from_conn(&conn)?;
+        let queued_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM vod_queue WHERE state='QUEUED'",
+            [],
+            |row| row.get(0),
+        )?;
+        drop(conn);
+
         if let Some(active) = active_id.as_deref() {
             if let Some(item) = items.iter_mut().find(|item| item.id == active) {
                 apply_runtime_status(item, &current);
             }
         }
-        let queued_count = self.queued_count()?;
         Ok(VodQueueSnapshot {
             active_id,
-            queued_count,
+            queued_count: queued_count.max(0) as usize,
             items,
         })
-    }
-
-    fn queued_count(&self) -> Result<usize> {
-        let count: i64 = self.conn()?.query_row(
-            "SELECT COUNT(*) FROM vod_queue WHERE state='QUEUED'",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(count.max(0) as usize)
     }
 
     pub async fn has_pending_or_active(&self) -> Result<bool> {
@@ -377,39 +379,53 @@ impl VodQueueManager {
 
     fn list_items(&self) -> Result<Vec<VodQueueItem>> {
         let conn = self.conn()?;
+        Self::list_items_from_conn(&conn)
+    }
+
+    fn list_items_from_conn(conn: &Connection) -> Result<Vec<VodQueueItem>> {
         let mut stmt = conn.prepare(
             r#"SELECT id,vod_url,output_directory,state,attempts,message,title,streamer,output_file,created_at,started_at,finished_at,updated_at
                FROM vod_queue ORDER BY
                  CASE state WHEN 'RUNNING' THEN 0 WHEN 'STARTING' THEN 0 WHEN 'CANCELLING' THEN 0 WHEN 'QUEUED' THEN 1 ELSE 2 END,
                  created_at DESC LIMIT ?1"#,
         )?;
-        stmt.query_map(params![QUEUE_LIMIT as i64], |row| {
-            Ok(VodQueueItem {
-                id: row.get(0)?,
-                vod_url: row.get(1)?,
-                output_directory: row.get(2)?,
-                state: row.get(3)?,
-                attempts: row.get::<_, i64>(4)?.max(0) as u32,
-                message: row.get(5)?,
-                title: row.get(6)?,
-                streamer: row.get(7)?,
-                current_part: 0,
-                part_count: 0,
-                percent: 0.0,
-                output_file: row.get(8)?,
-                created_at: row.get(9)?,
-                started_at: row.get(10)?,
-                finished_at: row.get(11)?,
-                updated_at: row.get(12)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        stmt.query_map(params![QUEUE_LIMIT as i64], queue_item_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     fn item(&self, id: &str) -> Result<Option<VodQueueItem>> {
-        Ok(self.list_items()?.into_iter().find(|item| item.id == id))
+        let conn = self.conn()?;
+        conn.query_row(
+            r#"SELECT id,vod_url,output_directory,state,attempts,message,title,streamer,output_file,created_at,started_at,finished_at,updated_at
+               FROM vod_queue WHERE id=?1"#,
+            params![id],
+            queue_item_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
     }
+}
+
+fn queue_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VodQueueItem> {
+    Ok(VodQueueItem {
+        id: row.get(0)?,
+        vod_url: row.get(1)?,
+        output_directory: row.get(2)?,
+        state: row.get(3)?,
+        attempts: row.get::<_, i64>(4)?.max(0) as u32,
+        message: row.get(5)?,
+        title: row.get(6)?,
+        streamer: row.get(7)?,
+        current_part: 0,
+        part_count: 0,
+        percent: 0.0,
+        output_file: row.get(8)?,
+        created_at: row.get(9)?,
+        started_at: row.get(10)?,
+        finished_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
 }
 
 fn apply_runtime_status(item: &mut VodQueueItem, status: &VodJobStatus) {

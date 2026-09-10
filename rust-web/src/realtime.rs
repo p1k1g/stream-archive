@@ -13,11 +13,12 @@ use serde_json::json;
 use std::{convert::Infallible, time::Duration};
 use tokio::{
     sync::mpsc,
-    time::{MissedTickBehavior, interval},
+    time::{Instant, MissedTickBehavior, interval, sleep_until},
 };
 use tokio_stream::wrappers::ReceiverStream;
 
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
+const MIN_EVENT_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
 // Established cookie-authenticated streams are revoked within this interval.
 const SESSION_REVALIDATE_INTERVAL: Duration = Duration::from_secs(5);
 const LOG_LINES: usize = 160;
@@ -86,24 +87,51 @@ pub(crate) async fn api_events(
         // first loop iteration re-reading SQLite solely because interval() ticks
         // immediately on creation.
         revalidate.tick().await;
+
+        // Streamlink can emit many stderr lines in a short burst. A log event should
+        // wake the UI promptly, but rebuilding the complete watcher/VOD/queue/log
+        // snapshot for every line multiplies SQLite/process-state reads. Coalesce
+        // those bursts while keeping the regular one-second snapshot unchanged.
+        let mut next_event_snapshot = Instant::now();
+        let mut log_snapshot_pending = false;
+
         loop {
-            tokio::select! {
-                _ = tick.tick() => {}
+            let should_snapshot = tokio::select! {
+                _ = tick.tick() => {
+                    log_snapshot_pending = false;
+                    true
+                }
                 _ = revalidate.tick(), if session_headers.is_some() => {
                     let Some(ref headers) = session_headers else { continue };
                     if state.auth.authorize_session_readonly(headers).is_err() {
                         break;
                     }
-                    continue;
+                    false
                 }
                 event = log_events.recv() => match event {
-                    Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        if Instant::now() >= next_event_snapshot {
+                            true
+                        } else {
+                            log_snapshot_pending = true;
+                            false
+                        }
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                _ = sleep_until(next_event_snapshot), if log_snapshot_pending => {
+                    log_snapshot_pending = false;
+                    true
                 }
+            };
+
+            if !should_snapshot {
+                continue;
             }
             if sender.send(Ok(snapshot_event(&state).await)).await.is_err() {
                 break;
             }
+            next_event_snapshot = Instant::now() + MIN_EVENT_SNAPSHOT_INTERVAL;
         }
     });
 
@@ -125,6 +153,24 @@ mod tests {
         logs.push("realtime-test").await;
         assert!(receiver.recv().await.is_ok());
         assert_eq!(logs.tail(1).await, vec!["realtime-test"]);
+    }
+
+    #[tokio::test]
+    async fn log_buffer_notifies_multiple_realtime_subscribers() {
+        let logs = LogBuffer::new();
+        let mut first = logs.subscribe();
+        let mut second = logs.subscribe();
+
+        logs.push("multi-client-realtime-test").await;
+
+        assert!(first.recv().await.is_ok());
+        assert!(second.recv().await.is_ok());
+    }
+
+    #[test]
+    fn event_snapshots_are_coalesced_below_periodic_interval() {
+        assert!(MIN_EVENT_SNAPSHOT_INTERVAL > Duration::ZERO);
+        assert!(MIN_EVENT_SNAPSHOT_INTERVAL < SNAPSHOT_INTERVAL);
     }
 
     #[test]

@@ -14,15 +14,92 @@ use std::{
     collections::{BTreeMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock},
 };
 
 static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
+
+const SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS channels (
+    account TEXT PRIMARY KEY COLLATE NOCASE,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    outdir TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_recordings (
+    id TEXT PRIMARY KEY,
+    account TEXT NOT NULL,
+    channel_name TEXT NOT NULL,
+    bno TEXT,
+    title TEXT,
+    file_path TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    status TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_live_recordings_started
+    ON live_recordings(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS vod_jobs (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    vod_url TEXT,
+    title TEXT,
+    streamer TEXT,
+    part_count INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL,
+    output_file TEXT,
+    message TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
+    ON vod_jobs(started_at DESC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS vod_queue (
+    id TEXT PRIMARY KEY,
+    request_json TEXT NOT NULL,
+    vod_url TEXT NOT NULL,
+    output_directory TEXT NOT NULL,
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    message TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    streamer TEXT NOT NULL DEFAULT '',
+    output_file TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
+    ON vod_queue(state, created_at);
+"#;
 
 #[derive(Clone)]
 pub struct Store {
     inner: Arc<Mutex<Connection>>,
     path: PathBuf,
+    settings_cache: Arc<RwLock<BTreeMap<String, String>>>,
+    channels_cache: Arc<RwLock<Vec<Channel>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,90 +145,17 @@ impl Store {
             .with_context(|| format!("failed to open SQLite database {}", path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
-            r#"
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            PRAGMA foreign_keys=ON;
-
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                source TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS channels (
-                account TEXT PRIMARY KEY COLLATE NOCASE,
-                name TEXT NOT NULL,
-                enabled INTEGER NOT NULL,
-                outdir TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS live_recordings (
-                id TEXT PRIMARY KEY,
-                account TEXT NOT NULL,
-                channel_name TEXT NOT NULL,
-                bno TEXT,
-                title TEXT,
-                file_path TEXT,
-                started_at TEXT NOT NULL,
-                ended_at TEXT,
-                duration_seconds INTEGER NOT NULL DEFAULT 0,
-                size_bytes INTEGER NOT NULL DEFAULT 0,
-                reason TEXT,
-                status TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_live_recordings_started
-                ON live_recordings(started_at DESC);
-
-            CREATE TABLE IF NOT EXISTS vod_jobs (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                vod_url TEXT,
-                title TEXT,
-                streamer TEXT,
-                part_count INTEGER NOT NULL DEFAULT 0,
-                state TEXT NOT NULL,
-                output_file TEXT,
-                message TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
-                ON vod_jobs(started_at DESC, updated_at DESC);
-
-
-            CREATE TABLE IF NOT EXISTS vod_queue (
-                id TEXT PRIMARY KEY,
-                request_json TEXT NOT NULL,
-                vod_url TEXT NOT NULL,
-                output_directory TEXT NOT NULL,
-                state TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                message TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                streamer TEXT NOT NULL DEFAULT '',
-                output_file TEXT,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                finished_at TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
-                ON vod_queue(state, created_at);
-            "#,
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;
+        conn.execute_batch(SCHEMA_SQL)?;
+        let settings_cache = load_all_settings_from_conn(&conn)?;
+        let channels_cache = load_channels_from_conn(&conn)?;
 
         let store = Self {
             inner: Arc::new(Mutex::new(conn)),
             path,
+            settings_cache: Arc::new(RwLock::new(settings_cache)),
+            channels_cache: Arc::new(RwLock::new(channels_cache)),
         };
         store.recover_interrupted()?;
         Ok(store)
@@ -192,91 +196,20 @@ impl Store {
         let backup = Backup::new(&source, &mut *target)?;
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
-        target.execute_batch("PRAGMA foreign_keys=ON; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        target.execute_batch("PRAGMA foreign_keys=ON;")?;
+        // A valid older backup may predate a newer table/index. Restore the data
+        // first, then bring it to the current schema before refreshing caches.
+        target.execute_batch(SCHEMA_SQL)?;
+        target.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        self.refresh_config_cache_from_conn(&target)?;
         Ok(())
     }
 
     pub fn ensure_schema(&self) -> Result<()> {
         let conn = self.conn()?;
-        conn.execute_batch(
-            r#"
-            PRAGMA foreign_keys=ON;
-
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                source TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS channels (
-                account TEXT PRIMARY KEY COLLATE NOCASE,
-                name TEXT NOT NULL,
-                enabled INTEGER NOT NULL,
-                outdir TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS live_recordings (
-                id TEXT PRIMARY KEY,
-                account TEXT NOT NULL,
-                channel_name TEXT NOT NULL,
-                bno TEXT,
-                title TEXT,
-                file_path TEXT,
-                started_at TEXT NOT NULL,
-                ended_at TEXT,
-                duration_seconds INTEGER NOT NULL DEFAULT 0,
-                size_bytes INTEGER NOT NULL DEFAULT 0,
-                reason TEXT,
-                status TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_live_recordings_started
-                ON live_recordings(started_at DESC);
-
-            CREATE TABLE IF NOT EXISTS vod_jobs (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                vod_url TEXT,
-                title TEXT,
-                streamer TEXT,
-                part_count INTEGER NOT NULL DEFAULT 0,
-                state TEXT NOT NULL,
-                output_file TEXT,
-                message TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
-                ON vod_jobs(started_at DESC, updated_at DESC);
-
-
-            CREATE TABLE IF NOT EXISTS vod_queue (
-                id TEXT PRIMARY KEY,
-                request_json TEXT NOT NULL,
-                vod_url TEXT NOT NULL,
-                output_directory TEXT NOT NULL,
-                state TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                message TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                streamer TEXT NOT NULL DEFAULT '',
-                output_file TEXT,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                finished_at TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
-                ON vod_queue(state, created_at);
-            "#,
-        )?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch(SCHEMA_SQL)?;
+        self.refresh_config_cache_from_conn(&conn)?;
         drop(conn);
         self.recover_interrupted()?;
         Ok(())
@@ -286,6 +219,20 @@ impl Store {
         self.inner
             .lock()
             .map_err(|_| anyhow::anyhow!("SQLite connection mutex poisoned"))
+    }
+
+    fn refresh_config_cache_from_conn(&self, conn: &Connection) -> Result<()> {
+        let settings = load_all_settings_from_conn(conn)?;
+        let channels = load_channels_from_conn(conn)?;
+        *self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))? = settings;
+        *self
+            .channels_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))? = channels;
+        Ok(())
     }
 
     fn recover_interrupted(&self) -> Result<()> {
@@ -354,17 +301,13 @@ impl Store {
     }
 
     pub fn settings_for_keys(&self, keys: &[&str]) -> Result<BTreeMap<String, String>> {
-        let wanted: HashSet<&str> = keys.iter().copied().collect();
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare("SELECT key,value FROM settings ORDER BY key")?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows
-            .into_iter()
-            .filter(|(key, _)| wanted.contains(key.as_str()))
+        let cache = self
+            .settings_cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        Ok(keys
+            .iter()
+            .filter_map(|key| cache.get(*key).map(|value| ((*key).to_string(), value.clone())))
             .collect())
     }
 
@@ -384,20 +327,11 @@ impl Store {
     }
 
     pub fn channels(&self) -> Result<Vec<Channel>> {
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT name,account,enabled,outdir FROM channels ORDER BY name COLLATE NOCASE, account COLLATE NOCASE",
-        )?;
-        stmt.query_map([], |row| {
-            Ok(Channel {
-                name: row.get(0)?,
-                account: row.get(1)?,
-                enabled: row.get::<_, i64>(2)? != 0,
-                outdir: row.get(3)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        Ok(self
+            .channels_cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))?
+            .clone())
     }
 
     pub fn sync_settings(&self, values: &BTreeMap<String, String>, source: &str) -> Result<()> {
@@ -411,6 +345,13 @@ impl Store {
             )?;
         }
         tx.commit()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        for (key, value) in values {
+            cache.insert(key.clone(), value.clone());
+        }
         Ok(())
     }
 
@@ -426,6 +367,14 @@ impl Store {
             )?;
         }
         tx.commit()?;
+        // Keep the hot-read cache behavior identical to a fresh Store::open():
+        // API saves must immediately expose the same NOCASE ordering that SQLite
+        // returns after restart/restore instead of temporarily preserving request order.
+        let sorted_channels = load_channels_from_conn(&conn)?;
+        *self
+            .channels_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))? = sorted_channels;
         Ok(())
     }
 
@@ -448,9 +397,11 @@ impl Store {
     }
 
     fn settings_count(&self) -> Result<usize> {
-        let conn = self.conn()?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM settings", [], |row| row.get(0))?;
-        Ok(count.max(0) as usize)
+        Ok(self
+            .settings_cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?
+            .len())
     }
 
     pub fn start_live(&self, item: &LiveHistoryItem) -> Result<()> {
@@ -508,7 +459,18 @@ impl Store {
                  message=excluded.message,
                  started_at=COALESCE(vod_jobs.started_at, excluded.started_at),
                  finished_at=COALESCE(excluded.finished_at, vod_jobs.finished_at),
-                 updated_at=excluded.updated_at"#,
+                 updated_at=excluded.updated_at
+               WHERE
+                 (excluded.kind<>'JOB' AND excluded.kind IS NOT vod_jobs.kind)
+                 OR (excluded.vod_url<>'' AND excluded.vod_url IS NOT vod_jobs.vod_url)
+                 OR (excluded.title<>'' AND excluded.title IS NOT vod_jobs.title)
+                 OR (excluded.streamer<>'' AND excluded.streamer IS NOT vod_jobs.streamer)
+                 OR excluded.part_count>vod_jobs.part_count
+                 OR excluded.state IS NOT vod_jobs.state
+                 OR (excluded.output_file IS NOT NULL AND excluded.output_file IS NOT vod_jobs.output_file)
+                 OR excluded.message IS NOT vod_jobs.message
+                 OR (vod_jobs.started_at IS NULL AND excluded.started_at IS NOT NULL)
+                 OR (excluded.finished_at IS NOT NULL AND excluded.finished_at IS NOT vod_jobs.finished_at)"#,
             params![
                 id,
                 kind,
@@ -528,15 +490,38 @@ impl Store {
     }
 
     pub fn setting_value(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn()?;
-        conn.query_row(
-            "SELECT value FROM settings WHERE key=?1",
-            params![key],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(Into::into)
+        Ok(self
+            .settings_cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?
+            .get(key)
+            .cloned())
     }
+}
+
+fn load_all_settings_from_conn(conn: &Connection) -> Result<BTreeMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT key,value FROM settings ORDER BY key")?;
+    stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?
+    .collect::<rusqlite::Result<BTreeMap<_, _>>>()
+    .map_err(Into::into)
+}
+
+fn load_channels_from_conn(conn: &Connection) -> Result<Vec<Channel>> {
+    let mut stmt = conn.prepare(
+        "SELECT name,account,enabled,outdir FROM channels ORDER BY name COLLATE NOCASE, account COLLATE NOCASE",
+    )?;
+    stmt.query_map([], |row| {
+        Ok(Channel {
+            name: row.get(0)?,
+            account: row.get(1)?,
+            enabled: row.get::<_, i64>(2)? != 0,
+            outdir: row.get(3)?,
+        })
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(Into::into)
 }
 
 fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
@@ -558,4 +543,142 @@ fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
         }
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn completed_vod_status(message: &str) -> VodJobStatus {
+        VodJobStatus {
+            state: "COMPLETED".into(),
+            running: false,
+            job_id: Some("vod-history-test".into()),
+            message: message.into(),
+            current_part: 1,
+            part_count: 1,
+            percent: 100.0,
+            output_file: Some("C:\\SOOP_VOD\\done.mp4".into()),
+            started_at: Some("2026-09-10T00:00:00Z".into()),
+            finished_at: Some("2026-09-10T00:01:00Z".into()),
+            analysis: None,
+        }
+    }
+
+    #[test]
+    fn runtime_config_cache_tracks_committed_writes() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("soop.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([("OUTPUT_DIR".into(), "C:\\cached-live".into())]),
+                "test",
+            )
+            .unwrap();
+        store
+            .sync_channels(&[Channel {
+                enabled: true,
+                name: "Cached".into(),
+                account: "cached-account".into(),
+                outdir: "C:\\cached-live".into(),
+            }])
+            .unwrap();
+
+        assert_eq!(
+            store.setting_value("OUTPUT_DIR").unwrap().as_deref(),
+            Some("C:\\cached-live")
+        );
+        let channels = store.channels().unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].account, "cached-account");
+    }
+
+    #[test]
+    fn channel_cache_preserves_database_sort_order_after_write() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("soop.db");
+        let store = Store::open(db_path.clone()).unwrap();
+        store
+            .sync_channels(&[
+                Channel {
+                    enabled: true,
+                    name: "Zulu".into(),
+                    account: "z".into(),
+                    outdir: String::new(),
+                },
+                Channel {
+                    enabled: true,
+                    name: "alpha".into(),
+                    account: "b".into(),
+                    outdir: String::new(),
+                },
+                Channel {
+                    enabled: true,
+                    name: "ALPHA".into(),
+                    account: "a".into(),
+                    outdir: String::new(),
+                },
+            ])
+            .unwrap();
+
+        let immediate = store
+            .channels()
+            .unwrap()
+            .into_iter()
+            .map(|channel| channel.account)
+            .collect::<Vec<_>>();
+        assert_eq!(immediate, vec!["a", "b", "z"]);
+
+        let reopened = Store::open(db_path).unwrap();
+        let after_restart = reopened
+            .channels()
+            .unwrap()
+            .into_iter()
+            .map(|channel| channel.account)
+            .collect::<Vec<_>>();
+        assert_eq!(after_restart, immediate);
+    }
+
+    #[test]
+    fn unchanged_vod_history_upsert_does_not_touch_updated_at() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("soop.db")).unwrap();
+        let status = completed_vod_status("완료");
+        store.upsert_vod(&status).unwrap();
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "UPDATE vod_jobs SET updated_at='sentinel' WHERE id='vod-history-test'",
+                [],
+            )
+            .unwrap();
+        }
+
+        store.upsert_vod(&status).unwrap();
+        let unchanged: String = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT updated_at FROM vod_jobs WHERE id='vod-history-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unchanged, "sentinel");
+
+        let mut changed = status.clone();
+        changed.message = "완료됨".into();
+        store.upsert_vod(&changed).unwrap();
+        let changed_at: String = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT updated_at FROM vod_jobs WHERE id='vod-history-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(changed_at, "sentinel");
+    }
 }

@@ -1,97 +1,53 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use reqwest::Client;
-use serde_json::Value;
 use std::time::Duration;
 
+#[path = "platform.rs"]
+pub mod platform;
+
+use platform::{PlatformId, default_platform, provider};
+
 pub async fn resolve_channel_name(account: &str) -> Result<String> {
+    resolve_channel_name_for(default_platform(), account).await
+}
+
+pub async fn resolve_channel_name_for(platform: PlatformId, account: &str) -> Result<String> {
     let account = account.trim();
-    if account.is_empty() {
-        bail!("계정 ID가 비어 있습니다.");
-    }
-    if !account
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
-    {
-        bail!("계정 ID 형식이 올바르지 않습니다.");
-    }
+    let provider = provider(platform);
+    provider.validate_account(account)?;
 
     let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36")
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+        )
         .timeout(Duration::from_secs(10))
         .no_proxy()
         .http1_only()
         .build()
-        .context("SOOP 조회용 HTTP client 생성 실패")?;
+        .with_context(|| format!("{} 조회용 HTTP client 생성 실패", provider.display_name()))?;
 
-    let response = client
-        .get("https://st.sooplive.com/api/get_station_status.php")
-        .query(&[("szBjId", account)])
+    let response = provider
+        .channel_lookup_request(&client, account)
         .send()
         .await
-        .context("SOOP 채널 정보 요청 실패")?
+        .with_context(|| format!("{} 채널 정보 요청 실패", provider.display_name()))?
         .error_for_status()
-        .context("SOOP 채널 정보 HTTP 오류")?;
+        .with_context(|| format!("{} 채널 정보 HTTP 오류", provider.display_name()))?;
 
-    let value: Value = response
+    let value = response
         .json()
         .await
-        .context("SOOP 채널 정보 JSON 파싱 실패")?;
+        .with_context(|| format!("{} 채널 정보 JSON 파싱 실패", provider.display_name()))?;
 
-    let result = value.get("RESULT").and_then(Value::as_i64).unwrap_or(0);
-    if result == 0 {
-        bail!("유효한 SOOP 계정을 찾지 못했습니다: {account}");
-    }
-
-    let returned_id = value
-        .pointer("/DATA/user_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if !returned_id.is_empty() && !returned_id.eq_ignore_ascii_case(account) {
-        bail!("SOOP 응답 계정이 요청과 다릅니다: 요청={account}, 응답={returned_id}");
-    }
-
-    let name = value
-        .pointer("/DATA/user_nick")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("station_name").and_then(Value::as_str))
-        .unwrap_or("")
-        .trim();
-    if name.is_empty() {
-        bail!("채널 닉네임을 찾지 못했습니다: {account}");
-    }
-    Ok(name.to_string())
+    provider.parse_channel_name(account, &value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn nickname_from_value(value: &Value) -> Option<&str> {
-        value
-            .pointer("/DATA/user_nick")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("station_name").and_then(Value::as_str))
-    }
-
     #[test]
-    fn parses_current_station_status_nickname_shape() {
-        let value = serde_json::json!({
-            "RESULT": 1,
-            "DATA": {
-                "user_id": "1004ysus",
-                "user_nick": "테스트닉"
-            }
-        });
-        assert_eq!(nickname_from_value(&value), Some("테스트닉"));
-    }
-
-    #[test]
-    fn parses_legacy_station_name_fallback() {
-        let value = serde_json::json!({
-            "RESULT": 1,
-            "station_name": "구형닉"
-        });
-        assert_eq!(nickname_from_value(&value), Some("구형닉"));
+    fn default_channel_provider_is_soop() {
+        assert_eq!(default_platform(), PlatformId::Soop);
     }
 }
