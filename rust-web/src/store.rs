@@ -19,6 +19,81 @@ use std::{
 
 static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
 
+const SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS channels (
+    account TEXT PRIMARY KEY COLLATE NOCASE,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    outdir TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_recordings (
+    id TEXT PRIMARY KEY,
+    account TEXT NOT NULL,
+    channel_name TEXT NOT NULL,
+    bno TEXT,
+    title TEXT,
+    file_path TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    status TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_live_recordings_started
+    ON live_recordings(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS vod_jobs (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    vod_url TEXT,
+    title TEXT,
+    streamer TEXT,
+    part_count INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL,
+    output_file TEXT,
+    message TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
+    ON vod_jobs(started_at DESC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS vod_queue (
+    id TEXT PRIMARY KEY,
+    request_json TEXT NOT NULL,
+    vod_url TEXT NOT NULL,
+    output_directory TEXT NOT NULL,
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    message TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    streamer TEXT NOT NULL DEFAULT '',
+    output_file TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
+    ON vod_queue(state, created_at);
+"#;
+
 #[derive(Clone)]
 pub struct Store {
     inner: Arc<Mutex<Connection>>,
@@ -70,86 +145,9 @@ impl Store {
             .with_context(|| format!("failed to open SQLite database {}", path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
-            r#"
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            PRAGMA foreign_keys=ON;
-
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                source TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS channels (
-                account TEXT PRIMARY KEY COLLATE NOCASE,
-                name TEXT NOT NULL,
-                enabled INTEGER NOT NULL,
-                outdir TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS live_recordings (
-                id TEXT PRIMARY KEY,
-                account TEXT NOT NULL,
-                channel_name TEXT NOT NULL,
-                bno TEXT,
-                title TEXT,
-                file_path TEXT,
-                started_at TEXT NOT NULL,
-                ended_at TEXT,
-                duration_seconds INTEGER NOT NULL DEFAULT 0,
-                size_bytes INTEGER NOT NULL DEFAULT 0,
-                reason TEXT,
-                status TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_live_recordings_started
-                ON live_recordings(started_at DESC);
-
-            CREATE TABLE IF NOT EXISTS vod_jobs (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                vod_url TEXT,
-                title TEXT,
-                streamer TEXT,
-                part_count INTEGER NOT NULL DEFAULT 0,
-                state TEXT NOT NULL,
-                output_file TEXT,
-                message TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
-                ON vod_jobs(started_at DESC, updated_at DESC);
-
-
-            CREATE TABLE IF NOT EXISTS vod_queue (
-                id TEXT PRIMARY KEY,
-                request_json TEXT NOT NULL,
-                vod_url TEXT NOT NULL,
-                output_directory TEXT NOT NULL,
-                state TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                message TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                streamer TEXT NOT NULL DEFAULT '',
-                output_file TEXT,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                finished_at TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
-                ON vod_queue(state, created_at);
-            "#,
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;
+        conn.execute_batch(SCHEMA_SQL)?;
         let settings_cache = load_all_settings_from_conn(&conn)?;
         let channels_cache = load_channels_from_conn(&conn)?;
 
@@ -198,92 +196,19 @@ impl Store {
         let backup = Backup::new(&source, &mut *target)?;
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
-        target.execute_batch("PRAGMA foreign_keys=ON; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        target.execute_batch("PRAGMA foreign_keys=ON;")?;
+        // A valid older backup may predate a newer table/index. Restore the data
+        // first, then bring it to the current schema before refreshing caches.
+        target.execute_batch(SCHEMA_SQL)?;
+        target.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         self.refresh_config_cache_from_conn(&target)?;
         Ok(())
     }
 
     pub fn ensure_schema(&self) -> Result<()> {
         let conn = self.conn()?;
-        conn.execute_batch(
-            r#"
-            PRAGMA foreign_keys=ON;
-
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                source TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS channels (
-                account TEXT PRIMARY KEY COLLATE NOCASE,
-                name TEXT NOT NULL,
-                enabled INTEGER NOT NULL,
-                outdir TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS live_recordings (
-                id TEXT PRIMARY KEY,
-                account TEXT NOT NULL,
-                channel_name TEXT NOT NULL,
-                bno TEXT,
-                title TEXT,
-                file_path TEXT,
-                started_at TEXT NOT NULL,
-                ended_at TEXT,
-                duration_seconds INTEGER NOT NULL DEFAULT 0,
-                size_bytes INTEGER NOT NULL DEFAULT 0,
-                reason TEXT,
-                status TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_live_recordings_started
-                ON live_recordings(started_at DESC);
-
-            CREATE TABLE IF NOT EXISTS vod_jobs (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                vod_url TEXT,
-                title TEXT,
-                streamer TEXT,
-                part_count INTEGER NOT NULL DEFAULT 0,
-                state TEXT NOT NULL,
-                output_file TEXT,
-                message TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_vod_jobs_started
-                ON vod_jobs(started_at DESC, updated_at DESC);
-
-
-            CREATE TABLE IF NOT EXISTS vod_queue (
-                id TEXT PRIMARY KEY,
-                request_json TEXT NOT NULL,
-                vod_url TEXT NOT NULL,
-                output_directory TEXT NOT NULL,
-                state TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                message TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                streamer TEXT NOT NULL DEFAULT '',
-                output_file TEXT,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                finished_at TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
-                ON vod_queue(state, created_at);
-            "#,
-        )?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch(SCHEMA_SQL)?;
         self.refresh_config_cache_from_conn(&conn)?;
         drop(conn);
         self.recover_interrupted()?;
