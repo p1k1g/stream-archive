@@ -367,10 +367,14 @@ impl Store {
             )?;
         }
         tx.commit()?;
+        // Keep the hot-read cache behavior identical to a fresh Store::open():
+        // API saves must immediately expose the same NOCASE ordering that SQLite
+        // returns after restart/restore instead of temporarily preserving request order.
+        let sorted_channels = load_channels_from_conn(&conn)?;
         *self
             .channels_cache
             .write()
-            .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))? = channels.to_vec();
+            .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))? = sorted_channels;
         Ok(())
     }
 
@@ -588,6 +592,52 @@ mod tests {
         let channels = store.channels().unwrap();
         assert_eq!(channels.len(), 1);
         assert_eq!(channels[0].account, "cached-account");
+    }
+
+    #[test]
+    fn channel_cache_preserves_database_sort_order_after_write() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("soop.db");
+        let store = Store::open(db_path.clone()).unwrap();
+        store
+            .sync_channels(&[
+                Channel {
+                    enabled: true,
+                    name: "Zulu".into(),
+                    account: "z".into(),
+                    outdir: String::new(),
+                },
+                Channel {
+                    enabled: true,
+                    name: "alpha".into(),
+                    account: "b".into(),
+                    outdir: String::new(),
+                },
+                Channel {
+                    enabled: true,
+                    name: "ALPHA".into(),
+                    account: "a".into(),
+                    outdir: String::new(),
+                },
+            ])
+            .unwrap();
+
+        let immediate = store
+            .channels()
+            .unwrap()
+            .into_iter()
+            .map(|channel| channel.account)
+            .collect::<Vec<_>>();
+        assert_eq!(immediate, vec!["a", "b", "z"]);
+
+        let reopened = Store::open(db_path).unwrap();
+        let after_restart = reopened
+            .channels()
+            .unwrap()
+            .into_iter()
+            .map(|channel| channel.account)
+            .collect::<Vec<_>>();
+        assert_eq!(after_restart, immediate);
     }
 
     #[test]
