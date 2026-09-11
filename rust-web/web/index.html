@@ -154,4 +154,22 @@
 <script src="/phase13.js?v=p13-5-theme1"></script>
 <script src="/phase14.js?v=p166-ui2"></script>
 <script>window.p166TranslateStatus=window.p166TranslateStatus||function(v){return typeof statusText==='function'?statusText(v):(v||'-')};window.p166TranslateReason=window.p166TranslateReason||function(v){const m={'WATCHER EXIT':'감시 종료','CHANNEL REMOVED':'채널 삭제','CHANNEL DISABLED':'채널 비활성화','USER CHANNEL STOP':'사용자 중지','BROADCAST ENDED':'방송 종료','BROADCAST CHANGED':'방송 변경','LOW DISK SPACE':'디스크 공간 부족','RECORD STALLED':'녹화 정지 감지','NORMAL':'정상 종료'};const s=String(v||'').trim();const x=s.match(/^RECORDER EXIT CODE=(.+)$/);return m[s]||(x?`녹화 프로세스 비정상 종료 (코드: ${x[1]})`:v)}</script>
+<script>(()=>{'use strict';
+function p166FollowupSettings(){
+  document.getElementById('p135ThemePreference')?.remove();
+  const settings=document.getElementById('settings');
+  const removeFallback=()=>settings?.querySelector('[data-key="STREAMLINK_FALLBACK"]')?.closest('label')?.remove();
+  removeFallback();
+  if(settings&&!settings.dataset.p166FollowupObserver){settings.dataset.p166FollowupObserver='1';new MutationObserver(removeFallback).observe(settings,{childList:true,subtree:true})}
+  const dir=document.getElementById('p12BackupDir')?.closest('span');if(dir)dir.hidden=true;
+  const summary=document.querySelector('#p12BackupPanel>.summary');if(summary){summary.style.gridTemplateColumns='1fr';summary.style.display='grid'}
+}
+function p166FollowupHistory(){
+  document.querySelectorAll('#p8LiveHistory tr').forEach(row=>{const cells=row.querySelectorAll('td');if(cells.length<2)return;const detail=cells[cells.length-1].textContent||'';if(detail.includes('방송 종료')||detail.includes('BROADCAST ENDED')){const status=cells[0].querySelector('b')||cells[0];status.textContent='완료';cells[0].classList.add('ok')}})
+}
+const originalApi=window.api;
+if(typeof originalApi==='function'&&!originalApi.__p166BroadcastComplete){const wrapped=async function(path,opt){const data=await originalApi(path,opt);if(String(path||'').startsWith('/api/history')&&Array.isArray(data?.live)){data.live=data.live.map(item=>String(item?.reason||'').trim().toUpperCase()==='BROADCAST ENDED'?{...item,status:'COMPLETED'}:item)}return data};wrapped.__p166BroadcastComplete=true;window.api=wrapped;try{api=wrapped}catch{}}
+function p166FollowupInit(){p166FollowupSettings();p166FollowupHistory();const live=document.getElementById('p8LiveHistory');if(live)new MutationObserver(p166FollowupHistory).observe(live,{childList:true,subtree:true,characterData:true});setTimeout(()=>document.getElementById('p8ApplyHistory')?.click(),0)}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',p166FollowupInit,{once:true});else p166FollowupInit();
+})()</script>
 </body></html>
