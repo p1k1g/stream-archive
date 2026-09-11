@@ -53,4 +53,48 @@
 </main>
 </div>
 <div id="toast"></div><script src="/phase10.js?v=p13-5-auth1"></script><script src="/app.js?v=p13-queue1"></script><script src="/phase8.js?v=p13-queue1"></script><script src="/phase9_1.js?v=p13-queue1"></script><script src="/phase12.js?v=p13-queue1"></script><script src="/phase13.js?v=p13-5-theme1"></script><script src="/phase14.js?v=p166-ui2"></script><script>window.p166TranslateStatus=window.p166TranslateStatus||function(v){return typeof statusText==='function'?statusText(v):(v||'-')};window.p166TranslateReason=window.p166TranslateReason||function(v){const m={'WATCHER EXIT':'감시 종료','CHANNEL REMOVED':'채널 삭제','CHANNEL DISABLED':'채널 비활성화','USER CHANNEL STOP':'사용자 중지','BROADCAST ENDED':'방송 종료','BROADCAST CHANGED':'방송 변경','LOW DISK SPACE':'디스크 공간 부족','RECORD STALLED':'녹화 정지 감지','NORMAL':'정상 종료'};const s=String(v||'').trim();const x=s.match(/^RECORDER EXIT CODE=(.+)$/);return m[s]||(x?`녹화 프로세스 비정상 종료 (코드: ${x[1]})`:v)}</script>
+<script>(()=>{'use strict';
+const X_LIVE_ACTIVE=new Set(['RECORDING']);
+const X_VOD_WAITING=new Set(['READY','QUEUED','IDLE']);
+const X_VOD_ACTIVE=new Set(['RUNNING','STARTING','ANALYZING','DOWNLOADING','REFRESHING','MERGING','CANCELLING']);
+const X_VOD_KIND={ANALYZE:'분석',ANALYSIS:'분석',DOWNLOAD:'다운로드',JOB:'작업',MERGE:'병합'};
+function xLiveNormalized(item){if(String(item?.reason||'').trim().toUpperCase()==='BROADCAST ENDED')return{...item,status:'COMPLETED'};return item}
+function xLiveMatch(item,wanted){if(!wanted)return true;const status=String(item?.status||'').toUpperCase();if(wanted==='RECORDING')return X_LIVE_ACTIVE.has(status);return status===wanted}
+function xVodMatch(item,wanted){if(!wanted)return true;const state=String(item?.state||'').toUpperCase();if(wanted==='WAITING')return X_VOD_WAITING.has(state);if(wanted==='ACTIVE')return X_VOD_ACTIVE.has(state);return state===wanted}
+function xInstallStyle(){if(document.getElementById('p166xStyle'))return;const style=document.createElement('style');style.id='p166xStyle';style.textContent=`
+#p135ThemePreference{display:none!important}
+#settings label:has([data-key="STREAMLINK_FALLBACK"]){display:none!important}
+#p12BackupPanel>.summary{display:none!important}
+#p166BackupPolicyInline{margin:0!important;font-weight:700}
+`;document.head.appendChild(style)}
+function xInstallHistoryFilters(){
+  const old=document.getElementById('p8HistoryStatus');const label=old?.closest('label');if(!label||document.getElementById('p166LiveHistoryStatus'))return;
+  label.textContent='LIVE 상태';const live=document.createElement('select');live.id='p166LiveHistoryStatus';live.innerHTML='<option value="">전체</option><option value="RECORDING">녹화 중</option><option value="COMPLETED">완료</option><option value="STOPPED">중지</option><option value="INTERRUPTED">비정상 종료</option><option value="FAILED">실패</option>';label.appendChild(live);
+  const vodLabel=document.createElement('label');vodLabel.textContent='VOD 상태';const vod=document.createElement('select');vod.id='p166VodHistoryStatus';vod.innerHTML='<option value="">전체</option><option value="WAITING">대기</option><option value="ACTIVE">진행 중</option><option value="COMPLETED">완료</option><option value="FAILED">실패</option><option value="INTERRUPTED">비정상 종료</option><option value="CANCELLED">취소</option>';vodLabel.appendChild(vod);label.insertAdjacentElement('afterend',vodLabel);
+  const apply=()=>document.getElementById('p8ApplyHistory')?.click();live.addEventListener('change',apply);vod.addEventListener('change',apply);
+  const clear=document.getElementById('p8ClearHistory');if(clear){const reset=()=>{live.value='';vod.value=''};clear.addEventListener('pointerdown',reset);clear.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' ')reset()})}
+}
+function xInstallHistoryApi(){
+  const original=window.api;if(typeof original!=='function'||original.__p166xHistory)return;
+  const wrapped=async function(path,opt){
+    const raw=String(path||'');if(!raw.startsWith('/api/history'))return original(path,opt);
+    const u=new URL(raw,location.origin);const requested=Math.min(500,Math.max(1,Number(u.searchParams.get('limit'))||100));const liveWanted=document.getElementById('p166LiveHistoryStatus')?.value||'';const vodWanted=document.getElementById('p166VodHistoryStatus')?.value||'';
+    u.searchParams.delete('status');if(liveWanted||vodWanted)u.searchParams.set('limit','500');
+    const data=await original(u.pathname+(u.search?'?'+u.searchParams.toString():''),opt);if(!data||typeof data!=='object')return data;
+    let live=(data.live||[]).map(xLiveNormalized);let vod=(data.vod||[]).map(item=>({...item,kind:X_VOD_KIND[String(item?.kind||'').toUpperCase()]||item.kind}));
+    if(liveWanted)live=live.filter(item=>xLiveMatch(item,liveWanted));if(vodWanted)vod=vod.filter(item=>xVodMatch(item,vodWanted));data.live=live.slice(0,requested);data.vod=vod.slice(0,requested);return data
+  };
+  wrapped.__p166xHistory=true;window.api=wrapped;try{api=wrapped}catch{}
+}
+function xPolicyText(policy){const p=policy||{};if(!p.enabled)return'정책: 자동 백업 꺼짐';const keep=Number(p.keep_count||0)>0?`${p.keep_count}개`:'무제한';const days=Number(p.retention_days||0)>0?`${p.retention_days}일`:'기간 제한 없음';return`정책: 자동 · ${p.interval_hours}시간 · 최대 ${keep} · ${days}`}
+async function xRefreshBackupPolicy(){const out=document.getElementById('p166BackupPolicyInline');if(!out)return;try{const d=await api('/api/backups');out.textContent=xPolicyText(d?.policy)}catch(e){out.textContent='정책: 조회 실패'}}
+function xInstallBackupCleanup(attempt=0){
+  const panel=document.getElementById('p12BackupPanel');const card=document.querySelector('.p166-backup-path-card');if(!panel||!card){if(attempt<10)setTimeout(()=>xInstallBackupCleanup(attempt+1),100);return}
+  const summary=panel.querySelector(':scope>.summary');if(summary)summary.hidden=true;
+  if(!document.getElementById('p166BackupPolicyInline')){const p=document.createElement('p');p.id='p166BackupPolicyInline';p.className='hint';const actions=card.querySelector('.p166-backup-path-actions');actions?.insertAdjacentElement('afterend',p)}
+  xRefreshBackupPolicy();document.getElementById('p12BackupRefresh')?.addEventListener('click',()=>setTimeout(xRefreshBackupPolicy,0));document.querySelector('[data-settings-tab="backup"]')?.addEventListener('click',()=>setTimeout(xRefreshBackupPolicy,0));document.getElementById('saveSettings')?.addEventListener('click',()=>setTimeout(xRefreshBackupPolicy,250));
+}
+function xInit(){xInstallStyle();xInstallHistoryFilters();xInstallHistoryApi();xInstallBackupCleanup();setTimeout(()=>document.getElementById('p8ApplyHistory')?.click(),250)}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',xInit,{once:true});else xInit();
+})()</script>
 </body></html>
