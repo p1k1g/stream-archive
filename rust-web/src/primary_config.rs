@@ -4,7 +4,12 @@ use crate::{
     support::platform::PlatformId,
 };
 use anyhow::{Context, Result, bail};
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 pub const VOD_TOOL_KEYS: &[&str] = &["YT_DLP_PATH", "FFMPEG_PATH"];
 
@@ -43,6 +48,9 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
             }
             _ => {}
         }
+    }
+    if let Some(value) = updates.get("BACKUP_DIR") {
+        validate_writable_backup_directory(value)?;
     }
     Ok(())
 }
@@ -126,6 +134,36 @@ fn validate_single_line(value: &str, max_len: usize, label: &str) -> Result<()> 
     Ok(())
 }
 
+fn validate_writable_backup_directory(value: &str) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    let path = PathBuf::from(value);
+    if path.exists() && !path.is_dir() {
+        bail!("BACKUP_DIR must be a directory: {}", path.display());
+    }
+    fs::create_dir_all(&path)
+        .with_context(|| format!("BACKUP_DIR cannot be created: {}", path.display()))?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let probe = path.join(format!(
+        ".soop-recorder-write-test-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::write(&probe, b"")
+        .with_context(|| format!("BACKUP_DIR is not writable: {}", path.display()))?;
+    fs::remove_file(&probe).with_context(|| {
+        format!(
+            "BACKUP_DIR write test cleanup failed: {}",
+            probe.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn validate_int(value: &str, min: u64, max: u64, key: &str) -> Result<()> {
     let parsed: u64 = value
         .parse()
@@ -156,6 +194,7 @@ fn validate_yes_no(value: &str, key: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn rejects_duplicate_channel_accounts_case_insensitively() {
@@ -191,5 +230,29 @@ mod tests {
     fn accepts_fractional_min_free_space() {
         let updates = BTreeMap::from([("MIN_FREE_SPACE_GB".into(), "1.5".into())]);
         assert!(validate_setting_updates(&updates).is_ok());
+    }
+
+    #[test]
+    fn backup_directory_must_be_creatable_and_writable() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("nested").join("backups");
+        let updates = BTreeMap::from([(
+            "BACKUP_DIR".into(),
+            target.display().to_string(),
+        )]);
+        assert!(validate_setting_updates(&updates).is_ok());
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn backup_directory_rejects_existing_file() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("not-a-directory");
+        fs::write(&target, b"file").unwrap();
+        let updates = BTreeMap::from([(
+            "BACKUP_DIR".into(),
+            target.display().to_string(),
+        )]);
+        assert!(validate_setting_updates(&updates).is_err());
     }
 }
