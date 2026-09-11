@@ -320,3 +320,94 @@ function p166Init(){
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',p166Init,{once:true});else p166Init();
 })();
+
+(()=>{
+'use strict';
+
+const P166R_ALIASES=new Map([
+  ['완료',['COMPLETED']],['실패',['FAILED']],['비정상 종료',['INTERRUPTED']],['중단됨',['INTERRUPTED']],['취소',['CANCELLED']],
+  ['중지',['STOPPED','WATCHER_STOPPED']],['감시 중지',['WATCHER_STOPPED']],['대기',['READY','QUEUED','IDLE']],
+  ['진행 중',['RUNNING','STARTING','ANALYZING','DOWNLOADING','REFRESHING','MERGING','CANCELLING']],['진행중',['RUNNING','STARTING','ANALYZING','DOWNLOADING','REFRESHING','MERGING','CANCELLING']],
+  ['준비 중',['STARTING']],['준비중',['STARTING']],['분석 중',['ANALYZING']],['분석중',['ANALYZING']],['다운로드 중',['DOWNLOADING']],['다운로드중',['DOWNLOADING']],
+  ['인증 갱신 중',['REFRESHING']],['병합 중',['MERGING']],['병합중',['MERGING']],['취소 중',['CANCELLING']],['취소중',['CANCELLING']],
+  ['녹화중',['RECORDING']],['녹화 중',['RECORDING']],['오프라인',['OFFLINE']],['오류',['ERROR']],['비활성',['DISABLED']],['디스크 부족',['LOW_DISK']],
+  ['녹화 정지',['STALLED']],['인증 필요',['AUTH']],['비밀번호 필요',['PASSWORD_REQUIRED']],['현재방송 중지',['PAUSED']],['현재 방송 중지',['PAUSED']],
+  ['확인중',['UNKNOWN']],['확인 중',['UNKNOWN']],['방송중',['LIVE']],['방송 중',['LIVE']],['COMPLETE',['COMPLETED']]
+]);
+let p166rHistory={live:[],vod:[]};
+
+function p166rStatusAlias(raw){
+  const value=String(raw||'').trim().replace(/\s+/g,' ');if(!value||value==='전체')return null;
+  return P166R_ALIASES.get(value)||P166R_ALIASES.get(value.toUpperCase())||null;
+}
+function p166rHistoryValues(){
+  return{
+    q:document.getElementById('p8HistoryQ')?.value.trim()||'',
+    status:document.getElementById('p8HistoryStatus')?.value.trim()||'',
+    from:document.getElementById('p8HistoryFrom')?.value||'',
+    to:document.getElementById('p8HistoryTo')?.value||'',
+    limit:Math.min(500,Math.max(1,Number(document.getElementById('p8HistoryLimit')?.value)||100))
+  };
+}
+function p166rRenderHistory(data){
+  const live=document.getElementById('p8LiveHistory'),vod=document.getElementById('p8VodHistory');if(!live||!vod)return;
+  live.replaceChildren();vod.replaceChildren();
+  for(const item of data.live||[]){if(typeof liveHistoryRow==='function')live.appendChild(liveHistoryRow(item))}
+  for(const item of data.vod||[]){if(typeof vodHistoryRow==='function')vod.appendChild(vodHistoryRow(item))}
+  if(!(data.live||[]).length){const tr=document.createElement('tr');tr.innerHTML='<td colspan="6" class="muted">조건에 맞는 LIVE 녹화 이력이 없습니다.</td>';live.appendChild(tr)}
+  if(!(data.vod||[]).length){const tr=document.createElement('tr');tr.innerHTML='<td colspan="6" class="muted">조건에 맞는 VOD 작업 이력이 없습니다.</td>';vod.appendChild(tr)}
+  if(typeof p166TranslateDynamicUi==='function')p166TranslateDynamicUi();
+}
+async function p166rLoadHistory(){
+  const values=p166rHistoryValues();const alias=p166rStatusAlias(values.status);const params=new URLSearchParams();
+  if(values.q)params.set('q',values.q);if(values.from)params.set('from',values.from);if(values.to)params.set('to',values.to);
+  if(alias){params.set('limit','500')}else{if(values.status)params.set('status',values.status.toUpperCase());params.set('limit',String(values.limit))}
+  try{
+    const data=await api('/api/history?'+params.toString());let live=[...(data?.live||[])],vod=[...(data?.vod||[])];
+    if(alias){const allowed=new Set(alias);live=live.filter(item=>allowed.has(String(item.status||'').toUpperCase())).slice(0,values.limit);vod=vod.filter(item=>allowed.has(String(item.state||'').toUpperCase())).slice(0,values.limit)}
+    p166rHistory={live,vod};p166rRenderHistory(p166rHistory);
+  }catch(e){toast('기록 조회 실패: '+e.message)}
+}
+function p166rClearHistory(){
+  for(const id of ['p8HistoryQ','p8HistoryStatus','p8HistoryFrom','p8HistoryTo']){const el=document.getElementById(id);if(el)el.value=''}
+  const limit=document.getElementById('p8HistoryLimit');if(limit)limit.value='100';p166rLoadHistory();
+}
+function p166rCsv(value){const text=String(value??'');return /[",\r\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text}
+function p166rExportHistory(){
+  const rows=[['구분','상태','이름','계정/스트리머','시작','길이/PART','크기','종료 사유/결과','파일/URL']];
+  for(const x of p166rHistory.live||[])rows.push(['LIVE',statusText(x.status),x.channel_name,x.account,x.started_at,duration(x.duration_seconds),bytes(x.size_bytes),p166TranslateReason(x.reason||''),x.file_path||'']);
+  for(const x of p166rHistory.vod||[])rows.push(['VOD',p166TranslateStatus(x.state),x.title||'',x.streamer||'',x.started_at||'',x.part_count||'', '',x.message||'',x.output_file||x.vod_url||'']);
+  const blob=new Blob(['\uFEFF'+rows.map(row=>row.map(p166rCsv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`stream-archive-history-${new Date().toISOString().slice(0,10)}.csv`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),0);
+}
+function p166rBindButton(id,handler){
+  const button=document.getElementById(id);if(!button)return;
+  button.addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();Promise.resolve(handler()).catch(e=>alert(e.message))},true);
+}
+function p166rInstallHistorySearch(){
+  const status=document.getElementById('p8HistoryStatus');if(status)status.placeholder='예: 완료 / 실패 / 녹화중 / 대기';
+  p166rBindButton('p8ApplyHistory',p166rLoadHistory);p166rBindButton('p8ClearHistory',p166rClearHistory);p166rBindButton('p8ExportHistory',p166rExportHistory);
+  ['p8HistoryQ','p8HistoryStatus','p8HistoryFrom','p8HistoryTo'].forEach(id=>document.getElementById(id)?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();p166rLoadHistory()}}));
+  p166rLoadHistory();
+}
+function p166rDriveLabel(path){
+  const value=String(path||'');const win=value.match(/^([A-Za-z]:\\)/);if(win)return win[1];const unix=value.match(/^(\/[^/]+)?/);return unix?.[0]||'저장소';
+}
+function p166rStorageClass(status){return status==='OK'?'ok':(status==='WARN'?'warn':'bad')}
+async function p166rLoadStorage(){
+  const values=document.getElementById('p166StorageValues');if(!values)return;
+  try{
+    const data=await api('/api/storage');values.replaceChildren();
+    for(const volume of data?.volumes||[]){const item=document.createElement('span');item.className=`p166-storage-volume ${p166rStorageClass(volume.status)}`;if(volume.error){item.textContent='저장공간 확인 실패';item.title=volume.error}else{const drive=p166rDriveLabel(volume.probe_path);item.innerHTML=`<b>${esc(drive)}</b><span>${esc(bytes(volume.free_bytes))} 남음 · 사용 ${Number(volume.used_percent||0).toFixed(1)}%</span>`}values.appendChild(item)}
+    if(!values.children.length){const item=document.createElement('span');item.className='p166-storage-volume bad';item.textContent='저장공간 정보를 확인할 수 없습니다.';values.appendChild(item)}
+  }catch(e){values.innerHTML='<span class="p166-storage-volume bad">저장공간 조회 실패</span>'}
+}
+function p166rInstallDashboardStorage(){
+  const old=document.querySelector('.p135-storage-card');if(old){old.hidden=true;old.setAttribute('aria-hidden','true')}
+  const card=document.querySelector('.p135-watcher-card');const summary=card?.querySelector('.summary');const actions=card?.querySelector('.p135-action-row');if(!card||!summary||!actions)return;
+  let strip=document.getElementById('p166StorageStrip');if(!strip){strip=document.createElement('div');strip.id='p166StorageStrip';strip.className='p166-storage-strip';strip.innerHTML='<span class="p166-storage-strip-label">저장 공간</span><div id="p166StorageValues" class="p166-storage-strip-values"><span class="p166-storage-volume">확인 중</span></div>';actions.insertAdjacentElement('beforebegin',strip)}
+  p166rLoadStorage();document.querySelector('[data-app-tab="dashboard"]')?.addEventListener('click',()=>setTimeout(p166rLoadStorage,0));setInterval(()=>{if(!document.hidden)p166rLoadStorage()},30000);
+}
+function p166rFixDiagnostics(){document.getElementById('diagDb')?.closest('p')?.classList.add('p166-diag-line')}
+function p166rInit(){p166rFixDiagnostics();p166rInstallDashboardStorage();p166rInstallHistorySearch()}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',p166rInit,{once:true});else p166rInit();
+})();
