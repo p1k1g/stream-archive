@@ -365,7 +365,9 @@ async function p166rLoadHistory(){
   try{
     const data=await api('/api/history?'+params.toString());let live=[...(data?.live||[])],vod=[...(data?.vod||[])];
     if(alias){const allowed=new Set(alias);live=live.filter(item=>allowed.has(String(item.status||'').toUpperCase())).slice(0,values.limit);vod=vod.filter(item=>allowed.has(String(item.state||'').toUpperCase())).slice(0,values.limit)}
-    p166rHistory={live,vod};p166rRenderHistory(p166rHistory);
+    p166rHistory={live,vod};
+    if(typeof p8State==='object'&&p8State)p8State.history=p166rHistory;
+    p166rRenderHistory(p166rHistory);
   }catch(e){toast('기록 조회 실패: '+e.message)}
 }
 function p166rClearHistory(){
@@ -374,9 +376,10 @@ function p166rClearHistory(){
 }
 function p166rCsv(value){const text=String(value??'');return /[",\r\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text}
 function p166rExportHistory(){
+  const snapshot=(typeof p8State==='object'&&p8State?.history)?p8State.history:p166rHistory;
   const rows=[['구분','상태','이름','계정/스트리머','시작','길이/PART','크기','종료 사유/결과','파일/URL']];
-  for(const x of p166rHistory.live||[])rows.push(['LIVE',statusText(x.status),x.channel_name,x.account,x.started_at,duration(x.duration_seconds),bytes(x.size_bytes),p166TranslateReason(x.reason||''),x.file_path||'']);
-  for(const x of p166rHistory.vod||[])rows.push(['VOD',p166TranslateStatus(x.state),x.title||'',x.streamer||'',x.started_at||'',x.part_count||'', '',x.message||'',x.output_file||x.vod_url||'']);
+  for(const x of snapshot.live||[])rows.push(['LIVE',statusText(x.status),x.channel_name,x.account,x.started_at,duration(x.duration_seconds),bytes(x.size_bytes),p166TranslateReason(x.reason||''),x.file_path||'']);
+  for(const x of snapshot.vod||[])rows.push(['VOD',p166TranslateStatus(x.state),x.title||'',x.streamer||'',x.started_at||'',x.part_count||'', '',x.message||'',x.output_file||x.vod_url||'']);
   const blob=new Blob(['\uFEFF'+rows.map(row=>row.map(p166rCsv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`stream-archive-history-${new Date().toISOString().slice(0,10)}.csv`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),0);
 }
 function p166rBindButton(id,handler){
