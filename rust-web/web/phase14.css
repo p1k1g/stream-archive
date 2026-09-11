@@ -68,3 +68,29 @@ html[data-theme="dark"] .p166-backup-path-card{border-color:#29384a;background:#
   .p166-backup-path-card .hint{grid-column:1}
   .p166-backup-path-actions{justify-content:flex-start}
 }
+
+/* Phase 16.6 refinement */
+.p135-storage-card{display:none!important}
+[data-tab-page="dashboard"]>.p135-runtime-card{grid-column:1/-1!important}
+#p102AdvancedPanel p.mono{font-size:11px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere;word-break:break-word}
+.p166-storage-strip{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px 14px;align-items:center;margin:0 0 13px;padding:10px 12px;border:1px solid #e3eaf2;border-radius:11px;background:var(--surface-soft)}
+.p166-storage-strip-label{font-size:10px;font-weight:900;letter-spacing:.7px;color:#718198;white-space:nowrap}
+.p166-storage-strip-values{display:flex;gap:8px;flex-wrap:wrap;min-width:0}
+.p166-storage-volume{display:inline-flex;align-items:center;gap:7px;min-height:30px;padding:6px 9px;border:1px solid #dfe8f2;border-radius:9px;background:var(--surface);font-size:11px;color:#51637a;white-space:nowrap}
+.p166-storage-volume b{color:#26364d;font-size:12px}
+.p166-storage-volume.ok::before,.p166-storage-volume.warn::before,.p166-storage-volume.bad::before{content:'';width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+.p166-storage-volume.ok::before{background:var(--green)}
+.p166-storage-volume.warn::before{background:var(--orange)}
+.p166-storage-volume.bad::before{background:var(--red)}
+html[data-theme="dark"] .p166-storage-strip{border-color:#29384a;background:#192534}
+html[data-theme="dark"] .p166-storage-volume{border-color:#334459;background:#141f2c;color:#a8b7c8}
+html[data-theme="dark"] .p166-storage-volume b{color:#e1eaf5}
+@media(min-width:1261px){
+  [data-tab-page="history"].p166-history-layout>.p166-history-live,[data-tab-page="history"].p166-history-layout>.p166-history-vod{height:clamp(590px,calc(100vh - 205px),720px);display:flex;flex-direction:column;min-height:0}
+  .p166-history-live>.p166-history-scroll,.p166-history-vod>.p166-history-scroll{flex:1 1 auto;min-height:0;max-height:none}
+  .p166-history-live>.grid,.p166-history-live>.hint,.p166-history-live>h3,.p166-history-vod>.title{flex:0 0 auto}
+}
+@media(max-width:700px){
+  .p166-storage-strip{grid-template-columns:1fr;gap:7px}
+  .p166-storage-volume{white-space:normal}
+}
