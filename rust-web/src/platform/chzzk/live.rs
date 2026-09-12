@@ -1,4 +1,4 @@
-use super::{auth::ChzzkAuth, super::live::StreamInput};
+use super::{super::live::StreamInput, auth::ChzzkAuth};
 use anyhow::{Context, Result, bail};
 use reqwest::{Client, header::COOKIE};
 use serde_json::Value;
