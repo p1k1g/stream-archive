@@ -20,8 +20,7 @@ pub struct ChzzkAuth {
 }
 
 impl ChzzkAuth {
-    // Reload per operation: auth edits apply without restarting the watcher and
-    // decrypted values are not retained in a long-lived provider session.
+    // Reload per operation so settings changes apply without restarting the watcher.
     pub fn load() -> Result<Self> {
         let db = store::global()?;
         let nid_aut = unprotect_secret(
