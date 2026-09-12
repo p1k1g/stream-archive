@@ -6,6 +6,13 @@ use super::super::live::HttpCookie;
 pub const NID_AUT_KEY: &str = "CHZZK_NID_AUT";
 pub const NID_SES_KEY: &str = "CHZZK_NID_SES";
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ChzzkAuthState {
+    Missing,
+    Partial,
+    Configured,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ChzzkAuth {
     nid_aut: String,
@@ -26,12 +33,20 @@ impl ChzzkAuth {
         Ok(Self { nid_aut, nid_ses })
     }
 
+    pub fn state(&self) -> ChzzkAuthState {
+        match (self.nid_aut.is_empty(), self.nid_ses.is_empty()) {
+            (true, true) => ChzzkAuthState::Missing,
+            (false, false) => ChzzkAuthState::Configured,
+            _ => ChzzkAuthState::Partial,
+        }
+    }
+
     pub fn configured(&self) -> bool {
-        !self.nid_aut.is_empty() && !self.nid_ses.is_empty()
+        self.state() == ChzzkAuthState::Configured
     }
 
     pub fn partial(&self) -> bool {
-        self.nid_aut.is_empty() != self.nid_ses.is_empty()
+        self.state() == ChzzkAuthState::Partial
     }
 
     pub fn cookie_header(&self) -> Option<String> {
@@ -67,7 +82,7 @@ impl ChzzkAuth {
     }
 
     #[cfg(test)]
-    fn from_plain(nid_aut: &str, nid_ses: &str) -> Self {
+    pub(crate) fn from_plain(nid_aut: &str, nid_ses: &str) -> Self {
         Self {
             nid_aut: nid_aut.into(),
             nid_ses: nid_ses.into(),
@@ -78,6 +93,26 @@ impl ChzzkAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_auth_state() {
+        assert_eq!(
+            ChzzkAuth::from_plain("", "").state(),
+            ChzzkAuthState::Missing
+        );
+        assert_eq!(
+            ChzzkAuth::from_plain("aut", "").state(),
+            ChzzkAuthState::Partial
+        );
+        assert_eq!(
+            ChzzkAuth::from_plain("", "ses").state(),
+            ChzzkAuthState::Partial
+        );
+        assert_eq!(
+            ChzzkAuth::from_plain("aut", "ses").state(),
+            ChzzkAuthState::Configured
+        );
+    }
 
     #[test]
     fn requires_both_naver_cookies_for_complete_auth() {
