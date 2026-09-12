@@ -57,6 +57,16 @@ fn channel_key(platform: PlatformId, account: &str) -> String {
     format!("{}:{}", platform.as_str(), account.trim().to_ascii_lowercase())
 }
 
+fn scoped_channel_target(target: &str) -> Option<(PlatformId, &str)> {
+    let (platform, account) = target.split_once(':')?;
+    let platform = platform.parse::<PlatformId>().ok()?;
+    let account = account.trim();
+    if account.is_empty() {
+        return None;
+    }
+    Some((platform, account))
+}
+
 fn stream_password_for(platform: PlatformId, account: &str, broadcast_id: &str) -> Option<String> {
     let key = channel_key(platform, account);
     let Ok(mut passwords) = stream_passwords().lock() else {
@@ -285,36 +295,59 @@ impl NativeWatcherManager {
         Ok(())
     }
 
-    pub async fn channel_password(&self, account: String, password: String) -> Result<()> {
-        let account = account.trim().to_string();
-        if account.is_empty() {
+    pub async fn channel_password(&self, target: String, password: String) -> Result<()> {
+        let target = target.trim().to_string();
+        if target.is_empty() {
             bail!("channel account is empty");
         }
         if password.is_empty() {
             bail!("stream password is empty");
         }
-        let (platform, broadcast_id) = {
+        let (platform, account, broadcast_id) = {
             let snapshot = self.snapshot.read().await;
-            let mut matches = snapshot
-                .channels
-                .iter()
-                .filter(|channel| channel.account.eq_ignore_ascii_case(&account));
-            let channel = matches
-                .next()
-                .ok_or_else(|| anyhow!("channel not found: {account}"))?;
-            if matches.next().is_some() {
-                bail!("channel account is ambiguous across platforms: {account}");
+            if let Some((platform, account)) = scoped_channel_target(&target) {
+                let channel = snapshot
+                    .channels
+                    .iter()
+                    .find(|channel| {
+                        channel.platform == platform
+                            && channel.account.eq_ignore_ascii_case(account)
+                    })
+                    .ok_or_else(|| anyhow!("channel not found: {target}"))?;
+                if channel.status != "PASSWORD_REQUIRED" {
+                    bail!("channel is not waiting for a stream password");
+                }
+                (
+                    platform,
+                    channel.account.clone(),
+                    channel
+                        .bno
+                        .clone()
+                        .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?,
+                )
+            } else {
+                let mut matches = snapshot
+                    .channels
+                    .iter()
+                    .filter(|channel| channel.account.eq_ignore_ascii_case(&target));
+                let channel = matches
+                    .next()
+                    .ok_or_else(|| anyhow!("channel not found: {target}"))?;
+                if matches.next().is_some() {
+                    bail!("channel account is ambiguous across platforms: {target}");
+                }
+                if channel.status != "PASSWORD_REQUIRED" {
+                    bail!("channel is not waiting for a stream password");
+                }
+                (
+                    channel.platform,
+                    channel.account.clone(),
+                    channel
+                        .bno
+                        .clone()
+                        .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?,
+                )
             }
-            if channel.status != "PASSWORD_REQUIRED" {
-                bail!("channel is not waiting for a stream password");
-            }
-            (
-                channel.platform,
-                channel
-                    .bno
-                    .clone()
-                    .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?,
-            )
         };
         {
             let mut passwords = stream_passwords()
@@ -333,7 +366,8 @@ impl NativeWatcherManager {
                 "[RUST:AUTH] stream password supplied platform={platform} account={account} (memory only)"
             ))
             .await;
-        self.channel_action(account, "recheck").await
+        self.channel_action(channel_key(platform, &account), "recheck")
+            .await
     }
 }
 
@@ -597,16 +631,24 @@ async fn apply_channels(
     }
 }
 
-fn command_state_key(states: &HashMap<String, ChannelState>, account: &str) -> Result<String> {
+fn command_state_key(states: &HashMap<String, ChannelState>, target: &str) -> Result<String> {
+    if let Some((platform, account)) = scoped_channel_target(target) {
+        let key = channel_key(platform, account);
+        if states.contains_key(&key) {
+            return Ok(key);
+        }
+        bail!("channel command target not found: {target}");
+    }
+
     let matches = states
         .iter()
-        .filter(|(_, state)| state.channel.account.eq_ignore_ascii_case(account))
+        .filter(|(_, state)| state.channel.account.eq_ignore_ascii_case(target))
         .map(|(key, _)| key.clone())
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [key] => Ok(key.clone()),
-        [] => bail!("channel command target not found: {account}"),
-        _ => bail!("channel account is ambiguous across platforms: {account}"),
+        [] => bail!("channel command target not found: {target}"),
+        _ => bail!("channel account is ambiguous across platforms: {target}"),
     }
 }
 
@@ -616,12 +658,12 @@ async fn handle_command(
     recorder: &RecorderManager,
     logs: &LogBuffer,
 ) {
-    let (account, action) = match &command {
-        WatcherCommand::StopOnce(account) => (account, "stop"),
-        WatcherCommand::Resume(account) => (account, "resume"),
-        WatcherCommand::Recheck(account) => (account, "recheck"),
+    let (target, action) = match &command {
+        WatcherCommand::StopOnce(target) => (target, "stop"),
+        WatcherCommand::Resume(target) => (target, "resume"),
+        WatcherCommand::Recheck(target) => (target, "recheck"),
     };
-    let key = match command_state_key(states, account) {
+    let key = match command_state_key(states, target) {
         Ok(key) => key,
         Err(err) => {
             logs.push(format!("[RUST:WARN] {err}")).await;
@@ -1404,5 +1446,29 @@ mod tests {
             channel_key(PlatformId::Chzzk, "ABCDEF0123456789ABCDEF0123456789"),
             "CHZZK:abcdef0123456789abcdef0123456789"
         );
+    }
+
+    #[test]
+    fn scoped_channel_command_targets_composite_identity() {
+        let account = "0123456789abcdef0123456789abcdef";
+        let mut states = HashMap::new();
+        states.insert(
+            channel_key(PlatformId::Soop, account),
+            ChannelState::new(channel("SOOP", account)),
+        );
+        states.insert(
+            channel_key(PlatformId::Chzzk, account),
+            ChannelState::new(chzzk_channel(true)),
+        );
+
+        assert_eq!(
+            command_state_key(&states, &format!("SOOP:{account}")).unwrap(),
+            channel_key(PlatformId::Soop, account)
+        );
+        assert_eq!(
+            command_state_key(&states, &format!("CHZZK:{account}")).unwrap(),
+            channel_key(PlatformId::Chzzk, account)
+        );
+        assert!(command_state_key(&states, account).is_err());
     }
 }
