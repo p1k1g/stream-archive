@@ -13,16 +13,6 @@ pub enum ChzzkAuthState {
     Configured,
 }
 
-impl ChzzkAuthState {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Missing => "missing",
-            Self::Partial => "partial",
-            Self::Configured => "configured",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ChzzkAuth {
     nid_aut: String,
@@ -110,12 +100,10 @@ mod tests {
             ChzzkAuth::from_plain("", "").state(),
             ChzzkAuthState::Missing
         );
-        assert_eq!(ChzzkAuthState::Missing.label(), "missing");
         assert_eq!(
             ChzzkAuth::from_plain("aut", "").state(),
             ChzzkAuthState::Partial
         );
-        assert_eq!(ChzzkAuthState::Partial.label(), "partial");
         assert_eq!(
             ChzzkAuth::from_plain("", "ses").state(),
             ChzzkAuthState::Partial
@@ -124,7 +112,6 @@ mod tests {
             ChzzkAuth::from_plain("aut", "ses").state(),
             ChzzkAuthState::Configured
         );
-        assert_eq!(ChzzkAuthState::Configured.label(), "configured");
     }
 
     #[test]
