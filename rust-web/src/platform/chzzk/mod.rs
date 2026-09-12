@@ -88,15 +88,19 @@ mod tests {
     #[test]
     fn validates_channel_id_shape() {
         assert!(CHZZK.validate_account(CHANNEL).is_ok());
-        assert!(CHZZK
-            .validate_account("0123456789ABCDEF0123456789ABCDEF")
-            .is_ok());
+        assert!(
+            CHZZK
+                .validate_account("0123456789ABCDEF0123456789ABCDEF")
+                .is_ok()
+        );
         assert!(CHZZK.validate_account(&format!(" {CHANNEL} ")).is_ok());
         assert!(CHZZK.validate_account("not-a-channel-id").is_err());
         assert!(CHZZK.validate_account("0123456789abcdef").is_err());
-        assert!(CHZZK
-            .validate_account("0123456789abcdef0123456789abcdeg")
-            .is_err());
+        assert!(
+            CHZZK
+                .validate_account("0123456789abcdef0123456789abcdeg")
+                .is_err()
+        );
     }
 
     #[test]
