@@ -19,6 +19,7 @@ use tokio::{
 use uuid::Uuid;
 
 const GB: u64 = 1024 * 1024 * 1024;
+const COOKIE_FILE_EXPIRES_UNIX: i64 = 4_102_444_800; // 2100-01-01 UTC
 
 #[derive(Debug, Clone)]
 pub struct RecorderConfig {
@@ -379,9 +380,17 @@ fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> 
             "FALSE"
         };
         let secure = if cookie.secure { "TRUE" } else { "FALSE" };
+        // Streamlink 8.2+ loads Netscape files with Python's MozillaCookieJar.
+        // An expiry value of 0 is treated as already expired and silently dropped,
+        // so use a distant future timestamp; this temporary file is deleted after recording.
         text.push_str(&format!(
-            "{}\t{}\t/\t{}\t0\t{}\t{}\n",
-            cookie.domain, include_subdomains, secure, cookie.name, cookie.value
+            "{}\t{}\t/\t{}\t{}\t{}\t{}\n",
+            cookie.domain,
+            include_subdomains,
+            secure,
+            COOKIE_FILE_EXPIRES_UNIX,
+            cookie.name,
+            cookie.value
         ));
     }
     fs::write(&path, text)
@@ -399,7 +408,7 @@ mod tests {
     use crate::support::platform::live::HttpCookie;
 
     #[test]
-    fn writes_netscape_cookie_file_without_exposing_cookie_in_arguments() {
+    fn writes_netscape_cookie_file_with_non_expired_cookie() {
         let path = write_cookie_file(&[HttpCookie {
             domain: ".naver.com".into(),
             name: "NID_AUT".into(),
@@ -408,7 +417,11 @@ mod tests {
         }])
         .unwrap();
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains(".naver.com\tTRUE\t/\tTRUE\t0\tNID_AUT\tsecret-value"));
+        assert!(text.contains(&format!(
+            ".naver.com\tTRUE\t/\tTRUE\t{}\tNID_AUT\tsecret-value",
+            COOKIE_FILE_EXPIRES_UNIX
+        )));
+        assert!(!text.contains("\t0\tNID_AUT\t"));
         let _ = fs::remove_file(path);
     }
 }
