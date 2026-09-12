@@ -28,7 +28,7 @@ $primary = Read-RepoFile 'rust-web/src/primary_config.rs'
 $backend = Read-RepoFile 'rust-web/src/backend.rs'
 $app = Read-RepoFile 'rust-web/web/app.js'
 
-# Provider registration / scope boundary.
+# Provider registration / Phase 17 scope boundary.
 Assert-Match $platform 'Chzzk' 'PlatformId::Chzzk registration is missing.'
 Assert-Match $platform 'PlatformId::Chzzk\s*=>\s*&chzzk::CHZZK' 'CHZZK provider dispatch is missing.'
 Assert-Match $chzzk 'live:\s*true' 'CHZZK LIVE capability must remain enabled.'
@@ -48,10 +48,10 @@ Assert-Match $auth 'ChzzkAuthState::Configured' 'Configured CHZZK auth state cov
 # LIVE discovery / restriction handling.
 Assert-Match $live 'service/v2/channels/\{channel_id\}/live-detail' 'CHZZK live-detail endpoint is missing.'
 Assert-Match $live 'membershipBenefitType' 'CHZZK membership-only restriction detection is missing.'
-Assert-Match $live 'adult' 'CHZZK adult restriction detection is missing.'
-Assert-Match $live 'requires_auth' 'CHZZK restricted playback flag is missing.'
-Assert-Match $live '재생 정보를 받지 못했습니다' 'OPEN-without-playback must not be silently treated as offline.'
-Assert-Match $live '만료되었거나' 'Expired/invalid CHZZK auth guidance is missing.'
+Assert-Match $live 'let requires_auth = adult \|\| membership_only' 'CHZZK restricted playback flag is missing.'
+Assert-Match $live 'if !playback_available' 'CHZZK playback availability handling is missing.'
+Assert-Match $live 'return auth_failure\(auth\)' 'Restricted playback auth handling is missing.'
+Assert-Match $live 'ChzzkAuthState::Configured' 'Expired or unauthorized CHZZK auth path is missing.'
 Assert-Match $live 'cookies:\s*if live\.requires_auth' 'Public CHZZK LIVE must not always forward stored cookies.'
 
 # Streamlink plugin boundary / secret-safe cookie transport.
