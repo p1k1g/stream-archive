@@ -162,11 +162,15 @@ impl NativeWatcherManager {
 
         let db = store::global()?;
         let settings = db.live_settings_with_secrets()?;
-        let config = WatcherConfig::from_values(&self.backend_dir, &settings)?;
         let channels = db.channels()?;
         for channel in &channels {
             ensure_supported(channel.platform)?;
         }
+        let config = WatcherConfig::from_values(
+            &self.backend_dir,
+            &settings,
+            channels_require_soop(&channels),
+        )?;
         let (stop_tx, stop_rx) = oneshot::channel();
         let (command_tx, command_rx) = mpsc::channel(32);
         let backend_dir = self.backend_dir.clone();
@@ -412,14 +416,17 @@ async fn run_native_watcher(
                     next_setting_check = now + Duration::from_secs(1);
                     match store::global().and_then(|db| db.live_settings_with_secrets()) {
                         Ok(values) if values != last_settings => {
-                            match WatcherConfig::from_values(&backend_dir, &values) {
+                            let require_soop = states.values().any(|state| {
+                                state.channel.enabled && state.channel.platform == PlatformId::Soop
+                            });
+                            match WatcherConfig::from_values(&backend_dir, &values, require_soop) {
                                 Ok(new_config) => {
                                     let auth_changed = new_config.soop_username != config.soop_username
                                         || new_config.soop_password != config.soop_password;
                                     config = new_config;
                                     last_settings = values;
                                     logs.push("[RUST] SQLite settings hot reload applied").await;
-                                    if auth_changed {
+                                    if auth_changed && require_soop {
                                         refresh_soop_login(&mut sessions, &config, &logs, "refresh").await;
                                     }
                                 }
@@ -437,12 +444,22 @@ async fn run_native_watcher(
                         Ok(channels) => {
                             let signature = channel_signature(&channels);
                             if signature != last_channel_signature {
-                                if let Err(err) = ensure_sessions(&mut sessions, &channels, &client) {
-                                    logs.push(format!("[RUST:WARN] channel reload contains unsupported platform: {err:#}")).await;
-                                } else {
-                                    apply_channels(&mut states, channels, &recorder, &logs).await;
-                                    last_channel_signature = signature;
-                                    logs.push("[RUST] SQLite channel hot reload applied").await;
+                                let require_soop = channels_require_soop(&channels);
+                                match WatcherConfig::from_values(&backend_dir, &last_settings, require_soop) {
+                                    Err(err) => logs.push(format!("[RUST:WARN] channel reload rejected by platform configuration: {err:#}")).await,
+                                    Ok(new_config) => {
+                                        if let Err(err) = ensure_sessions(&mut sessions, &channels, &client) {
+                                            logs.push(format!("[RUST:WARN] channel reload contains unsupported platform: {err:#}")).await;
+                                        } else {
+                                            config = new_config;
+                                            if require_soop {
+                                                refresh_soop_login(&mut sessions, &config, &logs, "channel reload").await;
+                                            }
+                                            apply_channels(&mut states, channels, &recorder, &logs).await;
+                                            last_channel_signature = signature;
+                                            logs.push("[RUST] SQLite channel hot reload applied").await;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -486,6 +503,12 @@ fn ensure_sessions(
         }
     }
     Ok(())
+}
+
+fn channels_require_soop(channels: &[Channel]) -> bool {
+    channels
+        .iter()
+        .any(|channel| channel.enabled && channel.platform == PlatformId::Soop)
 }
 
 async fn refresh_soop_login(
@@ -642,7 +665,7 @@ async fn login_for_auth_required(
             .login(&config.soop_username, &config.soop_password)
             .await,
         PlatformId::Chzzk => bail!(
-            "CHZZK 연령 제한 방송 인증은 NID_AUT/NID_SES 설정이 필요합니다."
+            "CHZZK 제한 방송 인증은 NID_AUT/NID_SES 설정이 필요합니다."
         ),
     }
 }
@@ -1044,17 +1067,28 @@ async fn update_snapshot(
 }
 
 impl WatcherConfig {
-    fn from_values(backend_dir: &Path, map: &BTreeMap<String, String>) -> Result<Self> {
+    fn from_values(
+        backend_dir: &Path,
+        map: &BTreeMap<String, String>,
+        require_soop: bool,
+    ) -> Result<Self> {
         let raw = |name: &str| map.get(name).cloned().unwrap_or_default();
-        let worker_api_key = unprotect_secret(&raw("CLOUDFLARE_API_KEY"), "CLOUDFLARE_API_KEY")?;
-        let soop_password = unprotect_secret(&raw("SOOP_PASSWORD"), "SOOP_PASSWORD")?;
         let worker_url = raw("CLOUDFLARE_WORKER_URL");
-        if !worker_url.starts_with("https://") {
-            bail!("CLOUDFLARE_WORKER_URL must be https://");
-        }
-        if worker_api_key.is_empty() {
-            bail!("CLOUDFLARE_API_KEY is empty");
-        }
+        let soop_username = raw("SOOP_USERNAME");
+        let (worker_api_key, soop_password) = if require_soop {
+            let worker_api_key =
+                unprotect_secret(&raw("CLOUDFLARE_API_KEY"), "CLOUDFLARE_API_KEY")?;
+            let soop_password = unprotect_secret(&raw("SOOP_PASSWORD"), "SOOP_PASSWORD")?;
+            if !worker_url.starts_with("https://") {
+                bail!("CLOUDFLARE_WORKER_URL must be https:// when an enabled SOOP channel exists");
+            }
+            if worker_api_key.is_empty() {
+                bail!("CLOUDFLARE_API_KEY is empty while an enabled SOOP channel exists");
+            }
+            (worker_api_key, soop_password)
+        } else {
+            (String::new(), String::new())
+        };
 
         let output_dir = PathBuf::from(
             map.get("OUTPUT_DIR")
@@ -1078,7 +1112,7 @@ impl WatcherConfig {
                 .to_ascii_uppercase(),
             worker_url,
             worker_api_key,
-            soop_username: raw("SOOP_USERNAME"),
+            soop_username,
             soop_password,
             recorder: RecorderConfig {
                 streamlink,
@@ -1276,6 +1310,16 @@ mod tests {
         }
     }
 
+    fn chzzk_channel(enabled: bool) -> Channel {
+        Channel {
+            platform: PlatformId::Chzzk,
+            enabled,
+            name: "CHZZK".into(),
+            account: "0123456789abcdef0123456789abcdef".into(),
+            outdir: String::new(),
+        }
+    }
+
     #[test]
     fn safe_filename_replaces_windows_reserved_chars() {
         assert_eq!(safe_name("a:b/c*?d", 80), "a_b_c__d");
@@ -1287,6 +1331,20 @@ mod tests {
         let a = vec![channel("A", "UserA")];
         let b = vec![channel("A", "usera")];
         assert_eq!(channel_signature(&a), channel_signature(&b));
+    }
+
+    #[test]
+    fn soop_worker_credentials_are_needed_only_for_enabled_soop_channels() {
+        assert!(!channels_require_soop(&[chzzk_channel(true)]));
+
+        let mut disabled_soop = channel("SOOP", "disabled");
+        disabled_soop.enabled = false;
+        assert!(!channels_require_soop(&[disabled_soop, chzzk_channel(true)]));
+
+        assert!(channels_require_soop(&[
+            channel("SOOP", "enabled"),
+            chzzk_channel(true),
+        ]));
     }
 
     #[test]
