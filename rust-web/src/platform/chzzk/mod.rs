@@ -4,6 +4,7 @@ use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
 use url::Url;
 
+pub mod auth;
 pub mod live;
 
 pub(crate) static CHZZK: ChzzkProvider = ChzzkProvider;
