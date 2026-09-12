@@ -63,7 +63,10 @@ impl ChzzkLiveSession {
             .json()
             .await?;
         if value.get("code").and_then(Value::as_i64) != Some(200) {
-            let code = value.get("code").and_then(Value::as_i64).unwrap_or_default();
+            let code = value
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
             let message = value
                 .get("message")
                 .and_then(Value::as_str)
@@ -163,10 +166,14 @@ fn auth_failure(auth: &ChzzkAuth) -> Result<ChzzkProbe> {
     match auth.state() {
         ChzzkAuthState::Missing => Ok(ChzzkProbe::AuthRequired),
         ChzzkAuthState::Partial => {
-            bail!("CHZZK NID_AUT/NID_SES 중 하나만 설정되어 있습니다. 두 값을 모두 다시 저장하세요.")
+            bail!(
+                "CHZZK NID_AUT/NID_SES 중 하나만 설정되어 있습니다. 두 값을 모두 다시 저장하세요."
+            )
         }
         ChzzkAuthState::Configured => {
-            bail!("CHZZK 인증 쿠키가 만료되었거나 이 제한 방송을 재생할 권한이 없습니다. NID_AUT/NID_SES를 확인하세요.")
+            bail!(
+                "CHZZK 인증 쿠키가 만료되었거나 이 제한 방송을 재생할 권한이 없습니다. NID_AUT/NID_SES를 확인하세요."
+            )
         }
     }
 }
