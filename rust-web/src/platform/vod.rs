@@ -32,19 +32,18 @@ impl VodManager {
     pub async fn analyze(&self, req: VodAnalyzeRequest) -> Result<VodJobStatus> {
         match vod_platform(&req.vod_url)? {
             PlatformId::Soop => self.soop.analyze(req).await,
+            PlatformId::Chzzk => bail!("CHZZK VOD는 Phase 18에서 지원합니다."),
         }
     }
 
     pub async fn download(&self, req: VodDownloadRequest) -> Result<VodJobStatus> {
         match vod_platform(&req.vod_url)? {
             PlatformId::Soop => self.soop.download(req).await,
+            PlatformId::Chzzk => bail!("CHZZK VOD는 Phase 18에서 지원합니다."),
         }
     }
 
     pub async fn cancel(&self) -> Result<VodJobStatus> {
-        // Phase 16 currently has one registered VOD provider. When CHZZK is
-        // added, the common facade will track the active provider here rather
-        // than teaching queue/history code about provider-specific managers.
         self.soop.cancel().await
     }
 }
@@ -52,6 +51,7 @@ impl VodManager {
 pub(crate) fn validate_download_request(req: &VodDownloadRequest) -> Result<()> {
     match vod_platform(&req.vod_url)? {
         PlatformId::Soop => soop::vod::validate_download_request(req),
+        PlatformId::Chzzk => bail!("CHZZK VOD는 Phase 18에서 지원합니다."),
     }
 }
 
@@ -68,11 +68,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn common_vod_facade_routes_soop_and_rejects_unknown_hosts() {
+    fn common_vod_facade_routes_soop_and_keeps_chzzk_disabled() {
         assert_eq!(
             vod_platform("https://vod.sooplive.com/player/123456789").unwrap(),
             PlatformId::Soop
         );
+        assert!(vod_platform("https://chzzk.naver.com/video/123456").is_err());
         assert!(vod_platform("https://example.com/player/123456789").is_err());
     }
 }
