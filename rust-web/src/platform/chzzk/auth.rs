@@ -90,7 +90,10 @@ mod tests {
     #[test]
     fn builds_cookie_header_and_streamlink_cookie_list() {
         let auth = ChzzkAuth::from_plain("aut", "ses");
-        assert_eq!(auth.cookie_header().as_deref(), Some("NID_AUT=aut; NID_SES=ses"));
+        assert_eq!(
+            auth.cookie_header().as_deref(),
+            Some("NID_AUT=aut; NID_SES=ses")
+        );
         let cookies = auth.streamlink_cookies();
         assert_eq!(cookies.len(), 2);
         assert_eq!(cookies[0].name, "NID_AUT");
