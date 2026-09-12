@@ -80,7 +80,9 @@ The process-lifecycle invariant remains unchanged: the application may terminate
 - Web UI: Settings -> Backup.
 - Default backup directory: sibling `soop-recorder-backups` next to the portable application folder, not inside `data`.
 - Override with `SOOP_BACKUP_DIR`.
-- Automatic defaults: enabled, every 24 hours, keep 10, remove backups older than 30 days.
+- Automatic defaults: enabled, every 24 hours, keep 10 managed backups, remove managed backups older than 3 days.
+- Backup enabled/interval/keep-count/retention are editable from the Backup UI; existing persisted values are preserved during upgrades.
+- Metadata-less legacy backups are excluded from automatic retention cleanup for safety.
 - SQLite backups use the online backup API and may be created while LIVE recording is active.
 - Restore requires Watcher and VOD to be stopped. A `pre_restore` safety backup is created first.
 - Restore invalidates all browser sessions so an old database cannot resurrect a previously valid session.
