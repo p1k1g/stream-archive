@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 const DEFAULT_INTERVAL_HOURS: u64 = 24;
 const DEFAULT_KEEP_COUNT: usize = 10;
-const DEFAULT_RETENTION_DAYS: i64 = 30;
+const DEFAULT_RETENTION_DAYS: i64 = 3;
 const AUTO_CHECK_INTERVAL: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,7 +106,7 @@ impl BackupManager {
             ("BACKUP_ENABLED", "Y"),
             ("BACKUP_INTERVAL_HOURS", "24"),
             ("BACKUP_KEEP_COUNT", "10"),
-            ("BACKUP_RETENTION_DAYS", "30"),
+            ("BACKUP_RETENTION_DAYS", "3"),
             ("BACKUP_DIR", ""),
         ] {
             if self.store.setting_value(key)?.is_none() {
@@ -605,6 +605,17 @@ mod tests {
         fs::create_dir_all(&backend).unwrap();
         let resolved = resolve_backup_dir(&backend).unwrap();
         assert_eq!(resolved, dir.path().join("soop-recorder-backups"));
+    }
+
+    #[test]
+    fn default_backup_retention_is_three_days() {
+        let dir = tempdir().unwrap();
+        let app = dir.path().join("soop-recorder");
+        let backend = app.join("backend");
+        fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(app.join("data").join("soop.db")).unwrap();
+        let manager = BackupManager::open(store, &backend).unwrap();
+        assert_eq!(manager.policy().unwrap().retention_days, 3);
     }
 
     #[test]
