@@ -103,7 +103,10 @@ impl RecorderManager {
                 };
                 (url, None)
             }
-            StreamInput::PluginUrl { url, cookies } => (url.clone(), Some(cookies.as_slice())),
+            StreamInput::PluginUrl { url, cookies } => {
+                preflight_plugin_input(config, url, !cookies.is_empty()).await?;
+                (url.clone(), Some(cookies.as_slice()))
+            }
         };
         let cookie_file = match cookies {
             Some(cookies) if !cookies.is_empty() => Some(write_cookie_file(cookies)?),
@@ -315,6 +318,48 @@ impl RecorderManager {
     }
 }
 
+async fn preflight_plugin_input(config: &RecorderConfig, url: &str, needs_cookie_file: bool) -> Result<()> {
+    let mut can_handle = Command::new(&config.streamlink);
+    can_handle
+        .arg("--can-handle-url")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(parent) = config.streamlink.parent() {
+        if parent.is_dir() {
+            can_handle.current_dir(parent);
+        }
+    }
+    let status = can_handle
+        .status()
+        .await
+        .with_context(|| format!("failed to inspect Streamlink plugin support: {}", config.streamlink.display()))?;
+    if !status.success() {
+        bail!("현재 Streamlink이 이 플랫폼 URL을 처리할 수 없습니다. Streamlink을 최신 버전으로 업데이트하세요: {url}");
+    }
+
+    if needs_cookie_file {
+        let mut help = Command::new(&config.streamlink);
+        help.arg("--help").stdin(Stdio::null());
+        if let Some(parent) = config.streamlink.parent() {
+            if parent.is_dir() {
+                help.current_dir(parent);
+            }
+        }
+        let output = help
+            .output()
+            .await
+            .with_context(|| format!("failed to inspect Streamlink cookie-file support: {}", config.streamlink.display()))?;
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        if !text.contains("--http-cookies-file") {
+            bail!("CHZZK 제한 방송 인증에는 --http-cookies-file을 지원하는 Streamlink 8.2 이상이 필요합니다.");
+        }
+    }
+    Ok(())
+}
+
 fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> Result<PathBuf> {
     let path = std::env::temp_dir().join(format!(
         "stream-archive-cookies-{}.txt",
@@ -339,7 +384,8 @@ fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> 
             cookie.domain, include_subdomains, secure, cookie.name, cookie.value
         ));
     }
-    fs::write(&path, text).with_context(|| format!("failed to create Streamlink cookie file {}", path.display()))?;
+    fs::write(&path, text)
+        .with_context(|| format!("failed to create Streamlink cookie file {}", path.display()))?;
     Ok(path)
 }
 
