@@ -15,6 +15,7 @@ pub struct ChzzkBroadcast {
     pub channel_name: String,
     pub title: String,
     pub adult: bool,
+    pub requires_auth: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -102,12 +103,20 @@ impl ChzzkLiveSession {
             .get("adult")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let membership_only = content
+            .get("membershipBenefitType")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case("MEMBER_ONLY"));
+        let requires_auth = adult || membership_only;
         let playback_available = content.get("livePlaybackJson").is_some_and(|value| {
             !value.is_null() && value.as_str().is_some_and(|text| !text.is_empty())
         });
 
-        if adult && !playback_available {
-            return auth_failure(&auth);
+        if !playback_available {
+            if requires_auth {
+                return auth_failure(&auth);
+            }
+            bail!("CHZZK 방송은 OPEN 상태이지만 재생 정보를 받지 못했습니다.");
         }
 
         Ok(ChzzkProbe::Live(ChzzkBroadcast {
@@ -115,6 +124,7 @@ impl ChzzkLiveSession {
             channel_name,
             title,
             adult,
+            requires_auth,
         }))
     }
 
@@ -124,13 +134,13 @@ impl ChzzkLiveSession {
         live: &ChzzkBroadcast,
     ) -> Result<ChzzkResolvedStream> {
         let auth = ChzzkAuth::load()?;
-        if live.adult && !auth.configured() {
+        if live.requires_auth && !auth.configured() {
             match auth.state() {
                 ChzzkAuthState::Partial => {
                     bail!("CHZZK NID_AUT/NID_SES 중 하나만 설정되어 있습니다.")
                 }
                 ChzzkAuthState::Missing => {
-                    bail!("CHZZK 연령 제한 방송에는 NID_AUT/NID_SES 인증이 필요합니다.")
+                    bail!("이 CHZZK 제한 방송에는 NID_AUT/NID_SES 인증이 필요합니다.")
                 }
                 ChzzkAuthState::Configured => unreachable!(),
             }
@@ -139,7 +149,7 @@ impl ChzzkLiveSession {
             quality: "best".into(),
             input: StreamInput::PluginUrl {
                 url: format!("https://chzzk.naver.com/live/{}", channel_id.trim()),
-                cookies: if live.adult {
+                cookies: if live.requires_auth {
                     auth.streamlink_cookies()
                 } else {
                     Vec::new()
@@ -156,7 +166,7 @@ fn auth_failure(auth: &ChzzkAuth) -> Result<ChzzkProbe> {
             bail!("CHZZK NID_AUT/NID_SES 중 하나만 설정되어 있습니다. 두 값을 모두 다시 저장하세요.")
         }
         ChzzkAuthState::Configured => {
-            bail!("CHZZK 인증 쿠키가 만료되었거나 유효하지 않습니다. NID_AUT/NID_SES를 다시 저장하세요.")
+            bail!("CHZZK 인증 쿠키가 만료되었거나 이 제한 방송을 재생할 권한이 없습니다. NID_AUT/NID_SES를 확인하세요.")
         }
     }
 }
@@ -178,6 +188,18 @@ mod tests {
         let invalid = auth_failure(&ChzzkAuth::from_plain("aut", "ses"))
             .unwrap_err()
             .to_string();
-        assert!(invalid.contains("만료되었거나 유효하지"));
+        assert!(invalid.contains("만료되었거나"));
+    }
+
+    #[test]
+    fn restricted_broadcasts_keep_auth_cookies_for_streamlink() {
+        let live = ChzzkBroadcast {
+            live_id: "1".into(),
+            channel_name: "test".into(),
+            title: "title".into(),
+            adult: false,
+            requires_auth: true,
+        };
+        assert!(live.requires_auth);
     }
 }
