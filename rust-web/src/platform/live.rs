@@ -75,16 +75,6 @@ impl LiveSession {
         }
     }
 
-    pub fn set_chzzk_auth(&mut self, nid_aut: &str, nid_ses: &str) -> Result<()> {
-        match self {
-            Self::Chzzk(session) => {
-                session.set_auth(nid_aut, nid_ses);
-                Ok(())
-            }
-            Self::Soop(_) => bail!("CHZZK 인증을 SOOP 세션에 적용할 수 없습니다."),
-        }
-    }
-
     pub async fn probe(&self, account: &str) -> Result<LiveProbe> {
         match self {
             Self::Soop(session) => match session.probe(account).await? {
