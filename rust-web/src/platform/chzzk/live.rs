@@ -258,7 +258,8 @@ mod tests {
     #[test]
     fn configured_restricted_live_passes_cookies_to_streamlink() {
         let auth = ChzzkAuth::from_plain("aut", "ses");
-        let probe = parse_probe_content(CHANNEL, &open_live(true, None, Some("{}")), &auth).unwrap();
+        let probe =
+            parse_probe_content(CHANNEL, &open_live(true, None, Some("{}")), &auth).unwrap();
         let ChzzkProbe::Live(live) = probe else {
             panic!("expected live probe");
         };
@@ -272,7 +273,8 @@ mod tests {
     #[test]
     fn public_live_omits_auth_cookies_from_streamlink() {
         let auth = ChzzkAuth::from_plain("aut", "ses");
-        let probe = parse_probe_content(CHANNEL, &open_live(false, None, Some("{}")), &auth).unwrap();
+        let probe =
+            parse_probe_content(CHANNEL, &open_live(false, None, Some("{}")), &auth).unwrap();
         let ChzzkProbe::Live(live) = probe else {
             panic!("expected live probe");
         };
