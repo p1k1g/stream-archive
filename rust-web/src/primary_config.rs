@@ -1,7 +1,7 @@
 use crate::{
     backend::{HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS},
     model::Channel,
-    support::platform::PlatformId,
+    support::platform::{PlatformId, provider},
 };
 use anyhow::{Context, Result, bail};
 use std::{
@@ -77,6 +77,15 @@ pub fn validate_channels(channels: &[Channel]) -> Result<()> {
         if channel.account.trim().is_empty() {
             bail!("channel account cannot be empty");
         }
+        provider(channel.platform)
+            .validate_account(channel.account.trim())
+            .with_context(|| {
+                format!(
+                    "invalid {} channel account: {}",
+                    channel.platform,
+                    channel.account.trim()
+                )
+            })?;
         for (label, value) in [
             ("channel name", channel.name.as_str()),
             ("channel account", channel.account.as_str()),
@@ -214,6 +223,39 @@ mod tests {
                 outdir: String::new(),
             },
         ];
+        assert!(validate_channels(&channels).is_err());
+    }
+
+    #[test]
+    fn same_account_text_is_allowed_on_different_platforms() {
+        let channels = vec![
+            Channel {
+                platform: PlatformId::Soop,
+                enabled: true,
+                name: "SOOP".into(),
+                account: "0123456789abcdef0123456789abcdef".into(),
+                outdir: String::new(),
+            },
+            Channel {
+                platform: PlatformId::Chzzk,
+                enabled: true,
+                name: "CHZZK".into(),
+                account: "0123456789abcdef0123456789abcdef".into(),
+                outdir: String::new(),
+            },
+        ];
+        assert!(validate_channels(&channels).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_chzzk_channel_id_on_save() {
+        let channels = vec![Channel {
+            platform: PlatformId::Chzzk,
+            enabled: true,
+            name: "CHZZK".into(),
+            account: "not-a-channel-id".into(),
+            outdir: String::new(),
+        }];
         assert!(validate_channels(&channels).is_err());
     }
 
