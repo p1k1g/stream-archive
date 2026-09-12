@@ -116,7 +116,11 @@ impl ChzzkLiveSession {
             quality: "best".into(),
             input: StreamInput::PluginUrl {
                 url: format!("https://chzzk.naver.com/live/{}", channel_id.trim()),
-                cookies: auth.streamlink_cookies(),
+                cookies: if live.adult {
+                    auth.streamlink_cookies()
+                } else {
+                    Vec::new()
+                },
             },
         })
     }
