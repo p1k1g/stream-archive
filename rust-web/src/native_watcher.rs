@@ -641,6 +641,9 @@ async fn login_for_auth_required(
         PlatformId::Soop => session
             .login(&config.soop_username, &config.soop_password)
             .await,
+        PlatformId::Chzzk => bail!(
+            "CHZZK 연령 제한 방송 인증은 NID_AUT/NID_SES 설정이 필요합니다."
+        ),
     }
 }
 
@@ -933,18 +936,9 @@ async fn start_recording(
         &live.title,
         &config.file_name_pattern,
     )?;
-    let stream_url = if stream
-        .playlist_url
-        .to_ascii_lowercase()
-        .starts_with("hls://")
-    {
-        stream.playlist_url.clone()
-    } else {
-        format!("hls://{}", stream.playlist_url)
-    };
 
     logs.push(format!(
-        "[RUST] stream resolved platform={} account={} hls={} cdn={} host={}",
+        "[RUST] stream resolved platform={} account={} quality={} cdn={} host={}",
         channel.platform, channel.account, stream.quality, stream.cdn, stream.host
     ))
     .await;
@@ -953,7 +947,7 @@ async fn start_recording(
         .start(
             &config.recorder,
             channel.platform,
-            &stream_url,
+            &stream.input,
             output_file,
             live.id.clone(),
             live.title.clone(),
@@ -1348,5 +1342,9 @@ mod tests {
     #[test]
     fn channel_key_namespaces_accounts_by_platform() {
         assert_eq!(channel_key(PlatformId::Soop, "User"), "SOOP:user");
+        assert_eq!(
+            channel_key(PlatformId::Chzzk, "ABCDEF0123456789ABCDEF0123456789"),
+            "CHZZK:abcdef0123456789abcdef0123456789"
+        );
     }
 }
