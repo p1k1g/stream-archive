@@ -3,7 +3,8 @@ use anyhow::{Context, Result, bail};
 use reqwest::{Client, header::COOKIE};
 use serde_json::Value;
 
-const LIVE_DETAIL_URL: &str = "https://api.chzzk.naver.com/service/v2/channels/{channel_id}/live-detail";
+const LIVE_DETAIL_URL: &str =
+    "https://api.chzzk.naver.com/service/v2/channels/{channel_id}/live-detail";
 
 #[derive(Debug, Clone)]
 pub struct ChzzkBroadcast {
@@ -107,10 +108,13 @@ impl ChzzkLiveSession {
             .unwrap_or("")
             .trim()
             .to_string();
-        let adult = content.get("adult").and_then(Value::as_bool).unwrap_or(false);
-        let playback_available = content
-            .get("livePlaybackJson")
-            .is_some_and(|value| !value.is_null() && value.as_str().is_some_and(|text| !text.is_empty()));
+        let adult = content
+            .get("adult")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let playback_available = content.get("livePlaybackJson").is_some_and(|value| {
+            !value.is_null() && value.as_str().is_some_and(|text| !text.is_empty())
+        });
 
         if adult && !playback_available {
             return Ok(ChzzkProbe::AuthRequired);
