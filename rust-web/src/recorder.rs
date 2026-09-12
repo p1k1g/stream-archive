@@ -2,7 +2,7 @@ use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
     store,
-    support::platform::PlatformId,
+    support::platform::{PlatformId, live::StreamInput},
 };
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -38,9 +38,18 @@ pub struct Recording {
     pub history_id: String,
     child: Child,
     output_dir: PathBuf,
+    cookie_file: Option<PathBuf>,
     last_size: u64,
     last_growth: Instant,
     last_monitor: Instant,
+}
+
+impl Drop for Recording {
+    fn drop(&mut self) {
+        if let Some(path) = self.cookie_file.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 pub enum RecordingPoll {
@@ -65,7 +74,7 @@ impl RecorderManager {
         &self,
         config: &RecorderConfig,
         platform: PlatformId,
-        stream_url: &str,
+        input: &StreamInput,
         output_file: PathBuf,
         bno: String,
         title: String,
@@ -85,13 +94,32 @@ impl RecorderManager {
             );
         }
 
+        let (stream_url, cookies) = match input {
+            StreamInput::DirectHls(url) => {
+                let url = if url.to_ascii_lowercase().starts_with("hls://") {
+                    url.clone()
+                } else {
+                    format!("hls://{url}")
+                };
+                (url, None)
+            }
+            StreamInput::PluginUrl { url, cookies } => (url.clone(), Some(cookies.as_slice())),
+        };
+        let cookie_file = match cookies {
+            Some(cookies) if !cookies.is_empty() => Some(write_cookie_file(cookies)?),
+            _ => None,
+        };
+
         let stream_timeout = config
             .stall_timeout
             .max(10)
             .saturating_add(config.monitor_interval.max(1));
         let mut command = Command::new(&config.streamlink);
+        if let Some(path) = cookie_file.as_ref() {
+            command.arg("--http-cookies-file").arg(path);
+        }
         command
-            .arg(stream_url)
+            .arg(&stream_url)
             .arg(&config.quality)
             .arg("--output")
             .arg(&output_file)
@@ -116,12 +144,20 @@ impl RecorderManager {
             }
         }
 
-        let mut child = command.spawn().with_context(|| {
-            format!(
-                "failed to start Streamlink: {}",
-                config.streamlink.display()
-            )
-        })?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                if let Some(path) = cookie_file.as_ref() {
+                    let _ = fs::remove_file(path);
+                }
+                return Err(err).with_context(|| {
+                    format!(
+                        "failed to start Streamlink: {}",
+                        config.streamlink.display()
+                    )
+                });
+            }
+        };
         let pid = child
             .id()
             .ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
@@ -180,6 +216,7 @@ impl RecorderManager {
             history_id,
             child,
             output_dir,
+            cookie_file,
             last_size: 0,
             last_growth: Instant::now(),
             last_monitor: Instant::now(),
@@ -278,6 +315,54 @@ impl RecorderManager {
     }
 }
 
+fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> Result<PathBuf> {
+    let path = std::env::temp_dir().join(format!(
+        "stream-archive-cookies-{}.txt",
+        Uuid::new_v4().simple()
+    ));
+    let mut text = String::from("# Netscape HTTP Cookie File\n");
+    for cookie in cookies {
+        if cookie.domain.contains(['\r', '\n', '\t'])
+            || cookie.name.contains(['\r', '\n', '\t'])
+            || cookie.value.contains(['\r', '\n', '\t'])
+        {
+            bail!("invalid cookie data");
+        }
+        let include_subdomains = if cookie.domain.starts_with('.') {
+            "TRUE"
+        } else {
+            "FALSE"
+        };
+        let secure = if cookie.secure { "TRUE" } else { "FALSE" };
+        text.push_str(&format!(
+            "{}\t{}\t/\t{}\t0\t{}\t{}\n",
+            cookie.domain, include_subdomains, secure, cookie.name, cookie.value
+        ));
+    }
+    fs::write(&path, text).with_context(|| format!("failed to create Streamlink cookie file {}", path.display()))?;
+    Ok(path)
+}
+
 pub fn free_gb(path: &Path) -> Result<f64> {
     Ok(fs2::available_space(path)? as f64 / GB as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::support::platform::live::HttpCookie;
+
+    #[test]
+    fn writes_netscape_cookie_file_without_exposing_cookie_in_arguments() {
+        let path = write_cookie_file(&[HttpCookie {
+            domain: ".naver.com".into(),
+            name: "NID_AUT".into(),
+            value: "secret-value".into(),
+            secure: true,
+        }])
+        .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(".naver.com\tTRUE\t/\tTRUE\t0\tNID_AUT\tsecret-value"));
+        let _ = fs::remove_file(path);
+    }
 }
