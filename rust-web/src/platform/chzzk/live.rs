@@ -1,6 +1,9 @@
-use super::{super::live::StreamInput, auth::ChzzkAuth};
+use super::{
+    super::live::StreamInput,
+    auth::{ChzzkAuth, ChzzkAuthState},
+};
 use anyhow::{Context, Result, bail};
-use reqwest::{Client, header::COOKIE};
+use reqwest::{Client, StatusCode, header::COOKIE};
 use serde_json::Value;
 
 const LIVE_DETAIL_URL: &str =
@@ -44,12 +47,27 @@ impl ChzzkLiveSession {
             request = request.header(COOKIE, cookie);
         }
         let response = request.send().await?;
-        if response.status().as_u16() == 404 {
+        if response.status() == StatusCode::NOT_FOUND {
             return Ok(ChzzkProbe::Offline);
         }
-        let value: Value = response.error_for_status()?.json().await?;
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            return auth_failure(&auth);
+        }
+        let value: Value = response
+            .error_for_status()
+            .context("CHZZK live-detail HTTP 오류")?
+            .json()
+            .await?;
         if value.get("code").and_then(Value::as_i64) != Some(200) {
-            return Ok(ChzzkProbe::Offline);
+            let code = value.get("code").and_then(Value::as_i64).unwrap_or_default();
+            let message = value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown response");
+            bail!("CHZZK live-detail API 오류: code={code} message={message}");
         }
         let Some(content) = value.get("content").filter(|value| !value.is_null()) else {
             return Ok(ChzzkProbe::Offline);
@@ -89,7 +107,7 @@ impl ChzzkLiveSession {
         });
 
         if adult && !playback_available {
-            return Ok(ChzzkProbe::AuthRequired);
+            return auth_failure(&auth);
         }
 
         Ok(ChzzkProbe::Live(ChzzkBroadcast {
@@ -107,10 +125,15 @@ impl ChzzkLiveSession {
     ) -> Result<ChzzkResolvedStream> {
         let auth = ChzzkAuth::load()?;
         if live.adult && !auth.configured() {
-            if auth.partial() {
-                bail!("CHZZK NID_AUT/NID_SES 중 하나만 설정되어 있습니다.");
+            match auth.state() {
+                ChzzkAuthState::Partial => {
+                    bail!("CHZZK NID_AUT/NID_SES 중 하나만 설정되어 있습니다.")
+                }
+                ChzzkAuthState::Missing => {
+                    bail!("CHZZK 연령 제한 방송에는 NID_AUT/NID_SES 인증이 필요합니다.")
+                }
+                ChzzkAuthState::Configured => unreachable!(),
             }
-            bail!("CHZZK 연령 제한 방송에는 NID_AUT/NID_SES 인증이 필요합니다.");
         }
         Ok(ChzzkResolvedStream {
             quality: "best".into(),
@@ -123,5 +146,38 @@ impl ChzzkLiveSession {
                 },
             },
         })
+    }
+}
+
+fn auth_failure(auth: &ChzzkAuth) -> Result<ChzzkProbe> {
+    match auth.state() {
+        ChzzkAuthState::Missing => Ok(ChzzkProbe::AuthRequired),
+        ChzzkAuthState::Partial => {
+            bail!("CHZZK NID_AUT/NID_SES 중 하나만 설정되어 있습니다. 두 값을 모두 다시 저장하세요.")
+        }
+        ChzzkAuthState::Configured => {
+            bail!("CHZZK 인증 쿠키가 만료되었거나 유효하지 않습니다. NID_AUT/NID_SES를 다시 저장하세요.")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_failure_distinguishes_missing_partial_and_invalid() {
+        assert!(matches!(
+            auth_failure(&ChzzkAuth::from_plain("", "")).unwrap(),
+            ChzzkProbe::AuthRequired
+        ));
+        let partial = auth_failure(&ChzzkAuth::from_plain("aut", ""))
+            .unwrap_err()
+            .to_string();
+        assert!(partial.contains("하나만 설정"));
+        let invalid = auth_failure(&ChzzkAuth::from_plain("aut", "ses"))
+            .unwrap_err()
+            .to_string();
+        assert!(invalid.contains("만료되었거나 유효하지"));
     }
 }
