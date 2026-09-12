@@ -59,6 +59,8 @@ Assert-Match $recorder 'StreamInput::PluginUrl' 'Recorder does not accept provid
 Assert-Match $recorder '"--can-handle-url"' 'Streamlink plugin preflight is missing.'
 Assert-Match $recorder '"--http-cookies-file"' 'Streamlink cookie-file transport is missing.'
 Assert-Match $recorder 'Netscape HTTP Cookie File' 'Netscape cookie-file generation is missing.'
+Assert-Match $recorder 'COOKIE_FILE_EXPIRES_UNIX' 'CHZZK Netscape cookie entries must use a non-expired timestamp.'
+Assert-Match $recorder '4_102_444_800' 'CHZZK Netscape cookie expiry must stay in the future.'
 Assert-NotMatch $recorder '--http-cookie\s+NID_' 'CHZZK cookie values must not be exposed as direct process arguments.'
 
 # CHZZK-only operation must not depend on SOOP Worker credentials.
