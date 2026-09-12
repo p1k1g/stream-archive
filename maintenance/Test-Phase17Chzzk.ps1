@@ -69,7 +69,7 @@ Assert-Match $watcher 'channels_require_soop\(&channels\)' 'Watcher startup does
 
 # API-side validation and user-facing platform selection must remain connected.
 Assert-Match $primary 'provider\(channel\.platform\)\s*\.validate_account' 'Server-side platform channel validation is missing.'
-Assert-Match $app '<option value=\\"CHZZK\\">CHZZK</option>' 'Channel UI CHZZK selector is missing.'
+Assert-Match $app '<option value="CHZZK">CHZZK</option>' 'Channel UI CHZZK selector is missing.'
 Assert-Match $app 'saveChzzkSecrets' 'CHZZK settings save flow is missing.'
 Assert-Match $app 'CHZZK_NID_AUT' 'CHZZK NID_AUT settings UI binding is missing.'
 Assert-Match $app 'CHZZK_NID_SES' 'CHZZK NID_SES settings UI binding is missing.'
