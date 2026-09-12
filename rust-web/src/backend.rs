@@ -70,7 +70,7 @@ impl LogBuffer {
     pub fn new() -> Self {
         let (events, _) = broadcast::channel(128);
         Self {
-            inner: Arc::new(RwLock::new(VecDeque::with_capacity(LOG_CAPACITY)),
+            inner: Arc::new(RwLock::new(VecDeque::with_capacity(LOG_CAPACITY))),
             events,
         }
     }
