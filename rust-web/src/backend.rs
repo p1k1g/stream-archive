@@ -50,6 +50,7 @@ pub const SAFE_SETTING_KEYS: &[&str] = &[
     "BACKUP_INTERVAL_HOURS",
     "BACKUP_KEEP_COUNT",
     "BACKUP_RETENTION_DAYS",
+    "BACKUP_DIR",
 ];
 
 const LOG_CAPACITY: usize = 400;

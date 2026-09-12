@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 const DEFAULT_INTERVAL_HOURS: u64 = 24;
 const DEFAULT_KEEP_COUNT: usize = 10;
-const DEFAULT_RETENTION_DAYS: i64 = 30;
+const DEFAULT_RETENTION_DAYS: i64 = 3;
 const AUTO_CHECK_INTERVAL: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,28 +58,46 @@ pub struct BackupInfo {
 #[derive(Clone)]
 pub struct BackupManager {
     store: Store,
-    backup_dir: Arc<PathBuf>,
+    default_backup_dir: Arc<PathBuf>,
+    env_override: bool,
     operation: Arc<Mutex<()>>,
 }
 
 impl BackupManager {
     pub fn open(store: Store, backend_dir: &Path) -> Result<Self> {
-        let backup_dir = resolve_backup_dir(backend_dir)?;
-        fs::create_dir_all(&backup_dir).with_context(|| {
-            format!("failed to create backup directory {}", backup_dir.display())
-        })?;
+        let env_override = env::var("SOOP_BACKUP_DIR")
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty());
+        let default_backup_dir = resolve_backup_dir(backend_dir)?;
         let manager = Self {
             store,
-            backup_dir: Arc::new(backup_dir),
+            default_backup_dir: Arc::new(default_backup_dir),
+            env_override,
             operation: Arc::new(Mutex::new(())),
         };
         manager.ensure_policy_defaults()?;
+        let backup_dir = manager.backup_dir();
+        fs::create_dir_all(&backup_dir).with_context(|| {
+            format!("failed to create backup directory {}", backup_dir.display())
+        })?;
         manager.migrate_legacy_backups()?;
         Ok(manager)
     }
 
-    pub fn backup_dir(&self) -> &Path {
-        self.backup_dir.as_path()
+    pub fn backup_dir(&self) -> PathBuf {
+        if !self.env_override {
+            if let Ok(Some(value)) = self.store.setting_value("BACKUP_DIR") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return PathBuf::from(value);
+                }
+            }
+        }
+        self.default_backup_dir.as_ref().clone()
+    }
+
+    pub fn backup_dir_editable(&self) -> bool {
+        !self.env_override
     }
 
     pub(crate) fn ensure_policy_defaults(&self) -> Result<()> {
@@ -88,7 +106,8 @@ impl BackupManager {
             ("BACKUP_ENABLED", "Y"),
             ("BACKUP_INTERVAL_HOURS", "24"),
             ("BACKUP_KEEP_COUNT", "10"),
-            ("BACKUP_RETENTION_DAYS", "30"),
+            ("BACKUP_RETENTION_DAYS", "3"),
+            ("BACKUP_DIR", ""),
         ] {
             if self.store.setting_value(key)?.is_none() {
                 defaults.insert(key.to_string(), value.to_string());
@@ -133,7 +152,8 @@ impl BackupManager {
             return Ok(0);
         };
         let legacy = data_dir.join("backups");
-        if !legacy.is_dir() || legacy == self.backup_dir.as_path() {
+        let backup_dir = self.backup_dir();
+        if !legacy.is_dir() || legacy == backup_dir {
             return Ok(0);
         }
         let mut moved = 0;
@@ -150,7 +170,7 @@ impl BackupManager {
             if !is_backup_artifact_name(&name_text) {
                 continue;
             }
-            let target = self.backup_dir.join(name);
+            let target = backup_dir.join(name);
             if target.exists() {
                 continue;
             }
@@ -231,10 +251,11 @@ impl BackupManager {
     }
 
     fn create_locked_with_cleanup(&self, kind: &str, cleanup: bool) -> Result<BackupInfo> {
-        fs::create_dir_all(self.backup_dir.as_path())?;
+        let backup_dir = self.backup_dir();
+        fs::create_dir_all(&backup_dir)?;
         let stamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
         let file_name = format!("soop_{kind}_{stamp}.db");
-        let path = self.backup_dir.join(&file_name);
+        let path = backup_dir.join(&file_name);
         self.store.backup_to(&path)?;
         verify_sqlite(&path)?;
         let sha256 = sha256_file(&path)?;
@@ -266,9 +287,10 @@ impl BackupManager {
     }
 
     fn list_locked(&self) -> Result<Vec<BackupInfo>> {
-        fs::create_dir_all(self.backup_dir.as_path())?;
+        let backup_dir = self.backup_dir();
+        fs::create_dir_all(&backup_dir)?;
         let mut items = Vec::new();
-        for entry in fs::read_dir(self.backup_dir.as_path())? {
+        for entry in fs::read_dir(&backup_dir)? {
             let path = entry?.path();
             if !is_backup_database_name(&path) {
                 continue;
@@ -286,7 +308,9 @@ impl BackupManager {
     }
 
     fn cleanup_locked(&self, policy: &BackupPolicy) -> Result<usize> {
-        let mut files: Vec<PathBuf> = fs::read_dir(self.backup_dir.as_path())?
+        let backup_dir = self.backup_dir();
+        fs::create_dir_all(&backup_dir)?;
+        let mut files: Vec<PathBuf> = fs::read_dir(&backup_dir)?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| is_owned_backup(p))
             .collect();
@@ -328,7 +352,7 @@ impl BackupManager {
         {
             bail!("invalid backup file name");
         }
-        let path = self.backup_dir.join(trimmed);
+        let path = self.backup_dir().join(trimmed);
         if !path.is_file() {
             bail!("backup not found: {trimmed}")
         }
@@ -366,9 +390,13 @@ pub(crate) async fn api_list(
     authorize(&headers, &state)?;
     let policy = state.backups.policy().map_err(internal_error)?;
     let backups = state.backups.list().await.map_err(internal_error)?;
-    Ok(Json(
-        json!({"directory": state.backups.backup_dir().display().to_string(), "policy": policy, "backups": backups}),
-    ))
+    let directory = state.backups.backup_dir();
+    Ok(Json(json!({
+        "directory": directory.display().to_string(),
+        "directory_editable": state.backups.backup_dir_editable(),
+        "policy": policy,
+        "backups": backups
+    })))
 }
 
 pub(crate) async fn api_create(
@@ -577,6 +605,49 @@ mod tests {
         fs::create_dir_all(&backend).unwrap();
         let resolved = resolve_backup_dir(&backend).unwrap();
         assert_eq!(resolved, dir.path().join("soop-recorder-backups"));
+    }
+
+    #[test]
+    fn default_backup_retention_is_three_days() {
+        let dir = tempdir().unwrap();
+        let app = dir.path().join("soop-recorder");
+        let backend = app.join("backend");
+        fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(app.join("data").join("soop.db")).unwrap();
+        let manager = BackupManager::open(store, &backend).unwrap();
+        assert_eq!(manager.policy().unwrap().retention_days, 3);
+    }
+
+    #[test]
+    fn persisted_backup_directory_updates_without_restart() {
+        let dir = tempdir().unwrap();
+        let app = dir.path().join("soop-recorder");
+        let backend = app.join("backend");
+        fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(app.join("data").join("soop.db")).unwrap();
+        let manager = BackupManager::open(store.clone(), &backend).unwrap();
+        let first = dir.path().join("backup-a");
+        let second = dir.path().join("backup-b");
+        store
+            .sync_settings(
+                &std::collections::BTreeMap::from([(
+                    "BACKUP_DIR".into(),
+                    first.display().to_string(),
+                )]),
+                "test",
+            )
+            .unwrap();
+        assert_eq!(manager.backup_dir(), first);
+        store
+            .sync_settings(
+                &std::collections::BTreeMap::from([(
+                    "BACKUP_DIR".into(),
+                    second.display().to_string(),
+                )]),
+                "test",
+            )
+            .unwrap();
+        assert_eq!(manager.backup_dir(), second);
     }
 
     #[test]
