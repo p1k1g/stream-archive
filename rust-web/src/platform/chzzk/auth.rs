@@ -20,6 +20,9 @@ pub struct ChzzkAuth {
 }
 
 impl ChzzkAuth {
+    // Read through the SQLite cache on each probe/resolve instead of retaining
+    // plaintext cookies in a long-lived provider session. This keeps auth edits
+    // hot-reloadable and limits plaintext lifetime to the current operation.
     pub fn load() -> Result<Self> {
         let db = store::global()?;
         let nid_aut = unprotect_secret(
