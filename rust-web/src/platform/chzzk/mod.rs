@@ -88,7 +88,15 @@ mod tests {
     #[test]
     fn validates_channel_id_shape() {
         assert!(CHZZK.validate_account(CHANNEL).is_ok());
+        assert!(CHZZK
+            .validate_account("0123456789ABCDEF0123456789ABCDEF")
+            .is_ok());
+        assert!(CHZZK.validate_account(&format!(" {CHANNEL} ")).is_ok());
         assert!(CHZZK.validate_account("not-a-channel-id").is_err());
+        assert!(CHZZK.validate_account("0123456789abcdef").is_err());
+        assert!(CHZZK
+            .validate_account("0123456789abcdef0123456789abcdeg")
+            .is_err());
     }
 
     #[test]
@@ -104,5 +112,17 @@ mod tests {
             CHZZK.parse_channel_name(CHANNEL, &value).unwrap(),
             "테스트 채널"
         );
+    }
+
+    #[test]
+    fn rejects_mismatched_channel_lookup_response() {
+        let value = serde_json::json!({
+            "code": 200,
+            "content": {
+                "channelId": "ffffffffffffffffffffffffffffffff",
+                "channelName": "다른 채널"
+            }
+        });
+        assert!(CHZZK.parse_channel_name(CHANNEL, &value).is_err());
     }
 }
