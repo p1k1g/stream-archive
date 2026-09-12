@@ -28,7 +28,10 @@ pub struct HttpCookie {
 #[derive(Debug, Clone)]
 pub enum StreamInput {
     DirectHls(String),
-    PluginUrl { url: String, cookies: Vec<HttpCookie> },
+    PluginUrl {
+        url: String,
+        cookies: Vec<HttpCookie>,
+    },
 }
 
 #[derive(Debug, Clone)]
