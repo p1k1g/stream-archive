@@ -233,7 +233,10 @@ pub fn read_channels(path: &Path) -> Result<Vec<Channel>> {
 }
 
 pub fn parse_channels(content: &str) -> Result<Vec<Channel>> {
-    let normalized = content.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+    let normalized = content
+        .trim_start_matches('\u{feff}')
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
     let mut channels = Vec::new();
     for (index, raw) in normalized.lines().enumerate() {
         let line = raw.trim();
@@ -352,6 +355,19 @@ mod tests {
         assert_eq!(channels[0].platform, PlatformId::Soop);
         assert!(channels[0].enabled);
         assert!(!channels[1].enabled);
+    }
+
+    #[test]
+    fn parses_legacy_channel_line_endings() {
+        for separator in ["\n", "\r\n", "\r"] {
+            let content = format!(
+                "\u{feff}Y|Alpha|alpha|C:\\A{separator}N|Beta|beta|C:\\B{separator}"
+            );
+            let channels = parse_channels(&content).unwrap();
+            assert_eq!(channels.len(), 2, "separator={separator:?}");
+            assert_eq!(channels[0].name, "Alpha");
+            assert_eq!(channels[1].name, "Beta");
+        }
     }
 
     #[test]
