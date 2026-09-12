@@ -41,6 +41,10 @@ jobs:
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./maintenance/Test-Phase15Architecture.ps1
 
+      - name: Phase 17 CHZZK guard
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./maintenance/Test-Phase17Chzzk.ps1
+
       - name: Owned process lifecycle guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./maintenance/Test-ProcessLifecycle.ps1
@@ -71,11 +75,11 @@ jobs:
           }
 
       # The repository contains formatting drift in older untouched modules. Keep
-      # the new/common provider boundary strict without turning architecture PRs
-      # into a whole-repository whitespace rewrite.
+      # the common/provider boundary strict without turning architecture PRs into
+      # a whole-repository whitespace rewrite.
       - name: Rust format check (platform provider boundary)
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: rustfmt --edition 2024 --check rust-web/src/platform/mod.rs rust-web/src/platform/live.rs rust-web/src/platform/vod.rs rust-web/src/platform/soop/mod.rs rust-web/src/support.rs
+        run: rustfmt --edition 2024 --check rust-web/src/platform/mod.rs rust-web/src/platform/live.rs rust-web/src/platform/vod.rs rust-web/src/platform/soop/mod.rs rust-web/src/platform/chzzk/mod.rs rust-web/src/platform/chzzk/auth.rs rust-web/src/platform/chzzk/live.rs rust-web/src/support.rs
 
       - name: Rust unit tests
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
