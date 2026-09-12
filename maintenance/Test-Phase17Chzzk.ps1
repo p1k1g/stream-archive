@@ -28,6 +28,7 @@ $primary = Read-RepoFile 'rust-web/src/primary_config.rs'
 $backend = Read-RepoFile 'rust-web/src/backend.rs'
 $app = Read-RepoFile 'rust-web/web/app.js'
 $phase8 = Read-RepoFile 'rust-web/web/phase8.js'
+$phase14 = Read-RepoFile 'rust-web/web/phase14.js'
 
 # Provider registration / Phase 17 scope boundary.
 Assert-Match $platform 'Chzzk' 'PlatformId::Chzzk registration is missing.'
@@ -77,6 +78,17 @@ Assert-Match $watcher 'scoped_channel_command_targets_composite_identity' 'Compo
 Assert-Match $app 'function channelTarget\(platform,account\)' 'Runtime controls do not construct a platform-scoped channel target.'
 Assert-Match $app 'channelAction\(platformId,c\.account' 'Runtime action buttons are not passing the platform.'
 Assert-Match $app 'channelPassword\(platformId,c\.account\)' 'Runtime password control is not passing the platform.'
+
+# Browser LIVE notification state must use the same composite identity.
+Assert-Match $phase14 'function p14LiveKey\(c,index=0\)' 'LIVE notification composite-key helper is missing.'
+Assert-Match $phase14 'c\?\.platform\|\|''SOOP''' 'LIVE notification key is not namespaced by platform.'
+Assert-Match $phase14 'p14LiveStates\.set\(p14LiveKey\(' 'Initial LIVE notification state is still keyed only by account.'
+Assert-Match $phase14 'const key=p14LiveKey\(' 'LIVE notification transitions are still keyed only by account.'
+
+# Legacy channel-file migration must preserve LF, CRLF, and lone-CR compatibility.
+Assert-Match $backend "\.replace\('\\r', \"\\n\"\)" 'Legacy lone-CR channel line ending normalization is missing.'
+Assert-Match $backend 'fn parses_legacy_channel_line_endings\(\)' 'Legacy channel line-ending regression test is missing.'
+Assert-Match $backend 'for separator in \["\\n", "\\r\\n", "\\r"\]' 'Legacy channel parser test does not cover LF/CRLF/lone-CR.'
 
 # API-side validation and user-facing platform selection must remain connected.
 Assert-Match $primary 'provider\(channel\.platform\)\s*\.validate_account' 'Server-side platform channel validation is missing.'
