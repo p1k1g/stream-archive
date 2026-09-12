@@ -7,9 +7,11 @@ use crate::{
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -59,14 +61,24 @@ pub enum RecordingPoll {
     Stalled,
 }
 
+#[derive(Default)]
+struct PreflightCache {
+    plugin_urls: HashSet<String>,
+    cookie_file_checked: bool,
+}
+
 #[derive(Clone)]
 pub struct RecorderManager {
     logs: LogBuffer,
+    preflight: Arc<Mutex<PreflightCache>>,
 }
 
 impl RecorderManager {
     pub fn new(logs: LogBuffer) -> Self {
-        Self { logs }
+        Self {
+            logs,
+            preflight: Arc::new(Mutex::new(PreflightCache::default())),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -104,7 +116,8 @@ impl RecorderManager {
                 (url, None)
             }
             StreamInput::PluginUrl { url, cookies } => {
-                preflight_plugin_input(config, url, !cookies.is_empty()).await?;
+                self.preflight_plugin_input(config, url, !cookies.is_empty())
+                    .await?;
                 (url.clone(), Some(cookies.as_slice()))
             }
         };
@@ -316,48 +329,86 @@ impl RecorderManager {
             ))
             .await;
     }
+
+    async fn preflight_plugin_input(
+        &self,
+        config: &RecorderConfig,
+        url: &str,
+        needs_cookie_file: bool,
+    ) -> Result<()> {
+        let cache_key = plugin_cache_key(url);
+        let (plugin_checked, cookie_checked) = {
+            let cache = self
+                .preflight
+                .lock()
+                .map_err(|_| anyhow!("Streamlink preflight cache lock poisoned"))?;
+            (
+                cache.plugin_urls.contains(&cache_key),
+                cache.cookie_file_checked,
+            )
+        };
+
+        if !plugin_checked {
+            let mut can_handle = Command::new(&config.streamlink);
+            can_handle
+                .arg("--can-handle-url")
+                .arg(url)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if let Some(parent) = config.streamlink.parent() {
+                if parent.is_dir() {
+                    can_handle.current_dir(parent);
+                }
+            }
+            let status = can_handle.status().await.with_context(|| {
+                format!(
+                    "failed to inspect Streamlink plugin support: {}",
+                    config.streamlink.display()
+                )
+            })?;
+            if !status.success() {
+                bail!("현재 Streamlink이 이 플랫폼 URL을 처리할 수 없습니다. Streamlink을 최신 버전으로 업데이트하세요: {url}");
+            }
+            self.preflight
+                .lock()
+                .map_err(|_| anyhow!("Streamlink preflight cache lock poisoned"))?
+                .plugin_urls
+                .insert(cache_key);
+        }
+
+        if needs_cookie_file && !cookie_checked {
+            let mut help = Command::new(&config.streamlink);
+            help.arg("--help").stdin(Stdio::null());
+            if let Some(parent) = config.streamlink.parent() {
+                if parent.is_dir() {
+                    help.current_dir(parent);
+                }
+            }
+            let output = help.output().await.with_context(|| {
+                format!(
+                    "failed to inspect Streamlink cookie-file support: {}",
+                    config.streamlink.display()
+                )
+            })?;
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            if !text.contains("--http-cookies-file") {
+                bail!("CHZZK 제한 방송 인증에는 --http-cookies-file을 지원하는 Streamlink 8.2 이상이 필요합니다.");
+            }
+            self.preflight
+                .lock()
+                .map_err(|_| anyhow!("Streamlink preflight cache lock poisoned"))?
+                .cookie_file_checked = true;
+        }
+        Ok(())
+    }
 }
 
-async fn preflight_plugin_input(config: &RecorderConfig, url: &str, needs_cookie_file: bool) -> Result<()> {
-    let mut can_handle = Command::new(&config.streamlink);
-    can_handle
-        .arg("--can-handle-url")
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Some(parent) = config.streamlink.parent() {
-        if parent.is_dir() {
-            can_handle.current_dir(parent);
-        }
-    }
-    let status = can_handle
-        .status()
-        .await
-        .with_context(|| format!("failed to inspect Streamlink plugin support: {}", config.streamlink.display()))?;
-    if !status.success() {
-        bail!("현재 Streamlink이 이 플랫폼 URL을 처리할 수 없습니다. Streamlink을 최신 버전으로 업데이트하세요: {url}");
-    }
-
-    if needs_cookie_file {
-        let mut help = Command::new(&config.streamlink);
-        help.arg("--help").stdin(Stdio::null());
-        if let Some(parent) = config.streamlink.parent() {
-            if parent.is_dir() {
-                help.current_dir(parent);
-            }
-        }
-        let output = help
-            .output()
-            .await
-            .with_context(|| format!("failed to inspect Streamlink cookie-file support: {}", config.streamlink.display()))?;
-        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
-        if !text.contains("--http-cookies-file") {
-            bail!("CHZZK 제한 방송 인증에는 --http-cookies-file을 지원하는 Streamlink 8.2 이상이 필요합니다.");
-        }
-    }
-    Ok(())
+fn plugin_cache_key(url: &str) -> String {
+    url.split_once("/live/")
+        .map(|(base, _)| format!("{base}/live/*"))
+        .unwrap_or_else(|| url.to_string())
 }
 
 fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> Result<PathBuf> {
@@ -410,5 +461,17 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains(".naver.com\tTRUE\t/\tTRUE\t0\tNID_AUT\tsecret-value"));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn plugin_preflight_cache_groups_chzzk_channel_urls() {
+        assert_eq!(
+            plugin_cache_key("https://chzzk.naver.com/live/abc"),
+            "https://chzzk.naver.com/live/*"
+        );
+        assert_eq!(
+            plugin_cache_key("https://chzzk.naver.com/live/def"),
+            "https://chzzk.naver.com/live/*"
+        );
     }
 }
