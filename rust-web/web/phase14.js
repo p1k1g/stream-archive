@@ -42,12 +42,17 @@ function p14ForceTest(){
   try{new Notification('Stream Archive 테스트',{body:'LIVE / VOD 브라우저 알림이 정상적으로 동작합니다.',tag:'stream-archive-phase14-test'});return true}catch(e){console.warn('Phase14 test notification failed',e);return false}
 }
 function p14Name(c){return c?.name||c?.account||'LIVE 채널'}
+function p14LiveKey(c,index=0){
+  const platform=String(c?.platform||'SOOP').trim().toUpperCase()||'SOOP';
+  const identity=c?.account||c?.name||String(index);
+  return `${platform}:${identity}`;
+}
 function p14TrackLive(watcher){
   const channels=watcher?.channels||[];
-  if(!p14LiveSeen){channels.forEach(c=>p14LiveStates.set(c.account,c.status));p14LiveSeen=true;return}
+  if(!p14LiveSeen){channels.forEach((c,index)=>p14LiveStates.set(p14LiveKey(c,index),c.status));p14LiveSeen=true;return}
   const next=new Map();
   for(const c of channels){
-    const key=c.account||c.name||String(next.size);
+    const key=p14LiveKey(c,next.size);
     const prev=p14LiveStates.get(key);
     const now=c.status;
     next.set(key,now);
