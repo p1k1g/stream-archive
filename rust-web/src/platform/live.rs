@@ -31,6 +31,7 @@ pub enum StreamInput {
     PluginUrl {
         url: String,
         cookies: Vec<HttpCookie>,
+        start_at_zero: bool,
     },
 }
 
@@ -72,6 +73,13 @@ impl LiveSession {
         match self {
             Self::Soop(session) => session.login(username, password).await,
             Self::Chzzk(_) => bail!("CHZZK는 ID/PW 로그인을 사용하지 않습니다."),
+        }
+    }
+
+    pub async fn recover_auth(&mut self, username: &str, password: &str) -> Result<String> {
+        match self {
+            Self::Soop(session) => session.login(username, password).await,
+            Self::Chzzk(session) => session.recover_auth(),
         }
     }
 
