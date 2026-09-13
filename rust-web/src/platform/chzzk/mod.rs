@@ -153,8 +153,6 @@ mod tests {
         assert!(
             !CHZZK.accepts_vod_url(&Url::parse("https://chzzk.naver.com/live/6325166").unwrap())
         );
-        assert!(!CHZZK.accepts_vod_url(
-            &Url::parse("https://example.com/video/6325166").unwrap()
-        ));
+        assert!(!CHZZK.accepts_vod_url(&Url::parse("https://example.com/video/6325166").unwrap()));
     }
 }
