@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - "rust-web/src/main.rs"
       - "rust-web/src/platform/**"
       - "rust-web/src/vod.rs"
       - "rust-web/src/vod_queue.rs"
