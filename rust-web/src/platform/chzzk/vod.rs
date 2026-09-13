@@ -9,11 +9,13 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Datelike, Local, Utc};
+use fs2::FileExt;
 use regex::Regex;
 use serde_json::Value;
 use std::{
     collections::{BTreeSet, VecDeque},
-    env, fs,
+    env,
+    fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     process::{Command as StdCommand, ExitStatus, Stdio},
     sync::{
@@ -35,6 +37,7 @@ const TERMINAL_CACHE_LIMIT: usize = 32;
 const COOKIE_FILE_EXPIRES_UNIX: i64 = 4_102_444_800; // 2100-01-01 UTC
 const PROGRESS_PREFIX: &str = "__CHZZK_PROGRESS__";
 const COOKIE_FILE_NAME: &str = "chzzk-cookies.txt";
+const JOB_LOCK_FILE_NAME: &str = "owner.lock";
 const MEDIA_FILE_NAME: &str = "media.mp4";
 
 #[derive(Debug, Clone)]
@@ -58,10 +61,21 @@ struct JobRuntime {
     cancel: Arc<AtomicBool>,
 }
 
-struct JobDirGuard(PathBuf);
+struct JobDirGuard {
+    path: PathBuf,
+    lock: File,
+}
+
+impl JobDirGuard {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 impl Drop for JobDirGuard {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = FileExt::unlock(&self.lock);
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 
@@ -229,8 +243,9 @@ async fn run_analysis(
     set_status(status, "ANALYZING", "CHZZK VOD 분석 중…").await;
 
     let tools = resolve_tools(backend, &req.yt_dlp_path, &req.ffmpeg_path)?;
-    let job_dir = job_dir(backend)?;
-    let _job_guard = JobDirGuard(job_dir.clone());
+    let job_guard = job_dir(backend)?;
+    let job_dir = job_guard.path().to_path_buf();
+    let _job_guard = job_guard;
     let cookie_file = chzzk_cookie_file(&job_dir)?;
     let metadata =
         load_metadata(&tools, &req.vod_url, cookie_file.as_deref(), cancel, logs).await?;
@@ -285,8 +300,9 @@ async fn run_download(
     let output_dir = PathBuf::from(req.output_directory.trim());
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("VOD 출력 폴더 생성 실패: {}", output_dir.display()))?;
-    let job_dir = job_dir(backend)?;
-    let _job_guard = JobDirGuard(job_dir.clone());
+    let job_guard = job_dir(backend)?;
+    let job_dir = job_guard.path().to_path_buf();
+    let _job_guard = job_guard;
     let cookie_file = chzzk_cookie_file(&job_dir)?;
 
     set_status(status, "ANALYZING", "CHZZK VOD 메타데이터 확인 중…").await;
@@ -821,22 +837,83 @@ fn cleanup_stale_job_dirs(backend: &Path) -> Result<()> {
             continue;
         }
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with("chzzk-") {
-            let _ = fs::remove_dir_all(entry.path());
+        if !name.to_string_lossy().starts_with("chzzk-") {
+            continue;
+        }
+        let dir = entry.path();
+        let lock_path = dir.join(JOB_LOCK_FILE_NAME);
+        if !lock_path.is_file() {
+            let _ = fs::remove_dir_all(&dir);
+            continue;
+        }
+        let lock = match OpenOptions::new().read(true).write(true).open(&lock_path) {
+            Ok(lock) => lock,
+            Err(_) => continue,
+        };
+        match lock.try_lock_exclusive() {
+            Ok(()) => {
+                let _ = FileExt::unlock(&lock);
+                drop(lock);
+                let _ = fs::remove_dir_all(&dir);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(_) => {}
         }
     }
     Ok(())
 }
 
-fn job_dir(backend: &Path) -> Result<PathBuf> {
+fn job_dir(backend: &Path) -> Result<JobDirGuard> {
     let root = vod_job_root(backend);
     fs::create_dir_all(&root)
         .with_context(|| format!("CHZZK VOD 임시 루트 생성 실패: {}", root.display()))?;
-    let dir = root.join(format!("chzzk-{}", Uuid::new_v4().simple()));
-    fs::create_dir(&dir)
-        .with_context(|| format!("CHZZK VOD 임시 폴더 생성 실패: {}", dir.display()))?;
-    restrict_job_dir(&dir)?;
-    Ok(dir)
+    let id = Uuid::new_v4().simple().to_string();
+    let preparing = root.join(format!(".chzzk-creating-{id}"));
+    let dir = root.join(format!("chzzk-{id}"));
+    fs::create_dir(&preparing)
+        .with_context(|| format!("CHZZK VOD 임시 폴더 생성 실패: {}", preparing.display()))?;
+    if let Err(err) = restrict_job_dir(&preparing) {
+        let _ = fs::remove_dir_all(&preparing);
+        return Err(err);
+    }
+    let lock_path = preparing.join(JOB_LOCK_FILE_NAME);
+    let lock = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(lock) => lock,
+        Err(err) => {
+            let _ = fs::remove_dir_all(&preparing);
+            return Err(err).with_context(|| {
+                format!("CHZZK VOD ownership lock 생성 실패: {}", lock_path.display())
+            });
+        }
+    };
+    if let Err(err) = restrict_cookie_file(&lock_path) {
+        drop(lock);
+        let _ = fs::remove_dir_all(&preparing);
+        return Err(err);
+    }
+    if let Err(err) = lock.lock_exclusive() {
+        drop(lock);
+        let _ = fs::remove_dir_all(&preparing);
+        return Err(err).context("CHZZK VOD ownership lock 획득 실패");
+    }
+    if let Err(err) = fs::rename(&preparing, &dir) {
+        let _ = FileExt::unlock(&lock);
+        drop(lock);
+        let _ = fs::remove_dir_all(&preparing);
+        return Err(err).with_context(|| {
+            format!(
+                "CHZZK VOD 임시 폴더 publish 실패: {} -> {}",
+                preparing.display(),
+                dir.display()
+            )
+        });
+    }
+    Ok(JobDirGuard { path: dir, lock })
 }
 
 #[cfg(windows)]
@@ -938,6 +1015,60 @@ fn find_finished_output(expected: &Path) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("yt-dlp 완료 파일을 찾지 못했습니다: {}", expected.display()))
 }
 
+fn finalizing_path(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_os_string();
+    name.push(format!(".{}.finalizing", Uuid::new_v4().simple()));
+    PathBuf::from(name)
+}
+
+fn publish_by_copy(source: &Path, target: &Path, rename_error: &std::io::Error) -> Result<()> {
+    if target.exists() {
+        bail!(
+            "CHZZK VOD 최종 파일이 이미 존재합니다: {}",
+            target.display()
+        );
+    }
+    let temp = finalizing_path(target);
+    let publish = (|| -> Result<()> {
+        fs::copy(source, &temp).with_context(|| {
+            format!(
+                "CHZZK VOD destination 임시 복사 실패: {} -> {}",
+                source.display(),
+                temp.display()
+            )
+        })?;
+        File::open(&temp)
+            .and_then(|file| file.sync_all())
+            .with_context(|| format!("CHZZK VOD destination 임시 파일 sync 실패: {}", temp.display()))?;
+        if target.exists() {
+            bail!(
+                "CHZZK VOD 최종 파일이 복사 중 생성되었습니다: {}",
+                target.display()
+            );
+        }
+        fs::rename(&temp, target).with_context(|| {
+            format!(
+                "CHZZK VOD destination 임시 파일 publish 실패: {} -> {}",
+                temp.display(),
+                target.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if let Err(err) = publish {
+        let _ = fs::remove_file(&temp);
+        return Err(err).with_context(|| {
+            format!(
+                "CHZZK VOD 최종 파일 이동 실패 (rename: {rename_error}): {} -> {}",
+                source.display(),
+                target.display()
+            )
+        });
+    }
+    let _ = fs::remove_file(source);
+    Ok(())
+}
+
 fn finalize_output(source: &Path, target: &Path) -> Result<()> {
     if target.exists() {
         bail!(
@@ -945,23 +1076,8 @@ fn finalize_output(source: &Path, target: &Path) -> Result<()> {
             target.display()
         );
     }
-    match fs::rename(source, target) {
-        Ok(()) => {}
-        Err(rename_error) => {
-            if let Err(copy_error) = fs::copy(source, target) {
-                let _ = fs::remove_file(target);
-                return Err(copy_error).with_context(|| {
-                    format!(
-                        "CHZZK VOD 최종 파일 이동 실패 (rename: {rename_error}): {} -> {}",
-                        source.display(),
-                        target.display()
-                    )
-                });
-            }
-            fs::remove_file(source).with_context(|| {
-                format!("CHZZK VOD staging 파일 정리 실패: {}", source.display())
-            })?;
-        }
+    if let Err(rename_error) = fs::rename(source, target) {
+        publish_by_copy(source, target, &rename_error)?;
     }
     if !target.is_file() {
         bail!("CHZZK VOD 최종 파일 생성 확인 실패: {}", target.display());
@@ -974,9 +1090,9 @@ fn cleanup_job_media(job_dir: &Path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_file()
-                || path
-                    .file_name()
-                    .is_some_and(|name| name == COOKIE_FILE_NAME)
+                || path.file_name().is_some_and(|name| {
+                    name == COOKIE_FILE_NAME || name == JOB_LOCK_FILE_NAME
+                })
             {
                 continue;
             }
@@ -1215,17 +1331,83 @@ mod tests {
     }
 
     #[test]
+    fn active_job_lock_survives_scavenging_until_release() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = vod_job_root(temp.path());
+        let active = root.join("chzzk-active");
+        fs::create_dir_all(&active).unwrap();
+        let lock_path = active.join(JOB_LOCK_FILE_NAME);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+
+        cleanup_stale_job_dirs(temp.path()).unwrap();
+        assert!(active.exists());
+
+        FileExt::unlock(&lock).unwrap();
+        drop(lock);
+        cleanup_stale_job_dirs(temp.path()).unwrap();
+        assert!(!active.exists());
+    }
+
+    #[test]
     fn cleanup_is_scoped_to_unique_job_directory() {
         let temp = tempfile::tempdir().unwrap();
         let cookie = temp.path().join(COOKIE_FILE_NAME);
+        let lock = temp.path().join(JOB_LOCK_FILE_NAME);
         let media = temp.path().join(MEDIA_FILE_NAME);
         fs::write(&cookie, "cookie").unwrap();
+        fs::write(&lock, "lock").unwrap();
         fs::write(&media, "media").unwrap();
         fs::write(temp.path().join("media.mp4.part-Frag1.part"), "part").unwrap();
         cleanup_job_media(temp.path());
         assert!(cookie.exists());
+        assert!(lock.exists());
         assert!(!media.exists());
         assert!(!temp.path().join("media.mp4.part-Frag1.part").exists());
+    }
+
+    #[test]
+    fn atomic_copy_publish_keeps_partial_data_out_of_final_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.mp4");
+        let target = temp.path().join("final.mp4");
+        fs::write(&source, b"complete-media").unwrap();
+        let rename_error = std::io::Error::other("simulated cross-volume rename");
+
+        publish_by_copy(&source, &target, &rename_error).unwrap();
+        assert!(!source.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"complete-media");
+        assert!(
+            fs::read_dir(temp.path())
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".finalizing"))
+        );
+    }
+
+    #[test]
+    fn atomic_copy_publish_failure_preserves_source_and_existing_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.mp4");
+        let target = temp.path().join("final.mp4");
+        fs::write(&source, b"source").unwrap();
+        fs::write(&target, b"existing").unwrap();
+        let rename_error = std::io::Error::other("simulated cross-volume rename");
+
+        assert!(publish_by_copy(&source, &target, &rename_error).is_err());
+        assert!(source.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"existing");
+        assert!(
+            fs::read_dir(temp.path())
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".finalizing"))
+        );
     }
 
     #[test]
