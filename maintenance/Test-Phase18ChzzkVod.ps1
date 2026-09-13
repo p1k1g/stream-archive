@@ -24,6 +24,7 @@ $vodFacade = Read-RepoFile 'rust-web/src/platform/vod.rs'
 $chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
 $queue = Read-RepoFile 'rust-web/src/vod_queue.rs'
 $auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
+$main = Read-RepoFile 'rust-web/src/main.rs'
 
 # Platform registration / URL routing.
 Assert-Match $chzzk 'pub mod vod;' 'CHZZK VOD provider module is not registered.'
@@ -53,6 +54,11 @@ Assert-Match $chzzkVod 'NID_\(\?:AUT\|SES\)' 'CHZZK VOD secret redaction coverag
 Assert-NotMatch $chzzkVod 'NID_AUT=.*--|NID_SES=.*--' 'CHZZK cookies must not be put directly on process arguments.'
 Assert-Match $auth 'CHZZK_NID_AUT' 'Shared CHZZK auth key disappeared.'
 Assert-Match $auth 'CHZZK_NID_SES' 'Shared CHZZK auth key disappeared.'
+
+# Startup scavenging is destructive by design, so exclusive listener ownership must
+# be established before VodManager::new can remove any stale chzzk-* directories.
+Assert-Match $main 'TcpListener::bind\(&bind\)[\s\S]*?VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)' 'Server bind ownership must be established before CHZZK stale-job scavenging can run.'
+Assert-NotMatch $main 'VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)[\s\S]*?let listener = TcpListener::bind\(&bind\)' 'CHZZK VOD manager must not be constructed before the exclusive server bind.'
 
 # yt-dlp owns CHZZK extraction, but long user titles must never become HLS fragment temp paths.
 Assert-Match $chzzkVod 'MEDIA_FILE_NAME:\s*&str\s*=\s*"media\.mp4"' 'CHZZK VOD short staging filename is missing.'
