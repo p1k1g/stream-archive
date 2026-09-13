@@ -125,18 +125,22 @@ impl RecorderManager {
             );
         }
 
-        let (stream_url, cookies) = match input {
+        let (stream_url, cookies, start_at_zero) = match input {
             StreamInput::DirectHls(url) => {
                 let url = if url.to_ascii_lowercase().starts_with("hls://") {
                     url.clone()
                 } else {
                     format!("hls://{url}")
                 };
-                (url, None)
+                (url, None, false)
             }
-            StreamInput::PluginUrl { url, cookies } => {
+            StreamInput::PluginUrl {
+                url,
+                cookies,
+                start_at_zero,
+            } => {
                 preflight_plugin_input(config, url, !cookies.is_empty()).await?;
-                (url.clone(), Some(cookies.as_slice()))
+                (url.clone(), Some(cookies.as_slice()), *start_at_zero)
             }
         };
         let cookie_file = match cookies {
@@ -151,6 +155,9 @@ impl RecorderManager {
         let mut command = Command::new(&config.streamlink);
         if let Some(path) = cookie_file.as_ref() {
             command.arg("--http-cookies-file").arg(path);
+        }
+        if start_at_zero {
+            command.arg("--ffmpeg-start-at-zero");
         }
         command
             .arg(&stream_url)
