@@ -65,6 +65,10 @@ impl ChzzkLiveSession {
         parse_probe_content(channel_id, &value, &auth)
     }
 
+    pub fn recover_auth(&self) -> Result<String> {
+        bail!("CHZZK 제한 방송 인증은 설정 > CHZZK 인증에서 NID_AUT/NID_SES를 모두 저장하세요.")
+    }
+
     pub async fn resolve_stream(
         &self,
         channel_id: &str,
@@ -170,6 +174,9 @@ fn resolve_stream_with_auth(
             } else {
                 Vec::new()
             },
+            // CHZZK's Streamlink plugin preserves source PTS with copyts. Reset only the
+            // presentation origin so a recording started mid-broadcast begins at 00:00.
+            start_at_zero: true,
         },
     })
 }
@@ -228,6 +235,14 @@ mod tests {
     }
 
     #[test]
+    fn auth_recovery_guidance_is_owned_by_chzzk_provider() {
+        let session = ChzzkLiveSession::new(Client::new());
+        let message = session.recover_auth().unwrap_err().to_string();
+        assert!(message.contains("CHZZK 인증"));
+        assert!(message.contains("NID_AUT/NID_SES"));
+    }
+
+    #[test]
     fn public_live_does_not_require_auth() {
         let probe = parse_probe_content(
             CHANNEL,
@@ -264,10 +279,16 @@ mod tests {
             panic!("expected live probe");
         };
         let resolved = resolve_stream_with_auth(CHANNEL, &live, &auth).unwrap();
-        let StreamInput::PluginUrl { cookies, .. } = resolved.input else {
+        let StreamInput::PluginUrl {
+            cookies,
+            start_at_zero,
+            ..
+        } = resolved.input
+        else {
             panic!("expected plugin URL");
         };
         assert_eq!(cookies.len(), 2);
+        assert!(start_at_zero);
     }
 
     #[test]
@@ -279,10 +300,16 @@ mod tests {
             panic!("expected live probe");
         };
         let resolved = resolve_stream_with_auth(CHANNEL, &live, &auth).unwrap();
-        let StreamInput::PluginUrl { cookies, .. } = resolved.input else {
+        let StreamInput::PluginUrl {
+            cookies,
+            start_at_zero,
+            ..
+        } = resolved.input
+        else {
             panic!("expected plugin URL");
         };
         assert!(cookies.is_empty());
+        assert!(start_at_zero);
     }
 
     #[test]
