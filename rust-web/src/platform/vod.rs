@@ -15,6 +15,7 @@ pub struct VodManager {
     soop: soop::vod::VodManager,
     chzzk: chzzk::vod::VodManager,
     selected: Mutex<PlatformId>,
+    lifecycle: Mutex<()>,
 }
 
 impl VodManager {
@@ -23,14 +24,43 @@ impl VodManager {
             soop: soop::vod::VodManager::new(backend_dir.clone(), logs.clone()),
             chzzk: chzzk::vod::VodManager::new(backend_dir, logs),
             selected: Mutex::new(PlatformId::Soop),
+            lifecycle: Mutex::new(()),
         }
     }
 
-    pub async fn status(&self) -> VodJobStatus {
-        match *self.selected.lock().await {
+    async fn provider_status(&self, platform: PlatformId) -> VodJobStatus {
+        match platform {
             PlatformId::Soop => self.soop.status().await,
             PlatformId::Chzzk => self.chzzk.status().await,
         }
+    }
+
+    async fn running_provider(&self) -> Option<(PlatformId, VodJobStatus)> {
+        let soop = self.soop.status().await;
+        if soop.running {
+            return Some((PlatformId::Soop, soop));
+        }
+        let chzzk = self.chzzk.status().await;
+        if chzzk.running {
+            return Some((PlatformId::Chzzk, chzzk));
+        }
+        None
+    }
+
+    async fn ensure_idle(&self) -> Result<()> {
+        if let Some((platform, _)) = self.running_provider().await {
+            bail!("다른 {platform} VOD 작업이 이미 실행 중입니다.");
+        }
+        Ok(())
+    }
+
+    pub async fn status(&self) -> VodJobStatus {
+        if let Some((platform, status)) = self.running_provider().await {
+            *self.selected.lock().await = platform;
+            return status;
+        }
+        let selected = *self.selected.lock().await;
+        self.provider_status(selected).await
     }
 
     pub async fn terminal_status(&self, job_id: &str) -> Option<VodJobStatus> {
@@ -50,6 +80,8 @@ impl VodManager {
 
     pub async fn analyze(&self, req: VodAnalyzeRequest) -> Result<VodJobStatus> {
         let platform = vod_platform(&req.vod_url)?;
+        let _lifecycle = self.lifecycle.lock().await;
+        self.ensure_idle().await?;
         *self.selected.lock().await = platform;
         match platform {
             PlatformId::Soop => self.soop.analyze(req).await,
@@ -59,6 +91,8 @@ impl VodManager {
 
     pub async fn download(&self, req: VodDownloadRequest) -> Result<VodJobStatus> {
         let platform = vod_platform(&req.vod_url)?;
+        let _lifecycle = self.lifecycle.lock().await;
+        self.ensure_idle().await?;
         *self.selected.lock().await = platform;
         match platform {
             PlatformId::Soop => self.soop.download(req).await,
@@ -67,7 +101,14 @@ impl VodManager {
     }
 
     pub async fn cancel(&self) -> Result<VodJobStatus> {
-        match *self.selected.lock().await {
+        let _lifecycle = self.lifecycle.lock().await;
+        let platform = self
+            .running_provider()
+            .await
+            .map(|(platform, _)| platform)
+            .unwrap_or(*self.selected.lock().await);
+        *self.selected.lock().await = platform;
+        match platform {
             PlatformId::Soop => self.soop.cancel().await,
             PlatformId::Chzzk => self.chzzk.cancel().await,
         }
