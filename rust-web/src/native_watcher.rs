@@ -1385,7 +1385,7 @@ mod tests {
             PlatformId::Chzzk,
         )
         .unwrap();
-        assert_eq!(first_chzzk.extension().and_then(|v| v.to_str()), Some("mp4"));
+        assert_eq!(first_chzzk.extension().and_then(|v| v.to_str()), Some("ts"));
         assert!(first_chzzk.file_name().unwrap().to_string_lossy().contains("_01_"));
         fs::write(&first_chzzk, b"existing").unwrap();
 
@@ -1397,7 +1397,7 @@ mod tests {
             PlatformId::Chzzk,
         )
         .unwrap();
-        assert_eq!(second_chzzk.extension().and_then(|v| v.to_str()), Some("mp4"));
+        assert_eq!(second_chzzk.extension().and_then(|v| v.to_str()), Some("ts"));
         assert!(second_chzzk.file_name().unwrap().to_string_lossy().contains("_02_"));
 
         let first_soop = unique_output_file(
