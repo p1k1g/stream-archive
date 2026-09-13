@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use std::{
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant},
@@ -89,6 +89,56 @@ fn output_file_for_platform(mut requested: PathBuf, platform: PlatformId) -> Res
     bail!("too many output filename collisions")
 }
 
+fn find_on_path(names: &[&str]) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    for dir in env::split_paths(&path) {
+        for name in names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_timestamp_rebase_ffmpeg(streamlink: &Path) -> Result<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(streamlink_dir) = streamlink.parent() {
+        candidates.push(streamlink_dir.join("ffmpeg.exe"));
+        candidates.push(streamlink_dir.join("vod").join("ffmpeg.exe"));
+        if let Some(streamlink_root) = streamlink_dir.parent() {
+            // Official Streamlink Windows builds install streamlink.exe under bin/
+            // and the bundled FFmpeg executable under ffmpeg/.
+            candidates.push(streamlink_root.join("ffmpeg").join("ffmpeg.exe"));
+            candidates.push(streamlink_root.join("ffmpeg.exe"));
+        }
+    }
+    if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+        return Ok(path);
+    }
+    if let Some(path) = find_on_path(&["ffmpeg.exe", "ffmpeg"]) {
+        return Ok(path);
+    }
+    bail!(
+        "CHZZK LIVE timestamp rebasing requires FFmpeg. Install the Streamlink Windows build with bundled FFmpeg or add ffmpeg.exe to PATH."
+    )
+}
+
+fn timestamp_rebase_player_args(output_file: &Path) -> Result<String> {
+    let output = output_file.to_string_lossy();
+    if output.contains('"') {
+        bail!("output file path contains an unsupported quote character");
+    }
+    // Streamlink expands {...} formatting variables in --player-args. Escape
+    // literal braces from user-controlled output paths before handing the string
+    // to Streamlink's player argument tokenizer.
+    let output = output.replace('{', "{{").replace('}', "}}");
+    Ok(format!(
+        "-hide_banner -loglevel warning -copyts -start_at_zero -i {{playerinput}} -map 0:v:0? -map 0:a:0? -c copy -movflags +frag_keyframe+empty_moov+default_base_moof -f mp4 -y \"{output}\""
+    ))
+}
+
 #[derive(Clone)]
 pub struct RecorderManager {
     logs: LogBuffer,
@@ -157,14 +207,26 @@ impl RecorderManager {
             command.arg("--http-cookies-file").arg(path);
         }
         if start_at_zero {
-            command.arg("--ffmpeg-start-at-zero");
+            // CHZZK's HLS worker must remain in Streamlink because it rewrites
+            // segment requests. Use FFmpeg as Streamlink's player/output sink so
+            // the already-fetched fMP4 byte stream is remuxed on the fly with a
+            // zero-based timeline. This is stream-copy only: no re-encode and no
+            // post-recording remux step.
+            let ffmpeg = resolve_timestamp_rebase_ffmpeg(&config.streamlink)?;
+            let player_args = timestamp_rebase_player_args(&output_file)?;
+            command
+                .arg("--player")
+                .arg(ffmpeg)
+                .arg("--player-args")
+                .arg(player_args)
+                .arg("--player-verbose");
+        } else {
+            command
+                .arg("--output")
+                .arg(&output_file)
+                .arg("--force");
         }
         command
-            .arg(&stream_url)
-            .arg(&config.quality)
-            .arg("--output")
-            .arg(&output_file)
-            .arg("--force")
             .arg("--progress")
             .arg("no")
             .arg("--hls-live-edge")
@@ -175,6 +237,8 @@ impl RecorderManager {
             .arg("0")
             .arg("--stream-timeout")
             .arg(stream_timeout.to_string())
+            .arg(&stream_url)
+            .arg(&config.quality)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -356,7 +420,11 @@ impl RecorderManager {
     }
 }
 
-async fn preflight_plugin_input(config: &RecorderConfig, url: &str, needs_cookie_file: bool) -> Result<()> {
+async fn preflight_plugin_input(
+    config: &RecorderConfig,
+    url: &str,
+    needs_cookie_file: bool,
+) -> Result<()> {
     let mut can_handle = Command::new(&config.streamlink);
     can_handle
         .arg("--can-handle-url")
@@ -369,10 +437,12 @@ async fn preflight_plugin_input(config: &RecorderConfig, url: &str, needs_cookie
             can_handle.current_dir(parent);
         }
     }
-    let status = can_handle
-        .status()
-        .await
-        .with_context(|| format!("failed to inspect Streamlink plugin support: {}", config.streamlink.display()))?;
+    let status = can_handle.status().await.with_context(|| {
+        format!(
+            "failed to inspect Streamlink plugin support: {}",
+            config.streamlink.display()
+        )
+    })?;
     if !status.success() {
         bail!("현재 Streamlink이 이 플랫폼 URL을 처리할 수 없습니다. Streamlink을 최신 버전으로 업데이트하세요: {url}");
     }
@@ -385,10 +455,12 @@ async fn preflight_plugin_input(config: &RecorderConfig, url: &str, needs_cookie
                 help.current_dir(parent);
             }
         }
-        let output = help
-            .output()
-            .await
-            .with_context(|| format!("failed to inspect Streamlink cookie-file support: {}", config.streamlink.display()))?;
+        let output = help.output().await.with_context(|| {
+            format!(
+                "failed to inspect Streamlink cookie-file support: {}",
+                config.streamlink.display()
+            )
+        })?;
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         if !text.contains("--http-cookies-file") {
@@ -399,7 +471,7 @@ async fn preflight_plugin_input(config: &RecorderConfig, url: &str, needs_cookie
 }
 
 fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!(
+    let path = env::temp_dir().join(format!(
         "stream-archive-cookies-{}.txt",
         Uuid::new_v4().simple()
     ));
@@ -446,7 +518,7 @@ mod tests {
 
     #[test]
     fn uses_platform_specific_live_output_extension_without_overwriting_existing_file() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = env::temp_dir().join(format!(
             "stream-archive-extension-test-{}",
             Uuid::new_v4().simple()
         ));
@@ -465,6 +537,41 @@ mod tests {
         let next = output_file_for_platform(requested, PlatformId::Chzzk).unwrap();
         assert_eq!(next, dir.join("capture_02.mp4"));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn timestamp_rebase_player_args_keep_copyts_but_shift_to_zero_and_fragment_mp4() {
+        let args = timestamp_rebase_player_args(Path::new("capture.mp4")).unwrap();
+        assert!(args.contains("-copyts -start_at_zero"));
+        assert!(args.contains("-i {playerinput}"));
+        assert!(args.contains("-c copy"));
+        assert!(args.contains("+frag_keyframe+empty_moov+default_base_moof"));
+        assert!(args.ends_with("-f mp4 -y \"capture.mp4\""));
+    }
+
+    #[test]
+    fn timestamp_rebase_player_args_escape_streamlink_format_braces() {
+        let args = timestamp_rebase_player_args(Path::new("capture_{live}.mp4")).unwrap();
+        assert!(args.contains("capture_{{live}}.mp4"));
+    }
+
+    #[test]
+    fn finds_ffmpeg_from_official_streamlink_windows_layout() {
+        let root = env::temp_dir().join(format!(
+            "stream-archive-streamlink-layout-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        let bin = root.join("bin");
+        let ffmpeg_dir = root.join("ffmpeg");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&ffmpeg_dir).unwrap();
+        let streamlink = bin.join("streamlink.exe");
+        let ffmpeg = ffmpeg_dir.join("ffmpeg.exe");
+        fs::write(&streamlink, b"stub").unwrap();
+        fs::write(&ffmpeg, b"stub").unwrap();
+
+        assert_eq!(resolve_timestamp_rebase_ffmpeg(&streamlink).unwrap(), ffmpeg);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
