@@ -15,7 +15,7 @@ use std::{
     collections::{BTreeSet, VecDeque},
     env, fs,
     path::{Path, PathBuf},
-    process::{ExitStatus, Stdio},
+    process::{Command as StdCommand, ExitStatus, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -34,6 +34,8 @@ use uuid::Uuid;
 const TERMINAL_CACHE_LIMIT: usize = 32;
 const COOKIE_FILE_EXPIRES_UNIX: i64 = 4_102_444_800; // 2100-01-01 UTC
 const PROGRESS_PREFIX: &str = "__CHZZK_PROGRESS__";
+const COOKIE_FILE_NAME: &str = "chzzk-cookies.txt";
+const MEDIA_FILE_NAME: &str = "media.mp4";
 
 #[derive(Debug, Clone)]
 struct Tools {
@@ -73,6 +75,7 @@ pub struct VodManager {
 
 impl VodManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
+        let _ = cleanup_stale_job_dirs(&backend_dir);
         Self {
             backend_dir,
             logs,
@@ -306,14 +309,16 @@ async fn run_download(
         safe_name(&metadata.streamer, 60),
         safe_name(&metadata.title, 100)
     );
-    let output = collision_path(&output_dir, &base, "mp4")?;
+    let final_output = collision_path(&output_dir, &base, "mp4")?;
+    let staging_output = job_dir.join(MEDIA_FILE_NAME);
     let mut last_error = String::new();
     let attempts = req.max_retries.max(1);
     for attempt in 1..=attempts {
         if cancel.load(Ordering::SeqCst) {
-            cleanup_incomplete(&output);
+            cleanup_job_media(&job_dir);
             return Ok(());
         }
+        cleanup_job_media(&job_dir);
         {
             let mut current = status.write().await;
             current.state = "DOWNLOADING".into();
@@ -325,7 +330,7 @@ async fn run_download(
             &tools,
             &req,
             cookie_file.as_deref(),
-            &output,
+            &staging_output,
             status,
             cancel,
             logs,
@@ -333,28 +338,29 @@ async fn run_download(
         .await
         {
             Ok(()) if !cancel.load(Ordering::SeqCst) => {
-                let final_file = find_finished_output(&output)?;
+                let staged_file = find_finished_output(&staging_output)?;
+                finalize_output(&staged_file, &final_output)?;
                 let mut current = status.write().await;
                 current.state = "COMPLETED".into();
                 current.running = false;
                 current.message = "CHZZK VOD 다운로드가 완료되었습니다.".into();
-                current.output_file = Some(final_file.display().to_string());
+                current.output_file = Some(final_output.display().to_string());
                 current.percent = 100.0;
                 current.finished_at = Some(Utc::now().to_rfc3339());
                 logs.push(format!(
                     "[VOD:CHZZK] completed file={}",
-                    final_file.display()
+                    final_output.display()
                 ))
                 .await;
                 return Ok(());
             }
             Ok(()) => {
-                cleanup_incomplete(&output);
+                cleanup_job_media(&job_dir);
                 return Ok(());
             }
             Err(err) => {
                 last_error = redact(&format!("{err:#}"));
-                cleanup_incomplete(&output);
+                cleanup_job_media(&job_dir);
                 logs.push(format!(
                     "[VOD:CHZZK:WARN] download retry {attempt}/{attempts}: {last_error}"
                 ))
@@ -540,6 +546,11 @@ fn format_selector(quality: &str) -> String {
     "bestvideo*+bestaudio/best".into()
 }
 
+fn configure_ytdlp_command(command: &mut Command) {
+    command.env("PYTHONUTF8", "1");
+    command.env("PYTHONIOENCODING", "utf-8");
+}
+
 async fn run_download_process(
     program: &Path,
     args: &[String],
@@ -548,6 +559,7 @@ async fn run_download_process(
     _logs: &LogBuffer,
 ) -> Result<()> {
     let mut command = Command::new(program);
+    configure_ytdlp_command(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -629,7 +641,9 @@ async fn run_capture(
     _logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    configure_ytdlp_command(&mut command);
+    let mut child = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -711,7 +725,7 @@ fn chzzk_cookie_file(job_dir: &Path) -> Result<Option<PathBuf>> {
             bail!("CHZZK 인증정보가 일부만 설정되어 있습니다. NID_AUT/NID_SES를 모두 저장하세요.")
         }
         ChzzkAuthState::Configured => {
-            let path = job_dir.join("chzzk-cookies.txt");
+            let path = job_dir.join(COOKIE_FILE_NAME);
             let mut text = String::from("# Netscape HTTP Cookie File\n");
             for cookie in auth.streamlink_cookies() {
                 if cookie.domain.contains(['\r', '\n', '\t'])
@@ -731,6 +745,7 @@ fn chzzk_cookie_file(job_dir: &Path) -> Result<Option<PathBuf>> {
             }
             fs::write(&path, text)
                 .with_context(|| format!("CHZZK 임시 cookie 파일 생성 실패: {}", path.display()))?;
+            restrict_cookie_file(&path)?;
             Ok(Some(path))
         }
     }
@@ -789,14 +804,90 @@ fn resolve_tool(configured: &str, candidates: &[PathBuf], names: &[&str]) -> Opt
     None
 }
 
+fn vod_job_root(backend: &Path) -> PathBuf {
+    backend.join(".rust-web").join("vod")
+}
+
+fn cleanup_stale_job_dirs(backend: &Path) -> Result<()> {
+    let root = vod_job_root(backend);
+    if !root.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&root)
+        .with_context(|| format!("CHZZK VOD 임시 폴더 조회 실패: {}", root.display()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with("chzzk-") {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+    Ok(())
+}
+
 fn job_dir(backend: &Path) -> Result<PathBuf> {
-    let dir = backend
-        .join(".rust-web")
-        .join("vod")
-        .join(format!("chzzk-{}", Uuid::new_v4().simple()));
-    fs::create_dir_all(&dir)
+    let root = vod_job_root(backend);
+    fs::create_dir_all(&root)
+        .with_context(|| format!("CHZZK VOD 임시 루트 생성 실패: {}", root.display()))?;
+    let dir = root.join(format!("chzzk-{}", Uuid::new_v4().simple()));
+    fs::create_dir(&dir)
         .with_context(|| format!("CHZZK VOD 임시 폴더 생성 실패: {}", dir.display()))?;
+    restrict_job_dir(&dir)?;
     Ok(dir)
+}
+
+#[cfg(windows)]
+fn restrict_job_dir(dir: &Path) -> Result<()> {
+    let username = env::var("USERNAME").context("Windows USERNAME 환경 변수가 없습니다.")?;
+    let domain = env::var("USERDOMAIN").unwrap_or_default();
+    let identity = if domain.trim().is_empty() || domain == "." {
+        username
+    } else {
+        format!("{domain}\\{username}")
+    };
+    let status = StdCommand::new("icacls.exe")
+        .arg(dir)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{identity}:(OI)(CI)F"))
+        .arg("/Q")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("CHZZK 임시 폴더 ACL 설정 실패: {}", dir.display()))?;
+    if !status.success() {
+        let _ = fs::remove_dir_all(dir);
+        bail!("CHZZK 임시 폴더를 현재 사용자 전용으로 제한하지 못했습니다.");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_job_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("CHZZK 임시 폴더 권한 설정 실패: {}", dir.display()))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn restrict_job_dir(_dir: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_cookie_file(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("CHZZK cookie 파일 권한 설정 실패: {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn restrict_cookie_file(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn collision_path(dir: &Path, base: &str, extension: &str) -> Result<PathBuf> {
@@ -847,30 +938,42 @@ fn find_finished_output(expected: &Path) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("yt-dlp 완료 파일을 찾지 못했습니다: {}", expected.display()))
 }
 
-fn cleanup_incomplete(output: &Path) {
-    let _ = fs::remove_file(output);
-    let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = output
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
-    let stem = output
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
-    if let Ok(entries) = fs::read_dir(parent) {
+fn finalize_output(source: &Path, target: &Path) -> Result<()> {
+    if target.exists() {
+        bail!("CHZZK VOD 최종 파일이 이미 존재합니다: {}", target.display());
+    }
+    match fs::rename(source, target) {
+        Ok(()) => {}
+        Err(rename_error) => {
+            if let Err(copy_error) = fs::copy(source, target) {
+                let _ = fs::remove_file(target);
+                return Err(copy_error).with_context(|| {
+                    format!(
+                        "CHZZK VOD 최종 파일 이동 실패 (rename: {rename_error}): {} -> {}",
+                        source.display(),
+                        target.display()
+                    )
+                });
+            }
+            fs::remove_file(source).with_context(|| {
+                format!("CHZZK VOD staging 파일 정리 실패: {}", source.display())
+            })?;
+        }
+    }
+    if !target.is_file() {
+        bail!("CHZZK VOD 최종 파일 생성 확인 실패: {}", target.display());
+    }
+    Ok(())
+}
+
+fn cleanup_job_media(job_dir: &Path) {
+    if let Ok(entries) = fs::read_dir(job_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("");
-            if name == format!("{file_name}.part")
-                || name == format!("{file_name}.ytdl")
-                || (name.starts_with(stem) && (name.ends_with(".part") || name.ends_with(".ytdl")))
-            {
-                let _ = fs::remove_file(path);
+            if !path.is_file() || path.file_name().is_some_and(|name| name == COOKIE_FILE_NAME) {
+                continue;
             }
+            let _ = fs::remove_file(path);
         }
     }
 }
@@ -1090,5 +1193,39 @@ mod tests {
         assert!(!text.contains("bbb"));
         assert!(text.contains("NID_AUT=<redacted>"));
         assert!(text.contains("NID_SES=<redacted>"));
+    }
+
+    #[test]
+    fn stale_chzzk_job_dirs_are_scavenged_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = vod_job_root(temp.path());
+        fs::create_dir_all(root.join("chzzk-stale")).unwrap();
+        fs::write(root.join("chzzk-stale").join("secret.txt"), "secret").unwrap();
+        fs::create_dir_all(root.join("soop-keep")).unwrap();
+        cleanup_stale_job_dirs(temp.path()).unwrap();
+        assert!(!root.join("chzzk-stale").exists());
+        assert!(root.join("soop-keep").exists());
+    }
+
+    #[test]
+    fn cleanup_is_scoped_to_unique_job_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let cookie = temp.path().join(COOKIE_FILE_NAME);
+        let media = temp.path().join(MEDIA_FILE_NAME);
+        fs::write(&cookie, "cookie").unwrap();
+        fs::write(&media, "media").unwrap();
+        fs::write(temp.path().join("media.mp4.part-Frag1.part"), "part").unwrap();
+        cleanup_job_media(temp.path());
+        assert!(cookie.exists());
+        assert!(!media.exists());
+        assert!(!temp.path().join("media.mp4.part-Frag1.part").exists());
+    }
+
+    #[test]
+    fn yt_dlp_staging_name_is_short_and_title_independent() {
+        let temp = tempfile::tempdir().unwrap();
+        let staging = temp.path().join(MEDIA_FILE_NAME);
+        assert_eq!(staging.file_name().unwrap(), MEDIA_FILE_NAME);
+        assert!(!staging.to_string_lossy().contains("테스트 VOD"));
     }
 }
