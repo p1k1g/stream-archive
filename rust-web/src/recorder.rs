@@ -127,7 +127,7 @@ fn resolve_timestamp_rebase_ffmpeg(streamlink: &Path) -> Result<PathBuf> {
         return Ok(path);
     }
     bail!(
-        "CHZZK LIVE timestamp rebasing requires FFmpeg. Install the Streamlink Windows build with bundled FFmpeg or add ffmpeg.exe to PATH."
+        "CHZZK LIVE MPEG-TS remux requires FFmpeg. Install the Streamlink Windows build with bundled FFmpeg or add ffmpeg.exe to PATH."
     )
 }
 
@@ -141,7 +141,7 @@ fn timestamp_rebase_player_args(output_file: &Path) -> Result<String> {
     // to Streamlink's player argument tokenizer.
     let output = output.replace('{', "{{").replace('}', "}}");
     Ok(format!(
-        "-hide_banner -loglevel warning -copyts -start_at_zero -i {{playerinput}} -map 0:v:0? -map 0:a:0? -c copy -movflags +frag_keyframe+empty_moov+default_base_moof -f mp4 -y \"{output}\""
+        "-hide_banner -loglevel warning -fflags +genpts+discardcorrupt -i {{playerinput}} -map 0:v:0? -map 0:a:0? -c copy -bsf:v h264_mp4toannexb -f mpegts -mpegts_flags resend_headers -mpegts_copyts 0 -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -avioflags direct -y \"{output}\""
     ))
 }
 
@@ -226,10 +226,10 @@ impl RecorderManager {
         }
         if let Some((ffmpeg, player_args)) = timestamp_player {
             // CHZZK's HLS worker must remain in Streamlink because it rewrites
-            // segment requests. Use FFmpeg as Streamlink's player/output sink so
-            // the already-fetched fMP4 byte stream is remuxed on the fly with a
-            // zero-based timeline. This is stream-copy only: no re-encode and no
-            // post-recording remux step.
+            // segment requests. FFmpeg consumes Streamlink's already-fetched
+            // fMP4 stream and remuxes it live into a genuine zero-based MPEG-TS
+            // file. This is stream-copy only: no re-encode and no post-recording
+            // remux/finalize pass or duplicate-disk-space requirement.
             command
                 .arg("--player")
                 .arg(ffmpeg)
@@ -539,28 +539,34 @@ mod tests {
         );
 
         let chzzk = output_file_for_platform(requested.clone(), PlatformId::Chzzk).unwrap();
-        assert_eq!(chzzk, dir.join("capture.mp4"));
+        assert_eq!(chzzk, dir.join("capture.ts"));
         fs::write(&chzzk, b"existing").unwrap();
 
         let next = output_file_for_platform(requested, PlatformId::Chzzk).unwrap();
-        assert_eq!(next, dir.join("capture_02.mp4"));
+        assert_eq!(next, dir.join("capture_02.ts"));
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn timestamp_rebase_player_args_keep_copyts_but_shift_to_zero_and_fragment_mp4() {
-        let args = timestamp_rebase_player_args(Path::new("capture.mp4")).unwrap();
-        assert!(args.contains("-copyts -start_at_zero"));
+    fn timestamp_rebase_player_args_write_zero_based_mpegts_stream_copy() {
+        let args = timestamp_rebase_player_args(Path::new("capture.ts")).unwrap();
+        assert!(args.contains("-fflags +genpts+discardcorrupt"));
         assert!(args.contains("-i {playerinput}"));
         assert!(args.contains("-c copy"));
-        assert!(args.contains("+frag_keyframe+empty_moov+default_base_moof"));
-        assert!(args.ends_with("-f mp4 -y \"capture.mp4\""));
+        assert!(args.contains("-bsf:v h264_mp4toannexb"));
+        assert!(args.contains("-f mpegts"));
+        assert!(args.contains("-mpegts_flags resend_headers"));
+        assert!(args.contains("-mpegts_copyts 0"));
+        assert!(args.contains("-avoid_negative_ts make_zero"));
+        assert!(args.contains("-muxpreload 0 -muxdelay 0"));
+        assert!(args.ends_with("-avioflags direct -y \"capture.ts\""));
+        assert!(!args.contains("frag_keyframe"));
     }
 
     #[test]
     fn timestamp_rebase_player_args_escape_streamlink_format_braces() {
-        let args = timestamp_rebase_player_args(Path::new("capture_{live}.mp4")).unwrap();
-        assert!(args.contains("capture_{{live}}.mp4"));
+        let args = timestamp_rebase_player_args(Path::new("capture_{live}.ts")).unwrap();
+        assert!(args.contains("capture_{{live}}.ts"));
     }
 
     #[test]
