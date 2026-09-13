@@ -697,19 +697,10 @@ async fn handle_command(
     .await;
 }
 
-async fn login_for_auth_required(
-    platform: PlatformId,
-    session: &mut LiveSession,
-    config: &WatcherConfig,
-) -> Result<String> {
-    match platform {
-        PlatformId::Soop => session
-            .login(&config.soop_username, &config.soop_password)
-            .await,
-        PlatformId::Chzzk => bail!(
-            "CHZZK 제한 방송 인증은 NID_AUT/NID_SES 설정이 필요합니다."
-        ),
-    }
+async fn recover_auth_required(session: &mut LiveSession, config: &WatcherConfig) -> Result<String> {
+    session
+        .recover_auth(&config.soop_username, &config.soop_password)
+        .await
 }
 
 async fn poll_channels(
@@ -750,9 +741,9 @@ async fn poll_channels(
             }
             Ok(LiveProbe::AuthRequired) => {
                 state.status = "AUTH".into();
-                match login_for_auth_required(platform, session, config).await {
+                match recover_auth_required(session, config).await {
                     Ok(_) => state.next_check = Instant::now(),
-                    Err(err) => state.detail = Some(format!("login failed: {err}")),
+                    Err(err) => state.detail = Some(err.to_string()),
                 }
             }
             Ok(LiveProbe::Live(live)) => {
