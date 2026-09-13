@@ -30,6 +30,20 @@ pub struct RecorderConfig {
     pub min_free_space_gb: f64,
 }
 
+struct CookieFile(PathBuf);
+
+impl CookieFile {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for CookieFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 pub struct Recording {
     pub pid: u32,
     pub bno: String,
@@ -39,18 +53,10 @@ pub struct Recording {
     pub history_id: String,
     child: Child,
     output_dir: PathBuf,
-    cookie_file: Option<PathBuf>,
+    cookie_file: Option<CookieFile>,
     last_size: u64,
     last_growth: Instant,
     last_monitor: Instant,
-}
-
-impl Drop for Recording {
-    fn drop(&mut self) {
-        if let Some(path) = self.cookie_file.take() {
-            let _ = fs::remove_file(path);
-        }
-    }
 }
 
 pub enum RecordingPoll {
@@ -193,6 +199,18 @@ impl RecorderManager {
                 (url.clone(), Some(cookies.as_slice()), *start_at_zero)
             }
         };
+
+        // Resolve every fallible timestamp-player setting before creating the
+        // plaintext authentication cookie file. The CookieFile guard then owns
+        // deletion across spawn failures and all subsequent early returns.
+        let timestamp_player = if start_at_zero {
+            Some((
+                resolve_timestamp_rebase_ffmpeg(&config.streamlink)?,
+                timestamp_rebase_player_args(&output_file)?,
+            ))
+        } else {
+            None
+        };
         let cookie_file = match cookies {
             Some(cookies) if !cookies.is_empty() => Some(write_cookie_file(cookies)?),
             _ => None,
@@ -203,17 +221,15 @@ impl RecorderManager {
             .max(10)
             .saturating_add(config.monitor_interval.max(1));
         let mut command = Command::new(&config.streamlink);
-        if let Some(path) = cookie_file.as_ref() {
-            command.arg("--http-cookies-file").arg(path);
+        if let Some(cookie) = cookie_file.as_ref() {
+            command.arg("--http-cookies-file").arg(cookie.path());
         }
-        if start_at_zero {
+        if let Some((ffmpeg, player_args)) = timestamp_player {
             // CHZZK's HLS worker must remain in Streamlink because it rewrites
             // segment requests. Use FFmpeg as Streamlink's player/output sink so
             // the already-fetched fMP4 byte stream is remuxed on the fly with a
             // zero-based timeline. This is stream-copy only: no re-encode and no
             // post-recording remux step.
-            let ffmpeg = resolve_timestamp_rebase_ffmpeg(&config.streamlink)?;
-            let player_args = timestamp_rebase_player_args(&output_file)?;
             command
                 .arg("--player")
                 .arg(ffmpeg)
@@ -249,20 +265,12 @@ impl RecorderManager {
             }
         }
 
-        let mut child = match command.spawn() {
-            Ok(child) => child,
-            Err(err) => {
-                if let Some(path) = cookie_file.as_ref() {
-                    let _ = fs::remove_file(path);
-                }
-                return Err(err).with_context(|| {
-                    format!(
-                        "failed to start Streamlink: {}",
-                        config.streamlink.display()
-                    )
-                });
-            }
-        };
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "failed to start Streamlink: {}",
+                config.streamlink.display()
+            )
+        })?;
         let pid = child
             .id()
             .ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
@@ -470,7 +478,7 @@ async fn preflight_plugin_input(
     Ok(())
 }
 
-fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> Result<PathBuf> {
+fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> Result<CookieFile> {
     let path = env::temp_dir().join(format!(
         "stream-archive-cookies-{}.txt",
         Uuid::new_v4().simple()
@@ -504,7 +512,7 @@ fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> 
     }
     fs::write(&path, text)
         .with_context(|| format!("failed to create Streamlink cookie file {}", path.display()))?;
-    Ok(path)
+    Ok(CookieFile(path))
 }
 
 pub fn free_gb(path: &Path) -> Result<f64> {
@@ -576,19 +584,33 @@ mod tests {
 
     #[test]
     fn writes_netscape_cookie_file_with_non_expired_cookie() {
-        let path = write_cookie_file(&[HttpCookie {
+        let cookie_file = write_cookie_file(&[HttpCookie {
             domain: ".naver.com".into(),
             name: "NID_AUT".into(),
             value: "secret-value".into(),
             secure: true,
         }])
         .unwrap();
-        let text = fs::read_to_string(&path).unwrap();
+        let text = fs::read_to_string(cookie_file.path()).unwrap();
         assert!(text.contains(&format!(
             ".naver.com\tTRUE\t/\tTRUE\t{}\tNID_AUT\tsecret-value",
             COOKIE_FILE_EXPIRES_UNIX
         )));
         assert!(!text.contains("\t0\tNID_AUT\t"));
-        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn cookie_file_guard_removes_plaintext_temp_file_on_drop() {
+        let cookie_file = write_cookie_file(&[HttpCookie {
+            domain: ".naver.com".into(),
+            name: "NID_SES".into(),
+            value: "sensitive-session-value".into(),
+            secure: true,
+        }])
+        .unwrap();
+        let path = cookie_file.path().to_path_buf();
+        assert!(path.is_file());
+        drop(cookie_file);
+        assert!(!path.exists());
     }
 }
