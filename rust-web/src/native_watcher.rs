@@ -1409,7 +1409,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(first_soop.extension().and_then(|v| v.to_str()), Some("ts"));
-        assert!(first_soop.file_name().unwrap().to_string_lossy().contains("_01_"));
+        assert!(first_soop.file_name().unwrap().to_string_lossy().contains("_02_"));
         let _ = fs::remove_dir_all(dir);
     }
 
