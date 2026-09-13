@@ -73,6 +73,10 @@ Assert-Match $recorder 'Netscape HTTP Cookie File' 'Netscape cookie-file generat
 Assert-Match $recorder 'COOKIE_FILE_EXPIRES_UNIX' 'CHZZK Netscape cookie entries must use a non-expired timestamp.'
 Assert-Match $recorder '4_102_444_800' 'CHZZK Netscape cookie expiry must stay in the future.'
 Assert-NotMatch $recorder '--http-cookie\s+NID_' 'CHZZK cookie values must not be exposed as direct process arguments.'
+Assert-Match $recorder 'struct CookieFile\(PathBuf\)' 'Temporary CHZZK authentication cookie is not ownership-guarded.'
+Assert-Match $recorder 'impl Drop for CookieFile' 'Temporary CHZZK authentication cookie cleanup guard is missing.'
+Assert-Match $recorder 'let timestamp_player = if start_at_zero[\s\S]*?resolve_timestamp_rebase_ffmpeg[\s\S]*?let cookie_file = match cookies' 'Fallible FFmpeg/player setup must finish before plaintext cookie creation.'
+Assert-Match $recorder 'cookie_file_guard_removes_plaintext_temp_file_on_drop' 'Plaintext CHZZK cookie cleanup regression test is missing.'
 
 # CHZZK fMP4 must be remuxed live to a zero-based fragmented MP4 timeline.
 # The CHZZK Streamlink HLS worker still owns segment fetching; FFmpeg is only
@@ -84,18 +88,22 @@ Assert-Match $recorder '\.arg\("--player"\)' 'CHZZK timestamp path does not rout
 Assert-Match $recorder '\.arg\("--player-args"\)' 'CHZZK timestamp path does not configure FFmpeg player arguments.'
 Assert-Match $recorder '-copyts -start_at_zero' 'CHZZK FFmpeg stream-copy does not rebase copied timestamps to zero.'
 Assert-Match $recorder 'frag_keyframe\+empty_moov\+default_base_moof' 'CHZZK output is not written as an in-progress-safe fragmented MP4.'
-Assert-Match $recorder 'if start_at_zero[\s\S]*?--player[\s\S]*?else[\s\S]*?--output' 'SOOP direct output and CHZZK FFmpeg-player output are not separated.'
+Assert-Match $recorder 'if let Some\(\(ffmpeg, player_args\)\) = timestamp_player[\s\S]*?--player[\s\S]*?else[\s\S]*?--output' 'SOOP direct output and CHZZK FFmpeg-player output are not separated.'
 Assert-NotMatch $recorder '"--ffmpeg-start-at-zero"' 'The ineffective Streamlink mux-only --ffmpeg-start-at-zero path must not return.'
 Assert-Match $recorder 'timestamp_rebase_player_args_keep_copyts_but_shift_to_zero_and_fragment_mp4' 'CHZZK timestamp-remux regression test is missing.'
 Assert-Match $recorder 'finds_ffmpeg_from_official_streamlink_windows_layout' 'Bundled Streamlink FFmpeg discovery regression test is missing.'
 Assert-Match $live 'assert!\(start_at_zero\)' 'CHZZK timestamp policy regression coverage is missing.'
 
-# LIVE files must keep their real platform container extension.
+# LIVE files must keep their real platform container extension and collision scan.
 Assert-Match $platform 'pub const fn live_output_extension' 'Platform LIVE output extension mapping is missing.'
 Assert-Match $platform 'Self::Soop\s*=>\s*"ts"' 'SOOP LIVE output must remain .ts.'
 Assert-Match $platform 'Self::Chzzk\s*=>\s*"mp4"' 'CHZZK LIVE output must use .mp4.'
 Assert-Match $recorder 'output_file_for_platform\(output_file, platform\)' 'Recorder does not apply the platform LIVE output extension.'
 Assert-Match $recorder 'uses_platform_specific_live_output_extension_without_overwriting_existing_file' 'Platform output-extension regression test is missing.'
+Assert-Match $watcher 'fn unique_output_file\([\s\S]*?platform: PlatformId' 'Filename generation does not receive the LIVE platform.'
+Assert-Match $watcher 'let extension = platform\.live_output_extension\(\)' 'Filename collision scanning is not platform-extension aware.'
+Assert-Match $watcher 'TITLE_NUMBER[\s\S]*?\{extension\}' 'TITLE_NUMBER collisions are not checked with the platform extension.'
+Assert-Match $watcher 'title_number_collision_scans_with_platform_extension' 'Platform-aware TITLE_NUMBER collision regression test is missing.'
 
 # CHZZK-only operation must not depend on SOOP Worker credentials.
 Assert-Match $watcher 'fn channels_require_soop' 'SOOP credential gating helper is missing.'
@@ -134,6 +142,8 @@ Assert-Match $phase8 'function p8LiveRow\(x\).*x\.platform' 'Visible LIVE histor
 # Export and settings-tab transitions must preserve multiplatform UX.
 Assert-Match $phase8 '\[''type'',''platform'',''status''' 'History CSV export is missing the platform column.'
 Assert-Match $phase8 '\[''LIVE'',String\(x\.platform\|\|''SOOP''\)\.toUpperCase\(\)' 'LIVE CSV rows do not preserve platform identity.'
-Assert-Match $app 'function deactivateChzzkSettings\(\).*p8SettingsFields.*hidden=false' 'Leaving CHZZK auth does not restore normal settings fields.'
+Assert-Match $app 'function deactivateChzzkSettings\(destination=''''\)' 'CHZZK settings cleanup does not inspect the destination tab.'
+Assert-Match $app 'destination===''notifications''' 'Leaving CHZZK for Notifications does not preserve notification panel isolation.'
+Assert-Match $app 'deactivateChzzkSettings\(tab\.dataset\.settingsTab\|\|''''\)' 'CHZZK settings tab listeners do not pass their destination identity.'
 
 Write-Host 'Phase 17 CHZZK regression checks passed.'
