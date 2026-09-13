@@ -25,6 +25,7 @@ $chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
 $queue = Read-RepoFile 'rust-web/src/vod_queue.rs'
 $auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
 $main = Read-RepoFile 'rust-web/src/main.rs'
+$workflow = Read-RepoFile '.github/workflows/phase18-chzzk-vod-check.yml'
 
 # Platform registration / URL routing.
 Assert-Match $chzzk 'pub mod vod;' 'CHZZK VOD provider module is not registered.'
@@ -55,10 +56,18 @@ Assert-NotMatch $chzzkVod 'NID_AUT=.*--|NID_SES=.*--' 'CHZZK cookies must not be
 Assert-Match $auth 'CHZZK_NID_AUT' 'Shared CHZZK auth key disappeared.'
 Assert-Match $auth 'CHZZK_NID_SES' 'Shared CHZZK auth key disappeared.'
 
-# Startup scavenging is destructive by design, so exclusive listener ownership must
-# be established before VodManager::new can remove any stale chzzk-* directories.
-Assert-Match $main 'TcpListener::bind\(&bind\)[\s\S]*?VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)' 'Server bind ownership must be established before CHZZK stale-job scavenging can run.'
-Assert-NotMatch $main 'VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)[\s\S]*?let listener = TcpListener::bind\(&bind\)' 'CHZZK VOD manager must not be constructed before the exclusive server bind.'
+# Listener bind remains defense-in-depth, but backend/job ownership must not depend on a port.
+Assert-Match $main 'TcpListener::bind\(&bind\)[\s\S]*?VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)' 'Early server bind defense-in-depth ordering disappeared.'
+Assert-Match $workflow 'rust-web/src/main\.rs' 'Phase 18 workflow must trigger when main.rs startup ordering changes.'
+
+# Per-job OS locking is the source of truth for active CHZZK temp ownership.
+Assert-Match $chzzkVod 'use fs2::FileExt;' 'CHZZK VOD per-job OS locking is missing.'
+Assert-Match $chzzkVod 'JOB_LOCK_FILE_NAME:\s*&str\s*=\s*"owner\.lock"' 'CHZZK VOD ownership lock filename is missing.'
+Assert-Match $chzzkVod 'lock\.lock_exclusive\(\)' 'CHZZK VOD job does not acquire an exclusive ownership lock.'
+Assert-Match $chzzkVod 'try_lock_exclusive\(\)' 'Stale cleanup does not probe ownership locks before deleting job directories.'
+Assert-Match $chzzkVod 'FileExt::unlock\(&self\.lock\)' 'CHZZK VOD job guard does not release its ownership lock on teardown.'
+Assert-Match $chzzkVod 'name == COOKIE_FILE_NAME \|\| name == JOB_LOCK_FILE_NAME' 'Retry/cancel cleanup must preserve both cookie and ownership lock files.'
+Assert-Match $chzzkVod 'active_job_lock_survives_scavenging_until_release' 'Active-owner stale-cleanup regression test is missing.'
 
 # yt-dlp owns CHZZK extraction, but long user titles must never become HLS fragment temp paths.
 Assert-Match $chzzkVod 'MEDIA_FILE_NAME:\s*&str\s*=\s*"media\.mp4"' 'CHZZK VOD short staging filename is missing.'
@@ -74,6 +83,15 @@ Assert-Match $chzzkVod 'taskkill\.exe' 'Windows owned-process cancellation path 
 Assert-Match $chzzkVod '\.arg\("/PID"\)' 'CHZZK VOD cancellation is not PID scoped.'
 Assert-Match $chzzkVod '\.arg\("/T"\)' 'CHZZK VOD cancellation does not include the owned child tree.'
 Assert-NotMatch $chzzkVod 'taskkill[^\r\n]*/IM' 'CHZZK VOD must never kill processes by image name.'
+
+# Cross-volume fallback must never expose a partial file under the final MP4 name.
+Assert-Match $chzzkVod 'finalizing_path' 'Destination-side atomic publication temp path is missing.'
+Assert-Match $chzzkVod '\.finalizing' 'CHZZK VOD atomic publication marker is missing.'
+Assert-Match $chzzkVod 'sync_all\(\)' 'Destination-side copied media is not synced before publication.'
+Assert-Match $chzzkVod 'publish_by_copy' 'Cross-volume atomic publication helper is missing.'
+Assert-NotMatch $chzzkVod 'fs::copy\(source,\s*target\)' 'CHZZK VOD must never copy directly into the final MP4 pathname.'
+Assert-Match $chzzkVod 'atomic_copy_publish_keeps_partial_data_out_of_final_name' 'Atomic publication success regression test is missing.'
+Assert-Match $chzzkVod 'atomic_copy_publish_failure_preserves_source_and_existing_target' 'Atomic publication failure regression test is missing.'
 
 # Common VOD model contract: CHZZK is one logical part and still uses queue/history status.
 Assert-Match $chzzkVod 'part_count:\s*1' 'CHZZK VOD analysis must expose one logical part.'
