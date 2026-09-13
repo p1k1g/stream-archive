@@ -31,11 +31,11 @@ $app = Read-RepoFile 'rust-web/web/app.js'
 $phase8 = Read-RepoFile 'rust-web/web/phase8.js'
 $phase14 = Read-RepoFile 'rust-web/web/phase14.js'
 
-# Provider registration / Phase 17 scope boundary.
+# Provider registration / Phase 17 LIVE boundary. Phase 18 may enable VOD separately.
 Assert-Match $platform 'Chzzk' 'PlatformId::Chzzk registration is missing.'
 Assert-Match $platform 'PlatformId::Chzzk\s*=>\s*&chzzk::CHZZK' 'CHZZK provider dispatch is missing.'
 Assert-Match $chzzk 'live:\s*true' 'CHZZK LIVE capability must remain enabled.'
-Assert-Match $chzzk 'vod:\s*false' 'CHZZK VOD must remain disabled until Phase 18.'
+Assert-Match $chzzk 'vod:\s*(?:false|true)' 'CHZZK provider VOD capability field is missing.'
 Assert-Match $chzzk 'account\.len\(\)\s*!=\s*32' 'CHZZK channel ID length validation is missing.'
 Assert-Match $chzzk 'is_ascii_hexdigit' 'CHZZK channel ID hex validation is missing.'
 
@@ -146,4 +146,4 @@ Assert-Match $app 'function deactivateChzzkSettings\(destination=''''\)' 'CHZZK 
 Assert-Match $app 'destination===''notifications''' 'Leaving CHZZK for Notifications does not preserve notification panel isolation.'
 Assert-Match $app 'deactivateChzzkSettings\(tab\.dataset\.settingsTab\|\|''''\)' 'CHZZK settings tab listeners do not pass their destination identity.'
 
-Write-Host 'Phase 17 CHZZK regression checks passed.'
+Write-Host 'Phase 17 CHZZK LIVE regression checks passed.'
