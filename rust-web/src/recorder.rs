@@ -60,6 +60,35 @@ pub enum RecordingPoll {
     Stalled,
 }
 
+fn output_file_for_platform(mut requested: PathBuf, platform: PlatformId) -> Result<PathBuf> {
+    let extension = platform.live_output_extension();
+    let already_matches = requested
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension));
+    if !already_matches {
+        requested.set_extension(extension);
+    }
+    if !requested.exists() {
+        return Ok(requested);
+    }
+
+    let parent = requested.parent().unwrap_or_else(|| Path::new("."));
+    let stem = requested
+        .file_stem()
+        .ok_or_else(|| anyhow!("output file has no valid file stem"))?
+        .to_os_string();
+    for number in 2..=9999 {
+        let mut file_name = stem.clone();
+        file_name.push(format!("_{number:02}.{extension}"));
+        let candidate = parent.join(file_name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    bail!("too many output filename collisions")
+}
+
 #[derive(Clone)]
 pub struct RecorderManager {
     logs: LogBuffer,
@@ -82,6 +111,7 @@ impl RecorderManager {
         channel: &str,
         account: &str,
     ) -> Result<Recording> {
+        let output_file = output_file_for_platform(output_file, platform)?;
         let output_dir = output_file
             .parent()
             .ok_or_else(|| anyhow!("output file has no parent"))?
@@ -406,6 +436,29 @@ pub fn free_gb(path: &Path) -> Result<f64> {
 mod tests {
     use super::*;
     use crate::support::platform::live::HttpCookie;
+
+    #[test]
+    fn uses_platform_specific_live_output_extension_without_overwriting_existing_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "stream-archive-extension-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let requested = dir.join("capture.ts");
+
+        assert_eq!(
+            output_file_for_platform(requested.clone(), PlatformId::Soop).unwrap(),
+            requested
+        );
+
+        let chzzk = output_file_for_platform(requested.clone(), PlatformId::Chzzk).unwrap();
+        assert_eq!(chzzk, dir.join("capture.mp4"));
+        fs::write(&chzzk, b"existing").unwrap();
+
+        let next = output_file_for_platform(requested, PlatformId::Chzzk).unwrap();
+        assert_eq!(next, dir.join("capture_02.mp4"));
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn writes_netscape_cookie_file_with_non_expired_cookie() {
