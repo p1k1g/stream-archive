@@ -887,7 +887,10 @@ fn job_dir(backend: &Path) -> Result<JobDirGuard> {
         Err(err) => {
             let _ = fs::remove_dir_all(&preparing);
             return Err(err).with_context(|| {
-                format!("CHZZK VOD ownership lock 생성 실패: {}", lock_path.display())
+                format!(
+                    "CHZZK VOD ownership lock 생성 실패: {}",
+                    lock_path.display()
+                )
             });
         }
     };
@@ -1039,7 +1042,12 @@ fn publish_by_copy(source: &Path, target: &Path, rename_error: &std::io::Error) 
         })?;
         File::open(&temp)
             .and_then(|file| file.sync_all())
-            .with_context(|| format!("CHZZK VOD destination 임시 파일 sync 실패: {}", temp.display()))?;
+            .with_context(|| {
+                format!(
+                    "CHZZK VOD destination 임시 파일 sync 실패: {}",
+                    temp.display()
+                )
+            })?;
         if target.exists() {
             bail!(
                 "CHZZK VOD 최종 파일이 복사 중 생성되었습니다: {}",
@@ -1090,9 +1098,9 @@ fn cleanup_job_media(job_dir: &Path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_file()
-                || path.file_name().is_some_and(|name| {
-                    name == COOKIE_FILE_NAME || name == JOB_LOCK_FILE_NAME
-                })
+                || path
+                    .file_name()
+                    .is_some_and(|name| name == COOKIE_FILE_NAME || name == JOB_LOCK_FILE_NAME)
             {
                 continue;
             }
