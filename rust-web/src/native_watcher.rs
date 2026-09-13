@@ -57,6 +57,16 @@ fn channel_key(platform: PlatformId, account: &str) -> String {
     format!("{}:{}", platform.as_str(), account.trim().to_ascii_lowercase())
 }
 
+fn scoped_channel_target(target: &str) -> Option<(PlatformId, &str)> {
+    let (platform, account) = target.split_once(':')?;
+    let platform = platform.parse::<PlatformId>().ok()?;
+    let account = account.trim();
+    if account.is_empty() {
+        return None;
+    }
+    Some((platform, account))
+}
+
 fn stream_password_for(platform: PlatformId, account: &str, broadcast_id: &str) -> Option<String> {
     let key = channel_key(platform, account);
     let Ok(mut passwords) = stream_passwords().lock() else {
@@ -162,11 +172,15 @@ impl NativeWatcherManager {
 
         let db = store::global()?;
         let settings = db.live_settings_with_secrets()?;
-        let config = WatcherConfig::from_values(&self.backend_dir, &settings)?;
         let channels = db.channels()?;
         for channel in &channels {
             ensure_supported(channel.platform)?;
         }
+        let config = WatcherConfig::from_values(
+            &self.backend_dir,
+            &settings,
+            channels_require_soop(&channels),
+        )?;
         let (stop_tx, stop_rx) = oneshot::channel();
         let (command_tx, command_rx) = mpsc::channel(32);
         let backend_dir = self.backend_dir.clone();
@@ -281,36 +295,59 @@ impl NativeWatcherManager {
         Ok(())
     }
 
-    pub async fn channel_password(&self, account: String, password: String) -> Result<()> {
-        let account = account.trim().to_string();
-        if account.is_empty() {
+    pub async fn channel_password(&self, target: String, password: String) -> Result<()> {
+        let target = target.trim().to_string();
+        if target.is_empty() {
             bail!("channel account is empty");
         }
         if password.is_empty() {
             bail!("stream password is empty");
         }
-        let (platform, broadcast_id) = {
+        let (platform, account, broadcast_id) = {
             let snapshot = self.snapshot.read().await;
-            let mut matches = snapshot
-                .channels
-                .iter()
-                .filter(|channel| channel.account.eq_ignore_ascii_case(&account));
-            let channel = matches
-                .next()
-                .ok_or_else(|| anyhow!("channel not found: {account}"))?;
-            if matches.next().is_some() {
-                bail!("channel account is ambiguous across platforms: {account}");
+            if let Some((platform, account)) = scoped_channel_target(&target) {
+                let channel = snapshot
+                    .channels
+                    .iter()
+                    .find(|channel| {
+                        channel.platform == platform
+                            && channel.account.eq_ignore_ascii_case(account)
+                    })
+                    .ok_or_else(|| anyhow!("channel not found: {target}"))?;
+                if channel.status != "PASSWORD_REQUIRED" {
+                    bail!("channel is not waiting for a stream password");
+                }
+                (
+                    platform,
+                    channel.account.clone(),
+                    channel
+                        .bno
+                        .clone()
+                        .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?,
+                )
+            } else {
+                let mut matches = snapshot
+                    .channels
+                    .iter()
+                    .filter(|channel| channel.account.eq_ignore_ascii_case(&target));
+                let channel = matches
+                    .next()
+                    .ok_or_else(|| anyhow!("channel not found: {target}"))?;
+                if matches.next().is_some() {
+                    bail!("channel account is ambiguous across platforms: {target}");
+                }
+                if channel.status != "PASSWORD_REQUIRED" {
+                    bail!("channel is not waiting for a stream password");
+                }
+                (
+                    channel.platform,
+                    channel.account.clone(),
+                    channel
+                        .bno
+                        .clone()
+                        .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?,
+                )
             }
-            if channel.status != "PASSWORD_REQUIRED" {
-                bail!("channel is not waiting for a stream password");
-            }
-            (
-                channel.platform,
-                channel
-                    .bno
-                    .clone()
-                    .ok_or_else(|| anyhow!("protected broadcast number is unavailable"))?,
-            )
         };
         {
             let mut passwords = stream_passwords()
@@ -329,7 +366,8 @@ impl NativeWatcherManager {
                 "[RUST:AUTH] stream password supplied platform={platform} account={account} (memory only)"
             ))
             .await;
-        self.channel_action(account, "recheck").await
+        self.channel_action(channel_key(platform, &account), "recheck")
+            .await
     }
 }
 
@@ -412,14 +450,17 @@ async fn run_native_watcher(
                     next_setting_check = now + Duration::from_secs(1);
                     match store::global().and_then(|db| db.live_settings_with_secrets()) {
                         Ok(values) if values != last_settings => {
-                            match WatcherConfig::from_values(&backend_dir, &values) {
+                            let require_soop = states.values().any(|state| {
+                                state.channel.enabled && state.channel.platform == PlatformId::Soop
+                            });
+                            match WatcherConfig::from_values(&backend_dir, &values, require_soop) {
                                 Ok(new_config) => {
                                     let auth_changed = new_config.soop_username != config.soop_username
                                         || new_config.soop_password != config.soop_password;
                                     config = new_config;
                                     last_settings = values;
                                     logs.push("[RUST] SQLite settings hot reload applied").await;
-                                    if auth_changed {
+                                    if auth_changed && require_soop {
                                         refresh_soop_login(&mut sessions, &config, &logs, "refresh").await;
                                     }
                                 }
@@ -437,12 +478,22 @@ async fn run_native_watcher(
                         Ok(channels) => {
                             let signature = channel_signature(&channels);
                             if signature != last_channel_signature {
-                                if let Err(err) = ensure_sessions(&mut sessions, &channels, &client) {
-                                    logs.push(format!("[RUST:WARN] channel reload contains unsupported platform: {err:#}")).await;
-                                } else {
-                                    apply_channels(&mut states, channels, &recorder, &logs).await;
-                                    last_channel_signature = signature;
-                                    logs.push("[RUST] SQLite channel hot reload applied").await;
+                                let require_soop = channels_require_soop(&channels);
+                                match WatcherConfig::from_values(&backend_dir, &last_settings, require_soop) {
+                                    Err(err) => logs.push(format!("[RUST:WARN] channel reload rejected by platform configuration: {err:#}")).await,
+                                    Ok(new_config) => {
+                                        if let Err(err) = ensure_sessions(&mut sessions, &channels, &client) {
+                                            logs.push(format!("[RUST:WARN] channel reload contains unsupported platform: {err:#}")).await;
+                                        } else {
+                                            config = new_config;
+                                            if require_soop {
+                                                refresh_soop_login(&mut sessions, &config, &logs, "channel reload").await;
+                                            }
+                                            apply_channels(&mut states, channels, &recorder, &logs).await;
+                                            last_channel_signature = signature;
+                                            logs.push("[RUST] SQLite channel hot reload applied").await;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -486,6 +537,12 @@ fn ensure_sessions(
         }
     }
     Ok(())
+}
+
+fn channels_require_soop(channels: &[Channel]) -> bool {
+    channels
+        .iter()
+        .any(|channel| channel.enabled && channel.platform == PlatformId::Soop)
 }
 
 async fn refresh_soop_login(
@@ -574,16 +631,24 @@ async fn apply_channels(
     }
 }
 
-fn command_state_key(states: &HashMap<String, ChannelState>, account: &str) -> Result<String> {
+fn command_state_key(states: &HashMap<String, ChannelState>, target: &str) -> Result<String> {
+    if let Some((platform, account)) = scoped_channel_target(target) {
+        let key = channel_key(platform, account);
+        if states.contains_key(&key) {
+            return Ok(key);
+        }
+        bail!("channel command target not found: {target}");
+    }
+
     let matches = states
         .iter()
-        .filter(|(_, state)| state.channel.account.eq_ignore_ascii_case(account))
+        .filter(|(_, state)| state.channel.account.eq_ignore_ascii_case(target))
         .map(|(key, _)| key.clone())
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [key] => Ok(key.clone()),
-        [] => bail!("channel command target not found: {account}"),
-        _ => bail!("channel account is ambiguous across platforms: {account}"),
+        [] => bail!("channel command target not found: {target}"),
+        _ => bail!("channel account is ambiguous across platforms: {target}"),
     }
 }
 
@@ -593,12 +658,12 @@ async fn handle_command(
     recorder: &RecorderManager,
     logs: &LogBuffer,
 ) {
-    let (account, action) = match &command {
-        WatcherCommand::StopOnce(account) => (account, "stop"),
-        WatcherCommand::Resume(account) => (account, "resume"),
-        WatcherCommand::Recheck(account) => (account, "recheck"),
+    let (target, action) = match &command {
+        WatcherCommand::StopOnce(target) => (target, "stop"),
+        WatcherCommand::Resume(target) => (target, "resume"),
+        WatcherCommand::Recheck(target) => (target, "recheck"),
     };
-    let key = match command_state_key(states, account) {
+    let key = match command_state_key(states, target) {
         Ok(key) => key,
         Err(err) => {
             logs.push(format!("[RUST:WARN] {err}")).await;
@@ -632,16 +697,10 @@ async fn handle_command(
     .await;
 }
 
-async fn login_for_auth_required(
-    platform: PlatformId,
-    session: &mut LiveSession,
-    config: &WatcherConfig,
-) -> Result<String> {
-    match platform {
-        PlatformId::Soop => session
-            .login(&config.soop_username, &config.soop_password)
-            .await,
-    }
+async fn recover_auth_required(session: &mut LiveSession, config: &WatcherConfig) -> Result<String> {
+    session
+        .recover_auth(&config.soop_username, &config.soop_password)
+        .await
 }
 
 async fn poll_channels(
@@ -682,9 +741,9 @@ async fn poll_channels(
             }
             Ok(LiveProbe::AuthRequired) => {
                 state.status = "AUTH".into();
-                match login_for_auth_required(platform, session, config).await {
+                match recover_auth_required(session, config).await {
                     Ok(_) => state.next_check = Instant::now(),
-                    Err(err) => state.detail = Some(format!("login failed: {err}")),
+                    Err(err) => state.detail = Some(err.to_string()),
                 }
             }
             Ok(LiveProbe::Live(live)) => {
@@ -932,19 +991,11 @@ async fn start_recording(
         &channel.name,
         &live.title,
         &config.file_name_pattern,
+        channel.platform,
     )?;
-    let stream_url = if stream
-        .playlist_url
-        .to_ascii_lowercase()
-        .starts_with("hls://")
-    {
-        stream.playlist_url.clone()
-    } else {
-        format!("hls://{}", stream.playlist_url)
-    };
 
     logs.push(format!(
-        "[RUST] stream resolved platform={} account={} hls={} cdn={} host={}",
+        "[RUST] stream resolved platform={} account={} quality={} cdn={} host={}",
         channel.platform, channel.account, stream.quality, stream.cdn, stream.host
     ))
     .await;
@@ -953,7 +1004,7 @@ async fn start_recording(
         .start(
             &config.recorder,
             channel.platform,
-            &stream_url,
+            &stream.input,
             output_file,
             live.id.clone(),
             live.title.clone(),
@@ -1050,17 +1101,28 @@ async fn update_snapshot(
 }
 
 impl WatcherConfig {
-    fn from_values(backend_dir: &Path, map: &BTreeMap<String, String>) -> Result<Self> {
+    fn from_values(
+        backend_dir: &Path,
+        map: &BTreeMap<String, String>,
+        require_soop: bool,
+    ) -> Result<Self> {
         let raw = |name: &str| map.get(name).cloned().unwrap_or_default();
-        let worker_api_key = unprotect_secret(&raw("CLOUDFLARE_API_KEY"), "CLOUDFLARE_API_KEY")?;
-        let soop_password = unprotect_secret(&raw("SOOP_PASSWORD"), "SOOP_PASSWORD")?;
         let worker_url = raw("CLOUDFLARE_WORKER_URL");
-        if !worker_url.starts_with("https://") {
-            bail!("CLOUDFLARE_WORKER_URL must be https://");
-        }
-        if worker_api_key.is_empty() {
-            bail!("CLOUDFLARE_API_KEY is empty");
-        }
+        let soop_username = raw("SOOP_USERNAME");
+        let (worker_api_key, soop_password) = if require_soop {
+            let worker_api_key =
+                unprotect_secret(&raw("CLOUDFLARE_API_KEY"), "CLOUDFLARE_API_KEY")?;
+            let soop_password = unprotect_secret(&raw("SOOP_PASSWORD"), "SOOP_PASSWORD")?;
+            if !worker_url.starts_with("https://") {
+                bail!("CLOUDFLARE_WORKER_URL must be https:// when an enabled SOOP channel exists");
+            }
+            if worker_api_key.is_empty() {
+                bail!("CLOUDFLARE_API_KEY is empty while an enabled SOOP channel exists");
+            }
+            (worker_api_key, soop_password)
+        } else {
+            (String::new(), String::new())
+        };
 
         let output_dir = PathBuf::from(
             map.get("OUTPUT_DIR")
@@ -1084,7 +1146,7 @@ impl WatcherConfig {
                 .to_ascii_uppercase(),
             worker_url,
             worker_api_key,
-            soop_username: raw("SOOP_USERNAME"),
+            soop_username,
             soop_password,
             recorder: RecorderConfig {
                 streamlink,
@@ -1143,19 +1205,28 @@ fn channel_output_dir(channel: &Channel, default: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn unique_output_file(dir: &Path, channel: &str, title: &str, pattern: &str) -> Result<PathBuf> {
+fn unique_output_file(
+    dir: &Path,
+    channel: &str,
+    title: &str,
+    pattern: &str,
+    platform: PlatformId,
+) -> Result<PathBuf> {
     let now = Local::now();
     let date = now.format("%y%m%d").to_string();
     let time = now.format("%H%M%S").to_string();
     let channel = safe_name(channel, 60);
     let title = safe_name(title, 90);
+    let extension = platform.live_output_extension();
 
     let base = match pattern {
         "TIME_TITLE" => format!("{date}_{time}_{title}_{channel}"),
         "BJ_TITLE" => format!("{date}_{channel}_{title}"),
         "TITLE_NUMBER" => {
             for number in 1..=9999 {
-                let path = dir.join(format!("{date}_{title}_{number:02}_{channel}.ts"));
+                let path = dir.join(format!(
+                    "{date}_{title}_{number:02}_{channel}.{extension}"
+                ));
                 if !path.exists() {
                     return Ok(path);
                 }
@@ -1165,12 +1236,12 @@ fn unique_output_file(dir: &Path, channel: &str, title: &str, pattern: &str) -> 
         _ => format!("{date}_{time}_{channel}"),
     };
 
-    let mut path = dir.join(format!("{base}.ts"));
+    let mut path = dir.join(format!("{base}.{extension}"));
     for number in 2..=9999 {
         if !path.exists() {
             return Ok(path);
         }
-        path = dir.join(format!("{base}_{number:02}.ts"));
+        path = dir.join(format!("{base}_{number:02}.{extension}"));
     }
     bail!("too many output filename collisions")
 }
@@ -1282,6 +1353,16 @@ mod tests {
         }
     }
 
+    fn chzzk_channel(enabled: bool) -> Channel {
+        Channel {
+            platform: PlatformId::Chzzk,
+            enabled,
+            name: "CHZZK".into(),
+            account: "0123456789abcdef0123456789abcdef".into(),
+            outdir: String::new(),
+        }
+    }
+
     #[test]
     fn safe_filename_replaces_windows_reserved_chars() {
         assert_eq!(safe_name("a:b/c*?d", 80), "a_b_c__d");
@@ -1289,10 +1370,68 @@ mod tests {
     }
 
     #[test]
+    fn title_number_collision_scans_with_platform_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "stream-archive-title-number-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let first_chzzk = unique_output_file(
+            &dir,
+            "Channel",
+            "Title",
+            "TITLE_NUMBER",
+            PlatformId::Chzzk,
+        )
+        .unwrap();
+        assert_eq!(first_chzzk.extension().and_then(|v| v.to_str()), Some("mp4"));
+        assert!(first_chzzk.file_name().unwrap().to_string_lossy().contains("_01_"));
+        fs::write(&first_chzzk, b"existing").unwrap();
+
+        let second_chzzk = unique_output_file(
+            &dir,
+            "Channel",
+            "Title",
+            "TITLE_NUMBER",
+            PlatformId::Chzzk,
+        )
+        .unwrap();
+        assert_eq!(second_chzzk.extension().and_then(|v| v.to_str()), Some("mp4"));
+        assert!(second_chzzk.file_name().unwrap().to_string_lossy().contains("_02_"));
+
+        let first_soop = unique_output_file(
+            &dir,
+            "Channel",
+            "Title",
+            "TITLE_NUMBER",
+            PlatformId::Soop,
+        )
+        .unwrap();
+        assert_eq!(first_soop.extension().and_then(|v| v.to_str()), Some("ts"));
+        assert!(first_soop.file_name().unwrap().to_string_lossy().contains("_01_"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn channel_signature_is_case_insensitive_for_accounts() {
         let a = vec![channel("A", "UserA")];
         let b = vec![channel("A", "usera")];
         assert_eq!(channel_signature(&a), channel_signature(&b));
+    }
+
+    #[test]
+    fn soop_worker_credentials_are_needed_only_for_enabled_soop_channels() {
+        assert!(!channels_require_soop(&[chzzk_channel(true)]));
+
+        let mut disabled_soop = channel("SOOP", "disabled");
+        disabled_soop.enabled = false;
+        assert!(!channels_require_soop(&[disabled_soop, chzzk_channel(true)]));
+
+        assert!(channels_require_soop(&[
+            channel("SOOP", "enabled"),
+            chzzk_channel(true),
+        ]));
     }
 
     #[test]
@@ -1348,5 +1487,33 @@ mod tests {
     #[test]
     fn channel_key_namespaces_accounts_by_platform() {
         assert_eq!(channel_key(PlatformId::Soop, "User"), "SOOP:user");
+        assert_eq!(
+            channel_key(PlatformId::Chzzk, "ABCDEF0123456789ABCDEF0123456789"),
+            "CHZZK:abcdef0123456789abcdef0123456789"
+        );
+    }
+
+    #[test]
+    fn scoped_channel_command_targets_composite_identity() {
+        let account = "0123456789abcdef0123456789abcdef";
+        let mut states = HashMap::new();
+        states.insert(
+            channel_key(PlatformId::Soop, account),
+            ChannelState::new(channel("SOOP", account)),
+        );
+        states.insert(
+            channel_key(PlatformId::Chzzk, account),
+            ChannelState::new(chzzk_channel(true)),
+        );
+
+        assert_eq!(
+            command_state_key(&states, &format!("SOOP:{account}")).unwrap(),
+            channel_key(PlatformId::Soop, account)
+        );
+        assert_eq!(
+            command_state_key(&states, &format!("CHZZK:{account}")).unwrap(),
+            channel_key(PlatformId::Chzzk, account)
+        );
+        assert!(command_state_key(&states, account).is_err());
     }
 }

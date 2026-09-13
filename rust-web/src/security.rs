@@ -6,7 +6,12 @@ use std::{fs, path::Path};
 pub const DPAPI_PREFIX: &str = "dpapi:v1:";
 const DPAPI_ENTROPY: &[u8] = b"SOOPLiveDownloader:v1";
 #[cfg(test)]
-const SECRET_KEYS: &[&str] = &["SOOP_PASSWORD", "CLOUDFLARE_API_KEY"];
+const SECRET_KEYS: &[&str] = &[
+    "SOOP_PASSWORD",
+    "CLOUDFLARE_API_KEY",
+    "CHZZK_NID_AUT",
+    "CHZZK_NID_SES",
+];
 
 pub fn is_protected(value: &str) -> bool {
     value.trim().to_ascii_lowercase().starts_with(DPAPI_PREFIX)
@@ -203,10 +208,16 @@ mod tests {
     fn configured_status_does_not_expose_values() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.ini");
-        fs::write(&path, "SOOP_PASSWORD=secret\nCLOUDFLARE_API_KEY=\n").unwrap();
+        fs::write(
+            &path,
+            "SOOP_PASSWORD=secret\nCLOUDFLARE_API_KEY=\nCHZZK_NID_AUT=aut\nCHZZK_NID_SES=ses\n",
+        )
+        .unwrap();
         let status = configured_secrets(&path).unwrap();
         assert_eq!(status["SOOP_PASSWORD"], true);
         assert_eq!(status["CLOUDFLARE_API_KEY"], false);
+        assert_eq!(status["CHZZK_NID_AUT"], true);
+        assert_eq!(status["CHZZK_NID_SES"], true);
     }
 
     #[cfg(windows)]

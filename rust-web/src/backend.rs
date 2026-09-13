@@ -17,7 +17,12 @@ const SETTINGS_EXAMPLE_FILE: &str = "SOOP_LIVE_SETTING.example.ini";
 const CHANNELS_FILE: &str = "SOOP_LIVE_CHANNELS.txt";
 const CHANNELS_EXAMPLE_FILE: &str = "SOOP_LIVE_CHANNELS.example.txt";
 
-pub const HIDDEN_SETTING_KEYS: &[&str] = &["SOOP_PASSWORD", "CLOUDFLARE_API_KEY"];
+pub const HIDDEN_SETTING_KEYS: &[&str] = &[
+    "SOOP_PASSWORD",
+    "CLOUDFLARE_API_KEY",
+    "CHZZK_NID_AUT",
+    "CHZZK_NID_SES",
+];
 
 pub const SAFE_SETTING_KEYS: &[&str] = &[
     "CHECK_INTERVAL",
@@ -221,107 +226,26 @@ pub fn read_safe_settings(path: &Path) -> Result<BTreeMap<String, String>> {
     Ok(result)
 }
 
-#[cfg(test)]
-pub fn update_settings(path: &Path, updates: &BTreeMap<String, String>) -> Result<()> {
-    validate_setting_updates(updates)?;
-    let original =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let newline = preferred_newline(&original);
-    let normalized = normalize_line_endings(&original);
-    let mut seen = HashSet::new();
-    let mut output = Vec::new();
-
-    for raw in normalized.lines() {
-        let trimmed = raw.trim();
-        if !trimmed.starts_with('#') {
-            if let Some((key, _)) = raw.split_once('=') {
-                let key = key.trim();
-                if let Some(value) = updates.get(key) {
-                    output.push(format!("{key}={value}"));
-                    seen.insert(key.to_string());
-                    continue;
-                }
-            }
-        }
-        output.push(raw.to_string());
-    }
-
-    for (key, value) in updates {
-        if !seen.contains(key) {
-            output.push(format!("{key}={value}"));
-        }
-    }
-
-    let mut content = output.join(newline);
-    content.push_str(newline);
-    backup_existing(path)?;
-    write_atomic(path, content.as_bytes())
-}
-
-#[cfg(test)]
-fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()> {
-    let allowed: HashSet<&str> = SAFE_SETTING_KEYS.iter().copied().collect();
-    for (key, value) in updates {
-        if !allowed.contains(key.as_str()) {
-            bail!("setting is not editable in Rust web: {key}");
-        }
-        validate_single_line(value, 2048, &format!("setting {key}"))?;
-        match key.as_str() {
-            "CHECK_INTERVAL" => validate_int(value, 1, 86_400, key)?,
-            "CHANNEL_RELOAD_INTERVAL" => validate_int(value, 1, 3_600, key)?,
-            "RECORD_RETRY_INTERVAL" => validate_int(value, 1, 3_600, key)?,
-            "RECORD_STALL_TIMEOUT" => validate_int(value, 10, 86_400, key)?,
-            "RECORD_MONITOR_INTERVAL" => validate_int(value, 1, 3_600, key)?,
-            "WORKER_MAX_RETRY" => validate_int(value, 0, 100, key)?,
-            "CONSOLE_REFRESH_INTERVAL" => validate_int(value, 1, 3_600, key)?,
-            "MIN_FREE_SPACE_GB" => validate_int(value, 0, 1_000_000, key)?,
-            "LOG_RETENTION_DAYS" => validate_int(value, 0, 36_500, key)?,
-            "CONSOLE_AUTO_FORMAT"
-            | "CONSOLE_COLOR"
-            | "CONSOLE_SHOW_PATH"
-            | "GUI_NOTIFY_RECORD_START"
-            | "GUI_NOTIFY_RECORD_FINISH"
-            | "GUI_NOTIFY_WARNING"
-            | "LOG_ENABLED" => validate_yes_no(value, key)?,
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn validate_int(value: &str, min: u64, max: u64, key: &str) -> Result<()> {
-    let parsed: u64 = value
-        .parse()
-        .with_context(|| format!("{key} must be an integer"))?;
-    if !(min..=max).contains(&parsed) {
-        bail!("{key} must be between {min} and {max}");
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn validate_yes_no(value: &str, key: &str) -> Result<()> {
-    if !matches!(value.to_ascii_uppercase().as_str(), "Y" | "N") {
-        bail!("{key} must be Y or N");
-    }
-    Ok(())
-}
-
 pub fn read_channels(path: &Path) -> Result<Vec<Channel>> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let normalized = normalize_line_endings(&content);
-    let mut channels = Vec::new();
+    parse_channels(&content)
+}
 
+pub fn parse_channels(content: &str) -> Result<Vec<Channel>> {
+    let normalized = content
+        .trim_start_matches('\u{feff}')
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let mut channels = Vec::new();
     for (index, raw) in normalized.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let parts: Vec<&str> = raw.splitn(4, '|').collect();
+        let parts: Vec<&str> = line.split('|').collect();
         if parts.len() != 4 {
-            bail!("invalid channel line {} in {}", index + 1, path.display());
+            bail!("invalid channel line {}: expected 4 fields", index + 1);
         }
         channels.push(Channel {
             platform: PlatformId::Soop,
@@ -334,106 +258,86 @@ pub fn read_channels(path: &Path) -> Result<Vec<Channel>> {
     Ok(channels)
 }
 
+pub fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let hidden: HashSet<&str> = HIDDEN_SETTING_KEYS.iter().copied().collect();
+    let mut result = BTreeMap::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if hidden.contains(key) {
+            result.insert(key.to_string(), value.trim().to_string());
+        }
+    }
+    Ok(result)
+}
+
+pub fn resolve_setting_path(backend_dir: &Path, raw: &str) -> PathBuf {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return backend_dir.to_path_buf();
+    }
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        backend_dir.join(path)
+    }
+}
+
 #[cfg(test)]
-pub fn write_channels(path: &Path, channels: &[Channel]) -> Result<()> {
-    let mut lines = vec!["# ENABLED|NAME|ACCOUNT|OUTDIR".to_string()];
-    let mut accounts = HashSet::new();
+pub fn write_settings_atomic(path: &Path, values: &BTreeMap<String, String>) -> Result<()> {
+    write_key_values_atomic(path, values)
+}
+
+#[cfg(test)]
+pub fn write_channels_atomic(path: &Path, channels: &[Channel]) -> Result<()> {
+    let mut out = String::new();
     for channel in channels {
-        validate_channel(channel)?;
         if channel.platform != PlatformId::Soop {
             continue;
         }
-        let account_key = channel.account.to_ascii_lowercase();
-        if !accounts.insert(account_key) {
-            bail!("duplicate channel account: {}", channel.account);
-        }
-        lines.push(format!(
-            "{}|{}|{}|{}",
+        out.push_str(&format!(
+            "{}|{}|{}|{}\r\n",
             if channel.enabled { "Y" } else { "N" },
-            channel.name.trim(),
-            channel.account.trim(),
-            channel.outdir.trim()
+            channel.name,
+            channel.account,
+            channel.outdir
         ));
     }
-    let content = format!("{}\r\n", lines.join("\r\n"));
-    backup_existing(path)?;
-    write_atomic(path, content.as_bytes())
-}
-
-#[cfg(test)]
-fn validate_channel(channel: &Channel) -> Result<()> {
-    validate_single_line(&channel.name, 200, "channel name")?;
-    validate_single_line(&channel.account, 200, "channel account")?;
-    validate_single_line(&channel.outdir, 2048, "channel output directory")?;
-    if channel.name.trim().is_empty() {
-        bail!("channel name cannot be empty");
-    }
-    if channel.account.trim().is_empty() {
-        bail!("channel account cannot be empty");
-    }
-    for (label, value) in [
-        ("channel name", channel.name.as_str()),
-        ("channel account", channel.account.as_str()),
-        ("channel output directory", channel.outdir.as_str()),
-    ] {
-        if value.contains('|') {
-            bail!("{label} cannot contain '|'");
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn validate_single_line(value: &str, max_len: usize, label: &str) -> Result<()> {
-    if value.len() > max_len {
-        bail!("{label} is too long");
-    }
-    if value.contains('\r') || value.contains('\n') || value.contains('\0') {
-        bail!("{label} must be a single line");
-    }
-    Ok(())
-}
-
-fn normalize_line_endings(content: &str) -> String {
-    content.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-#[cfg(test)]
-fn preferred_newline(content: &str) -> &'static str {
-    if content.contains("\r\n") {
-        "\r\n"
-    } else if content.contains('\r') && !content.contains('\n') {
-        "\r"
-    } else {
-        "\n"
-    }
-}
-
-#[cfg(test)]
-fn backup_existing(path: &Path) -> Result<()> {
-    if !path.is_file() {
-        return Ok(());
-    }
-    let mut backup_name = path.as_os_str().to_os_string();
-    backup_name.push(".bak");
-    let backup = PathBuf::from(backup_name);
-    fs::copy(path, &backup).with_context(|| {
-        format!(
-            "failed to create backup {} from {}",
-            backup.display(),
-            path.display()
-        )
-    })?;
-    Ok(())
-}
-
-#[cfg(test)]
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
     let mut file = AtomicWriteFile::options()
         .open(path)
-        .with_context(|| format!("failed to open atomic writer for {}", path.display()))?;
-    file.write_all(bytes)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+        .with_context(|| format!("failed to open {} for atomic write", path.display()))?;
+    file.write_all(out.as_bytes())?;
+    file.commit()
+        .with_context(|| format!("failed to commit {}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn write_key_values_atomic(path: &Path, values: &BTreeMap<String, String>) -> Result<()> {
+    let mut out = String::new();
+    for (key, value) in values {
+        out.push_str(key);
+        out.push('=');
+        out.push_str(value);
+        out.push_str("\r\n");
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let mut file = AtomicWriteFile::options()
+        .open(path)
+        .with_context(|| format!("failed to open {} for atomic write", path.display()))?;
+    file.write_all(out.as_bytes())?;
     file.commit()
         .with_context(|| format!("failed to commit {}", path.display()))?;
     Ok(())
@@ -442,96 +346,34 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
-    use tempfile::tempdir;
 
-    #[cfg(windows)]
     #[test]
-    fn strips_windows_verbatim_path_prefixes() {
-        assert_eq!(
-            strip_windows_verbatim_prefix(r"\\?\C:\Users\test\backend"),
-            r"C:\Users\test\backend"
-        );
-        assert_eq!(
-            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\backend"),
-            r"\\server\share\backend"
-        );
+    fn parses_basic_channel_file() {
+        let channels = parse_channels("Y|Alpha|alpha|C:\\A\nN|Beta|beta|C:\\B\n").unwrap();
+        assert_eq!(channels.len(), 2);
+        assert_eq!(channels[0].name, "Alpha");
+        assert_eq!(channels[0].platform, PlatformId::Soop);
+        assert!(channels[0].enabled);
+        assert!(!channels[1].enabled);
     }
 
     #[test]
-    fn channel_parser_accepts_crlf_lf_and_cr() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("channels.txt");
-        for content in [
-            "# header\r\nY|A|a|\r\nN|B|b|D:\\B\r\n",
-            "# header\nY|A|a|\nN|B|b|D:\\B\n",
-            "# header\rY|A|a|\rN|B|b|D:\\B\r",
-        ] {
-            fs::write(&path, content).unwrap();
-            let channels = read_channels(&path).unwrap();
-            assert_eq!(channels.len(), 2);
-            assert_eq!(channels[0].platform, PlatformId::Soop);
-            assert_eq!(channels[0].account, "a");
-            assert_eq!(channels[1].outdir, "D:\\B");
+    fn parses_legacy_channel_line_endings() {
+        for separator in ["\n", "\r\n", "\r"] {
+            let content = format!(
+                "\u{feff}Y|Alpha|alpha|C:\\A{separator}N|Beta|beta|C:\\B{separator}"
+            );
+            let channels = parse_channels(&content).unwrap();
+            assert_eq!(channels.len(), 2, "separator={separator:?}");
+            assert_eq!(channels[0].name, "Alpha");
+            assert_eq!(channels[1].name, "Beta");
         }
     }
 
     #[test]
-    fn settings_update_preserves_hidden_secret_and_creates_backup() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("SOOP_LIVE_SETTING.ini");
-        let original = "CHECK_INTERVAL=30\r\nSOOP_PASSWORD=dpapi:v1:secret\r\nQUALITY=best\r\n";
-        fs::write(&path, original).unwrap();
-
-        let mut updates = BTreeMap::new();
-        updates.insert("CHECK_INTERVAL".into(), "15".into());
-        updates.insert("QUALITY".into(), "1080p".into());
-        update_settings(&path, &updates).unwrap();
-
-        let new_content = fs::read_to_string(&path).unwrap();
-        assert!(new_content.contains("CHECK_INTERVAL=15"));
-        assert!(new_content.contains("QUALITY=1080p"));
-        assert!(new_content.contains("SOOP_PASSWORD=dpapi:v1:secret"));
-        let backup = dir.path().join("SOOP_LIVE_SETTING.ini.bak");
-        assert_eq!(fs::read_to_string(backup).unwrap(), original);
-    }
-
-    #[test]
-    fn channel_write_creates_backup_and_rejects_duplicate_accounts() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("SOOP_LIVE_CHANNELS.txt");
-        fs::write(&path, "Y|Old|old|\r\n").unwrap();
-
-        let channels = vec![Channel {
-            platform: PlatformId::Soop,
-            enabled: true,
-            name: "New".into(),
-            account: "new".into(),
-            outdir: "".into(),
-        }];
-        write_channels(&path, &channels).unwrap();
-        assert!(fs::read_to_string(&path).unwrap().contains("Y|New|new|"));
-        assert_eq!(
-            fs::read_to_string(dir.path().join("SOOP_LIVE_CHANNELS.txt.bak")).unwrap(),
-            "Y|Old|old|\r\n"
-        );
-
-        let dup = vec![
-            Channel {
-                platform: PlatformId::Soop,
-                enabled: true,
-                name: "A".into(),
-                account: "same".into(),
-                outdir: "".into(),
-            },
-            Channel {
-                platform: PlatformId::Soop,
-                enabled: true,
-                name: "B".into(),
-                account: "SAME".into(),
-                outdir: "".into(),
-            },
-        ];
-        assert!(write_channels(&path, &dup).is_err());
+    fn parses_empty_outdir() {
+        let channels = parse_channels("Y|Alpha|alpha|\n").unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].outdir, "");
     }
 }

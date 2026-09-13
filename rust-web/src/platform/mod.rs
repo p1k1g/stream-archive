@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::{fmt, str::FromStr};
 use url::Url;
 
+pub mod chzzk;
 pub mod live;
 pub mod soop;
 pub mod vod;
@@ -14,12 +15,21 @@ pub mod vod;
 pub enum PlatformId {
     #[default]
     Soop,
+    Chzzk,
 }
 
 impl PlatformId {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Soop => "SOOP",
+            Self::Chzzk => "CHZZK",
+        }
+    }
+
+    pub const fn live_output_extension(self) -> &'static str {
+        match self {
+            Self::Soop => "ts",
+            Self::Chzzk => "mp4",
         }
     }
 }
@@ -36,6 +46,7 @@ impl FromStr for PlatformId {
     fn from_str(value: &str) -> Result<Self> {
         match value.trim().to_ascii_uppercase().as_str() {
             "" | "SOOP" => Ok(Self::Soop),
+            "CHZZK" => Ok(Self::Chzzk),
             other => bail!("지원하지 않는 플랫폼입니다: {other}"),
         }
     }
@@ -61,6 +72,7 @@ pub trait PlatformProvider: Send + Sync {
 pub fn provider(id: PlatformId) -> &'static dyn PlatformProvider {
     match id {
         PlatformId::Soop => &soop::SOOP,
+        PlatformId::Chzzk => &chzzk::CHZZK,
     }
 }
 
@@ -70,8 +82,9 @@ pub const fn default_platform() -> PlatformId {
 
 pub fn detect_vod_platform(raw_url: &str) -> Result<PlatformId> {
     let url = Url::parse(raw_url)?;
-    for id in [PlatformId::Soop] {
-        if provider(id).accepts_vod_url(&url) {
+    for id in [PlatformId::Soop, PlatformId::Chzzk] {
+        let provider = provider(id);
+        if provider.capabilities().vod && provider.accepts_vod_url(&url) {
             return Ok(id);
         }
     }
@@ -87,23 +100,33 @@ mod tests {
         assert_eq!(PlatformId::default(), PlatformId::Soop);
         assert_eq!("SOOP".parse::<PlatformId>().unwrap(), PlatformId::Soop);
         assert_eq!("soop".parse::<PlatformId>().unwrap(), PlatformId::Soop);
-        assert!("CHZZK".parse::<PlatformId>().is_err());
+        assert_eq!("CHZZK".parse::<PlatformId>().unwrap(), PlatformId::Chzzk);
+        assert_eq!("chzzk".parse::<PlatformId>().unwrap(), PlatformId::Chzzk);
     }
 
     #[test]
-    fn detects_soop_vod_urls_without_accepting_other_hosts() {
+    fn live_output_extensions_match_platform_container() {
+        assert_eq!(PlatformId::Soop.live_output_extension(), "ts");
+        assert_eq!(PlatformId::Chzzk.live_output_extension(), "mp4");
+    }
+
+    #[test]
+    fn detects_soop_vod_urls_without_enabling_chzzk_vod_yet() {
         assert_eq!(
             detect_vod_platform("https://vod.sooplive.com/player/123456789").unwrap(),
             PlatformId::Soop
         );
+        assert!(detect_vod_platform("https://chzzk.naver.com/video/123456").is_err());
         assert!(detect_vod_platform("https://example.com/player/123456789").is_err());
     }
 
     #[test]
     fn provider_capabilities_are_explicit() {
-        let capabilities = provider(default_platform()).capabilities();
-        assert!(capabilities.channel_lookup && capabilities.live && capabilities.vod);
-        assert_eq!(provider(default_platform()).id().as_str(), "SOOP");
-        assert_eq!(provider(default_platform()).display_name(), "SOOP");
+        let soop = provider(PlatformId::Soop).capabilities();
+        assert!(soop.channel_lookup && soop.live && soop.vod);
+        let chzzk = provider(PlatformId::Chzzk).capabilities();
+        assert!(chzzk.channel_lookup && chzzk.live && !chzzk.vod);
+        assert_eq!(provider(PlatformId::Soop).display_name(), "SOOP");
+        assert_eq!(provider(PlatformId::Chzzk).display_name(), "CHZZK");
     }
 }

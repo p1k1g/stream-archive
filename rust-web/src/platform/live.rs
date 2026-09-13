@@ -1,4 +1,4 @@
-use super::{PlatformId, soop};
+use super::{PlatformId, chzzk, soop};
 use anyhow::{Result, bail};
 use reqwest::Client;
 
@@ -14,6 +14,25 @@ pub struct LiveBroadcast {
 #[derive(Debug, Clone)]
 pub(crate) enum BroadcastPayload {
     Soop(soop::live::SoopBroadcast),
+    Chzzk(chzzk::live::ChzzkBroadcast),
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpCookie {
+    pub domain: String,
+    pub name: String,
+    pub value: String,
+    pub secure: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum StreamInput {
+    DirectHls(String),
+    PluginUrl {
+        url: String,
+        cookies: Vec<HttpCookie>,
+        start_at_zero: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -21,7 +40,7 @@ pub struct ResolvedStream {
     pub quality: String,
     pub cdn: String,
     pub host: String,
-    pub playlist_url: String,
+    pub input: StreamInput,
 }
 
 pub struct StreamResolveConfig<'a> {
@@ -39,18 +58,28 @@ pub enum LiveProbe {
 
 pub enum LiveSession {
     Soop(soop::live::SoopLiveSession),
+    Chzzk(chzzk::live::ChzzkLiveSession),
 }
 
 impl LiveSession {
     pub fn new(platform: PlatformId, client: Client) -> Result<Self> {
         match platform {
             PlatformId::Soop => Ok(Self::Soop(soop::live::SoopLiveSession::new(client))),
+            PlatformId::Chzzk => Ok(Self::Chzzk(chzzk::live::ChzzkLiveSession::new(client))),
         }
     }
 
     pub async fn login(&mut self, username: &str, password: &str) -> Result<String> {
         match self {
             Self::Soop(session) => session.login(username, password).await,
+            Self::Chzzk(_) => bail!("CHZZK는 ID/PW 로그인을 사용하지 않습니다."),
+        }
+    }
+
+    pub async fn recover_auth(&mut self, username: &str, password: &str) -> Result<String> {
+        match self {
+            Self::Soop(session) => session.login(username, password).await,
+            Self::Chzzk(session) => session.recover_auth(),
         }
     }
 
@@ -65,6 +94,17 @@ impl LiveSession {
                     title: value.title.clone(),
                     password_required: soop::live::is_password_protected(&value.bpwd),
                     payload: BroadcastPayload::Soop(value),
+                })),
+            },
+            Self::Chzzk(session) => match session.probe(account).await? {
+                chzzk::live::ChzzkProbe::Offline => Ok(LiveProbe::Offline),
+                chzzk::live::ChzzkProbe::AuthRequired => Ok(LiveProbe::AuthRequired),
+                chzzk::live::ChzzkProbe::Live(value) => Ok(LiveProbe::Live(LiveBroadcast {
+                    id: value.live_id.clone(),
+                    channel_name: value.channel_name.clone(),
+                    title: value.title.clone(),
+                    password_required: false,
+                    payload: BroadcastPayload::Chzzk(value),
                 })),
             },
         }
@@ -93,15 +133,26 @@ impl LiveSession {
                     quality: stream.quality,
                     cdn: stream.cdn,
                     host: stream.host,
-                    playlist_url: stream.playlist_url,
+                    input: StreamInput::DirectHls(stream.playlist_url),
                 })
             }
+            (Self::Chzzk(session), BroadcastPayload::Chzzk(value)) => {
+                let stream = session.resolve_stream(account, value).await?;
+                Ok(ResolvedStream {
+                    quality: stream.quality,
+                    cdn: "streamlink-plugin".into(),
+                    host: "chzzk.naver.com".into(),
+                    input: stream.input,
+                })
+            }
+            _ => bail!("LIVE 세션과 방송 payload 플랫폼이 일치하지 않습니다."),
         }
     }
 
     pub fn platform(&self) -> PlatformId {
         match self {
             Self::Soop(_) => PlatformId::Soop,
+            Self::Chzzk(_) => PlatformId::Chzzk,
         }
     }
 }

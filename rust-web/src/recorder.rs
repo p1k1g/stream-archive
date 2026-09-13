@@ -2,12 +2,12 @@ use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
     store,
-    support::platform::PlatformId,
+    support::platform::{PlatformId, live::StreamInput},
 };
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use std::{
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant},
@@ -19,6 +19,7 @@ use tokio::{
 use uuid::Uuid;
 
 const GB: u64 = 1024 * 1024 * 1024;
+const COOKIE_FILE_EXPIRES_UNIX: i64 = 4_102_444_800; // 2100-01-01 UTC
 
 #[derive(Debug, Clone)]
 pub struct RecorderConfig {
@@ -27,6 +28,20 @@ pub struct RecorderConfig {
     pub stall_timeout: u64,
     pub monitor_interval: u64,
     pub min_free_space_gb: f64,
+}
+
+struct CookieFile(PathBuf);
+
+impl CookieFile {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for CookieFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 pub struct Recording {
@@ -38,6 +53,7 @@ pub struct Recording {
     pub history_id: String,
     child: Child,
     output_dir: PathBuf,
+    cookie_file: Option<CookieFile>,
     last_size: u64,
     last_growth: Instant,
     last_monitor: Instant,
@@ -48,6 +64,85 @@ pub enum RecordingPoll {
     Exited(Option<i32>),
     LowDisk(f64),
     Stalled,
+}
+
+fn output_file_for_platform(mut requested: PathBuf, platform: PlatformId) -> Result<PathBuf> {
+    let extension = platform.live_output_extension();
+    let already_matches = requested
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension));
+    if !already_matches {
+        requested.set_extension(extension);
+    }
+    if !requested.exists() {
+        return Ok(requested);
+    }
+
+    let parent = requested.parent().unwrap_or_else(|| Path::new("."));
+    let stem = requested
+        .file_stem()
+        .ok_or_else(|| anyhow!("output file has no valid file stem"))?
+        .to_os_string();
+    for number in 2..=9999 {
+        let mut file_name = stem.clone();
+        file_name.push(format!("_{number:02}.{extension}"));
+        let candidate = parent.join(file_name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    bail!("too many output filename collisions")
+}
+
+fn find_on_path(names: &[&str]) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    for dir in env::split_paths(&path) {
+        for name in names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_timestamp_rebase_ffmpeg(streamlink: &Path) -> Result<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(streamlink_dir) = streamlink.parent() {
+        candidates.push(streamlink_dir.join("ffmpeg.exe"));
+        candidates.push(streamlink_dir.join("vod").join("ffmpeg.exe"));
+        if let Some(streamlink_root) = streamlink_dir.parent() {
+            // Official Streamlink Windows builds install streamlink.exe under bin/
+            // and the bundled FFmpeg executable under ffmpeg/.
+            candidates.push(streamlink_root.join("ffmpeg").join("ffmpeg.exe"));
+            candidates.push(streamlink_root.join("ffmpeg.exe"));
+        }
+    }
+    if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+        return Ok(path);
+    }
+    if let Some(path) = find_on_path(&["ffmpeg.exe", "ffmpeg"]) {
+        return Ok(path);
+    }
+    bail!(
+        "CHZZK LIVE timestamp rebasing requires FFmpeg. Install the Streamlink Windows build with bundled FFmpeg or add ffmpeg.exe to PATH."
+    )
+}
+
+fn timestamp_rebase_player_args(output_file: &Path) -> Result<String> {
+    let output = output_file.to_string_lossy();
+    if output.contains('"') {
+        bail!("output file path contains an unsupported quote character");
+    }
+    // Streamlink expands {...} formatting variables in --player-args. Escape
+    // literal braces from user-controlled output paths before handing the string
+    // to Streamlink's player argument tokenizer.
+    let output = output.replace('{', "{{").replace('}', "}}");
+    Ok(format!(
+        "-hide_banner -loglevel warning -copyts -start_at_zero -i {{playerinput}} -map 0:v:0? -map 0:a:0? -c copy -movflags +frag_keyframe+empty_moov+default_base_moof -f mp4 -y \"{output}\""
+    ))
 }
 
 #[derive(Clone)]
@@ -65,13 +160,14 @@ impl RecorderManager {
         &self,
         config: &RecorderConfig,
         platform: PlatformId,
-        stream_url: &str,
+        input: &StreamInput,
         output_file: PathBuf,
         bno: String,
         title: String,
         channel: &str,
         account: &str,
     ) -> Result<Recording> {
+        let output_file = output_file_for_platform(output_file, platform)?;
         let output_dir = output_file
             .parent()
             .ok_or_else(|| anyhow!("output file has no parent"))?
@@ -85,17 +181,68 @@ impl RecorderManager {
             );
         }
 
+        let (stream_url, cookies, start_at_zero) = match input {
+            StreamInput::DirectHls(url) => {
+                let url = if url.to_ascii_lowercase().starts_with("hls://") {
+                    url.clone()
+                } else {
+                    format!("hls://{url}")
+                };
+                (url, None, false)
+            }
+            StreamInput::PluginUrl {
+                url,
+                cookies,
+                start_at_zero,
+            } => {
+                preflight_plugin_input(config, url, !cookies.is_empty()).await?;
+                (url.clone(), Some(cookies.as_slice()), *start_at_zero)
+            }
+        };
+
+        // Resolve every fallible timestamp-player setting before creating the
+        // plaintext authentication cookie file. The CookieFile guard then owns
+        // deletion across spawn failures and all subsequent early returns.
+        let timestamp_player = if start_at_zero {
+            Some((
+                resolve_timestamp_rebase_ffmpeg(&config.streamlink)?,
+                timestamp_rebase_player_args(&output_file)?,
+            ))
+        } else {
+            None
+        };
+        let cookie_file = match cookies {
+            Some(cookies) if !cookies.is_empty() => Some(write_cookie_file(cookies)?),
+            _ => None,
+        };
+
         let stream_timeout = config
             .stall_timeout
             .max(10)
             .saturating_add(config.monitor_interval.max(1));
         let mut command = Command::new(&config.streamlink);
+        if let Some(cookie) = cookie_file.as_ref() {
+            command.arg("--http-cookies-file").arg(cookie.path());
+        }
+        if let Some((ffmpeg, player_args)) = timestamp_player {
+            // CHZZK's HLS worker must remain in Streamlink because it rewrites
+            // segment requests. Use FFmpeg as Streamlink's player/output sink so
+            // the already-fetched fMP4 byte stream is remuxed on the fly with a
+            // zero-based timeline. This is stream-copy only: no re-encode and no
+            // post-recording remux step.
+            command
+                .arg("--player")
+                .arg(ffmpeg)
+                .arg("--player-args")
+                .arg(player_args)
+                .arg("--player-verbose");
+        } else {
+            command
+                .arg("--output")
+                .arg(&output_file)
+                .arg("--force");
+        }
         command
-            .arg(stream_url)
-            .arg(&config.quality)
-            .arg("--output")
-            .arg(&output_file)
-            .arg("--force")
             .arg("--progress")
             .arg("no")
             .arg("--hls-live-edge")
@@ -106,6 +253,8 @@ impl RecorderManager {
             .arg("0")
             .arg("--stream-timeout")
             .arg(stream_timeout.to_string())
+            .arg(&stream_url)
+            .arg(&config.quality)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -180,6 +329,7 @@ impl RecorderManager {
             history_id,
             child,
             output_dir,
+            cookie_file,
             last_size: 0,
             last_growth: Instant::now(),
             last_monitor: Instant::now(),
@@ -278,6 +428,189 @@ impl RecorderManager {
     }
 }
 
+async fn preflight_plugin_input(
+    config: &RecorderConfig,
+    url: &str,
+    needs_cookie_file: bool,
+) -> Result<()> {
+    let mut can_handle = Command::new(&config.streamlink);
+    can_handle
+        .arg("--can-handle-url")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(parent) = config.streamlink.parent() {
+        if parent.is_dir() {
+            can_handle.current_dir(parent);
+        }
+    }
+    let status = can_handle.status().await.with_context(|| {
+        format!(
+            "failed to inspect Streamlink plugin support: {}",
+            config.streamlink.display()
+        )
+    })?;
+    if !status.success() {
+        bail!("현재 Streamlink이 이 플랫폼 URL을 처리할 수 없습니다. Streamlink을 최신 버전으로 업데이트하세요: {url}");
+    }
+
+    if needs_cookie_file {
+        let mut help = Command::new(&config.streamlink);
+        help.arg("--help").stdin(Stdio::null());
+        if let Some(parent) = config.streamlink.parent() {
+            if parent.is_dir() {
+                help.current_dir(parent);
+            }
+        }
+        let output = help.output().await.with_context(|| {
+            format!(
+                "failed to inspect Streamlink cookie-file support: {}",
+                config.streamlink.display()
+            )
+        })?;
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        if !text.contains("--http-cookies-file") {
+            bail!("CHZZK 제한 방송 인증에는 --http-cookies-file을 지원하는 Streamlink 8.2 이상이 필요합니다.");
+        }
+    }
+    Ok(())
+}
+
+fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> Result<CookieFile> {
+    let path = env::temp_dir().join(format!(
+        "stream-archive-cookies-{}.txt",
+        Uuid::new_v4().simple()
+    ));
+    let mut text = String::from("# Netscape HTTP Cookie File\n");
+    for cookie in cookies {
+        if cookie.domain.contains(['\r', '\n', '\t'])
+            || cookie.name.contains(['\r', '\n', '\t'])
+            || cookie.value.contains(['\r', '\n', '\t'])
+        {
+            bail!("invalid cookie data");
+        }
+        let include_subdomains = if cookie.domain.starts_with('.') {
+            "TRUE"
+        } else {
+            "FALSE"
+        };
+        let secure = if cookie.secure { "TRUE" } else { "FALSE" };
+        // Streamlink 8.2+ loads Netscape files with Python's MozillaCookieJar.
+        // An expiry value of 0 is treated as already expired and silently dropped,
+        // so use a distant future timestamp; this temporary file is deleted after recording.
+        text.push_str(&format!(
+            "{}\t{}\t/\t{}\t{}\t{}\t{}\n",
+            cookie.domain,
+            include_subdomains,
+            secure,
+            COOKIE_FILE_EXPIRES_UNIX,
+            cookie.name,
+            cookie.value
+        ));
+    }
+    fs::write(&path, text)
+        .with_context(|| format!("failed to create Streamlink cookie file {}", path.display()))?;
+    Ok(CookieFile(path))
+}
+
 pub fn free_gb(path: &Path) -> Result<f64> {
     Ok(fs2::available_space(path)? as f64 / GB as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::support::platform::live::HttpCookie;
+
+    #[test]
+    fn uses_platform_specific_live_output_extension_without_overwriting_existing_file() {
+        let dir = env::temp_dir().join(format!(
+            "stream-archive-extension-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let requested = dir.join("capture.ts");
+
+        assert_eq!(
+            output_file_for_platform(requested.clone(), PlatformId::Soop).unwrap(),
+            requested
+        );
+
+        let chzzk = output_file_for_platform(requested.clone(), PlatformId::Chzzk).unwrap();
+        assert_eq!(chzzk, dir.join("capture.mp4"));
+        fs::write(&chzzk, b"existing").unwrap();
+
+        let next = output_file_for_platform(requested, PlatformId::Chzzk).unwrap();
+        assert_eq!(next, dir.join("capture_02.mp4"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn timestamp_rebase_player_args_keep_copyts_but_shift_to_zero_and_fragment_mp4() {
+        let args = timestamp_rebase_player_args(Path::new("capture.mp4")).unwrap();
+        assert!(args.contains("-copyts -start_at_zero"));
+        assert!(args.contains("-i {playerinput}"));
+        assert!(args.contains("-c copy"));
+        assert!(args.contains("+frag_keyframe+empty_moov+default_base_moof"));
+        assert!(args.ends_with("-f mp4 -y \"capture.mp4\""));
+    }
+
+    #[test]
+    fn timestamp_rebase_player_args_escape_streamlink_format_braces() {
+        let args = timestamp_rebase_player_args(Path::new("capture_{live}.mp4")).unwrap();
+        assert!(args.contains("capture_{{live}}.mp4"));
+    }
+
+    #[test]
+    fn finds_ffmpeg_from_official_streamlink_windows_layout() {
+        let root = env::temp_dir().join(format!(
+            "stream-archive-streamlink-layout-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        let bin = root.join("bin");
+        let ffmpeg_dir = root.join("ffmpeg");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&ffmpeg_dir).unwrap();
+        let streamlink = bin.join("streamlink.exe");
+        let ffmpeg = ffmpeg_dir.join("ffmpeg.exe");
+        fs::write(&streamlink, b"stub").unwrap();
+        fs::write(&ffmpeg, b"stub").unwrap();
+
+        assert_eq!(resolve_timestamp_rebase_ffmpeg(&streamlink).unwrap(), ffmpeg);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn writes_netscape_cookie_file_with_non_expired_cookie() {
+        let cookie_file = write_cookie_file(&[HttpCookie {
+            domain: ".naver.com".into(),
+            name: "NID_AUT".into(),
+            value: "secret-value".into(),
+            secure: true,
+        }])
+        .unwrap();
+        let text = fs::read_to_string(cookie_file.path()).unwrap();
+        assert!(text.contains(&format!(
+            ".naver.com\tTRUE\t/\tTRUE\t{}\tNID_AUT\tsecret-value",
+            COOKIE_FILE_EXPIRES_UNIX
+        )));
+        assert!(!text.contains("\t0\tNID_AUT\t"));
+    }
+
+    #[test]
+    fn cookie_file_guard_removes_plaintext_temp_file_on_drop() {
+        let cookie_file = write_cookie_file(&[HttpCookie {
+            domain: ".naver.com".into(),
+            name: "NID_SES".into(),
+            value: "sensitive-session-value".into(),
+            secure: true,
+        }])
+        .unwrap();
+        let path = cookie_file.path().to_path_buf();
+        assert!(path.is_file());
+        drop(cookie_file);
+        assert!(!path.exists());
+    }
 }

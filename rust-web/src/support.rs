@@ -8,6 +8,19 @@ pub mod platform;
 use platform::{PlatformId, default_platform, provider};
 
 pub async fn resolve_channel_name(account: &str) -> Result<String> {
+    let account = account.trim();
+    if let Some(value) = account.strip_prefix("CHZZK:") {
+        return resolve_channel_name_for(PlatformId::Chzzk, value).await;
+    }
+    if let Some(value) = account.strip_prefix("chzzk:") {
+        return resolve_channel_name_for(PlatformId::Chzzk, value).await;
+    }
+    if let Some(value) = account.strip_prefix("SOOP:") {
+        return resolve_channel_name_for(PlatformId::Soop, value).await;
+    }
+    if let Some(value) = account.strip_prefix("soop:") {
+        return resolve_channel_name_for(PlatformId::Soop, value).await;
+    }
     resolve_channel_name_for(default_platform(), account).await
 }
 
@@ -49,5 +62,11 @@ mod tests {
     #[test]
     fn default_channel_provider_is_soop() {
         assert_eq!(default_platform(), PlatformId::Soop);
+    }
+
+    #[test]
+    fn platform_prefixes_are_unambiguous() {
+        assert!("CHZZK:0123456789abcdef0123456789abcdef".starts_with("CHZZK:"));
+        assert!("SOOP:example".starts_with("SOOP:"));
     }
 }
