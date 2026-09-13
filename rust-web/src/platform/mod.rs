@@ -111,12 +111,16 @@ mod tests {
     }
 
     #[test]
-    fn detects_soop_vod_urls_without_enabling_chzzk_vod_yet() {
+    fn detects_soop_and_chzzk_vod_urls() {
         assert_eq!(
             detect_vod_platform("https://vod.sooplive.com/player/123456789").unwrap(),
             PlatformId::Soop
         );
-        assert!(detect_vod_platform("https://chzzk.naver.com/video/123456").is_err());
+        assert_eq!(
+            detect_vod_platform("https://chzzk.naver.com/video/123456").unwrap(),
+            PlatformId::Chzzk
+        );
+        assert!(detect_vod_platform("https://chzzk.naver.com/live/123456").is_err());
         assert!(detect_vod_platform("https://example.com/player/123456789").is_err());
     }
 
@@ -125,7 +129,7 @@ mod tests {
         let soop = provider(PlatformId::Soop).capabilities();
         assert!(soop.channel_lookup && soop.live && soop.vod);
         let chzzk = provider(PlatformId::Chzzk).capabilities();
-        assert!(chzzk.channel_lookup && chzzk.live && !chzzk.vod);
+        assert!(chzzk.channel_lookup && chzzk.live && chzzk.vod);
         assert_eq!(provider(PlatformId::Soop).display_name(), "SOOP");
         assert_eq!(provider(PlatformId::Chzzk).display_name(), "CHZZK");
     }
