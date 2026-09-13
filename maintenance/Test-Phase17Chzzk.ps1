@@ -19,6 +19,7 @@ function Assert-NotMatch([string]$text, [string]$pattern, [string]$message) {
 }
 
 $platform = Read-RepoFile 'rust-web/src/platform/mod.rs'
+$platformLive = Read-RepoFile 'rust-web/src/platform/live.rs'
 $chzzk = Read-RepoFile 'rust-web/src/platform/chzzk/mod.rs'
 $auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
 $live = Read-RepoFile 'rust-web/src/platform/chzzk/live.rs'
@@ -56,6 +57,14 @@ Assert-Match $live 'return auth_failure\(auth\)' 'Restricted playback auth handl
 Assert-Match $live 'ChzzkAuthState::Configured' 'Expired or unauthorized CHZZK auth path is missing.'
 Assert-Match $live 'cookies:\s*if live\.requires_auth' 'Public CHZZK LIVE must not always forward stored cookies.'
 
+# AuthRequired recovery must stay behind the platform-neutral facade.
+Assert-Match $platformLive 'pub async fn recover_auth' 'LIVE facade auth recovery entrypoint is missing.'
+Assert-Match $platformLive 'Self::Chzzk\(session\)\s*=>\s*session\.recover_auth\(\)' 'CHZZK auth recovery is not dispatched through the LIVE facade.'
+Assert-Match $live 'pub fn recover_auth\(&self\)' 'CHZZK provider-owned auth recovery guidance is missing.'
+Assert-Match $watcher 'recover_auth_required\(session, config\)' 'Watcher does not use provider-neutral auth recovery.'
+Assert-Match $watcher '\.recover_auth\(&config\.soop_username, &config\.soop_password\)' 'Watcher auth recovery is not routed through LiveSession.'
+Assert-NotMatch $watcher 'CHZZK 제한 방송 인증' 'Provider-specific CHZZK auth policy leaked into the common watcher.'
+
 # Streamlink plugin boundary / secret-safe cookie transport.
 Assert-Match $recorder 'StreamInput::PluginUrl' 'Recorder does not accept provider plugin URLs.'
 Assert-Match $recorder '"--can-handle-url"' 'Streamlink plugin preflight is missing.'
@@ -64,6 +73,12 @@ Assert-Match $recorder 'Netscape HTTP Cookie File' 'Netscape cookie-file generat
 Assert-Match $recorder 'COOKIE_FILE_EXPIRES_UNIX' 'CHZZK Netscape cookie entries must use a non-expired timestamp.'
 Assert-Match $recorder '4_102_444_800' 'CHZZK Netscape cookie expiry must stay in the future.'
 Assert-NotMatch $recorder '--http-cookie\s+NID_' 'CHZZK cookie values must not be exposed as direct process arguments.'
+
+# CHZZK fMP4 must start at the recording origin while SOOP remains unchanged.
+Assert-Match $platformLive 'start_at_zero:\s*bool' 'Plugin stream timestamp policy is missing from StreamInput.'
+Assert-Match $live 'start_at_zero:\s*true' 'CHZZK LIVE does not request zero-based recording timestamps.'
+Assert-Match $recorder 'if start_at_zero\s*\{\s*command\.arg\("--ffmpeg-start-at-zero"\)' 'Recorder does not apply the CHZZK zero-based FFmpeg timeline option.'
+Assert-Match $live 'assert!\(start_at_zero\)' 'CHZZK timestamp policy regression coverage is missing.'
 
 # LIVE files must keep their real platform container extension without remuxing.
 Assert-Match $platform 'pub const fn live_output_extension' 'Platform LIVE output extension mapping is missing.'
@@ -105,5 +120,10 @@ Assert-Match $app 'CHZZK_NID_AUT' 'CHZZK NID_AUT settings UI binding is missing.
 Assert-Match $app 'CHZZK_NID_SES' 'CHZZK NID_SES settings UI binding is missing.'
 Assert-Match $app '\[\$\{platform\}\]' 'Runtime platform label rendering is missing.'
 Assert-Match $phase8 'function p8LiveRow\(x\).*x\.platform' 'Visible LIVE history renderer does not show the platform label.'
+
+# Export and settings-tab transitions must preserve multiplatform UX.
+Assert-Match $phase8 '\[''type'',''platform'',''status''' 'History CSV export is missing the platform column.'
+Assert-Match $phase8 '\[''LIVE'',String\(x\.platform\|\|''SOOP''\)\.toUpperCase\(\)' 'LIVE CSV rows do not preserve platform identity.'
+Assert-Match $app 'function deactivateChzzkSettings\(\).*p8SettingsFields.*hidden=false' 'Leaving CHZZK auth does not restore normal settings fields.'
 
 Write-Host 'Phase 17 CHZZK regression checks passed.'
