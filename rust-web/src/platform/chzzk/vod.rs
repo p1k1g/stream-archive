@@ -1040,7 +1040,10 @@ fn publish_by_copy(source: &Path, target: &Path, rename_error: &std::io::Error) 
                 temp.display()
             )
         })?;
-        File::open(&temp)
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&temp)
             .and_then(|file| file.sync_all())
             .with_context(|| {
                 format!(
