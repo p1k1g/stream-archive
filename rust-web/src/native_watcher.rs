@@ -991,6 +991,7 @@ async fn start_recording(
         &channel.name,
         &live.title,
         &config.file_name_pattern,
+        channel.platform,
     )?;
 
     logs.push(format!(
@@ -1204,19 +1205,28 @@ fn channel_output_dir(channel: &Channel, default: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn unique_output_file(dir: &Path, channel: &str, title: &str, pattern: &str) -> Result<PathBuf> {
+fn unique_output_file(
+    dir: &Path,
+    channel: &str,
+    title: &str,
+    pattern: &str,
+    platform: PlatformId,
+) -> Result<PathBuf> {
     let now = Local::now();
     let date = now.format("%y%m%d").to_string();
     let time = now.format("%H%M%S").to_string();
     let channel = safe_name(channel, 60);
     let title = safe_name(title, 90);
+    let extension = platform.live_output_extension();
 
     let base = match pattern {
         "TIME_TITLE" => format!("{date}_{time}_{title}_{channel}"),
         "BJ_TITLE" => format!("{date}_{channel}_{title}"),
         "TITLE_NUMBER" => {
             for number in 1..=9999 {
-                let path = dir.join(format!("{date}_{title}_{number:02}_{channel}.ts"));
+                let path = dir.join(format!(
+                    "{date}_{title}_{number:02}_{channel}.{extension}"
+                ));
                 if !path.exists() {
                     return Ok(path);
                 }
@@ -1226,12 +1236,12 @@ fn unique_output_file(dir: &Path, channel: &str, title: &str, pattern: &str) -> 
         _ => format!("{date}_{time}_{channel}"),
     };
 
-    let mut path = dir.join(format!("{base}.ts"));
+    let mut path = dir.join(format!("{base}.{extension}"));
     for number in 2..=9999 {
         if !path.exists() {
             return Ok(path);
         }
-        path = dir.join(format!("{base}_{number:02}.ts"));
+        path = dir.join(format!("{base}_{number:02}.{extension}"));
     }
     bail!("too many output filename collisions")
 }
@@ -1357,6 +1367,50 @@ mod tests {
     fn safe_filename_replaces_windows_reserved_chars() {
         assert_eq!(safe_name("a:b/c*?d", 80), "a_b_c__d");
         assert_eq!(safe_name("CON", 80), "_CON");
+    }
+
+    #[test]
+    fn title_number_collision_scans_with_platform_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "stream-archive-title-number-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let first_chzzk = unique_output_file(
+            &dir,
+            "Channel",
+            "Title",
+            "TITLE_NUMBER",
+            PlatformId::Chzzk,
+        )
+        .unwrap();
+        assert_eq!(first_chzzk.extension().and_then(|v| v.to_str()), Some("mp4"));
+        assert!(first_chzzk.file_name().unwrap().to_string_lossy().contains("_01_"));
+        fs::write(&first_chzzk, b"existing").unwrap();
+
+        let second_chzzk = unique_output_file(
+            &dir,
+            "Channel",
+            "Title",
+            "TITLE_NUMBER",
+            PlatformId::Chzzk,
+        )
+        .unwrap();
+        assert_eq!(second_chzzk.extension().and_then(|v| v.to_str()), Some("mp4"));
+        assert!(second_chzzk.file_name().unwrap().to_string_lossy().contains("_02_"));
+
+        let first_soop = unique_output_file(
+            &dir,
+            "Channel",
+            "Title",
+            "TITLE_NUMBER",
+            PlatformId::Soop,
+        )
+        .unwrap();
+        assert_eq!(first_soop.extension().and_then(|v| v.to_str()), Some("ts"));
+        assert!(first_soop.file_name().unwrap().to_string_lossy().contains("_01_"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
