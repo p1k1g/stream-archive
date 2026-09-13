@@ -6,6 +6,7 @@ use url::Url;
 
 pub mod auth;
 pub mod live;
+pub mod vod;
 
 pub(crate) static CHZZK: ChzzkProvider = ChzzkProvider;
 
@@ -24,7 +25,7 @@ impl PlatformProvider for ChzzkProvider {
         PlatformCapabilities {
             channel_lookup: true,
             live: true,
-            vod: false,
+            vod: true,
         }
     }
 
@@ -72,10 +73,21 @@ impl PlatformProvider for ChzzkProvider {
         Ok(name.to_string())
     }
 
-    fn accepts_vod_url(&self, _url: &Url) -> bool {
-        // Phase 17 deliberately exposes CHZZK LIVE only. VOD routing is enabled
-        // in Phase 18 after the common CHZZK authentication path is stabilized.
-        false
+    fn accepts_vod_url(&self, url: &Url) -> bool {
+        if !url
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("chzzk.naver.com"))
+        {
+            return false;
+        }
+        let parts = url
+            .path_segments()
+            .map(|segments| segments.filter(|part| !part.is_empty()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        parts.len() == 2
+            && parts[0] == "video"
+            && !parts[1].is_empty()
+            && parts[1].chars().all(|c| c.is_ascii_digit())
     }
 }
 
@@ -128,5 +140,13 @@ mod tests {
             }
         });
         assert!(CHZZK.parse_channel_name(CHANNEL, &value).is_err());
+    }
+
+    #[test]
+    fn recognizes_chzzk_video_urls_only() {
+        assert!(CHZZK.accepts_vod_url(&Url::parse("https://chzzk.naver.com/video/6325166").unwrap()));
+        assert!(CHZZK.accepts_vod_url(&Url::parse("https://chzzk.naver.com/video/6325166?foo=bar").unwrap()));
+        assert!(!CHZZK.accepts_vod_url(&Url::parse("https://chzzk.naver.com/live/6325166").unwrap()));
+        assert!(!CHZZK.accepts_vod_url(&Url::parse("https://example.com/video/6325166").unwrap()));
     }
 }
