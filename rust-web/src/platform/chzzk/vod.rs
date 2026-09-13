@@ -118,7 +118,11 @@ impl VodManager {
 
     async fn start_job(&self, kind: VodJobKind) -> Result<VodJobStatus> {
         let mut runtime = self.runtime.lock().await;
-        if runtime.task.as_ref().is_some_and(|task| !task.is_finished()) {
+        if runtime
+            .task
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
             bail!("다른 CHZZK VOD 작업이 이미 실행 중입니다.");
         }
         runtime.task.take();
@@ -146,11 +150,9 @@ impl VodManager {
 
         let task = tokio::spawn(async move {
             let result = match kind {
-                VodJobKind::Analyze(req) => {
-                    run_analysis(&backend, req, &logs, &status, &cancel)
-                        .await
-                        .map(|_| ())
-                }
+                VodJobKind::Analyze(req) => run_analysis(&backend, req, &logs, &status, &cancel)
+                    .await
+                    .map(|_| ()),
                 VodJobKind::Download(req) => {
                     run_download(&backend, req, &logs, &status, &cancel).await
                 }
@@ -184,7 +186,11 @@ impl VodManager {
     pub async fn cancel(&self) -> Result<VodJobStatus> {
         let task = {
             let mut runtime = self.runtime.lock().await;
-            if runtime.task.as_ref().is_some_and(|task| !task.is_finished()) {
+            if runtime
+                .task
+                .as_ref()
+                .is_some_and(|task| !task.is_finished())
+            {
                 runtime.cancel.store(true, Ordering::SeqCst);
             }
             runtime.task.take()
@@ -223,7 +229,8 @@ async fn run_analysis(
     let job_dir = job_dir(backend)?;
     let _job_guard = JobDirGuard(job_dir.clone());
     let cookie_file = chzzk_cookie_file(&job_dir)?;
-    let metadata = load_metadata(&tools, &req.vod_url, cookie_file.as_deref(), cancel, logs).await?;
+    let metadata =
+        load_metadata(&tools, &req.vod_url, cookie_file.as_deref(), cancel, logs).await?;
     let view = analysis_view(&req.vod_url, &metadata);
     {
         let mut current = status.write().await;
@@ -280,7 +287,8 @@ async fn run_download(
     let cookie_file = chzzk_cookie_file(&job_dir)?;
 
     set_status(status, "ANALYZING", "CHZZK VOD 메타데이터 확인 중…").await;
-    let metadata = load_metadata(&tools, &req.vod_url, cookie_file.as_deref(), cancel, logs).await?;
+    let metadata =
+        load_metadata(&tools, &req.vod_url, cookie_file.as_deref(), cancel, logs).await?;
     let view = analysis_view(&req.vod_url, &metadata);
     {
         let mut current = status.write().await;
@@ -396,8 +404,8 @@ async fn load_metadata(
             };
         }
     };
-    let value: Value = serde_json::from_str(stdout.trim())
-        .context("yt-dlp CHZZK 메타데이터 JSON 해석 실패")?;
+    let value: Value =
+        serde_json::from_str(stdout.trim()).context("yt-dlp CHZZK 메타데이터 JSON 해석 실패")?;
     metadata_from_json(&value)
 }
 
@@ -527,9 +535,7 @@ fn format_selector(quality: &str) -> String {
         .captures(quality)
     {
         let height = captures.get(1).unwrap().as_str();
-        return format!(
-            "bestvideo*[height<={height}]+bestaudio/best[height<={height}]"
-        );
+        return format!("bestvideo*[height<={height}]+bestaudio/best[height<={height}]");
     }
     "bestvideo*+bestaudio/best".into()
 }
@@ -631,8 +637,14 @@ async fn run_capture(
         .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("{label} 프로세스 실행 실패: {}", program.display()))?;
-    let mut stdout = child.stdout.take().ok_or_else(|| anyhow!("stdout unavailable"))?;
-    let mut stderr = child.stderr.take().ok_or_else(|| anyhow!("stderr unavailable"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("stdout unavailable"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("stderr unavailable"))?;
     let stdout_task = tokio::spawn(async move {
         let mut data = Vec::new();
         stdout.read_to_end(&mut data).await.map(|_| data)
@@ -647,7 +659,10 @@ async fn run_capture(
             terminate_owned(&mut child).await;
             bail!("{label} 취소됨");
         }
-        if let Some(exit) = child.try_wait().with_context(|| format!("{label} 상태 확인 실패"))? {
+        if let Some(exit) = child
+            .try_wait()
+            .with_context(|| format!("{label} 상태 확인 실패"))?
+        {
             break exit;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -714,9 +729,8 @@ fn chzzk_cookie_file(job_dir: &Path) -> Result<Option<PathBuf>> {
                     cookie.value
                 ));
             }
-            fs::write(&path, text).with_context(|| {
-                format!("CHZZK 임시 cookie 파일 생성 실패: {}", path.display())
-            })?;
+            fs::write(&path, text)
+                .with_context(|| format!("CHZZK 임시 cookie 파일 생성 실패: {}", path.display()))?;
             Ok(Some(path))
         }
     }
@@ -738,7 +752,11 @@ fn resolve_tools(backend: &Path, yt_dlp: &str, ffmpeg: &str) -> Result<Tools> {
         ],
         &["yt-dlp.exe", "yt-dlp"],
     )
-    .ok_or_else(|| anyhow!("yt-dlp 실행 파일을 찾지 못했습니다. 설정 > 외부 프로그램에서 YT_DLP_PATH를 확인하세요."))?;
+    .ok_or_else(|| {
+        anyhow!(
+            "yt-dlp 실행 파일을 찾지 못했습니다. 설정 > 외부 프로그램에서 YT_DLP_PATH를 확인하세요."
+        )
+    })?;
     let ffmpeg = resolve_tool(
         ffmpeg,
         &[
@@ -843,11 +861,13 @@ fn cleanup_incomplete(output: &Path) {
     if let Ok(entries) = fs::read_dir(parent) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("");
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("");
             if name == format!("{file_name}.part")
                 || name == format!("{file_name}.ytdl")
-                || (name.starts_with(stem)
-                    && (name.ends_with(".part") || name.ends_with(".ytdl")))
+                || (name.starts_with(stem) && (name.ends_with(".part") || name.ends_with(".ytdl")))
             {
                 let _ = fs::remove_file(path);
             }
@@ -881,13 +901,21 @@ fn video_id(raw: &str) -> Result<String> {
 }
 
 fn short_date(value: &str) -> Option<String> {
-    let digits = value.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
+    let digits = value
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>();
     (digits.len() >= 8).then(|| digits[2..8].to_string())
 }
 
 fn today_short_date() -> String {
     let today = Local::now().date_naive();
-    format!("{:02}{:02}{:02}", today.year() % 100, today.month(), today.day())
+    format!(
+        "{:02}{:02}{:02}",
+        today.year() % 100,
+        today.month(),
+        today.day()
+    )
 }
 
 fn safe_name(value: &str, max: usize) -> String {
