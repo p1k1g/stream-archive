@@ -65,6 +65,13 @@ Assert-Match $recorder 'COOKIE_FILE_EXPIRES_UNIX' 'CHZZK Netscape cookie entries
 Assert-Match $recorder '4_102_444_800' 'CHZZK Netscape cookie expiry must stay in the future.'
 Assert-NotMatch $recorder '--http-cookie\s+NID_' 'CHZZK cookie values must not be exposed as direct process arguments.'
 
+# LIVE files must keep their real platform container extension without remuxing.
+Assert-Match $platform 'pub const fn live_output_extension' 'Platform LIVE output extension mapping is missing.'
+Assert-Match $platform 'Self::Soop\s*=>\s*"ts"' 'SOOP LIVE output must remain .ts.'
+Assert-Match $platform 'Self::Chzzk\s*=>\s*"mp4"' 'CHZZK LIVE output must use .mp4.'
+Assert-Match $recorder 'output_file_for_platform\(output_file, platform\)' 'Recorder does not apply the platform LIVE output extension.'
+Assert-Match $recorder 'uses_platform_specific_live_output_extension_without_overwriting_existing_file' 'Platform output-extension regression test is missing.'
+
 # CHZZK-only operation must not depend on SOOP Worker credentials.
 Assert-Match $watcher 'fn channels_require_soop' 'SOOP credential gating helper is missing.'
 Assert-Match $watcher 'require_soop:\s*bool' 'WatcherConfig does not receive the SOOP requirement boundary.'
