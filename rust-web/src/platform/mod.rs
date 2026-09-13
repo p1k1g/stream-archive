@@ -25,6 +25,13 @@ impl PlatformId {
             Self::Chzzk => "CHZZK",
         }
     }
+
+    pub const fn live_output_extension(self) -> &'static str {
+        match self {
+            Self::Soop => "ts",
+            Self::Chzzk => "mp4",
+        }
+    }
 }
 
 impl fmt::Display for PlatformId {
@@ -95,6 +102,12 @@ mod tests {
         assert_eq!("soop".parse::<PlatformId>().unwrap(), PlatformId::Soop);
         assert_eq!("CHZZK".parse::<PlatformId>().unwrap(), PlatformId::Chzzk);
         assert_eq!("chzzk".parse::<PlatformId>().unwrap(), PlatformId::Chzzk);
+    }
+
+    #[test]
+    fn live_output_extensions_match_platform_container() {
+        assert_eq!(PlatformId::Soop.live_output_extension(), "ts");
+        assert_eq!(PlatformId::Chzzk.live_output_extension(), "mp4");
     }
 
     #[test]
