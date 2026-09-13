@@ -74,13 +74,23 @@ Assert-Match $recorder 'COOKIE_FILE_EXPIRES_UNIX' 'CHZZK Netscape cookie entries
 Assert-Match $recorder '4_102_444_800' 'CHZZK Netscape cookie expiry must stay in the future.'
 Assert-NotMatch $recorder '--http-cookie\s+NID_' 'CHZZK cookie values must not be exposed as direct process arguments.'
 
-# CHZZK fMP4 must start at the recording origin while SOOP remains unchanged.
+# CHZZK fMP4 must be remuxed live to a zero-based fragmented MP4 timeline.
+# The CHZZK Streamlink HLS worker still owns segment fetching; FFmpeg is only
+# the player/output sink, so this remains a live stream-copy and not a post job.
 Assert-Match $platformLive 'start_at_zero:\s*bool' 'Plugin stream timestamp policy is missing from StreamInput.'
 Assert-Match $live 'start_at_zero:\s*true' 'CHZZK LIVE does not request zero-based recording timestamps.'
-Assert-Match $recorder 'if start_at_zero\s*\{\s*command\.arg\("--ffmpeg-start-at-zero"\)' 'Recorder does not apply the CHZZK zero-based FFmpeg timeline option.'
+Assert-Match $recorder 'resolve_timestamp_rebase_ffmpeg' 'Recorder cannot locate FFmpeg for CHZZK timestamp rebasing.'
+Assert-Match $recorder '\.arg\("--player"\)' 'CHZZK timestamp path does not route Streamlink output through an FFmpeg player.'
+Assert-Match $recorder '\.arg\("--player-args"\)' 'CHZZK timestamp path does not configure FFmpeg player arguments.'
+Assert-Match $recorder '-copyts -start_at_zero' 'CHZZK FFmpeg stream-copy does not rebase copied timestamps to zero.'
+Assert-Match $recorder 'frag_keyframe\+empty_moov\+default_base_moof' 'CHZZK output is not written as an in-progress-safe fragmented MP4.'
+Assert-Match $recorder 'if start_at_zero[\s\S]*?--player[\s\S]*?else[\s\S]*?--output' 'SOOP direct output and CHZZK FFmpeg-player output are not separated.'
+Assert-NotMatch $recorder '"--ffmpeg-start-at-zero"' 'The ineffective Streamlink mux-only --ffmpeg-start-at-zero path must not return.'
+Assert-Match $recorder 'timestamp_rebase_player_args_keep_copyts_but_shift_to_zero_and_fragment_mp4' 'CHZZK timestamp-remux regression test is missing.'
+Assert-Match $recorder 'finds_ffmpeg_from_official_streamlink_windows_layout' 'Bundled Streamlink FFmpeg discovery regression test is missing.'
 Assert-Match $live 'assert!\(start_at_zero\)' 'CHZZK timestamp policy regression coverage is missing.'
 
-# LIVE files must keep their real platform container extension without remuxing.
+# LIVE files must keep their real platform container extension.
 Assert-Match $platform 'pub const fn live_output_extension' 'Platform LIVE output extension mapping is missing.'
 Assert-Match $platform 'Self::Soop\s*=>\s*"ts"' 'SOOP LIVE output must remain .ts.'
 Assert-Match $platform 'Self::Chzzk\s*=>\s*"mp4"' 'CHZZK LIVE output must use .mp4.'
