@@ -940,7 +940,10 @@ fn find_finished_output(expected: &Path) -> Result<PathBuf> {
 
 fn finalize_output(source: &Path, target: &Path) -> Result<()> {
     if target.exists() {
-        bail!("CHZZK VOD 최종 파일이 이미 존재합니다: {}", target.display());
+        bail!(
+            "CHZZK VOD 최종 파일이 이미 존재합니다: {}",
+            target.display()
+        );
     }
     match fs::rename(source, target) {
         Ok(()) => {}
@@ -970,7 +973,11 @@ fn cleanup_job_media(job_dir: &Path) {
     if let Ok(entries) = fs::read_dir(job_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_file() || path.file_name().is_some_and(|name| name == COOKIE_FILE_NAME) {
+            if !path.is_file()
+                || path
+                    .file_name()
+                    .is_some_and(|name| name == COOKIE_FILE_NAME)
+            {
                 continue;
             }
             let _ = fs::remove_file(path);
