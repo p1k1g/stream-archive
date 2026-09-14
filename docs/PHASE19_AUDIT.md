@@ -85,3 +85,7 @@ forbidden patterns, OS boundaries, secrets, workflow triggers, and portable pack
 JavaScript syntax validation, whole-crate rustfmt, Rust tests/check/clippy, Windows compilation, and
 portable package smoke/verification. Its path filter covers provider code, `platform_runtime.rs`,
 recorder, queue, main, backend, web assets, all maintenance guards, and workflow changes.
+
+The consolidated Phase 19.7 changes were exercised on the Windows self-hosted runner before
+finalization: runtime contracts, whole-crate formatting, Rust unit tests, `cargo check`, and
+JavaScript syntax validation all passed.
