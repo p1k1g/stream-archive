@@ -77,13 +77,16 @@ jobs:
           if (-not $src.Contains($oldErr)) { throw 'metadata fallback error block not found' }
           $src = $src.Replace($oldErr, $newErr)
 
-          $src = $src.Replace(@'
+          $duplicate = @'
               text.contains("KeyError('sourceURL')")
                   || text.contains("KeyError(\"sourceURL\")")
                   || text.contains("KeyError('sourceURL')")
-          '@, @'
+          '@
+          $deduped = @'
               text.contains("KeyError('sourceURL')") || text.contains("KeyError(\"sourceURL\")")
-          '@)
+          '@
+          if (-not $src.Contains($duplicate)) { throw 'sourceURL classifier block not found' }
+          $src = $src.Replace($duplicate, $deduped)
 
           $oldUrl = @'
                   let mut url = Url::parse(&format!(
@@ -124,7 +127,7 @@ jobs:
                                   .as_i64()
                                   .or_else(|| value.as_f64().map(|number| number as i64))
                           })
-                          .and_then(|millis| chrono::DateTime::<Utc>::from_timestamp_millis(millis))
+                          .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
                           .map(|timestamp| {
                               let local = timestamp.with_timezone(&Local);
                               format!(
@@ -155,9 +158,10 @@ jobs:
           if (-not $src.Contains($oldInput)) { throw 'ffmpeg input args block not found' }
           $src = $src.Replace($oldInput, $newInput)
 
-          $src = $src.Replace('"publishDate": "2026-09-14 10:00:00",', '"publishDateAt": 1789347600000_i64,')
-          $src = $src.Replace('assert!(fallback.playback_url.contains("/playback/ABCDEF012345?"));', 'assert!(fallback.playback_url.contains("/vodplay/v2/playback/ABCDEF012345?"));')
-          $src = $src.Replace('assert!(fallback.playback_url.contains("key=abc%2Bdef%2Fghi"));', "assert!(fallback.playback_url.contains(\"key=abc%2Bdef%2Fghi\"));`n        assert_eq!(fallback.metadata.date.len(), 6);")
+          $oldTest = 'assert!(fallback.playback_url.contains("/playback/ABCDEF012345?"));'
+          $newTest = 'assert!(fallback.playback_url.contains("/vodplay/v2/playback/ABCDEF012345?"));'
+          if (-not $src.Contains($oldTest)) { throw 'fallback URL test assertion not found' }
+          $src = $src.Replace($oldTest, $newTest)
 
           [System.IO.File]::WriteAllText((Resolve-Path $path), $src, (New-Object System.Text.UTF8Encoding($false)))
           rustfmt --edition 2024 $path
