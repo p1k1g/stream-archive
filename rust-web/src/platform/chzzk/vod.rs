@@ -873,12 +873,12 @@ fn root_creation_lock(root: &Path) -> Result<File> {
         .open(&lock_path)
         .with_context(|| {
             format!(
-                "CHZZK VOD creation lock ?닿린 ?ㅽ뙣: {}",
+                "CHZZK VOD creation lock \u{c5f4}\u{ae30} \u{c2e4}\u{d328}: {}",
                 lock_path.display()
             )
         })?;
     lock.lock_exclusive()
-        .context("CHZZK VOD creation lock ?띾뱷 ?ㅽ뙣")?;
+        .context("CHZZK VOD creation lock \u{d68d}\u{b4dd} \u{c2e4}\u{d328}")?;
     Ok(lock)
 }
 
@@ -888,9 +888,12 @@ fn cleanup_stale_job_dirs(backend: &Path) -> Result<()> {
         return Ok(());
     }
     let creation_lock = root_creation_lock(&root)?;
-    for entry in fs::read_dir(&root)
-        .with_context(|| format!("CHZZK VOD ?꾩떆 ?대뜑 議고쉶 ?ㅽ뙣: {}", root.display()))?
-    {
+    for entry in fs::read_dir(&root).with_context(|| {
+        format!(
+            "CHZZK VOD \u{c784}\u{c2dc} \u{d3f4}\u{b354} \u{c870}\u{d68c} \u{c2e4}\u{d328}: {}",
+            root.display()
+        )
+    })? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
@@ -925,14 +928,22 @@ fn cleanup_stale_job_dirs(backend: &Path) -> Result<()> {
 
 fn job_dir(backend: &Path) -> Result<JobDirGuard> {
     let root = vod_job_root(backend);
-    fs::create_dir_all(&root)
-        .with_context(|| format!("CHZZK VOD ?꾩떆 猷⑦듃 ?앹꽦 ?ㅽ뙣: {}", root.display()))?;
+    fs::create_dir_all(&root).with_context(|| {
+        format!(
+            "CHZZK VOD \u{c784}\u{c2dc} \u{b8e8}\u{d2b8} \u{c0dd}\u{c131} \u{c2e4}\u{d328}: {}",
+            root.display()
+        )
+    })?;
     let creation_lock = root_creation_lock(&root)?;
     let id = Uuid::new_v4().simple().to_string();
     let preparing = root.join(format!(".chzzk-creating-{id}"));
     let dir = root.join(format!("chzzk-{id}"));
-    fs::create_dir(&preparing)
-        .with_context(|| format!("CHZZK VOD ?꾩떆 ?대뜑 ?앹꽦 ?ㅽ뙣: {}", preparing.display()))?;
+    fs::create_dir(&preparing).with_context(|| {
+        format!(
+            "CHZZK VOD \u{c784}\u{c2dc} \u{d3f4}\u{b354} \u{c0dd}\u{c131} \u{c2e4}\u{d328}: {}",
+            preparing.display()
+        )
+    })?;
     if let Err(err) = restrict_job_dir(&preparing) {
         let _ = fs::remove_dir_all(&preparing);
         return Err(err);
@@ -949,7 +960,7 @@ fn job_dir(backend: &Path) -> Result<JobDirGuard> {
             let _ = fs::remove_dir_all(&preparing);
             return Err(err).with_context(|| {
                 format!(
-                    "CHZZK VOD ownership lock ?앹꽦 ?ㅽ뙣: {}",
+                    "CHZZK VOD ownership lock \u{c0dd}\u{c131} \u{c2e4}\u{d328}: {}",
                     preparing_lock_path.display()
                 )
             });
@@ -965,7 +976,7 @@ fn job_dir(backend: &Path) -> Result<JobDirGuard> {
         let _ = fs::remove_dir_all(&preparing);
         return Err(err).with_context(|| {
             format!(
-                "CHZZK VOD ?꾩떆 ?대뜑 publish ?ㅽ뙣: {} -> {}",
+                "CHZZK VOD \u{c784}\u{c2dc} \u{d3f4}\u{b354} publish \u{c2e4}\u{d328}: {} -> {}",
                 preparing.display(),
                 dir.display()
             )
@@ -978,7 +989,7 @@ fn job_dir(backend: &Path) -> Result<JobDirGuard> {
             let _ = fs::remove_dir_all(&dir);
             return Err(err).with_context(|| {
                 format!(
-                    "CHZZK VOD ownership lock ?닿린 ?ㅽ뙣: {}",
+                    "CHZZK VOD ownership lock \u{c5f4}\u{ae30} \u{c2e4}\u{d328}: {}",
                     lock_path.display()
                 )
             });
@@ -987,7 +998,7 @@ fn job_dir(backend: &Path) -> Result<JobDirGuard> {
     if let Err(err) = lock.lock_exclusive() {
         drop(lock);
         let _ = fs::remove_dir_all(&dir);
-        return Err(err).context("CHZZK VOD ownership lock ?띾뱷 ?ㅽ뙣");
+        return Err(err).context("CHZZK VOD ownership lock \u{d68d}\u{b4dd} \u{c2e4}\u{d328}");
     }
     let _ = FileExt::unlock(&creation_lock);
     drop(creation_lock);
