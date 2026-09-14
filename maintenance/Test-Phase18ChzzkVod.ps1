@@ -69,7 +69,7 @@ Assert-Match $chzzkVod 'FileExt::unlock\(&self\.lock\)' 'CHZZK VOD job guard doe
 Assert-Match $chzzkVod 'name == COOKIE_FILE_NAME \|\| name == JOB_LOCK_FILE_NAME' 'Retry/cancel cleanup must preserve both cookie and ownership lock files.'
 Assert-Match $chzzkVod 'active_job_lock_survives_scavenging_until_release' 'Active-owner stale-cleanup regression test is missing.'
 
-# yt-dlp owns CHZZK extraction, but long user titles must never become HLS fragment temp paths.
+# yt-dlp owns normal CHZZK extraction, but long user titles must never become HLS fragment temp paths.
 Assert-Match $chzzkVod 'MEDIA_FILE_NAME:\s*&str\s*=\s*"media\.mp4"' 'CHZZK VOD short staging filename is missing.'
 Assert-Match $chzzkVod 'staging_output\s*=\s*job_dir\.join\(MEDIA_FILE_NAME\)' 'CHZZK VOD does not download into its private short staging path.'
 Assert-Match $chzzkVod 'finalize_output\(&staged_file,\s*&destination,\s*cancel\)' 'CHZZK VOD staging output is not finalized through the claimed destination.'
@@ -83,6 +83,16 @@ Assert-Match $chzzkVod 'taskkill\.exe' 'Windows owned-process cancellation path 
 Assert-Match $chzzkVod '\.arg\("/PID"\)' 'CHZZK VOD cancellation is not PID scoped.'
 Assert-Match $chzzkVod '\.arg\("/T"\)' 'CHZZK VOD cancellation does not include the owned child tree.'
 Assert-NotMatch $chzzkVod 'taskkill[^\r\n]*/IM' 'CHZZK VOD must never kill processes by image name.'
+
+# Known yt-dlp CHZZK sourceURL parser failures must fall back only for public playback and keep keys private.
+Assert-Match $chzzkVod 'is_source_url_extractor_bug' 'Known yt-dlp CHZZK sourceURL failure classification is missing.'
+Assert-Match $chzzkVod 'vodplay/v2/playback' 'CHZZK public neonplayer v2 DASH fallback URL is missing.'
+Assert-Match $chzzkVod 'run_ffmpeg_fallback' 'CHZZK public DASH ffmpeg fallback is missing.'
+Assert-Match $chzzkVod 'Accept: application/dash\+xml' 'CHZZK public DASH fallback does not request the MPD media type.'
+Assert-Match $chzzkVod 'redact_playback_key' 'CHZZK public playback key redaction is missing.'
+Assert-Match $chzzkVod 'public_api_fallback_builds_dash_url_for_abr_hls' 'CHZZK ABR_HLS public fallback regression test is missing.'
+Assert-Match $chzzkVod 'source_url_parser_failure_is_classified_as_upstream_bug' 'CHZZK sourceURL upstream-bug regression test is missing.'
+Assert-Match $chzzkVod 'playback_key_is_redacted_from_ffmpeg_errors' 'CHZZK public playback key privacy regression test is missing.'
 
 # Destination claims and cross-volume publication must be no-clobber, cancellable and crash-recoverable.
 Assert-Match $chzzkVod 'DESTINATION_CLAIM_SUFFIX:\s*&str\s*=\s*"\.soop-downloader\.claim"' 'Destination claim sidecar is missing.'
