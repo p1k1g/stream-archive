@@ -1,3 +1,4 @@
+use crate::platform_runtime::terminate_owned_checked;
 use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
@@ -365,26 +366,9 @@ impl RecorderManager {
 
     pub async fn stop(&self, rec: &mut Recording) -> Result<Option<i32>> {
         if rec.child.try_wait()?.is_none() {
-            #[cfg(windows)]
-            {
-                let status = Command::new("taskkill.exe")
-                    .arg("/PID")
-                    .arg(rec.pid.to_string())
-                    .arg("/T")
-                    .arg("/F")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .await?;
-                if !status.success() && rec.child.try_wait()?.is_none() {
-                    bail!("taskkill failed for recorder pid={}", rec.pid);
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = rec.child.kill().await;
-            }
+            return terminate_owned_checked(&mut rec.child)
+                .await
+                .with_context(|| format!("failed to stop recorder pid={}", rec.pid));
         }
         Ok(rec.child.wait().await.ok().and_then(|s| s.code()))
     }

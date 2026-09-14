@@ -1,3 +1,4 @@
+use crate::platform_runtime::terminate_owned;
 use crate::{
     backend::LogBuffer,
     model::{
@@ -1286,25 +1287,7 @@ async fn run_capture(
 }
 
 async fn stop_child(child: &mut Child) {
-    #[cfg(windows)]
-    {
-        if let Some(pid) = child.id() {
-            let _ = Command::new("taskkill.exe")
-                .arg("/PID")
-                .arg(pid.to_string())
-                .arg("/T")
-                .arg("/F")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = child.kill().await;
-    }
-    let _ = child.wait().await;
+    terminate_owned(child).await;
 }
 
 fn collect_set_cookies(jar: &mut CookieJar, response: &Response, default_domain: &str) {
