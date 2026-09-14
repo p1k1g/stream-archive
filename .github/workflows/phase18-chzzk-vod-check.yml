@@ -25,34 +25,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Probe public CHZZK VOD playback fallback
+      - name: Verify public CHZZK DASH with ffprobe
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($videoNo in @('15185683','15028162')) {
-            $detail = Invoke-RestMethod -Uri "https://api.chzzk.naver.com/service/v3/videos/$videoNo" -Method Get
-            $c = $detail.content
-            Write-Host "video=$videoNo code=$($detail.code) vodStatus=$($c.vodStatus) adult=$($c.adult) membership=$($c.membershipBenefitType) hasInKey=$([bool]$c.inKey) hasRewind=$([bool]$c.liveRewindPlaybackJson)"
-            $rewind = $c.liveRewindPlaybackJson
-            if (-not $rewind) {
-              try {
-                $auto = Invoke-RestMethod -Uri "https://api.chzzk.naver.com/service/v1/videos/$videoNo/live-rewind/auto-play-info" -Method Get
-                if ($auto.content -and $auto.content.liveRewindPlaybackJson) { $rewind = $auto.content.liveRewindPlaybackJson }
-                elseif ($auto.liveRewindPlaybackJson) { $rewind = $auto.liveRewindPlaybackJson }
-              } catch {
-                Write-Host "video=$videoNo autoPlayError=$($_.Exception.Message)"
-              }
-            }
-            if ($rewind) {
-              $p = $rewind | ConvertFrom-Json
-              foreach ($m in @($p.media)) {
-                if ($m.path) {
-                  $u = [Uri]$m.path
-                  Write-Host "video=$videoNo mediaId=$($m.mediaId) protocol=$($m.protocol) host=$($u.Host) tracks=$(@($m.encodingTrack).Count)"
-                }
-              }
-            }
+          $detail = Invoke-RestMethod -Uri 'https://api.chzzk.naver.com/service/v3/videos/15185683' -Method Get
+          $c = $detail.content
+          $key = [System.Uri]::EscapeDataString([string]$c.inKey)
+          $url = "https://apis.naver.com/neonplayer/vodplay/v1/playback/$($c.videoId)?key=$key&env=real&lc=en_US&cpl=en_US"
+          $ffprobe = (Get-Command ffprobe.exe -ErrorAction SilentlyContinue).Source
+          if (-not $ffprobe) {
+            $ffprobe = Get-ChildItem 'C:\Program Files\Streamlink' -Filter ffprobe.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           }
+          if (-not $ffprobe) { throw 'ffprobe.exe not found on Windows runner' }
+          Write-Host "ffprobe=$ffprobe"
+          & $ffprobe -v error -show_entries 'stream=index,codec_type,width,height,channels' -of csv=p=0 $url
+          if ($LASTEXITCODE -ne 0) { throw "ffprobe DASH probe failed: exit=$LASTEXITCODE" }
 
       - name: Phase 18 CHZZK VOD guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
