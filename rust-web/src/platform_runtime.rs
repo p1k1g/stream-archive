@@ -82,7 +82,9 @@ pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<
         }
 
         if !tree_stopped && child.try_wait()?.is_none() {
-            bail!("failed to terminate owned pid={pid} tree after {ATTEMPTS} attempts: {last_failure}");
+            bail!(
+                "failed to terminate owned pid={pid} tree after {ATTEMPTS} attempts: {last_failure}"
+            );
         }
     }
 

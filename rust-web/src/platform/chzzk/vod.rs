@@ -792,6 +792,30 @@ async fn abort_reader_tasks(tasks: Vec<JoinHandle<()>>) {
     join_reader_tasks(tasks).await;
 }
 
+async fn drain_failed_reader_tasks(
+    tasks: Vec<JoinHandle<()>>,
+    log_rx: &mut mpsc::Receiver<String>,
+    progress_rx: &mut mpsc::Receiver<String>,
+    tail: &mut VecDeque<String>,
+) {
+    while !tasks.iter().all(|task| task.is_finished()) {
+        tokio::select! {
+            line = log_rx.recv(), if !log_rx.is_closed() => {
+                if let Some(line) = line {
+                    push_tail(tail, &line);
+                }
+            }
+            _ = progress_rx.recv(), if !progress_rx.is_closed() => {}
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    while let Ok(line) = log_rx.try_recv() {
+        push_tail(tail, &line);
+    }
+    while progress_rx.try_recv().is_ok() {}
+    join_reader_tasks(tasks).await;
+}
+
 async fn run_streamlink_download(
     streamlink: &Path,
     ffmpeg: &Path,
@@ -938,11 +962,14 @@ async fn run_streamlink_download(
                     terminate_owned(&mut ffmpeg_child).await;
                     pump.abort();
                     let _ = pump.await;
-                    abort_reader_tasks(reader_tasks).await;
+                    drain_failed_reader_tasks(
+                        reader_tasks,
+                        &mut log_rx,
+                        &mut progress_rx,
+                        &mut tail,
+                    )
+                    .await;
                     let _ = fs::remove_file(output);
-                    while let Ok(line) = log_rx.try_recv() {
-                        push_tail(&mut tail, &line);
-                    }
                     bail!(
                         "Streamlink CHZZK 다운로드 실패 (exit={}): {}",
                         exit_code(*exit),
@@ -961,11 +988,14 @@ async fn run_streamlink_download(
                     terminate_owned(&mut streamlink_child).await;
                     pump.abort();
                     let _ = pump.await;
-                    abort_reader_tasks(reader_tasks).await;
+                    drain_failed_reader_tasks(
+                        reader_tasks,
+                        &mut log_rx,
+                        &mut progress_rx,
+                        &mut tail,
+                    )
+                    .await;
                     let _ = fs::remove_file(output);
-                    while let Ok(line) = log_rx.try_recv() {
-                        push_tail(&mut tail, &line);
-                    }
                     bail!(
                         "FFmpeg CHZZK MPEG-TS 저장 실패 (exit={}): {}",
                         exit_code(*exit),

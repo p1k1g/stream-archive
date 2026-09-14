@@ -605,13 +605,32 @@ async fn apply_channels(
     let existing: Vec<String> = states.keys().cloned().collect();
     for key in existing {
         if !incoming.contains_key(&key) {
-            if let Some(mut state) = states.remove(&key) {
-                stop_state_recording(&mut state, "CHANNEL REMOVED", recorder, logs).await;
-                logs.push(format!(
-                    "[RUST] channel removed: {}/{}",
-                    state.channel.platform, state.channel.account
-                ))
-                .await;
+            let mut can_remove = false;
+            if let Some(state) = states.get_mut(&key) {
+                stop_state_recording(state, "CHANNEL REMOVED", recorder, logs).await;
+                can_remove = state.recording.is_none();
+                if !can_remove {
+                    state.channel.enabled = false;
+                    state.status = "ERROR".into();
+                    state.detail = Some(
+                        "channel removed, but recorder ownership is retained until process-tree cleanup succeeds"
+                            .into(),
+                    );
+                    logs.push(format!(
+                        "[RUST:WARN] channel removal deferred while recorder cleanup is retained: {}/{}",
+                        state.channel.platform, state.channel.account
+                    ))
+                    .await;
+                }
+            }
+            if can_remove {
+                if let Some(state) = states.remove(&key) {
+                    logs.push(format!(
+                        "[RUST] channel removed: {}/{}",
+                        state.channel.platform, state.channel.account
+                    ))
+                    .await;
+                }
             }
         }
     }
@@ -1036,12 +1055,14 @@ async fn stop_state_recording(
                 .await
         }
         Err(err) => {
+            state.status = "ERROR".into();
             state.detail = Some(format!("stop failed: {err}"));
             logs.push(format!(
-                "[RUST:ERR] recorder stop failed {}/{} pid={}: {err:#}",
+                "[RUST:ERR] recorder stop failed {}/{} pid={}: {err:#}; retaining ownership for retry",
                 state.channel.platform, state.channel.account, rec.pid
             ))
             .await;
+            state.recording = Some(rec);
         }
     }
 }
