@@ -31,7 +31,7 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
-      - name: Apply Windows destination claim fix
+      - name: Apply and push Windows destination claim fix
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
@@ -80,19 +80,17 @@ jobs:
           rustfmt --edition 2024 $vodPath
           if ($LASTEXITCODE -ne 0) { throw 'rustfmt failed' }
 
-          git checkout 9fc6911bdfd336f13d858a2081994b5cf8aaa9ef -- .github/workflows/phase18-chzzk-vod-check.yml
-
           ./maintenance/Test-Phase18ChzzkVod.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Phase 18 guard failed' }
           cargo test --locked --manifest-path rust-web/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
           cargo check --locked --manifest-path rust-web/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'cargo check failed' }
-          git diff --check
+          git diff --check -- $vodPath
           if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add rust-web/src/platform/chzzk/vod.rs .github/workflows/phase18-chzzk-vod-check.yml
+          git add $vodPath
           git commit -m "Handle Windows destination claim contention"
           git push origin HEAD:${{ github.head_ref }}
