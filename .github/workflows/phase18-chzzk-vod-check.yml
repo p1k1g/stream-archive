@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  phase18-guard:
+  phase18-refactor:
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
     steps:
@@ -30,7 +30,7 @@ jobs:
           ref: phase18-chzzk-vod
           fetch-depth: 0
 
-      - name: Apply CHZZK API plus Streamlink refactor
+      - name: Apply CHZZK API plus Streamlink source refactor
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
@@ -40,6 +40,9 @@ jobs:
 
           path = Path('rust-web/src/platform/chzzk/vod.rs')
           text = path.read_text(encoding='utf-8')
+          if 'struct ChzzkTools {' in text:
+              print('CHZZK Streamlink refactor already present')
+              raise SystemExit(0)
 
           def one(old, new, name):
               global text
@@ -92,7 +95,6 @@ jobs:
               )
               .await?;''',
           'analysis path')
-
           one('    let tools = resolve_tools(backend, &req.yt_dlp_path, &req.ffmpeg_path)?;',
               '    let tools = resolve_chzzk_tools(backend, &req.ffmpeg_path)?;', 'download tools')
           one(
@@ -110,7 +112,7 @@ jobs:
           one('Regex::new(r"^best(?:\\[height<=\\d+\\])?$")',
               'Regex::new(r"^(?:best|worst|\\d+p(?:\\d+)?|best\\[height<=\\d+\\])$")', 'quality validation')
 
-          metadata_block = '''async fn load_chzzk_metadata(
+          metadata_block = r'''async fn load_chzzk_metadata(
               tools: &ChzzkTools,
               vod_url: &str,
               cookie_file: Option<&Path>,
@@ -160,7 +162,10 @@ jobs:
                       ChzzkAuthState::Partial => "CHZZK 인증정보가 일부만 설정되어 있습니다.",
                       ChzzkAuthState::Configured => "Streamlink가 CHZZK VOD 스트림을 열지 못했습니다. 쿠키 만료 또는 시청 권한을 확인하세요.",
                   })?;
-              logs.push(format!("[VOD:CHZZK] metadata via CHZZK API; streamlink qualities={}", metadata.qualities.len())).await;
+              logs.push(format!(
+                  "[VOD:CHZZK] metadata via CHZZK API; streamlink qualities={}",
+                  metadata.qualities.len()
+              )).await;
               Ok(metadata)
           }
 
@@ -179,51 +184,106 @@ jobs:
               ];
               append_streamlink_cookie_arg(&mut args, cookie_file);
               args.push(vod_url.to_string());
-              let stdout = run_capture(&tools.streamlink, &args, cancel, logs, "CHZZK Streamlink analyze").await?;
-              let value: Value = serde_json::from_str(stdout.trim()).context("Streamlink CHZZK JSON parse failed")?;
+              let stdout = run_capture(
+                  &tools.streamlink,
+                  &args,
+                  cancel,
+                  logs,
+                  "CHZZK Streamlink analyze",
+              ).await?;
+              let value: Value = serde_json::from_str(stdout.trim())
+                  .context("Streamlink CHZZK JSON parse failed")?;
               quality_options_from_streamlink_json(&value)
           }
 
           fn quality_options_from_streamlink_json(value: &Value) -> Result<Vec<VodQualityOption>> {
-              let streams = value.get("streams").and_then(Value::as_object).context("Streamlink CHZZK JSON has no streams")?;
-              let quality_re = Regex::new(r"^(\\d+)p(\\d+)?$").unwrap();
+              let streams = value
+                  .get("streams")
+                  .and_then(Value::as_object)
+                  .context("Streamlink CHZZK JSON has no streams")?;
+              let quality_re = Regex::new(r"^(\d+)p(\d+)?$").unwrap();
               let mut names = streams.keys().filter_map(|name| {
                   let captures = quality_re.captures(name)?;
                   let height = captures.get(1)?.as_str().parse::<u64>().ok()?;
-                  let fps = captures.get(2).and_then(|v| v.as_str().parse::<u64>().ok()).unwrap_or(0);
+                  let fps = captures
+                      .get(2)
+                      .and_then(|value| value.as_str().parse::<u64>().ok())
+                      .unwrap_or(0);
                   Some((height, fps, name.clone()))
               }).collect::<Vec<_>>();
-              names.sort_by(|a, b| b.cmp(a));
-              let mut options = vec![VodQualityOption { value: "best".into(), label: "최고 화질 (자동)".into() }];
+              names.sort_by(|left, right| right.cmp(left));
+              let mut options = vec![VodQualityOption {
+                  value: "best".into(),
+                  label: "최고 화질 (자동)".into(),
+              }];
               for (_, _, name) in names {
-                  options.push(VodQualityOption { value: name.clone(), label: name });
+                  options.push(VodQualityOption {
+                      value: name.clone(),
+                      label: name,
+                  });
               }
               Ok(options)
           }
 
           fn metadata_from_chzzk_content(content: &Value) -> Result<Metadata> {
-              let title = content.get("videoTitle").and_then(Value::as_str).unwrap_or("").trim().to_string();
-              if title.is_empty() { bail!("CHZZK API did not return a VOD title"); }
-              let streamer = content.pointer("/channel/channelName").and_then(Value::as_str).unwrap_or("CHZZK").trim().to_string();
-              let streamer_id = content.pointer("/channel/channelId").and_then(Value::as_str).unwrap_or("").trim().to_string();
-              let duration_seconds = content.get("duration").and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|n| n.max(0.0) as u64))).unwrap_or(0);
-              let date = content.get("publishDate").and_then(Value::as_str).and_then(short_date)
-                  .or_else(|| content.get("publishDateAt")
-                      .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|n| n as i64)))
-                      .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
-                      .map(|timestamp| { let local = timestamp.with_timezone(&Local); format!("{:02}{:02}{:02}", local.year() % 100, local.month(), local.day()) }))
+              let title = content
+                  .get("videoTitle")
+                  .and_then(Value::as_str)
+                  .unwrap_or("")
+                  .trim()
+                  .to_string();
+              if title.is_empty() {
+                  bail!("CHZZK API did not return a VOD title");
+              }
+              let streamer = content
+                  .pointer("/channel/channelName")
+                  .and_then(Value::as_str)
+                  .unwrap_or("CHZZK")
+                  .trim()
+                  .to_string();
+              let streamer_id = content
+                  .pointer("/channel/channelId")
+                  .and_then(Value::as_str)
+                  .unwrap_or("")
+                  .trim()
+                  .to_string();
+              let duration_seconds = content
+                  .get("duration")
+                  .and_then(|value| value.as_u64().or_else(|| value.as_f64().map(|n| n.max(0.0) as u64)))
+                  .unwrap_or(0);
+              let date = content
+                  .get("publishDate")
+                  .and_then(Value::as_str)
+                  .and_then(short_date)
+                  .or_else(|| {
+                      content.get("publishDateAt")
+                          .and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|n| n as i64)))
+                          .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
+                          .map(|timestamp| {
+                              let local = timestamp.with_timezone(&Local);
+                              format!("{:02}{:02}{:02}", local.year() % 100, local.month(), local.day())
+                          })
+                  })
                   .unwrap_or_else(today_short_date);
               Ok(Metadata {
-                  title, streamer, streamer_id, date, duration_seconds,
-                  qualities: vec![VodQualityOption { value: "best".into(), label: "최고 화질 (자동)".into() }],
+                  title,
+                  streamer,
+                  streamer_id,
+                  date,
+                  duration_seconds,
+                  qualities: vec![VodQualityOption {
+                      value: "best".into(),
+                      label: "최고 화질 (자동)".into(),
+                  }],
               })
           }
           '''
           pattern = re.compile(r'async fn load_metadata\([\s\S]*?\nfn analysis_view\(')
-          text, n = pattern.subn(lambda _m: metadata_block + '\nfn analysis_view(', text, count=1)
-          if n != 1: raise RuntimeError('metadata block replacement failed')
+          text, n = pattern.subn(lambda _match: metadata_block + '\nfn analysis_view(', text, count=1)
+          if n != 1:
+              raise RuntimeError('metadata block replacement failed')
 
-          download_block = '''async fn download_video(
+          download_block = r'''async fn download_video(
               tools: &ChzzkTools,
               req: &VodDownloadRequest,
               cookie_file: Option<&Path>,
@@ -236,72 +296,185 @@ jobs:
               let _ = fs::remove_file(&transport_output);
               let (mut quality_args, stream_name) = streamlink_quality_args(req.quality.trim());
               let mut args = vec![
-                  "--no-config".to_string(), "--loglevel".to_string(), "info".to_string(),
-                  "--ffmpeg-ffmpeg".to_string(), tools.ffmpeg.display().to_string(),
-                  "--output".to_string(), transport_output.display().to_string(),
+                  "--no-config".to_string(),
+                  "--loglevel".to_string(),
+                  "info".to_string(),
+                  "--progress=force".to_string(),
+                  "--ffmpeg-ffmpeg".to_string(),
+                  tools.ffmpeg.display().to_string(),
+                  "--output".to_string(),
+                  transport_output.display().to_string(),
               ];
               append_streamlink_cookie_arg(&mut args, cookie_file);
               args.append(&mut quality_args);
               args.push(req.vod_url.clone());
               args.push(stream_name);
+
               run_streamlink_process(&tools.streamlink, &args, cancel).await?;
-              if cancel.load(Ordering::SeqCst) { let _ = fs::remove_file(&transport_output); return Ok(()); }
-              let size = fs::metadata(&transport_output).with_context(|| format!("Streamlink CHZZK output missing: {}", transport_output.display()))?.len();
-              if size == 0 { bail!("Streamlink CHZZK output is empty"); }
-              { let mut current = status.write().await; current.percent = 97.0; current.message = "CHZZK VOD MP4 마무리 중…".into(); }
+              if cancel.load(Ordering::SeqCst) {
+                  let _ = fs::remove_file(&transport_output);
+                  return Ok(());
+              }
+              let size = fs::metadata(&transport_output)
+                  .with_context(|| format!("Streamlink CHZZK output missing: {}", transport_output.display()))?
+                  .len();
+              if size == 0 {
+                  bail!("Streamlink CHZZK output is empty");
+              }
+              {
+                  let mut current = status.write().await;
+                  current.percent = 97.0;
+                  current.message = "CHZZK VOD MP4 마무리 중…".into();
+              }
               let result = run_ffmpeg_remux(&tools.ffmpeg, &transport_output, output, cancel).await;
               let _ = fs::remove_file(&transport_output);
               result
           }
 
           fn streamlink_quality_args(quality: &str) -> (Vec<String>, String) {
-              if let Some(captures) = Regex::new(r"^best\\[height<=(\\d+)\\]$").unwrap().captures(quality) {
+              if let Some(captures) = Regex::new(r"^best\[height<=(\d+)\]$")
+                  .unwrap()
+                  .captures(quality)
+              {
                   let height = captures.get(1).unwrap().as_str();
-                  return (vec!["--stream-sorting-excludes".into(), format!(">{height}p")], "best".into());
+                  return (
+                      vec!["--stream-sorting-excludes".into(), format!(">{height}p")],
+                      "best".into(),
+                  );
               }
-              (Vec::new(), if quality.is_empty() { "best".into() } else { quality.to_string() })
+              let stream = if quality.is_empty() { "best" } else { quality };
+              (Vec::new(), stream.to_string())
           }
 
-          async fn run_streamlink_process(streamlink: &Path, args: &[String], cancel: &AtomicBool) -> Result<()> {
+          async fn run_streamlink_process(
+              streamlink: &Path,
+              args: &[String],
+              cancel: &AtomicBool,
+          ) -> Result<()> {
               let mut command = Command::new(streamlink);
               configure_python_cli_command(&mut command);
-              command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-              let mut child = command.spawn().with_context(|| format!("Streamlink 실행 실패: {}", streamlink.display()))?;
+              command
+                  .args(args)
+                  .stdin(Stdio::null())
+                  .stdout(Stdio::piped())
+                  .stderr(Stdio::piped())
+                  .kill_on_drop(true);
+              let mut child = command
+                  .spawn()
+                  .with_context(|| format!("Streamlink 실행 실패: {}", streamlink.display()))?;
               let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-              if let Some(stdout) = child.stdout.take() { let tx = tx.clone(); tokio::spawn(async move { let mut lines = BufReader::new(stdout).lines(); while let Ok(Some(line)) = lines.next_line().await { let _ = tx.send(line); } }); }
-              if let Some(stderr) = child.stderr.take() { let tx = tx.clone(); tokio::spawn(async move { let mut lines = BufReader::new(stderr).lines(); while let Ok(Some(line)) = lines.next_line().await { let _ = tx.send(line); } }); }
+              if let Some(stdout) = child.stdout.take() {
+                  let tx = tx.clone();
+                  tokio::spawn(async move {
+                      let mut lines = BufReader::new(stdout).lines();
+                      while let Ok(Some(line)) = lines.next_line().await {
+                          let _ = tx.send(line);
+                      }
+                  });
+              }
+              if let Some(stderr) = child.stderr.take() {
+                  let tx = tx.clone();
+                  tokio::spawn(async move {
+                      let mut lines = BufReader::new(stderr).lines();
+                      while let Ok(Some(line)) = lines.next_line().await {
+                          let _ = tx.send(line);
+                      }
+                  });
+              }
               drop(tx);
               let mut tail = VecDeque::with_capacity(20);
               let exit_status = loop {
-                  if cancel.load(Ordering::SeqCst) { terminate_owned(&mut child).await; return Ok(()); }
-                  while let Ok(line) = rx.try_recv() { push_tail(&mut tail, &line); }
-                  if let Some(exit) = child.try_wait().context("Streamlink CHZZK 상태 확인 실패")? { break exit; }
+                  if cancel.load(Ordering::SeqCst) {
+                      terminate_owned(&mut child).await;
+                      return Ok(());
+                  }
+                  while let Ok(line) = rx.try_recv() {
+                      push_tail(&mut tail, &line);
+                  }
+                  if let Some(exit) = child.try_wait().context("Streamlink CHZZK 상태 확인 실패")? {
+                      break exit;
+                  }
                   tokio::time::sleep(Duration::from_millis(150)).await;
               };
-              while let Ok(line) = rx.try_recv() { push_tail(&mut tail, &line); }
-              if !exit_status.success() { bail!("Streamlink CHZZK 다운로드 실패 (exit={}): {}", exit_code(exit_status), redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))); }
+              while let Ok(line) = rx.try_recv() {
+                  push_tail(&mut tail, &line);
+              }
+              if !exit_status.success() {
+                  bail!(
+                      "Streamlink CHZZK 다운로드 실패 (exit={}): {}",
+                      exit_code(exit_status),
+                      redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
+                  );
+              }
               Ok(())
           }
 
-          async fn run_ffmpeg_remux(ffmpeg: &Path, input: &Path, output: &Path, cancel: &AtomicBool) -> Result<()> {
+          async fn run_ffmpeg_remux(
+              ffmpeg: &Path,
+              input: &Path,
+              output: &Path,
+              cancel: &AtomicBool,
+          ) -> Result<()> {
               let mut command = Command::new(ffmpeg);
-              command.arg("-hide_banner").arg("-nostdin").arg("-y").arg("-i").arg(input)
-                  .arg("-map").arg("0:v:0?").arg("-map").arg("0:a:0?")
-                  .arg("-c").arg("copy").arg("-movflags").arg("+faststart").arg(output)
-                  .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
-              let mut child = command.spawn().with_context(|| format!("ffmpeg CHZZK remux 실행 실패: {}", ffmpeg.display()))?;
-              let stderr = child.stderr.take().ok_or_else(|| anyhow!("ffmpeg stderr unavailable"))?;
+              command
+                  .arg("-hide_banner")
+                  .arg("-nostdin")
+                  .arg("-y")
+                  .arg("-i")
+                  .arg(input)
+                  .arg("-map")
+                  .arg("0:v:0?")
+                  .arg("-map")
+                  .arg("0:a:0?")
+                  .arg("-c")
+                  .arg("copy")
+                  .arg("-movflags")
+                  .arg("+faststart")
+                  .arg(output)
+                  .stdin(Stdio::null())
+                  .stdout(Stdio::null())
+                  .stderr(Stdio::piped())
+                  .kill_on_drop(true);
+              let mut child = command
+                  .spawn()
+                  .with_context(|| format!("ffmpeg CHZZK remux 실행 실패: {}", ffmpeg.display()))?;
+              let stderr = child
+                  .stderr
+                  .take()
+                  .ok_or_else(|| anyhow!("ffmpeg stderr unavailable"))?;
               let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-              tokio::spawn(async move { let mut lines = BufReader::new(stderr).lines(); while let Ok(Some(line)) = lines.next_line().await { let _ = tx.send(line); } });
+              tokio::spawn(async move {
+                  let mut lines = BufReader::new(stderr).lines();
+                  while let Ok(Some(line)) = lines.next_line().await {
+                      let _ = tx.send(line);
+                  }
+              });
               let mut tail = VecDeque::with_capacity(20);
               let exit_status = loop {
-                  if cancel.load(Ordering::SeqCst) { terminate_owned(&mut child).await; let _ = fs::remove_file(output); return Ok(()); }
-                  while let Ok(line) = rx.try_recv() { push_tail(&mut tail, &line); }
-                  if let Some(exit) = child.try_wait().context("ffmpeg CHZZK remux 상태 확인 실패")? { break exit; }
+                  if cancel.load(Ordering::SeqCst) {
+                      terminate_owned(&mut child).await;
+                      let _ = fs::remove_file(output);
+                      return Ok(());
+                  }
+                  while let Ok(line) = rx.try_recv() {
+                      push_tail(&mut tail, &line);
+                  }
+                  if let Some(exit) = child.try_wait().context("ffmpeg CHZZK remux 상태 확인 실패")? {
+                      break exit;
+                  }
                   tokio::time::sleep(Duration::from_millis(100)).await;
               };
-              while let Ok(line) = rx.try_recv() { push_tail(&mut tail, &line); }
-              if !exit_status.success() { let _ = fs::remove_file(output); bail!("ffmpeg CHZZK local TS remux 실패 (exit={}): {}", exit_code(exit_status), redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))); }
+              while let Ok(line) = rx.try_recv() {
+                  push_tail(&mut tail, &line);
+              }
+              if !exit_status.success() {
+                  let _ = fs::remove_file(output);
+                  bail!(
+                      "ffmpeg CHZZK local TS remux 실패 (exit={}): {}",
+                      exit_code(exit_status),
+                      redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
+                  );
+              }
               Ok(())
           }
 
@@ -311,11 +484,12 @@ jobs:
           }
           '''
           pattern = re.compile(r'async fn download_video\([\s\S]*?\nasync fn run_capture\(')
-          text, n = pattern.subn(lambda _m: download_block + '\nasync fn run_capture(', text, count=1)
-          if n != 1: raise RuntimeError('download block replacement failed')
+          text, n = pattern.subn(lambda _match: download_block + '\nasync fn run_capture(', text, count=1)
+          if n != 1:
+              raise RuntimeError('download block replacement failed')
           text = text.replace('configure_ytdlp_command(&mut command);', 'configure_python_cli_command(&mut command);')
 
-          resolver = '''fn append_streamlink_cookie_arg(args: &mut Vec<String>, cookie_file: Option<&Path>) {
+          resolver_block = r'''fn append_streamlink_cookie_arg(args: &mut Vec<String>, cookie_file: Option<&Path>) {
               if let Some(path) = cookie_file {
                   args.push("--http-cookies-file".to_string());
                   args.push(path.display().to_string());
@@ -325,40 +499,72 @@ jobs:
           fn resolve_chzzk_tools(backend: &Path, ffmpeg: &str) -> Result<ChzzkTools> {
               let settings = read_safe_settings(&settings_path(backend)).unwrap_or_default();
               let streamlink = resolve_streamlink_tool(backend, &settings)?;
-              let ffmpeg = resolve_tool(ffmpeg, &[backend.join("vod").join("ffmpeg.exe"), backend.join("ffmpeg.exe")], &["ffmpeg.exe", "ffmpeg"])
-                  .ok_or_else(|| anyhow!("ffmpeg 실행 파일을 찾지 못했습니다. 설정 > 외부 프로그램에서 FFMPEG_PATH를 확인하세요."))?;
+              let ffmpeg = resolve_tool(
+                  ffmpeg,
+                  &[
+                      backend.join("vod").join("ffmpeg.exe"),
+                      backend.join("ffmpeg.exe"),
+                  ],
+                  &["ffmpeg.exe", "ffmpeg"],
+              )
+              .ok_or_else(|| anyhow!(
+                  "ffmpeg 실행 파일을 찾지 못했습니다. 설정 > 외부 프로그램에서 FFMPEG_PATH를 확인하세요."
+              ))?;
               Ok(ChzzkTools { streamlink, ffmpeg })
           }
 
-          fn resolve_streamlink_tool(backend: &Path, settings: &std::collections::BTreeMap<String, String>) -> Result<PathBuf> {
+          fn resolve_streamlink_tool(
+              backend: &Path,
+              settings: &std::collections::BTreeMap<String, String>,
+          ) -> Result<PathBuf> {
               for key in ["STREAMLINK_PATH", "STREAMLINK_FALLBACK"] {
                   if let Some(value) = settings.get(key) {
                       let value = value.trim();
                       if !value.is_empty() && !value.eq_ignore_ascii_case("AUTO") {
                           let path = PathBuf::from(value);
-                          if path.is_file() { return Ok(path); }
+                          if path.is_file() {
+                              return Ok(path);
+                          }
                       }
                   }
               }
               let mut candidates = vec![backend.join("streamlink.exe")];
-              #[cfg(windows)] {
-                  candidates.push(PathBuf::from(r"C:\\Program Files\\Streamlink\\bin\\streamlink.exe"));
-                  candidates.push(PathBuf::from(r"C:\\Program Files\\Streamlink\\streamlink.exe"));
+              #[cfg(windows)]
+              {
+                  candidates.push(PathBuf::from(r"C:\Program Files\Streamlink\bin\streamlink.exe"));
+                  candidates.push(PathBuf::from(r"C:\Program Files\Streamlink\streamlink.exe"));
               }
               resolve_tool("", &candidates, &["streamlink.exe", "streamlink"])
-                  .ok_or_else(|| anyhow!("Streamlink 실행 파일을 찾지 못했습니다. STREAMLINK_PATH/STREAMLINK_FALLBACK 설정을 확인하세요."))
+                  .ok_or_else(|| anyhow!(
+                      "Streamlink 실행 파일을 찾지 못했습니다. STREAMLINK_PATH/STREAMLINK_FALLBACK 설정을 확인하세요."
+                  ))
           }
           '''
           pattern = re.compile(r'fn append_cookie_arg\([\s\S]*?\nfn resolve_tool\(')
-          text, n = pattern.subn(lambda _m: resolver + '\nfn resolve_tool(', text, count=1)
-          if n != 1: raise RuntimeError('resolver replacement failed')
-          text = text.replace('"yt-dlp 완료 파일을 찾지 못했습니다: {}"', '"CHZZK 완료 파일을 찾지 못했습니다: {}"')
+          text, n = pattern.subn(lambda _match: resolver_block + '\nfn resolve_tool(', text, count=1)
+          if n != 1:
+              raise RuntimeError('resolver replacement failed')
+          text = text.replace(
+              '"yt-dlp 완료 파일을 찾지 못했습니다: {}"',
+              '"CHZZK 완료 파일을 찾지 못했습니다: {}"',
+          )
 
-          tests = '''    #[test]
+          quality_tests = r'''    #[test]
               fn streamlink_json_builds_quality_options() {
-                  let value = serde_json::json!({"streams":{"144p":{},"720p":{},"1080p":{},"worst":{},"best":{}}});
+                  let value = serde_json::json!({
+                      "streams": {
+                          "144p": {},
+                          "720p": {},
+                          "1080p": {},
+                          "worst": {},
+                          "best": {}
+                      }
+                  });
                   let options = quality_options_from_streamlink_json(&value).unwrap();
-                  assert_eq!(options.iter().map(|v| v.value.as_str()).collect::<Vec<_>>(), vec!["best","1080p","720p","144p"]);
+                  assert_eq!(
+                      options.iter().map(|value| value.value.as_str()).collect::<Vec<_>>(),
+                      vec!["best", "1080p", "720p", "144p"]
+                  );
               }
 
               #[test]
@@ -371,81 +577,79 @@ jobs:
                   assert_eq!(stream, "720p");
               }
           '''
-          pattern = re.compile(r'    #\[test\]\n    fn builds_quality_options_from_video_heights\(\)[\s\S]*?\n    #\[test\]\n    fn validates_single_part_download_contract')
-          text, n = pattern.subn(lambda _m: tests + '\n    #[test]\n    fn validates_single_part_download_contract', text, count=1)
-          if n != 1: raise RuntimeError('quality tests replacement failed')
+          pattern = re.compile(
+              r'    #\[test\]\n    fn builds_quality_options_from_video_heights\(\)[\s\S]*?\n    #\[test\]\n    fn validates_single_part_download_contract'
+          )
+          text, n = pattern.subn(
+              lambda _match: quality_tests + '\n    #[test]\n    fn validates_single_part_download_contract',
+              text,
+              count=1,
+          )
+          if n != 1:
+              raise RuntimeError('quality tests replacement failed')
 
-          api_test = '''    #[test]
+          api_test = r'''    #[test]
               fn chzzk_api_metadata_maps_to_common_analysis_shape() {
                   let content = serde_json::json!({
-                      "videoTitle":"테스트 VOD", "duration":1234, "publishDate":"2026-09-13 10:00:00",
-                      "channel":{"channelName":"테스트 채널","channelId":"0123456789abcdef0123456789abcdef"}
+                      "videoTitle": "테스트 VOD",
+                      "duration": 1234,
+                      "publishDate": "2026-09-13 10:00:00",
+                      "channel": {
+                          "channelName": "테스트 채널",
+                          "channelId": "0123456789abcdef0123456789abcdef"
+                      }
                   });
                   let metadata = metadata_from_chzzk_content(&content).unwrap();
                   assert_eq!(metadata.title, "테스트 VOD");
                   assert_eq!(metadata.streamer, "테스트 채널");
                   assert_eq!(metadata.date, "260913");
                   assert_eq!(metadata.duration_seconds, 1234);
-                  assert_eq!(analysis_view("https://chzzk.naver.com/video/1", &metadata).part_count, 1);
+                  assert_eq!(
+                      analysis_view("https://chzzk.naver.com/video/1", &metadata).part_count,
+                      1
+                  );
               }
           '''
-          pattern = re.compile(r'    #\[test\]\n    fn public_api_fallback_builds_dash_url_for_abr_hls\(\)[\s\S]*?\n    #\[test\]\n    fn redacts_naver_cookie_values')
-          text, n = pattern.subn(lambda _m: api_test + '\n    #[test]\n    fn redacts_naver_cookie_values', text, count=1)
-          if n != 1: raise RuntimeError('fallback tests replacement failed')
-          text = text.replace('fn yt_dlp_staging_name_is_short_and_title_independent()', 'fn streamlink_staging_name_is_short_and_title_independent()')
+          pattern = re.compile(
+              r'    #\[test\]\n    fn public_api_fallback_builds_dash_url_for_abr_hls\(\)[\s\S]*?\n    #\[test\]\n    fn redacts_naver_cookie_values'
+          )
+          text, n = pattern.subn(
+              lambda _match: api_test + '\n    #[test]\n    fn redacts_naver_cookie_values',
+              text,
+              count=1,
+          )
+          if n != 1:
+              raise RuntimeError('fallback tests replacement failed')
+          text = text.replace(
+              'fn yt_dlp_staging_name_is_short_and_title_independent()',
+              'fn streamlink_staging_name_is_short_and_title_independent()',
+          )
+
           path.write_text(text, encoding='utf-8')
-
-          guard = Path('maintenance/Test-Phase18ChzzkVod.ps1')
-          g = guard.read_text(encoding='utf-8')
-          start = g.index('# yt-dlp owns CHZZK extraction')
-          end = g.index('# Destination claims and cross-volume publication')
-          section = '''# CHZZK VOD uses CHZZK API metadata + Streamlink media transport.
-          Assert-Match $chzzkVod 'load_chzzk_metadata' 'CHZZK API metadata path is missing.'
-          Assert-Match $chzzkVod 'streamlink_quality_options' 'CHZZK Streamlink quality discovery is missing.'
-          Assert-Match $chzzkVod '"--json"' 'Streamlink JSON quality discovery is missing.'
-          Assert-Match $chzzkVod '"--http-cookies-file"' 'Streamlink CHZZK cookie transport is missing.'
-          Assert-Match $chzzkVod '"--ffmpeg-ffmpeg"' 'Configured ffmpeg is not passed to Streamlink.'
-          Assert-Match $chzzkVod 'run_streamlink_process' 'CHZZK VOD does not download through Streamlink.'
-          Assert-Match $chzzkVod 'with_extension\\("stream\\.ts"\\)' 'CHZZK Streamlink TS staging is missing.'
-          Assert-Match $chzzkVod 'run_ffmpeg_remux' 'Local TS to MP4 remux is missing.'
-          Assert-Match $chzzkVod 'STREAMLINK_PATH' 'CHZZK VOD does not honor Streamlink path setting.'
-          Assert-Match $chzzkVod 'STREAMLINK_FALLBACK' 'CHZZK VOD does not honor Streamlink fallback setting.'
-          Assert-Match $chzzkVod 'MEDIA_FILE_NAME:\\s*&str\\s*=\\s*"media\\.mp4"' 'CHZZK short final staging filename is missing.'
-          Assert-Match $chzzkVod 'PYTHONUTF8' 'Streamlink UTF-8 environment is missing.'
-          Assert-Match $chzzkVod 'PYTHONIOENCODING' 'Streamlink UTF-8 output setting is missing.'
-          Assert-NotMatch $chzzkVod '"--dump-single-json"' 'CHZZK provider must not use yt-dlp metadata extraction.'
-          Assert-NotMatch $chzzkVod '"--merge-output-format"' 'CHZZK provider must not use yt-dlp download extraction.'
-          Assert-Match $chzzkVod 'taskkill\\.exe' 'Windows owned-process cancellation path is missing.'
-          Assert-Match $chzzkVod '\\.arg\\("/PID"\\)' 'CHZZK cancellation is not PID scoped.'
-          Assert-Match $chzzkVod '\\.arg\\("/T"\\)' 'CHZZK cancellation does not include child tree.'
-
-          '''
-          g = g[:start] + section + g[end:]
-          g = g.replace("metadata_json_maps_to_common_analysis_shape", "chzzk_api_metadata_maps_to_common_analysis_shape")
-          g = g.replace("yt_dlp_staging_name_is_short_and_title_independent", "streamlink_staging_name_is_short_and_title_independent")
-          marker = "Assert-Match $chzzkVod 'validates_single_part_download_contract' 'CHZZK queue request regression test is missing.'"
-          g = g.replace(marker, marker + "\nAssert-Match $chzzkVod 'streamlink_json_builds_quality_options' 'CHZZK Streamlink quality regression test is missing.'\nAssert-Match $chzzkVod 'maps_legacy_height_quality_to_streamlink_selector' 'CHZZK legacy quality compatibility test is missing.'", 1)
-          guard.write_text(g, encoding='utf-8')
           '@ | Set-Content -LiteralPath $env:RUNNER_TEMP\phase18_streamlink_refactor.py -Encoding UTF8
           python $env:RUNNER_TEMP\phase18_streamlink_refactor.py
-          if ($LASTEXITCODE -ne 0) { throw "refactor script failed: $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "source refactor failed: $LASTEXITCODE" }
           rustfmt --edition 2024 rust-web/src/platform/chzzk/vod.rs
+          if ($LASTEXITCODE -ne 0) { throw 'rustfmt apply failed' }
 
-      - name: Phase 18 guard
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: ./maintenance/Test-Phase18ChzzkVod.ps1
+          $source = Get-Content -LiteralPath rust-web/src/platform/chzzk/vod.rs -Raw -Encoding UTF8
+          if ($source -notmatch 'struct ChzzkTools') { throw 'ChzzkTools missing after refactor' }
+          if ($source -notmatch 'run_streamlink_process') { throw 'Streamlink transport missing after refactor' }
+          if ($source -match '"--dump-single-json"|"--merge-output-format"|run_ffmpeg_fallback') {
+            throw 'legacy yt-dlp/public DASH fallback remains in CHZZK provider'
+          }
 
       - name: Rust tests and check
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           rustfmt --edition 2024 --check rust-web/src/platform/chzzk/vod.rs
-          if ($LASTEXITCODE -ne 0) { throw 'rustfmt failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'rustfmt check failed' }
           cargo test --locked --manifest-path rust-web/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
           cargo check --locked --manifest-path rust-web/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'cargo check failed' }
 
-      - name: Verify public Streamlink JSON and download
+      - name: Verify public CHZZK Streamlink
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $streamlink = 'C:\Program Files\Streamlink\bin\streamlink.exe'
@@ -459,14 +663,19 @@ jobs:
           Remove-Item $out -Force -ErrorAction SilentlyContinue
           & $streamlink --no-config --stream-segmented-duration 8 --output $out 'https://chzzk.naver.com/video/15185683' best
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw 'streamlink download smoke failed' }
+          if ((Get-Item $out).Length -lt 1880) { throw 'streamlink output too small' }
           Remove-Item $out -Force -ErrorAction SilentlyContinue
 
-      - name: Commit refactor
+      - name: Commit source refactor
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add rust-web/src/platform/chzzk/vod.rs maintenance/Test-Phase18ChzzkVod.ps1
+          git add rust-web/src/platform/chzzk/vod.rs
+          if (git diff --cached --quiet) {
+            Write-Host 'Source refactor already committed; nothing to push.'
+            exit 0
+          }
           git commit -m 'Use Streamlink for CHZZK VOD transport'
           if ($LASTEXITCODE -ne 0) { throw 'commit failed' }
           git push origin HEAD:phase18-chzzk-vod
