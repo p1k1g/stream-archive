@@ -14,9 +14,6 @@ on:
       - ".github/workflows/phase18-chzzk-vod-check.yml"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: phase18-chzzk-vod-${{ github.ref }}
   cancel-in-progress: true
@@ -24,73 +21,14 @@ concurrency:
 jobs:
   phase18-guard:
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
 
-      - name: Apply and push Windows destination claim fix
+      - name: Phase 18 CHZZK VOD guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vodPath = 'rust-web/src/platform/chzzk/vod.rs'
-          $vod = Get-Content -LiteralPath $vodPath -Raw -Encoding UTF8
+        run: ./maintenance/Test-Phase18ChzzkVod.ps1
 
-          $anchor = @'
-          fn finalizing_path(target: &Path) -> PathBuf {
-              let mut name = target.as_os_str().to_os_string();
-              name.push(FINALIZING_SUFFIX);
-              PathBuf::from(name)
-          }
-
-          '@
-          $replacement = @'
-          fn finalizing_path(target: &Path) -> PathBuf {
-              let mut name = target.as_os_str().to_os_string();
-              name.push(FINALIZING_SUFFIX);
-              PathBuf::from(name)
-          }
-
-          fn is_lock_contention(err: &std::io::Error) -> bool {
-              if err.kind() == std::io::ErrorKind::WouldBlock {
-                  return true;
-              }
-              #[cfg(windows)]
-              {
-                  return matches!(err.raw_os_error(), Some(32) | Some(33));
-              }
-              #[cfg(not(windows))]
-              {
-                  false
-              }
-          }
-
-          '@
-          if (-not $vod.Contains($anchor)) { throw 'finalizing_path anchor not found' }
-          $vod = $vod.Replace($anchor, $replacement)
-
-          $oldGuard = 'Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => continue,'
-          $newGuard = 'Err(err) if is_lock_contention(&err) => continue,'
-          if (-not $vod.Contains($oldGuard)) { throw 'destination claim contention guard not found' }
-          $vod = $vod.Replace($oldGuard, $newGuard)
-
-          [System.IO.File]::WriteAllText((Resolve-Path $vodPath), $vod, (New-Object System.Text.UTF8Encoding($false)))
-          rustfmt --edition 2024 $vodPath
-          if ($LASTEXITCODE -ne 0) { throw 'rustfmt failed' }
-
-          ./maintenance/Test-Phase18ChzzkVod.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Phase 18 guard failed' }
-          cargo test --locked --manifest-path rust-web/Cargo.toml
-          if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
-          cargo check --locked --manifest-path rust-web/Cargo.toml
-          if ($LASTEXITCODE -ne 0) { throw 'cargo check failed' }
-          git diff --check -- $vodPath
-          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add $vodPath
-          git commit -m "Handle Windows destination claim contention"
-          git push origin HEAD:${{ github.head_ref }}
+      - name: CHZZK VOD provider format
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: rustfmt --edition 2024 --check rust-web/src/platform/chzzk/vod.rs
