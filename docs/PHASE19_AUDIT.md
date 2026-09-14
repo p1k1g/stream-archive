@@ -61,3 +61,27 @@ without Windows suffix assumptions, and Windows plus Linux/macOS integration tes
 - Queue retry/cancel, server shutdown with active work, destination collision, stale job scavenging.
 - SSE disconnect/reconnect and session revocation.
 - Windows picker, DPAPI round trip, native compile, portable package smoke and verification.
+
+## 19.7 runtime contract guards
+
+The five historical phase/process/release entry points and three obsolete phase-only workflows were
+replaced by one permanent CI entry point, `maintenance/Test-RuntimeContracts.ps1`. The entry point
+only orchestrates focused modules under `maintenance/guards/`: shared helpers, architecture,
+providers, process lifecycle, storage ownership, security, and release safety. No transitional
+wrappers were retained because repository workflows were the only callers.
+
+The former implementation-location assumptions now follow the Phase 19 boundary. CHZZK VOD is
+required to call `restrict_private_dir` and `terminate_owned`; the platform runtime is independently
+required to implement Windows PID/tree termination, forbid `/IM`, apply the Windows ACL, and provide
+Unix mode 0700. LIVE and SOOP VOD also route owned termination through that common boundary.
+
+Behavioral assertions remain Rust tests: destination collision and reusable claims, no-clobber and
+cancellable publication, stale job cleanup, progress parsing, completed-versus-late-cancel,
+configuration-cache commits, queue serialization/retry, status transitions, and cookie cleanup.
+PowerShell contracts require those tests to exist while concentrating on dependency direction,
+forbidden patterns, OS boundaries, secrets, workflow triggers, and portable package contents.
+
+`rust-web-check.yml` is now the only pull-request runtime workflow. It invokes the consolidated guard,
+JavaScript syntax validation, whole-crate rustfmt, Rust tests/check/clippy, Windows compilation, and
+portable package smoke/verification. Its path filter covers provider code, `platform_runtime.rs`,
+recorder, queue, main, backend, web assets, all maintenance guards, and workflow changes.
