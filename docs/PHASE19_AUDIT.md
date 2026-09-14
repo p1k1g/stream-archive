@@ -96,7 +96,8 @@ The tracked repository was inventoried across runtime, frontend, maintenance, wo
 configuration templates, and documentation. Four superseded documents were removed: the obsolete
 WinUI-era cloud setup guide, the completed Phase 15 and Phase 16 design/audit records whose lasting
 invariants are now covered here and by runtime guards, and the duplicated Phase 6 Rust README. Its
-still-current environment-variable summary was consolidated into the root user README.
+still-current environment-variable and management-token recovery guidance was consolidated into the
+root user README.
 
 The phase-numbered Rust API modules were renamed by responsibility: `phase8.rs` became
 `history_storage.rs`, and `phase9_1.rs` became `local_picker.rs`. Their API routes and behavior did
@@ -111,6 +112,21 @@ Inventory counts changed as follows (tracked paths, before -> after): total 74 -
 configuration-template, or frontend files were deleted or merged. Pull-request validation now runs
 for every target branch rather than only `main`, so stacked hardening PRs receive the same permanent
 workflow without a branch-specific duplicate.
+
+### Permanent multi-platform migration compatibility contract
+
+Deleting the Phase 16 architecture note does not delete its active persistence contract. SQLite is
+the canonical multi-platform source of truth, and persisted channel identity remains
+`(platform, account)`. Pre-multiplatform/legacy channel rows are upgraded with platform `SOOP`;
+legacy `live_recordings`, `vod_jobs`, and `vod_queue` rows likewise default their platform identity
+to `SOOP` during schema upgrade.
+
+Backup restore must run the same schema upgrade before runtime caches are refreshed, so restoring an
+older compatible database preserves the same platform migration semantics as a normal startup. The
+legacy `backend/SOOP_LIVE_CHANNELS.txt` compatibility mirror intentionally remains SOOP-only; CHZZK
+and any future providers remain represented canonically in SQLite rather than being projected into
+that legacy mirror. These rules are compatibility invariants for future schema/restore work, not
+historical Phase 16 implementation notes.
 
 The provider trees, common LIVE/VOD facades, `platform_runtime`, process ownership, security, store,
 configuration, backup, queue, and publication boundaries remain separate. The two-line root VOD
