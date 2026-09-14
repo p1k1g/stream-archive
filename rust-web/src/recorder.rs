@@ -108,7 +108,7 @@ fn find_on_path(names: &[&str]) -> Option<PathBuf> {
     None
 }
 
-fn resolve_timestamp_rebase_ffmpeg(streamlink: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_timestamp_rebase_ffmpeg(streamlink: &Path) -> Result<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(streamlink_dir) = streamlink.parent() {
         candidates.push(streamlink_dir.join("ffmpeg.exe"));
@@ -131,7 +131,7 @@ fn resolve_timestamp_rebase_ffmpeg(streamlink: &Path) -> Result<PathBuf> {
     )
 }
 
-fn timestamp_rebase_player_args(output_file: &Path) -> Result<String> {
+pub(crate) fn timestamp_rebase_player_args(output_file: &Path) -> Result<String> {
     let output = output_file.to_string_lossy();
     if output.contains('"') {
         bail!("output file path contains an unsupported quote character");
@@ -237,10 +237,7 @@ impl RecorderManager {
                 .arg(player_args)
                 .arg("--player-verbose");
         } else {
-            command
-                .arg("--output")
-                .arg(&output_file)
-                .arg("--force");
+            command.arg("--output").arg(&output_file).arg("--force");
         }
         command
             .arg("--progress")
@@ -452,7 +449,9 @@ async fn preflight_plugin_input(
         )
     })?;
     if !status.success() {
-        bail!("현재 Streamlink이 이 플랫폼 URL을 처리할 수 없습니다. Streamlink을 최신 버전으로 업데이트하세요: {url}");
+        bail!(
+            "현재 Streamlink이 이 플랫폼 URL을 처리할 수 없습니다. Streamlink을 최신 버전으로 업데이트하세요: {url}"
+        );
     }
 
     if needs_cookie_file {
@@ -472,7 +471,9 @@ async fn preflight_plugin_input(
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         if !text.contains("--http-cookies-file") {
-            bail!("CHZZK 제한 방송 인증에는 --http-cookies-file을 지원하는 Streamlink 8.2 이상이 필요합니다.");
+            bail!(
+                "CHZZK 제한 방송 인증에는 --http-cookies-file을 지원하는 Streamlink 8.2 이상이 필요합니다."
+            );
         }
     }
     Ok(())
@@ -584,7 +585,10 @@ mod tests {
         fs::write(&streamlink, b"stub").unwrap();
         fs::write(&ffmpeg, b"stub").unwrap();
 
-        assert_eq!(resolve_timestamp_rebase_ffmpeg(&streamlink).unwrap(), ffmpeg);
+        assert_eq!(
+            resolve_timestamp_rebase_ffmpeg(&streamlink).unwrap(),
+            ffmpeg
+        );
         let _ = fs::remove_dir_all(root);
     }
 
