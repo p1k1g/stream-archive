@@ -16,6 +16,7 @@ use std::{
     collections::{BTreeSet, VecDeque},
     env,
     fs::{self, File, OpenOptions},
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command as StdCommand, ExitStatus, Stdio},
     sync::{
@@ -39,6 +40,9 @@ const PROGRESS_PREFIX: &str = "__CHZZK_PROGRESS__";
 const COOKIE_FILE_NAME: &str = "chzzk-cookies.txt";
 const JOB_LOCK_FILE_NAME: &str = "owner.lock";
 const MEDIA_FILE_NAME: &str = "media.mp4";
+const DESTINATION_CLAIM_SUFFIX: &str = ".soop-downloader.claim";
+const FINALIZING_SUFFIX: &str = ".soop-downloader.finalizing";
+const COPY_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct Tools {
@@ -76,6 +80,33 @@ impl Drop for JobDirGuard {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.lock);
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+struct DestinationClaim {
+    target: PathBuf,
+    claim_path: PathBuf,
+    lock: Option<File>,
+}
+
+impl DestinationClaim {
+    fn target(&self) -> &Path {
+        &self.target
+    }
+
+    fn finalizing_path(&self) -> PathBuf {
+        finalizing_path(&self.target)
+    }
+}
+
+impl Drop for DestinationClaim {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.finalizing_path());
+        if let Some(lock) = self.lock.take() {
+            let _ = FileExt::unlock(&lock);
+            drop(lock);
+        }
+        let _ = fs::remove_file(&self.claim_path);
     }
 }
 
@@ -178,7 +209,7 @@ impl VodManager {
                 let mut current = status.write().await;
                 current.running = false;
                 current.finished_at = Some(Utc::now().to_rfc3339());
-                if cancel.load(Ordering::SeqCst) {
+                if should_mark_cancelled(&cancel, &current.state) {
                     current.state = "CANCELLED".into();
                     current.message = "CHZZK VOD 작업이 취소되었습니다.".into();
                     logs.push("[VOD:CHZZK] job cancelled").await;
@@ -224,6 +255,10 @@ impl VodManager {
         }
         Ok(self.status.read().await.clone())
     }
+}
+
+fn should_mark_cancelled(cancel: &AtomicBool, state: &str) -> bool {
+    cancel.load(Ordering::SeqCst) && state != "COMPLETED"
 }
 
 enum VodJobKind {
@@ -325,7 +360,8 @@ async fn run_download(
         safe_name(&metadata.streamer, 60),
         safe_name(&metadata.title, 100)
     );
-    let final_output = collision_path(&output_dir, &base, "mp4")?;
+    let destination = claim_collision_path(&output_dir, &base, "mp4")?;
+    let final_output = destination.target().to_path_buf();
     let staging_output = job_dir.join(MEDIA_FILE_NAME);
     let mut last_error = String::new();
     let attempts = req.max_retries.max(1);
@@ -353,9 +389,16 @@ async fn run_download(
         )
         .await
         {
-            Ok(()) if !cancel.load(Ordering::SeqCst) => {
+            Ok(()) => {
+                if cancel.load(Ordering::SeqCst) {
+                    cleanup_job_media(&job_dir);
+                    return Ok(());
+                }
                 let staged_file = find_finished_output(&staging_output)?;
-                finalize_output(&staged_file, &final_output)?;
+                if !finalize_output(&staged_file, &destination, cancel)? {
+                    cleanup_job_media(&job_dir);
+                    return Ok(());
+                }
                 let mut current = status.write().await;
                 current.state = "COMPLETED".into();
                 current.running = false;
@@ -368,10 +411,6 @@ async fn run_download(
                     final_output.display()
                 ))
                 .await;
-                return Ok(());
-            }
-            Ok(()) => {
-                cleanup_job_media(&job_dir);
                 return Ok(());
             }
             Err(err) => {
@@ -970,15 +1009,72 @@ fn restrict_cookie_file(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn collision_path(dir: &Path, base: &str, extension: &str) -> Result<PathBuf> {
-    let first = dir.join(format!("{base}.{extension}"));
-    if !first.exists() {
-        return Ok(first);
+fn claim_path(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_os_string();
+    name.push(DESTINATION_CLAIM_SUFFIX);
+    PathBuf::from(name)
+}
+
+fn finalizing_path(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_os_string();
+    name.push(FINALIZING_SUFFIX);
+    PathBuf::from(name)
+}
+
+fn collision_candidate(dir: &Path, base: &str, extension: &str, number: usize) -> PathBuf {
+    if number == 1 {
+        dir.join(format!("{base}.{extension}"))
+    } else {
+        dir.join(format!("{base}_{number:02}.{extension}"))
     }
-    for number in 2..=9999 {
-        let candidate = dir.join(format!("{base}_{number:02}.{extension}"));
-        if !candidate.exists() {
-            return Ok(candidate);
+}
+
+fn claim_collision_path(dir: &Path, base: &str, extension: &str) -> Result<DestinationClaim> {
+    for number in 1..=9999 {
+        let target = collision_candidate(dir, base, extension, number);
+        if target.exists() {
+            continue;
+        }
+        let claim_path = claim_path(&target);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&claim_path)
+            .with_context(|| {
+                format!("CHZZK VOD destination claim 열기 실패: {}", claim_path.display())
+            })?;
+        match lock.try_lock_exclusive() {
+            Ok(()) => {
+                if target.exists() {
+                    let _ = FileExt::unlock(&lock);
+                    drop(lock);
+                    continue;
+                }
+                let stale_finalizing = finalizing_path(&target);
+                if stale_finalizing.is_file() {
+                    fs::remove_file(&stale_finalizing).with_context(|| {
+                        format!(
+                            "CHZZK VOD stale destination 임시 파일 정리 실패: {}",
+                            stale_finalizing.display()
+                        )
+                    })?;
+                }
+                return Ok(DestinationClaim {
+                    target,
+                    claim_path,
+                    lock: Some(lock),
+                });
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "CHZZK VOD destination claim 잠금 실패: {}",
+                        claim_path.display()
+                    )
+                });
+            }
         }
     }
     bail!("CHZZK VOD 파일명 충돌이 너무 많습니다.")
@@ -1018,39 +1114,69 @@ fn find_finished_output(expected: &Path) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("yt-dlp 완료 파일을 찾지 못했습니다: {}", expected.display()))
 }
 
-fn finalizing_path(target: &Path) -> PathBuf {
-    let mut name = target.as_os_str().to_os_string();
-    name.push(format!(".{}.finalizing", Uuid::new_v4().simple()));
-    PathBuf::from(name)
-}
-
-fn publish_by_copy(source: &Path, target: &Path, rename_error: &std::io::Error) -> Result<()> {
+fn publish_by_copy(
+    source: &Path,
+    destination: &DestinationClaim,
+    cancel: &AtomicBool,
+    rename_error: &std::io::Error,
+) -> Result<bool> {
+    let target = destination.target();
     if target.exists() {
         bail!(
             "CHZZK VOD 최종 파일이 이미 존재합니다: {}",
             target.display()
         );
     }
-    let temp = finalizing_path(target);
-    let publish = (|| -> Result<()> {
-        fs::copy(source, &temp).with_context(|| {
-            format!(
-                "CHZZK VOD destination 임시 복사 실패: {} -> {}",
-                source.display(),
-                temp.display()
-            )
+    let temp = destination.finalizing_path();
+    if temp.is_file() {
+        fs::remove_file(&temp).with_context(|| {
+            format!("CHZZK VOD stale destination 임시 파일 정리 실패: {}", temp.display())
         })?;
-        OpenOptions::new()
-            .read(true)
+    }
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+
+    let publish = (|| -> Result<bool> {
+        let mut input = File::open(source).with_context(|| {
+            format!("CHZZK VOD staging 파일 열기 실패: {}", source.display())
+        })?;
+        let mut output = OpenOptions::new()
             .write(true)
+            .create_new(true)
             .open(&temp)
-            .and_then(|file| file.sync_all())
             .with_context(|| {
-                format!(
-                    "CHZZK VOD destination 임시 파일 sync 실패: {}",
-                    temp.display()
-                )
+                format!("CHZZK VOD destination 임시 파일 생성 실패: {}", temp.display())
             })?;
+        let mut buffer = vec![0_u8; COPY_BUFFER_SIZE];
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                drop(output);
+                let _ = fs::remove_file(&temp);
+                return Ok(false);
+            }
+            let read = input.read(&mut buffer).with_context(|| {
+                format!("CHZZK VOD staging 파일 읽기 실패: {}", source.display())
+            })?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read]).with_context(|| {
+                format!("CHZZK VOD destination 임시 복사 실패: {}", temp.display())
+            })?;
+        }
+        output.flush().with_context(|| {
+            format!("CHZZK VOD destination 임시 파일 flush 실패: {}", temp.display())
+        })?;
+        output.sync_all().with_context(|| {
+            format!("CHZZK VOD destination 임시 파일 sync 실패: {}", temp.display())
+        })?;
+        drop(output);
+
+        if cancel.load(Ordering::SeqCst) {
+            let _ = fs::remove_file(&temp);
+            return Ok(false);
+        }
         if target.exists() {
             bail!(
                 "CHZZK VOD 최종 파일이 복사 중 생성되었습니다: {}",
@@ -1064,36 +1190,56 @@ fn publish_by_copy(source: &Path, target: &Path, rename_error: &std::io::Error) 
                 target.display()
             )
         })?;
-        Ok(())
+        Ok(true)
     })();
-    if let Err(err) = publish {
-        let _ = fs::remove_file(&temp);
-        return Err(err).with_context(|| {
-            format!(
-                "CHZZK VOD 최종 파일 이동 실패 (rename: {rename_error}): {} -> {}",
-                source.display(),
-                target.display()
-            )
-        });
+
+    match publish {
+        Ok(true) => {
+            let _ = fs::remove_file(source);
+            Ok(true)
+        }
+        Ok(false) => {
+            let _ = fs::remove_file(&temp);
+            Ok(false)
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&temp);
+            Err(err).with_context(|| {
+                format!(
+                    "CHZZK VOD 최종 파일 이동 실패 (rename: {rename_error}): {} -> {}",
+                    source.display(),
+                    target.display()
+                )
+            })
+        }
     }
-    let _ = fs::remove_file(source);
-    Ok(())
 }
 
-fn finalize_output(source: &Path, target: &Path) -> Result<()> {
+fn finalize_output(
+    source: &Path,
+    destination: &DestinationClaim,
+    cancel: &AtomicBool,
+) -> Result<bool> {
+    let target = destination.target();
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
     if target.exists() {
         bail!(
             "CHZZK VOD 최종 파일이 이미 존재합니다: {}",
             target.display()
         );
     }
-    if let Err(rename_error) = fs::rename(source, target) {
-        publish_by_copy(source, target, &rename_error)?;
+    match fs::rename(source, target) {
+        Ok(()) => {}
+        Err(rename_error) => {
+            return publish_by_copy(source, destination, cancel, &rename_error);
+        }
     }
     if !target.is_file() {
         bail!("CHZZK VOD 최종 파일 생성 확인 실패: {}", target.display());
     }
-    Ok(())
+    Ok(true)
 }
 
 fn cleanup_job_media(job_dir: &Path) {
@@ -1383,42 +1529,63 @@ mod tests {
     }
 
     #[test]
-    fn atomic_copy_publish_keeps_partial_data_out_of_final_name() {
+    fn concurrent_destination_claims_choose_distinct_collision_paths() {
         let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source.mp4");
-        let target = temp.path().join("final.mp4");
-        fs::write(&source, b"complete-media").unwrap();
-        let rename_error = std::io::Error::other("simulated cross-volume rename");
-
-        publish_by_copy(&source, &target, &rename_error).unwrap();
-        assert!(!source.exists());
-        assert_eq!(fs::read(&target).unwrap(), b"complete-media");
-        assert!(
-            fs::read_dir(temp.path())
-                .unwrap()
-                .flatten()
-                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".finalizing"))
-        );
+        let first = claim_collision_path(temp.path(), "same", "mp4").unwrap();
+        let second = claim_collision_path(temp.path(), "same", "mp4").unwrap();
+        assert_eq!(first.target().file_name().unwrap(), "same.mp4");
+        assert_eq!(second.target().file_name().unwrap(), "same_02.mp4");
     }
 
     #[test]
-    fn atomic_copy_publish_failure_preserves_source_and_existing_target() {
+    fn cancelled_copy_publish_keeps_final_unpublished() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source.mp4");
-        let target = temp.path().join("final.mp4");
-        fs::write(&source, b"source").unwrap();
-        fs::write(&target, b"existing").unwrap();
+        fs::write(&source, vec![7_u8; COPY_BUFFER_SIZE + 32]).unwrap();
+        let destination = claim_collision_path(temp.path(), "final", "mp4").unwrap();
+        let cancel = AtomicBool::new(true);
         let rename_error = std::io::Error::other("simulated cross-volume rename");
 
-        assert!(publish_by_copy(&source, &target, &rename_error).is_err());
+        assert!(!publish_by_copy(&source, &destination, &cancel, &rename_error).unwrap());
         assert!(source.exists());
-        assert_eq!(fs::read(&target).unwrap(), b"existing");
-        assert!(
-            fs::read_dir(temp.path())
-                .unwrap()
-                .flatten()
-                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".finalizing"))
-        );
+        assert!(!destination.target().exists());
+        assert!(!destination.finalizing_path().exists());
+    }
+
+    #[test]
+    fn completed_state_wins_over_late_cancellation() {
+        let cancel = AtomicBool::new(true);
+        assert!(!should_mark_cancelled(&cancel, "COMPLETED"));
+        assert!(should_mark_cancelled(&cancel, "DOWNLOADING"));
+    }
+
+    #[test]
+    fn stale_finalizing_is_reclaimed_under_destination_claim() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("final.mp4");
+        let stale = finalizing_path(&target);
+        fs::write(&stale, b"stale-partial").unwrap();
+        assert!(stale.exists());
+
+        let destination = claim_collision_path(temp.path(), "final", "mp4").unwrap();
+        assert_eq!(destination.target(), target.as_path());
+        assert!(!stale.exists());
+    }
+
+    #[test]
+    fn atomic_copy_publish_keeps_partial_data_out_of_final_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.mp4");
+        fs::write(&source, b"complete-media").unwrap();
+        let destination = claim_collision_path(temp.path(), "final", "mp4").unwrap();
+        let target = destination.target().to_path_buf();
+        let cancel = AtomicBool::new(false);
+        let rename_error = std::io::Error::other("simulated cross-volume rename");
+
+        assert!(publish_by_copy(&source, &destination, &cancel, &rename_error).unwrap());
+        assert!(!source.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"complete-media");
+        assert!(!destination.finalizing_path().exists());
     }
 
     #[test]
