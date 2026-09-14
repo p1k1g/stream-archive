@@ -713,7 +713,7 @@ fn download_progress_percent(media_seconds: f64, duration_seconds: u64) -> f64 {
     if duration_seconds == 0 {
         return 0.0;
     }
-    (media_seconds.max(0.0) / duration_seconds as f64 * 95.0).clamp(0.0, 95.0)
+    (media_seconds.max(0.0) / duration_seconds as f64 * 100.0).clamp(0.0, 99.0)
 }
 
 fn format_media_time(seconds: f64) -> String {
@@ -956,7 +956,7 @@ async fn run_streamlink_download(
         bail!("Streamlink CHZZK output is empty");
     }
     let mut current = status.write().await;
-    current.percent = 95.0;
+    current.percent = 99.0;
     current.current_part = 1;
     current.part_count = 1;
     current.message = "CHZZK VOD 저장 마무리 중…".into();
@@ -1875,9 +1875,9 @@ mod tests {
             Some(3600.0)
         );
         let percent = download_progress_percent(3600.0, 7200);
-        assert!((percent - 47.5).abs() < 0.001);
+        assert!((percent - 50.0).abs() < 0.001);
         assert_eq!(format_media_time(29856.0), "08:17:36");
-        assert_eq!(download_progress_percent(99999.0, 29856), 95.0);
+        assert_eq!(download_progress_percent(99999.0, 29856), 99.0);
     }
 
     #[test]

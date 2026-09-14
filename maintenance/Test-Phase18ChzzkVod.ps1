@@ -71,7 +71,7 @@ Assert-Match $chzzkVod 'FileExt::unlock\(&self\.lock\)' 'CHZZK VOD job guard doe
 Assert-Match $chzzkVod 'name == COOKIE_FILE_NAME \|\| name == JOB_LOCK_FILE_NAME' 'Retry/cancel cleanup must preserve both cookie and ownership lock files.'
 Assert-Match $chzzkVod 'active_job_lock_survives_scavenging_until_release' 'Active-owner stale-cleanup regression test is missing.'
 
-# CHZZK metadata comes from CHZZK API; Streamlink owns VOD media extraction and uses the LIVE MPEG-TS player pipeline.
+# CHZZK metadata comes from CHZZK API; Streamlink owns DASH extraction/mux and the VOD-owned FFmpeg finalizes TS with media progress.
 Assert-Match $chzzkVod 'struct ChzzkTools' 'CHZZK Streamlink tool bundle is missing.'
 Assert-Match $chzzkVod 'api\.chzzk\.naver\.com/service/v3/videos/' 'CHZZK VOD metadata is not read from the CHZZK API.'
 Assert-NotMatch $chzzkVod 'duration_seconds[\s\S]*?/ 1000;' 'CHZZK API duration is already seconds and must not be divided by 1000.'
