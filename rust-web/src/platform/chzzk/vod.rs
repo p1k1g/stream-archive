@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Datelike, Local, Utc};
 use fs2::FileExt;
 use regex::Regex;
+use reqwest::Client;
 use serde_json::Value;
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -59,6 +60,12 @@ struct Metadata {
     date: String,
     duration_seconds: u64,
     qualities: Vec<VodQualityOption>,
+}
+
+#[derive(Clone)]
+struct PublicPlaybackFallback {
+    metadata: Metadata,
+    playback_url: String,
 }
 
 struct JobRuntime {
@@ -446,29 +453,190 @@ async fn load_metadata(
     append_cookie_arg(&mut args, cookie_file);
     args.push(vod_url.to_string());
 
-    let output = run_capture(&tools.yt_dlp, &args, cancel, logs, "CHZZK metadata").await;
-    let stdout = match output {
-        Ok(stdout) => stdout,
+    match run_capture(&tools.yt_dlp, &args, cancel, logs, "CHZZK metadata").await {
+        Ok(stdout) => {
+            let value: Value = serde_json::from_str(stdout.trim())
+                .context("yt-dlp CHZZK metadata JSON parse failed")?;
+            metadata_from_json(&value)
+        }
         Err(err) => {
+            if let Ok(fallback) = load_public_playback_fallback(vod_url).await {
+                logs.push(
+                    "[VOD:CHZZK] yt-dlp metadata failed; using public CHZZK playback fallback",
+                )
+                .await;
+                return Ok(fallback.metadata);
+            }
+            if is_source_url_extractor_bug(&err) {
+                return Err(err).context(
+                    "yt-dlp CHZZK DASH parser hit the known sourceURL bug and the public playback fallback was unavailable",
+                );
+            }
             let state = ChzzkAuth::load()
                 .map(|auth| auth.state())
                 .unwrap_or(ChzzkAuthState::Missing);
-            return match state {
+            match state {
                 ChzzkAuthState::Missing => Err(err).context(
-                    "연령 제한/로그인 전용 VOD라면 설정 > CHZZK 인증에서 NID_AUT/NID_SES를 저장하세요.",
+                    "If this VOD requires login or age verification, save NID_AUT/NID_SES in CHZZK authentication settings",
                 ),
                 ChzzkAuthState::Partial => Err(err).context(
-                    "CHZZK 인증정보가 일부만 설정되어 있습니다. NID_AUT/NID_SES를 모두 저장하세요.",
+                    "CHZZK authentication is only partially configured; save both NID_AUT and NID_SES",
                 ),
                 ChzzkAuthState::Configured => Err(err).context(
-                    "CHZZK 인증 쿠키가 만료되었거나 이 VOD를 볼 권한이 없을 수 있습니다.",
+                    "CHZZK authentication may be expired or the account may not have permission for this VOD",
                 ),
-            };
+            }
         }
+    }
+}
+
+fn is_source_url_extractor_bug(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}");
+    text.contains("KeyError('sourceURL')")
+        || text.contains("KeyError(\"sourceURL\")")
+        || text.contains("KeyError('sourceURL')")
+}
+
+async fn load_public_playback_fallback(vod_url: &str) -> Result<PublicPlaybackFallback> {
+    let video_no = video_id(vod_url)?;
+    let value: Value = Client::new()
+        .get(format!(
+            "https://api.chzzk.naver.com/service/v3/videos/{video_no}"
+        ))
+        .send()
+        .await
+        .context("CHZZK public video detail request failed")?
+        .error_for_status()
+        .context("CHZZK public video detail HTTP error")?
+        .json()
+        .await
+        .context("CHZZK public video detail JSON parse failed")?;
+    public_playback_from_value(&value)
+}
+
+fn public_playback_from_value(value: &Value) -> Result<PublicPlaybackFallback> {
+    if value.get("code").and_then(Value::as_i64) != Some(200) {
+        bail!("CHZZK public video detail API returned a non-success response");
+    }
+    let content = value
+        .get("content")
+        .filter(|value| !value.is_null())
+        .context("CHZZK public video detail has no content")?;
+    let metadata = metadata_from_chzzk_content(content)?;
+
+    if let Some(path) = rewind_playback_path(content) {
+        return Ok(PublicPlaybackFallback {
+            metadata,
+            playback_url: path,
+        });
+    }
+
+    if content.get("vodStatus").and_then(Value::as_str) == Some("ABR_HLS") {
+        let media_id = content
+            .get("videoId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .context("CHZZK ABR_HLS response has no videoId")?;
+        let in_key = content
+            .get("inKey")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .context("CHZZK ABR_HLS response has no public inKey")?;
+        let mut url = Url::parse(&format!(
+            "https://apis.naver.com/neonplayer/vodplay/v1/playback/{media_id}"
+        ))?;
+        url.query_pairs_mut()
+            .append_pair("key", in_key)
+            .append_pair("env", "real")
+            .append_pair("lc", "en_US")
+            .append_pair("cpl", "en_US");
+        return Ok(PublicPlaybackFallback {
+            metadata,
+            playback_url: url.into(),
+        });
+    }
+
+    bail!("CHZZK public API did not expose a playable fallback for this VOD")
+}
+
+fn metadata_from_chzzk_content(content: &Value) -> Result<Metadata> {
+    let title = content
+        .get("videoTitle")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if title.is_empty() {
+        bail!("CHZZK public API did not return a VOD title");
+    }
+    let streamer = content
+        .pointer("/channel/channelName")
+        .and_then(Value::as_str)
+        .unwrap_or("CHZZK")
+        .trim()
+        .to_string();
+    let streamer_id = content
+        .pointer("/channel/channelId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let duration_seconds = content
+        .get("duration")
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_f64().map(|v| v.max(0.0) as u64))
+        })
+        .unwrap_or(0);
+    let date = content
+        .get("publishDate")
+        .and_then(Value::as_str)
+        .and_then(short_date)
+        .unwrap_or_else(today_short_date);
+    Ok(Metadata {
+        title,
+        streamer,
+        streamer_id,
+        date,
+        duration_seconds,
+        qualities: vec![VodQualityOption {
+            value: "best".into(),
+            label: "Best quality (public DASH fallback)".into(),
+        }],
+    })
+}
+
+fn rewind_playback_path(content: &Value) -> Option<String> {
+    let raw = content.get("liveRewindPlaybackJson")?.as_str()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    let playback: Value = serde_json::from_str(raw).ok()?;
+    let media = playback.get("media")?.as_array()?;
+    media
+        .iter()
+        .find(|item| {
+            item.get("mediaId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id.eq_ignore_ascii_case("HLS"))
+                && item.get("path").and_then(Value::as_str).is_some()
+        })
+        .or_else(|| {
+            media
+                .iter()
+                .find(|item| item.get("path").and_then(Value::as_str).is_some())
+        })
+        .and_then(|item| item.get("path"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn redact_playback_key(text: &str) -> String {
+    let Ok(regex) = Regex::new(r"(?i)(key=)[^&\s|]+") else {
+        return text.to_string();
     };
-    let value: Value =
-        serde_json::from_str(stdout.trim()).context("yt-dlp CHZZK 메타데이터 JSON 해석 실패")?;
-    metadata_from_json(&value)
+    regex.replace_all(text, "${1}<redacted>").into_owned()
 }
 
 fn metadata_from_json(value: &Value) -> Result<Metadata> {
@@ -588,7 +756,141 @@ async fn download_video(
         args.push(ffmpeg.display().to_string());
     }
     args.push(req.vod_url.clone());
-    run_download_process(&tools.yt_dlp, &args, status, cancel, logs).await
+
+    match run_download_process(&tools.yt_dlp, &args, status, cancel, logs).await {
+        Ok(()) => Ok(()),
+        Err(err) if is_source_url_extractor_bug(&err) => {
+            if !req.quality.trim().is_empty() && req.quality.trim() != "best" {
+                return Err(err)
+                    .context("The public DASH fallback currently supports only best quality");
+            }
+            let fallback = load_public_playback_fallback(&req.vod_url)
+                .await
+                .context("CHZZK public playback fallback lookup failed")?;
+            let ffmpeg = tools.ffmpeg.as_ref().context(
+                "yt-dlp hit the CHZZK sourceURL bug; configure FFMPEG_PATH to use the public DASH fallback",
+            )?;
+            logs.push("[VOD:CHZZK] yt-dlp sourceURL bug detected; switching to ffmpeg public playback fallback")
+                .await;
+            run_ffmpeg_fallback(
+                ffmpeg,
+                &fallback.playback_url,
+                output,
+                fallback.metadata.duration_seconds,
+                status,
+                cancel,
+            )
+            .await
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn run_ffmpeg_fallback(
+    ffmpeg: &Path,
+    playback_url: &str,
+    output: &Path,
+    duration_seconds: u64,
+    status: &Arc<RwLock<VodJobStatus>>,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let mut command = Command::new(ffmpeg);
+    command
+        .arg("-hide_banner")
+        .arg("-nostdin")
+        .arg("-y")
+        .arg("-i")
+        .arg(playback_url)
+        .arg("-c")
+        .arg("copy")
+        .arg("-progress")
+        .arg("pipe:1")
+        .arg("-nostats")
+        .arg(output)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("ffmpeg fallback launch failed: {}", ffmpeg.display()))?;
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    if let Some(stdout) = child.stdout.take() {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = tx.send(line);
+            }
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = tx.send(line);
+            }
+        });
+    }
+    drop(tx);
+
+    let mut tail = VecDeque::with_capacity(20);
+    let exit_status = loop {
+        if cancel.load(Ordering::SeqCst) {
+            terminate_owned(&mut child).await;
+            return Ok(());
+        }
+        while let Ok(line) = rx.try_recv() {
+            handle_ffmpeg_progress_line(&line, duration_seconds, status).await;
+            push_tail(&mut tail, &line);
+        }
+        if let Some(exit) = child
+            .try_wait()
+            .context("ffmpeg fallback status check failed")?
+        {
+            break exit;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    };
+    while let Ok(line) = rx.try_recv() {
+        handle_ffmpeg_progress_line(&line, duration_seconds, status).await;
+        push_tail(&mut tail, &line);
+    }
+    if !exit_status.success() {
+        let tail = tail.into_iter().collect::<Vec<_>>().join(" | ");
+        bail!(
+            "ffmpeg CHZZK public playback fallback failed (exit={}): {}",
+            exit_code(exit_status),
+            redact_playback_key(&redact(&tail))
+        );
+    }
+    Ok(())
+}
+
+async fn handle_ffmpeg_progress_line(
+    line: &str,
+    duration_seconds: u64,
+    status: &Arc<RwLock<VodJobStatus>>,
+) {
+    if duration_seconds == 0 {
+        return;
+    }
+    let Some(raw) = line
+        .strip_prefix("out_time_us=")
+        .or_else(|| line.strip_prefix("out_time_ms="))
+    else {
+        return;
+    };
+    let Ok(micros) = raw.trim().parse::<u64>() else {
+        return;
+    };
+    let percent = (micros as f64 / 1_000_000.0 / duration_seconds as f64 * 100.0).clamp(0.0, 99.9);
+    let mut current = status.write().await;
+    current.percent = percent;
+    current.current_part = 1;
+    current.part_count = 1;
 }
 
 fn format_selector(quality: &str) -> String {
@@ -1519,6 +1821,46 @@ mod tests {
         assert!(validate_download_request(&req).is_ok());
         req.parts = vec![2];
         assert!(validate_download_request(&req).is_err());
+    }
+
+    #[test]
+    fn public_api_fallback_builds_dash_url_for_abr_hls() {
+        let value = serde_json::json!({
+            "code": 200,
+            "content": {
+                "videoTitle": "public vod",
+                "duration": 123,
+                "publishDate": "2026-09-14 10:00:00",
+                "vodStatus": "ABR_HLS",
+                "videoId": "ABCDEF012345",
+                "inKey": "abc+def/ghi",
+                "channel": {
+                    "channelName": "channel",
+                    "channelId": "0123456789abcdef0123456789abcdef"
+                }
+            }
+        });
+        let fallback = public_playback_from_value(&value).unwrap();
+        assert_eq!(fallback.metadata.title, "public vod");
+        assert_eq!(fallback.metadata.qualities.len(), 1);
+        assert!(fallback.playback_url.contains("/playback/ABCDEF012345?"));
+        assert!(fallback.playback_url.contains("key=abc%2Bdef%2Fghi"));
+        assert!(!fallback.playback_url.contains("NID_AUT"));
+        assert!(!fallback.playback_url.contains("NID_SES"));
+    }
+
+    #[test]
+    fn source_url_parser_failure_is_classified_as_upstream_bug() {
+        let err = anyhow!("ERROR: extractor failed (caused by KeyError('sourceURL'))");
+        assert!(is_source_url_extractor_bug(&err));
+        assert!(!is_source_url_extractor_bug(&anyhow!("HTTP 403")));
+    }
+
+    #[test]
+    fn playback_key_is_redacted_from_ffmpeg_errors() {
+        let text = redact_playback_key("https://example.test/a?key=secret-token&env=real");
+        assert!(!text.contains("secret-token"));
+        assert!(text.contains("key=<redacted>"));
     }
 
     #[test]
