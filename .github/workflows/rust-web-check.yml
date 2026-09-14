@@ -2,8 +2,6 @@ name: Rust web check
 
 on:
   pull_request:
-    branches:
-      - main
     paths:
       - "rust-web/**"
       - "rust-web/src/platform/**"
