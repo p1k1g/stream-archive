@@ -1021,6 +1021,20 @@ fn finalizing_path(target: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+fn is_lock_contention(err: &std::io::Error) -> bool {
+    if err.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return matches!(err.raw_os_error(), Some(32) | Some(33));
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn collision_candidate(dir: &Path, base: &str, extension: &str, number: usize) -> PathBuf {
     if number == 1 {
         dir.join(format!("{base}.{extension}"))
@@ -1069,7 +1083,7 @@ fn claim_collision_path(dir: &Path, base: &str, extension: &str) -> Result<Desti
                     lock: Some(lock),
                 });
             }
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(err) if is_lock_contention(&err) => continue,
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
