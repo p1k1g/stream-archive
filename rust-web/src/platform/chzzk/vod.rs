@@ -90,7 +90,6 @@ impl Drop for JobDirGuard {
 
 struct DestinationClaim {
     target: PathBuf,
-    claim_path: PathBuf,
     lock: Option<File>,
 }
 
@@ -106,12 +105,14 @@ impl DestinationClaim {
 
 impl Drop for DestinationClaim {
     fn drop(&mut self) {
+        // Keep the sidecar pathname as a reusable lock anchor. Unlinking it after
+        // unlock lets a contender lock the old inode while a third process creates
+        // and locks a new inode at the same pathname.
         let _ = fs::remove_file(self.finalizing_path());
         if let Some(lock) = self.lock.take() {
             let _ = FileExt::unlock(&lock);
             drop(lock);
         }
-        let _ = fs::remove_file(&self.claim_path);
     }
 }
 
@@ -365,8 +366,7 @@ async fn run_download(
         safe_name(&metadata.streamer, 60),
         safe_name(&metadata.title, 100)
     );
-    let destination = claim_collision_path(&output_dir, &base, "ts")?;
-    let final_output = destination.target().to_path_buf();
+    let mut destination = claim_collision_path(&output_dir, &base, "ts")?;
     let staging_output = job_dir.join(MEDIA_FILE_NAME);
     let mut last_error = String::new();
     let attempts = req.max_retries.max(1);
@@ -401,10 +401,25 @@ async fn run_download(
                     return Ok(());
                 }
                 let staged_file = find_finished_output(&staging_output)?;
-                if !finalize_output(&staged_file, &destination, cancel)? {
-                    cleanup_job_media(&job_dir);
-                    return Ok(());
+                loop {
+                    match finalize_output(&staged_file, &destination, cancel)? {
+                        PublishOutcome::Published => break,
+                        PublishOutcome::Cancelled => {
+                            cleanup_job_media(&job_dir);
+                            return Ok(());
+                        }
+                        PublishOutcome::Collision => {
+                            logs.push(format!(
+                                "[VOD:CHZZK] destination appeared during publish; selecting next name: {}",
+                                destination.target().display()
+                            ))
+                            .await;
+                            drop(destination);
+                            destination = claim_collision_path(&output_dir, &base, "ts")?;
+                        }
+                    }
                 }
+                let final_output = destination.target().to_path_buf();
                 let mut current = status.write().await;
                 current.state = "COMPLETED".into();
                 current.running = false;
@@ -784,10 +799,13 @@ async fn run_streamlink_download(
     let mut streamlink_child = streamlink_command
         .spawn()
         .with_context(|| format!("Streamlink 실행 실패: {}", streamlink.display()))?;
-    let mut streamlink_stdout = streamlink_child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("Streamlink stdout unavailable"))?;
+    let mut streamlink_stdout = match streamlink_child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_owned(&mut streamlink_child).await;
+            bail!("Streamlink stdout unavailable");
+        }
+    };
 
     let mut ffmpeg_command = Command::new(ffmpeg);
     ffmpeg_command
@@ -829,13 +847,21 @@ async fn run_streamlink_download(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut ffmpeg_child = ffmpeg_command
-        .spawn()
-        .with_context(|| format!("FFmpeg 실행 실패: {}", ffmpeg.display()))?;
-    let mut ffmpeg_stdin = ffmpeg_child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("FFmpeg stdin unavailable"))?;
+    let mut ffmpeg_child = match ffmpeg_command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            terminate_owned(&mut streamlink_child).await;
+            return Err(err).with_context(|| format!("FFmpeg 실행 실패: {}", ffmpeg.display()));
+        }
+    };
+    let mut ffmpeg_stdin = match ffmpeg_child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            terminate_owned(&mut streamlink_child).await;
+            terminate_owned(&mut ffmpeg_child).await;
+            bail!("FFmpeg stdin unavailable");
+        }
+    };
 
     let pump = tokio::spawn(async move {
         let copied = tokio::io::copy(&mut streamlink_stdout, &mut ffmpeg_stdin).await;
@@ -1425,7 +1451,6 @@ fn claim_collision_path(dir: &Path, base: &str, extension: &str) -> Result<Desti
                 }
                 return Ok(DestinationClaim {
                     target,
-                    claim_path,
                     lock: Some(lock),
                 });
             }
@@ -1477,18 +1502,22 @@ fn find_finished_output(expected: &Path) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("CHZZK 완료 파일을 찾지 못했습니다: {}", expected.display()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishOutcome {
+    Published,
+    Cancelled,
+    Collision,
+}
+
 fn publish_by_copy(
     source: &Path,
     destination: &DestinationClaim,
     cancel: &AtomicBool,
-    rename_error: &std::io::Error,
-) -> Result<bool> {
+    link_error: &std::io::Error,
+) -> Result<PublishOutcome> {
     let target = destination.target();
     if target.exists() {
-        bail!(
-            "CHZZK VOD 최종 파일이 이미 존재합니다: {}",
-            target.display()
-        );
+        return Ok(PublishOutcome::Collision);
     }
     let temp = destination.finalizing_path();
     if temp.is_file() {
@@ -1500,10 +1529,10 @@ fn publish_by_copy(
         })?;
     }
     if cancel.load(Ordering::SeqCst) {
-        return Ok(false);
+        return Ok(PublishOutcome::Cancelled);
     }
 
-    let publish = (|| -> Result<bool> {
+    let publish = (|| -> Result<PublishOutcome> {
         let mut input = File::open(source)
             .with_context(|| format!("CHZZK VOD staging 파일 열기 실패: {}", source.display()))?;
         let mut output = OpenOptions::new()
@@ -1521,7 +1550,7 @@ fn publish_by_copy(
             if cancel.load(Ordering::SeqCst) {
                 drop(output);
                 let _ = fs::remove_file(&temp);
-                return Ok(false);
+                return Ok(PublishOutcome::Cancelled);
             }
             let read = input.read(&mut buffer).with_context(|| {
                 format!("CHZZK VOD staging 파일 읽기 실패: {}", source.display())
@@ -1549,38 +1578,46 @@ fn publish_by_copy(
 
         if cancel.load(Ordering::SeqCst) {
             let _ = fs::remove_file(&temp);
-            return Ok(false);
+            return Ok(PublishOutcome::Cancelled);
         }
-        if target.exists() {
-            bail!(
-                "CHZZK VOD 최종 파일이 복사 중 생성되었습니다: {}",
-                target.display()
-            );
+
+        match fs::hard_link(&temp, target) {
+            Ok(()) => {
+                let _ = fs::remove_file(&temp);
+                Ok(PublishOutcome::Published)
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&temp);
+                Ok(PublishOutcome::Collision)
+            }
+            Err(err) => Err(err).with_context(|| {
+                format!(
+                    "CHZZK VOD destination no-replace publish 실패: {} -> {}",
+                    temp.display(),
+                    target.display()
+                )
+            }),
         }
-        fs::rename(&temp, target).with_context(|| {
-            format!(
-                "CHZZK VOD destination 임시 파일 publish 실패: {} -> {}",
-                temp.display(),
-                target.display()
-            )
-        })?;
-        Ok(true)
     })();
 
     match publish {
-        Ok(true) => {
+        Ok(PublishOutcome::Published) => {
             let _ = fs::remove_file(source);
-            Ok(true)
+            Ok(PublishOutcome::Published)
         }
-        Ok(false) => {
+        Ok(PublishOutcome::Cancelled) => {
             let _ = fs::remove_file(&temp);
-            Ok(false)
+            Ok(PublishOutcome::Cancelled)
+        }
+        Ok(PublishOutcome::Collision) => {
+            let _ = fs::remove_file(&temp);
+            Ok(PublishOutcome::Collision)
         }
         Err(err) => {
             let _ = fs::remove_file(&temp);
             Err(err).with_context(|| {
                 format!(
-                    "CHZZK VOD 최종 파일 이동 실패 (rename: {rename_error}): {} -> {}",
+                    "CHZZK VOD 최종 파일 이동 실패 (direct link: {link_error}): {} -> {}",
                     source.display(),
                     target.display()
                 )
@@ -1593,27 +1630,24 @@ fn finalize_output(
     source: &Path,
     destination: &DestinationClaim,
     cancel: &AtomicBool,
-) -> Result<bool> {
+) -> Result<PublishOutcome> {
     let target = destination.target();
     if cancel.load(Ordering::SeqCst) {
-        return Ok(false);
+        return Ok(PublishOutcome::Cancelled);
     }
-    if target.exists() {
-        bail!(
-            "CHZZK VOD 최종 파일이 이미 존재합니다: {}",
-            target.display()
-        );
-    }
-    match fs::rename(source, target) {
-        Ok(()) => {}
-        Err(rename_error) => {
-            return publish_by_copy(source, destination, cancel, &rename_error);
+
+    // hard_link is an atomic create-if-absent publication primitive for a complete
+    // regular file. Unlike rename on Unix, it never replaces an existing target.
+    match fs::hard_link(source, target) {
+        Ok(()) => {
+            let _ = fs::remove_file(source);
+            Ok(PublishOutcome::Published)
         }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(PublishOutcome::Collision)
+        }
+        Err(link_error) => publish_by_copy(source, destination, cancel, &link_error),
     }
-    if !target.is_file() {
-        bail!("CHZZK VOD 최종 파일 생성 확인 실패: {}", target.display());
-    }
-    Ok(true)
 }
 
 fn cleanup_job_media(job_dir: &Path) {
@@ -1970,6 +2004,51 @@ mod tests {
     }
 
     #[test]
+    fn destination_claim_sidecar_is_reused_after_release() {
+        let temp = tempfile::tempdir().unwrap();
+        let target;
+        let sidecar;
+        {
+            let first = claim_collision_path(temp.path(), "same", "ts").unwrap();
+            target = first.target().to_path_buf();
+            sidecar = claim_path(&target);
+            assert!(sidecar.is_file());
+        }
+        assert!(sidecar.is_file());
+        let second = claim_collision_path(temp.path(), "same", "ts").unwrap();
+        assert_eq!(second.target(), target.as_path());
+        assert!(sidecar.is_file());
+    }
+
+    #[test]
+    fn late_external_collision_is_not_clobbered_and_retargets() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.ts");
+        fs::write(&source, b"complete-media").unwrap();
+        let first = claim_collision_path(temp.path(), "final", "ts").unwrap();
+        let first_target = first.target().to_path_buf();
+        fs::write(&first_target, b"external-data").unwrap();
+        let cancel = AtomicBool::new(false);
+
+        assert_eq!(
+            finalize_output(&source, &first, &cancel).unwrap(),
+            PublishOutcome::Collision
+        );
+        assert_eq!(fs::read(&first_target).unwrap(), b"external-data");
+        assert!(source.exists());
+        drop(first);
+
+        let second = claim_collision_path(temp.path(), "final", "ts").unwrap();
+        assert_eq!(second.target().file_name().unwrap(), "final_02.ts");
+        assert_eq!(
+            finalize_output(&source, &second, &cancel).unwrap(),
+            PublishOutcome::Published
+        );
+        assert_eq!(fs::read(second.target()).unwrap(), b"complete-media");
+        assert!(!source.exists());
+    }
+
+    #[test]
     fn cancelled_copy_publish_keeps_final_unpublished() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source.ts");
@@ -1978,7 +2057,10 @@ mod tests {
         let cancel = AtomicBool::new(true);
         let rename_error = std::io::Error::other("simulated cross-volume rename");
 
-        assert!(!publish_by_copy(&source, &destination, &cancel, &rename_error).unwrap());
+        assert_eq!(
+            publish_by_copy(&source, &destination, &cancel, &rename_error).unwrap(),
+            PublishOutcome::Cancelled
+        );
         assert!(source.exists());
         assert!(!destination.target().exists());
         assert!(!destination.finalizing_path().exists());
@@ -2014,7 +2096,10 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let rename_error = std::io::Error::other("simulated cross-volume rename");
 
-        assert!(publish_by_copy(&source, &destination, &cancel, &rename_error).unwrap());
+        assert_eq!(
+            publish_by_copy(&source, &destination, &cancel, &rename_error).unwrap(),
+            PublishOutcome::Published
+        );
         assert!(!source.exists());
         assert_eq!(fs::read(&target).unwrap(), b"complete-media");
         assert!(!destination.finalizing_path().exists());
