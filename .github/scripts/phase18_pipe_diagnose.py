@@ -32,39 +32,41 @@ def inspect(label: str, out: Path, log_paths: list[Path]) -> bool:
     print(f"{label}.size={size}")
     print(f"{label}.first_byte={first.hex() if first else 'none'}")
     for log in log_paths:
-        print(log.name + "_tail=" + log.read_text(encoding="utf-8", errors="replace")[-1600:].replace("\n", " | "))
+        print(log.name + "_tail=" + log.read_text(encoding="utf-8", errors="replace")[-3000:].replace("\n", " | "))
     return out.is_file() and size > 100_000 and first == b"\x47"
 
 
-# A: Streamlink file output without segmented-duration. Let it fetch for 12 wall-clock seconds.
-direct = root / "chzzk-direct-livecut.ts"
-direct_log = root / "chzzk-direct-livecut.log"
+common = [
+    "--no-config", "--loglevel", "debug", "--progress", "no",
+    "--stream-segment-threads", "3", "--ffmpeg-ffmpeg", str(ffmpeg),
+    "--ffmpeg-fout", "mpegts", "--ffmpeg-verbose",
+]
+
+# A: Streamlink's internal DASH muxer outputs MPEG-TS directly.
+direct = root / "chzzk-direct-mpegts.ts"
+direct_log = root / "chzzk-direct-mpegts.log"
 for p in (direct, direct_log):
     try: p.unlink()
     except FileNotFoundError: pass
 with direct_log.open("wb") as err:
     sl = subprocess.Popen([
-        str(streamlink), "--no-config", "--loglevel", "info", "--progress", "no",
-        "--stream-segment-threads", "3", "--ffmpeg-ffmpeg", str(ffmpeg),
-        "--output", str(direct), "--force", url, "best",
+        str(streamlink), *common, "--output", str(direct), "--force", url, "best",
     ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err, env=env)
-    time.sleep(12)
+    time.sleep(15)
     kill_tree(sl.pid)
     sl.wait(timeout=30)
 direct_ok = inspect("direct", direct, [direct_log])
 
-# B: Streamlink stdout -> owned FFmpeg, same 12 wall-clock seconds.
-pipe_out = root / "chzzk-pipe-livecut.ts"
-sl_log = root / "chzzk-pipe-livecut-streamlink.log"
-ff_log = root / "chzzk-pipe-livecut-ffmpeg.log"
+# B: Streamlink's MPEG-TS stdout -> owned FFmpeg rebase/remux.
+pipe_out = root / "chzzk-pipe-mpegts.ts"
+sl_log = root / "chzzk-pipe-mpegts-streamlink.log"
+ff_log = root / "chzzk-pipe-mpegts-ffmpeg.log"
 for p in (pipe_out, sl_log, ff_log):
     try: p.unlink()
     except FileNotFoundError: pass
 with sl_log.open("wb") as slerr, ff_log.open("wb") as fferr:
     sl = subprocess.Popen([
-        str(streamlink), "--no-config", "--loglevel", "info", "--progress", "no",
-        "--stream-segment-threads", "3", "--ffmpeg-ffmpeg", str(ffmpeg),
-        "--stdout", url, "best",
+        str(streamlink), *common, "--stdout", url, "best",
     ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=slerr, env=env)
     assert sl.stdout is not None
     ff = subprocess.Popen([
@@ -75,7 +77,7 @@ with sl_log.open("wb") as slerr, ff_log.open("wb") as fferr:
         "-muxdelay", "0", "-y", str(pipe_out),
     ], stdin=sl.stdout, stdout=subprocess.DEVNULL, stderr=fferr)
     sl.stdout.close()
-    time.sleep(12)
+    time.sleep(15)
     kill_tree(sl.pid)
     sl.wait(timeout=30)
     try:
@@ -88,4 +90,4 @@ pipe_ok = inspect("pipe", pipe_out, [sl_log, ff_log])
 print(f"direct_ok={direct_ok}")
 print(f"pipe_ok={pipe_ok}")
 if not (direct_ok or pipe_ok):
-    raise SystemExit("neither media path produced a valid MPEG-TS sample")
+    raise SystemExit("mpegts mux validation failed")
