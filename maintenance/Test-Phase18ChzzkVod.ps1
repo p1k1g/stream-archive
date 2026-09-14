@@ -72,7 +72,7 @@ Assert-Match $chzzkVod 'active_job_lock_survives_scavenging_until_release' 'Acti
 # yt-dlp owns CHZZK extraction, but long user titles must never become HLS fragment temp paths.
 Assert-Match $chzzkVod 'MEDIA_FILE_NAME:\s*&str\s*=\s*"media\.mp4"' 'CHZZK VOD short staging filename is missing.'
 Assert-Match $chzzkVod 'staging_output\s*=\s*job_dir\.join\(MEDIA_FILE_NAME\)' 'CHZZK VOD does not download into its private short staging path.'
-Assert-Match $chzzkVod 'finalize_output\(&staged_file,\s*&final_output\)' 'CHZZK VOD staging output is not finalized into the requested output directory.'
+Assert-Match $chzzkVod 'finalize_output\(&staged_file,\s*&destination,\s*cancel\)' 'CHZZK VOD staging output is not finalized through the claimed destination.'
 Assert-Match $chzzkVod 'cleanup_job_media' 'CHZZK VOD retry/cancel cleanup is not scoped to the owned job directory.'
 Assert-Match $chzzkVod 'PYTHONUTF8' 'yt-dlp UTF-8 child-process environment is missing.'
 Assert-Match $chzzkVod 'PYTHONIOENCODING' 'yt-dlp output encoding is not forced to UTF-8.'
@@ -84,14 +84,24 @@ Assert-Match $chzzkVod '\.arg\("/PID"\)' 'CHZZK VOD cancellation is not PID scop
 Assert-Match $chzzkVod '\.arg\("/T"\)' 'CHZZK VOD cancellation does not include the owned child tree.'
 Assert-NotMatch $chzzkVod 'taskkill[^\r\n]*/IM' 'CHZZK VOD must never kill processes by image name.'
 
-# Cross-volume fallback must never expose a partial file under the final MP4 name.
+# Destination claims and cross-volume publication must be no-clobber, cancellable and crash-recoverable.
+Assert-Match $chzzkVod 'DESTINATION_CLAIM_SUFFIX:\s*&str\s*=\s*"\.soop-downloader\.claim"' 'Destination claim sidecar is missing.'
+Assert-Match $chzzkVod 'FINALIZING_SUFFIX:\s*&str\s*=\s*"\.soop-downloader\.finalizing"' 'Exact app-owned finalizing suffix is missing.'
+Assert-Match $chzzkVod 'claim_collision_path' 'Atomic destination claim helper is missing.'
+Assert-Match $chzzkVod 'lock\.try_lock_exclusive\(\)' 'Destination filename claim is not protected by an OS lock.'
 Assert-Match $chzzkVod 'finalizing_path' 'Destination-side atomic publication temp path is missing.'
-Assert-Match $chzzkVod '\.finalizing' 'CHZZK VOD atomic publication marker is missing.'
+Assert-Match $chzzkVod 'COPY_BUFFER_SIZE' 'Cancellable bounded copy buffer is missing.'
+Assert-Match $chzzkVod 'cancel\.load\(Ordering::SeqCst\)' 'Cross-volume publication does not observe cancellation.'
 Assert-Match $chzzkVod 'sync_all\(\)' 'Destination-side copied media is not synced before publication.'
 Assert-Match $chzzkVod 'publish_by_copy' 'Cross-volume atomic publication helper is missing.'
 Assert-NotMatch $chzzkVod 'fs::copy\(source,\s*target\)' 'CHZZK VOD must never copy directly into the final MP4 pathname.'
+Assert-Match $chzzkVod 'should_mark_cancelled' 'Late cancellation completion precedence helper is missing.'
+Assert-Match $chzzkVod 'state != "COMPLETED"' 'A successfully published file must remain COMPLETED after a late cancellation.'
+Assert-Match $chzzkVod 'concurrent_destination_claims_choose_distinct_collision_paths' 'Concurrent destination claim regression test is missing.'
+Assert-Match $chzzkVod 'cancelled_copy_publish_keeps_final_unpublished' 'Cancelled destination publication regression test is missing.'
+Assert-Match $chzzkVod 'completed_state_wins_over_late_cancellation' 'COMPLETED-versus-late-cancel regression test is missing.'
+Assert-Match $chzzkVod 'stale_finalizing_is_reclaimed_under_destination_claim' 'Stale finalizing reclamation regression test is missing.'
 Assert-Match $chzzkVod 'atomic_copy_publish_keeps_partial_data_out_of_final_name' 'Atomic publication success regression test is missing.'
-Assert-Match $chzzkVod 'atomic_copy_publish_failure_preserves_source_and_existing_target' 'Atomic publication failure regression test is missing.'
 
 # Common VOD model contract: CHZZK is one logical part and still uses queue/history status.
 Assert-Match $chzzkVod 'part_count:\s*1' 'CHZZK VOD analysis must expose one logical part.'
