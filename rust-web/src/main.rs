@@ -93,6 +93,12 @@ async fn main() -> Result<()> {
     materialize_primary_files(&store, &backend_dir)?;
 
     let bind = env::var("SOOP_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    // Establish exclusive server ownership before constructing the VOD manager.
+    // CHZZK VOD startup scavenges stale private job directories, so a duplicate
+    // process must fail the bind before it can touch an active server's job files.
+    let listener = TcpListener::bind(&bind)
+        .await
+        .with_context(|| format!("failed to bind {bind}"))?;
     let (token, token_source) = load_or_create_token(&backend_dir)?;
     let auth = Arc::new(AuthManager::open(store.path().to_path_buf())?);
     let backups = BackupManager::open(store.clone(), &backend_dir)?;
@@ -213,9 +219,6 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
-    let listener = TcpListener::bind(&bind)
-        .await
-        .with_context(|| format!("failed to bind {bind}"))?;
     println!();
     println!("SOOP Rust Web - Phase 13");
     println!("Backend : {}", backend_dir.display());

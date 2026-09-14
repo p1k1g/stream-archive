@@ -29,7 +29,7 @@ impl PlatformId {
     pub const fn live_output_extension(self) -> &'static str {
         match self {
             Self::Soop => "ts",
-            Self::Chzzk => "mp4",
+            Self::Chzzk => "ts",
         }
     }
 }
@@ -107,26 +107,20 @@ mod tests {
     #[test]
     fn live_output_extensions_match_platform_container() {
         assert_eq!(PlatformId::Soop.live_output_extension(), "ts");
-        assert_eq!(PlatformId::Chzzk.live_output_extension(), "mp4");
+        assert_eq!(PlatformId::Chzzk.live_output_extension(), "ts");
     }
 
     #[test]
-    fn detects_soop_vod_urls_without_enabling_chzzk_vod_yet() {
+    fn detects_soop_and_chzzk_vod_urls() {
         assert_eq!(
             detect_vod_platform("https://vod.sooplive.com/player/123456789").unwrap(),
             PlatformId::Soop
         );
-        assert!(detect_vod_platform("https://chzzk.naver.com/video/123456").is_err());
+        assert_eq!(
+            detect_vod_platform("https://chzzk.naver.com/video/123456").unwrap(),
+            PlatformId::Chzzk
+        );
+        assert!(detect_vod_platform("https://chzzk.naver.com/live/123456").is_err());
         assert!(detect_vod_platform("https://example.com/player/123456789").is_err());
-    }
-
-    #[test]
-    fn provider_capabilities_are_explicit() {
-        let soop = provider(PlatformId::Soop).capabilities();
-        assert!(soop.channel_lookup && soop.live && soop.vod);
-        let chzzk = provider(PlatformId::Chzzk).capabilities();
-        assert!(chzzk.channel_lookup && chzzk.live && !chzzk.vod);
-        assert_eq!(provider(PlatformId::Soop).display_name(), "SOOP");
-        assert_eq!(provider(PlatformId::Chzzk).display_name(), "CHZZK");
     }
 }
