@@ -36,8 +36,8 @@ jobs:
       - name: Validate Phase 18 and Rust
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          ./maintenance/Test-Phase18ChzzkVod.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Phase 18 guard failed' }
+          & ./maintenance/Test-Phase18ChzzkVod.ps1
+          if (-not $?) { throw 'Phase 18 guard failed' }
           rustfmt --edition 2024 --check rust-web/src/platform/chzzk/vod.rs
           if ($LASTEXITCODE -ne 0) { throw 'rustfmt check failed' }
           cargo test --locked --manifest-path rust-web/Cargo.toml
