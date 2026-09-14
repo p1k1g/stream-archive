@@ -14,6 +14,9 @@ on:
       - ".github/workflows/phase18-chzzk-vod-check.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: phase18-chzzk-vod-${{ github.ref }}
   cancel-in-progress: true
@@ -24,6 +27,20 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Apply CHZZK VOD provider format
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          rustfmt --edition 2024 rust-web/src/platform/chzzk/vod.rs
+          git diff --exit-code -- rust-web/src/platform/chzzk/vod.rs
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rust-web/src/platform/chzzk/vod.rs
+          git commit -m "Format CHZZK VOD provider"
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Phase 18 CHZZK VOD guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
