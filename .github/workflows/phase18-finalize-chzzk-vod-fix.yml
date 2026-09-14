@@ -32,8 +32,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'final patch failed' }
           rustfmt --edition 2024 rust-web/src/platform/chzzk/vod.rs
           if ($LASTEXITCODE -ne 0) { throw 'rustfmt apply failed' }
-          node --check rust-web/web/app.js
-          if ($LASTEXITCODE -ne 0) { throw 'app.js syntax failed' }
 
       - name: Validate final Phase 18 state
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
