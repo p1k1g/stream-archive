@@ -39,6 +39,7 @@ const COOKIE_FILE_EXPIRES_UNIX: i64 = 4_102_444_800; // 2100-01-01 UTC
 const PROGRESS_PREFIX: &str = "__CHZZK_PROGRESS__";
 const COOKIE_FILE_NAME: &str = "chzzk-cookies.txt";
 const JOB_LOCK_FILE_NAME: &str = "owner.lock";
+const JOB_CREATION_LOCK_FILE_NAME: &str = ".chzzk-creation.lock";
 const MEDIA_FILE_NAME: &str = "media.mp4";
 const DESTINATION_CLAIM_SUFFIX: &str = ".soop-downloader.claim";
 const FINALIZING_SUFFIX: &str = ".soop-downloader.finalizing";
@@ -863,13 +864,32 @@ fn vod_job_root(backend: &Path) -> PathBuf {
     backend.join(".rust-web").join("vod")
 }
 
+fn root_creation_lock(root: &Path) -> Result<File> {
+    let lock_path = root.join(JOB_CREATION_LOCK_FILE_NAME);
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .with_context(|| {
+            format!(
+                "CHZZK VOD creation lock ?닿린 ?ㅽ뙣: {}",
+                lock_path.display()
+            )
+        })?;
+    lock.lock_exclusive()
+        .context("CHZZK VOD creation lock ?띾뱷 ?ㅽ뙣")?;
+    Ok(lock)
+}
+
 fn cleanup_stale_job_dirs(backend: &Path) -> Result<()> {
     let root = vod_job_root(backend);
     if !root.is_dir() {
         return Ok(());
     }
+    let creation_lock = root_creation_lock(&root)?;
     for entry in fs::read_dir(&root)
-        .with_context(|| format!("CHZZK VOD 임시 폴더 조회 실패: {}", root.display()))?
+        .with_context(|| format!("CHZZK VOD ?꾩떆 ?대뜑 議고쉶 ?ㅽ뙣: {}", root.display()))?
     {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -895,66 +915,82 @@ fn cleanup_stale_job_dirs(backend: &Path) -> Result<()> {
                 drop(lock);
                 let _ = fs::remove_dir_all(&dir);
             }
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(err) if is_lock_contention(&err) => {}
             Err(_) => {}
         }
     }
+    let _ = FileExt::unlock(&creation_lock);
     Ok(())
 }
 
 fn job_dir(backend: &Path) -> Result<JobDirGuard> {
     let root = vod_job_root(backend);
     fs::create_dir_all(&root)
-        .with_context(|| format!("CHZZK VOD 임시 루트 생성 실패: {}", root.display()))?;
+        .with_context(|| format!("CHZZK VOD ?꾩떆 猷⑦듃 ?앹꽦 ?ㅽ뙣: {}", root.display()))?;
+    let creation_lock = root_creation_lock(&root)?;
     let id = Uuid::new_v4().simple().to_string();
     let preparing = root.join(format!(".chzzk-creating-{id}"));
     let dir = root.join(format!("chzzk-{id}"));
     fs::create_dir(&preparing)
-        .with_context(|| format!("CHZZK VOD 임시 폴더 생성 실패: {}", preparing.display()))?;
+        .with_context(|| format!("CHZZK VOD ?꾩떆 ?대뜑 ?앹꽦 ?ㅽ뙣: {}", preparing.display()))?;
     if let Err(err) = restrict_job_dir(&preparing) {
         let _ = fs::remove_dir_all(&preparing);
         return Err(err);
     }
-    let lock_path = preparing.join(JOB_LOCK_FILE_NAME);
-    let lock = match OpenOptions::new()
+    let preparing_lock_path = preparing.join(JOB_LOCK_FILE_NAME);
+    let preparing_lock = match OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
-        .open(&lock_path)
+        .open(&preparing_lock_path)
     {
         Ok(lock) => lock,
         Err(err) => {
             let _ = fs::remove_dir_all(&preparing);
             return Err(err).with_context(|| {
                 format!(
-                    "CHZZK VOD ownership lock 생성 실패: {}",
-                    lock_path.display()
+                    "CHZZK VOD ownership lock ?앹꽦 ?ㅽ뙣: {}",
+                    preparing_lock_path.display()
                 )
             });
         }
     };
-    if let Err(err) = restrict_cookie_file(&lock_path) {
-        drop(lock);
+    if let Err(err) = restrict_cookie_file(&preparing_lock_path) {
+        drop(preparing_lock);
         let _ = fs::remove_dir_all(&preparing);
         return Err(err);
     }
-    if let Err(err) = lock.lock_exclusive() {
-        drop(lock);
-        let _ = fs::remove_dir_all(&preparing);
-        return Err(err).context("CHZZK VOD ownership lock 획득 실패");
-    }
+    drop(preparing_lock);
     if let Err(err) = fs::rename(&preparing, &dir) {
-        let _ = FileExt::unlock(&lock);
-        drop(lock);
         let _ = fs::remove_dir_all(&preparing);
         return Err(err).with_context(|| {
             format!(
-                "CHZZK VOD 임시 폴더 publish 실패: {} -> {}",
+                "CHZZK VOD ?꾩떆 ?대뜑 publish ?ㅽ뙣: {} -> {}",
                 preparing.display(),
                 dir.display()
             )
         });
     }
+    let lock_path = dir.join(JOB_LOCK_FILE_NAME);
+    let lock = match OpenOptions::new().read(true).write(true).open(&lock_path) {
+        Ok(lock) => lock,
+        Err(err) => {
+            let _ = fs::remove_dir_all(&dir);
+            return Err(err).with_context(|| {
+                format!(
+                    "CHZZK VOD ownership lock ?닿린 ?ㅽ뙣: {}",
+                    lock_path.display()
+                )
+            });
+        }
+    };
+    if let Err(err) = lock.lock_exclusive() {
+        drop(lock);
+        let _ = fs::remove_dir_all(&dir);
+        return Err(err).context("CHZZK VOD ownership lock ?띾뱷 ?ㅽ뙣");
+    }
+    let _ = FileExt::unlock(&creation_lock);
+    drop(creation_lock);
     Ok(JobDirGuard { path: dir, lock })
 }
 
@@ -1501,6 +1537,24 @@ mod tests {
         assert!(!text.contains("bbb"));
         assert!(text.contains("NID_AUT=<redacted>"));
         assert!(text.contains("NID_SES=<redacted>"));
+    }
+
+    #[test]
+    fn job_dir_publishes_before_holding_inner_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let guard = job_dir(temp.path()).unwrap();
+        let name = guard.path().file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("chzzk-"));
+        assert!(guard.path().join(JOB_LOCK_FILE_NAME).is_file());
+        let root = vod_job_root(temp.path());
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| {
+            entry.ok().is_some_and(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".chzzk-creating-")
+            })
+        }));
     }
 
     #[test]
