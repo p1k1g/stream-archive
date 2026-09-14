@@ -14,6 +14,8 @@
 - `rust-web/src/platform/soop/vod.rs`: SOOP VOD authentication/analyze/download/merge implementation
 - `rust-web/src/security.rs`: Windows DPAPI secret protection
 - `rust-web/src/store.rs`: SQLite persistence/history
+- `rust-web/src/history_storage.rs`: history queries and storage diagnostics APIs
+- `rust-web/src/local_picker.rs`: localhost-only Windows file/folder picker bridge
 - `rust-web/src/backend.rs`: INI/TXT compatibility layer
 - `rust-web/web/*`: browser UI
 

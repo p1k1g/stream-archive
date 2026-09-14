@@ -89,3 +89,30 @@ recorder, queue, main, backend, web assets, all maintenance guards, and workflow
 The consolidated Phase 19.7 changes were exercised on the Windows self-hosted runner before
 finalization: runtime contracts, whole-crate formatting, Rust unit tests, `cargo check`, and
 JavaScript syntax validation all passed.
+
+## 19.8 repository and module diet
+
+The tracked repository was inventoried across runtime, frontend, maintenance, workflows, packaging,
+configuration templates, and documentation. Four superseded documents were removed: the obsolete
+WinUI-era cloud setup guide, the completed Phase 15 and Phase 16 design/audit records whose lasting
+invariants are now covered here and by runtime guards, and the duplicated Phase 6 Rust README. Its
+still-current environment-variable summary was consolidated into the root user README.
+
+The phase-numbered Rust API modules were renamed by responsibility: `phase8.rs` became
+`history_storage.rs`, and `phase9_1.rs` became `local_picker.rs`. Their API routes and behavior did
+not change. Phase-numbered browser assets were intentionally retained because their scripts form a
+working layered UI with cross-file globals; renaming them would create broad frontend churn without
+removing runtime complexity. The unreferenced-looking `backend/worker.js` was also retained because
+it is the deployable Cloudflare Worker implementation required by SOOP LIVE configuration.
+
+Inventory counts changed as follows (tracked paths, before -> after): total 74 -> 70, workflows
+2 -> 2, maintenance files 11 -> 11, README files 2 -> 1, Markdown files 10 -> 6, Rust source files
+29 -> 29, and `rust-web/web` files 10 -> 10. No runtime, provider, maintenance, launcher, release,
+configuration-template, or frontend files were deleted or merged. Pull-request validation now runs
+for every target branch rather than only `main`, so stacked hardening PRs receive the same permanent
+workflow without a branch-specific duplicate.
+
+The provider trees, common LIVE/VOD facades, `platform_runtime`, process ownership, security, store,
+configuration, backup, queue, and publication boundaries remain separate. The two-line root VOD
+facade is deliberately retained for API compatibility. Native non-Windows picker work, Unix process
+groups, and non-DPAPI secret storage remain deferred to Phase 20.
