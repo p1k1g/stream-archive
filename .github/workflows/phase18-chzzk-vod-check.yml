@@ -25,6 +25,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify Streamlink CHZZK VOD short download
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            (Get-Command streamlink.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source),
+            'C:\Program Files\Streamlink\bin\streamlink.exe',
+            'C:\Program Files (x86)\Streamlink\bin\streamlink.exe'
+          ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
+          $streamlink = $candidates | Select-Object -First 1
+          if (-not $streamlink) { throw 'streamlink.exe not found on Windows runner' }
+          Write-Host "streamlink=$streamlink"
+          & $streamlink --version
+          if ($LASTEXITCODE -ne 0) { throw "streamlink --version failed: exit=$LASTEXITCODE" }
+
+          $out = Join-Path $env:RUNNER_TEMP 'chzzk-vod-streamlink-smoke.ts'
+          Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+          & $streamlink --no-config --loglevel info --stream-segmented-duration 8 --output $out 'https://chzzk.naver.com/video/15185683' best
+          if ($LASTEXITCODE -ne 0) { throw "streamlink CHZZK VOD smoke failed: exit=$LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath $out -PathType Leaf)) { throw 'streamlink did not create smoke output' }
+          $size = (Get-Item -LiteralPath $out).Length
+          if ($size -lt 1880) { throw "streamlink smoke output is unexpectedly small: $size bytes" }
+          $head = [System.IO.File]::ReadAllBytes($out)[0..15]
+          Write-Host "streamlink_version_exit=0 output_bytes=$size head=$([BitConverter]::ToString($head))"
+          Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+
       - name: Phase 18 CHZZK VOD guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./maintenance/Test-Phase18ChzzkVod.ps1
