@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/phase18-chzzk-vod-diagnose.yml"
+      - ".github/scripts/phase18_pipe_diagnose.py"
   workflow_dispatch:
 
 permissions:
@@ -20,35 +21,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect API and direct Streamlink output
+      - name: Inspect API duration and Streamlink stdout pipe
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
-          $url = 'https://chzzk.naver.com/video/15185683'
           $detail = Invoke-RestMethod -Uri 'https://api.chzzk.naver.com/service/v3/videos/15185683' -Method Get
           Write-Host ("api.duration=" + $detail.content.duration)
-          Write-Host ("api.title=" + $detail.content.videoTitle)
-
-          $streamlink = 'C:\Program Files\Streamlink\bin\streamlink.exe'
-          if (-not (Test-Path $streamlink)) { $streamlink = (Get-Command streamlink.exe -ErrorAction Stop).Source }
-          $ffmpegCandidates = @(
-            'C:\Program Files\Streamlink\ffmpeg\ffmpeg.exe',
-            'C:\Program Files\Streamlink\bin\ffmpeg.exe'
-          )
-          $ffmpeg = $ffmpegCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $ffmpeg) { $ffmpeg = (Get-Command ffmpeg.exe -ErrorAction Stop).Source }
-          Write-Host ("streamlink=" + $streamlink)
-          Write-Host ("ffmpeg=" + $ffmpeg)
-          & $streamlink --version
-
-          $out = Join-Path $env:RUNNER_TEMP 'chzzk-vod-direct.ts'
-          Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
-          & $streamlink --no-config --loglevel info --stream-segmented-duration 8 --stream-segment-threads 3 --ffmpeg-ffmpeg $ffmpeg --output $out $url best
-          if ($LASTEXITCODE -ne 0) { throw "streamlink direct output failed: $LASTEXITCODE" }
-          if (-not (Test-Path -LiteralPath $out)) { throw 'direct output file missing' }
-          $item = Get-Item -LiteralPath $out
-          Write-Host ("direct.size=" + $item.Length)
-          $bytes = [System.IO.File]::ReadAllBytes($out)
-          Write-Host ("direct.firstbyte=0x{0:X2}" -f $bytes[0])
-          & $ffmpeg -hide_banner -i $out -f null NUL 2>&1 | Select-Object -First 40
-          Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+          python .github/scripts/phase18_pipe_diagnose.py
+          if ($LASTEXITCODE -ne 0) { throw 'pipe diagnose failed' }
