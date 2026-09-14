@@ -105,7 +105,7 @@ async fn terminate_windows_tree(root_pid: u32) -> Result<()> {
 
 #[cfg(windows)]
 mod windows_tree {
-    use anyhow::{Context, Result, anyhow};
+    use anyhow::{Context, Result};
     use std::{
         collections::{HashMap, HashSet, VecDeque},
         ffi::c_void,
@@ -303,14 +303,6 @@ mod windows_tree {
         }
         Ok(owned)
     }
-
-    #[allow(dead_code)]
-    fn _handle_is_send_guard(_: &OwnedTreeJob) -> Result<()> {
-        if size_of::<HANDLE>() == 0 {
-            return Err(anyhow!("unreachable"));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(windows)]
@@ -385,7 +377,10 @@ mod tests {
     #[tokio::test]
     async fn windows_job_retains_descendant_after_root_exit() {
         use super::windows_tree::{OwnedTreeJob, process_tree_pids};
-        use std::{env, fs, time::Instant};
+        use std::{
+            env, fs,
+            time::{Duration, Instant},
+        };
         use uuid::Uuid;
 
         let pid_file = env::temp_dir().join(format!(
