@@ -5,7 +5,7 @@ use crate::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
     },
-    recorder::{resolve_timestamp_rebase_ffmpeg, timestamp_rebase_player_args},
+    recorder::resolve_timestamp_rebase_ffmpeg,
     support::platform::PlatformId,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -28,7 +28,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
     sync::{Mutex, RwLock, mpsc},
     task::JoinHandle,
@@ -388,6 +388,7 @@ async fn run_download(
             &req,
             cookie_file.as_deref(),
             &staging_output,
+            metadata.duration_seconds,
             status,
             cancel,
             logs,
@@ -596,8 +597,7 @@ fn metadata_from_chzzk_content(content: &Value) -> Result<Metadata> {
                 .as_u64()
                 .or_else(|| value.as_f64().map(|n| n.max(0.0) as u64))
         })
-        .unwrap_or(0)
-        / 1000;
+        .unwrap_or(0);
     let date = content
         .get("publishDate")
         .and_then(Value::as_str)
@@ -651,11 +651,11 @@ async fn download_video(
     req: &VodDownloadRequest,
     cookie_file: Option<&Path>,
     output: &Path,
+    duration_seconds: u64,
     status: &Arc<RwLock<VodJobStatus>>,
     cancel: &AtomicBool,
     _logs: &LogBuffer,
 ) -> Result<()> {
-    let player_args = timestamp_rebase_player_args(output)?;
     let (mut sorting_args, stream_name) = streamlink_quality_args(req.quality.trim());
     let mut args = vec![
         "--no-config".to_string(),
@@ -667,18 +667,25 @@ async fn download_video(
         "3".to_string(),
         "--ffmpeg-ffmpeg".to_string(),
         tools.ffmpeg.display().to_string(),
-        "--player".to_string(),
-        tools.ffmpeg.display().to_string(),
-        "--player-args".to_string(),
-        player_args,
-        "--player-verbose".to_string(),
+        "--ffmpeg-fout".to_string(),
+        "mpegts".to_string(),
+        "--stdout".to_string(),
     ];
     append_streamlink_cookie_arg(&mut args, cookie_file);
     args.append(&mut sorting_args);
     args.push(req.vod_url.clone());
     args.push(stream_name);
 
-    run_streamlink_download(&tools.streamlink, &args, output, status, cancel).await
+    run_streamlink_download(
+        &tools.streamlink,
+        &tools.ffmpeg,
+        &args,
+        output,
+        duration_seconds,
+        status,
+        cancel,
+    )
+    .await
 }
 
 fn streamlink_quality_args(quality: &str) -> (Vec<String>, String) {
@@ -696,16 +703,74 @@ fn streamlink_quality_args(quality: &str) -> (Vec<String>, String) {
     (Vec::new(), stream.to_string())
 }
 
+fn ffmpeg_progress_seconds(line: &str) -> Option<f64> {
+    let raw = line.trim().strip_prefix("out_time_us=")?;
+    let micros = raw.parse::<u64>().ok()?;
+    Some(micros as f64 / 1_000_000.0)
+}
+
+fn download_progress_percent(media_seconds: f64, duration_seconds: u64) -> f64 {
+    if duration_seconds == 0 {
+        return 0.0;
+    }
+    (media_seconds.max(0.0) / duration_seconds as f64 * 95.0).clamp(0.0, 95.0)
+}
+
+fn format_media_time(seconds: f64) -> String {
+    let total = seconds.max(0.0).floor() as u64;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+async fn update_download_progress(
+    status: &Arc<RwLock<VodJobStatus>>,
+    media_seconds: f64,
+    duration_seconds: u64,
+) {
+    let mut current = status.write().await;
+    current.percent = download_progress_percent(media_seconds, duration_seconds);
+    current.current_part = 1;
+    current.part_count = 1;
+    current.message = if duration_seconds > 0 {
+        format!(
+            "CHZZK VOD 다운로드 중 · {} / {}",
+            format_media_time(media_seconds),
+            format_media_time(duration_seconds as f64)
+        )
+    } else {
+        format!(
+            "CHZZK VOD 다운로드 중 · {}",
+            format_media_time(media_seconds)
+        )
+    };
+}
+
+fn spawn_line_reader<R>(reader: R, tx: mpsc::UnboundedSender<String>)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(reader).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = tx.send(line);
+        }
+    });
+}
+
 async fn run_streamlink_download(
     streamlink: &Path,
+    ffmpeg: &Path,
     args: &[String],
     output: &Path,
+    duration_seconds: u64,
     status: &Arc<RwLock<VodJobStatus>>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    let mut command = Command::new(streamlink);
-    configure_python_cli_command(&mut command);
-    command
+    let mut streamlink_command = Command::new(streamlink);
+    configure_python_cli_command(&mut streamlink_command);
+    streamlink_command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -713,63 +778,176 @@ async fn run_streamlink_download(
         .kill_on_drop(true);
     if let Some(parent) = streamlink.parent() {
         if parent.is_dir() {
-            command.current_dir(parent);
+            streamlink_command.current_dir(parent);
         }
     }
-    let mut child = command
+    let mut streamlink_child = streamlink_command
         .spawn()
         .with_context(|| format!("Streamlink 실행 실패: {}", streamlink.display()))?;
+    let mut streamlink_stdout = streamlink_child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("Streamlink stdout unavailable"))?;
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    if let Some(stdout) = child.stdout.take() {
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = tx.send(line);
-            }
-        });
+    let mut ffmpeg_command = Command::new(ffmpeg);
+    ffmpeg_command
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("warning")
+        .arg("-fflags")
+        .arg("+genpts+discardcorrupt")
+        .arg("-i")
+        .arg("pipe:0")
+        .arg("-map")
+        .arg("0:v:0?")
+        .arg("-map")
+        .arg("0:a:0?")
+        .arg("-c")
+        .arg("copy")
+        .arg("-bsf:v")
+        .arg("h264_mp4toannexb")
+        .arg("-f")
+        .arg("mpegts")
+        .arg("-mpegts_flags")
+        .arg("resend_headers")
+        .arg("-mpegts_copyts")
+        .arg("0")
+        .arg("-avoid_negative_ts")
+        .arg("make_zero")
+        .arg("-muxpreload")
+        .arg("0")
+        .arg("-muxdelay")
+        .arg("0")
+        .arg("-avioflags")
+        .arg("direct")
+        .arg("-progress")
+        .arg("pipe:1")
+        .arg("-nostats")
+        .arg("-y")
+        .arg(output)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut ffmpeg_child = ffmpeg_command
+        .spawn()
+        .with_context(|| format!("FFmpeg 실행 실패: {}", ffmpeg.display()))?;
+    let mut ffmpeg_stdin = ffmpeg_child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("FFmpeg stdin unavailable"))?;
+
+    let pump = tokio::spawn(async move {
+        let copied = tokio::io::copy(&mut streamlink_stdout, &mut ffmpeg_stdin).await;
+        let _ = ffmpeg_stdin.shutdown().await;
+        copied
+    });
+
+    let (log_tx, mut log_rx) = mpsc::unbounded_channel::<String>();
+    if let Some(stderr) = streamlink_child.stderr.take() {
+        spawn_line_reader(stderr, log_tx.clone());
     }
-    if let Some(stderr) = child.stderr.take() {
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = tx.send(line);
-            }
-        });
+    if let Some(stderr) = ffmpeg_child.stderr.take() {
+        spawn_line_reader(stderr, log_tx.clone());
     }
-    drop(tx);
+    drop(log_tx);
+
+    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+    if let Some(stdout) = ffmpeg_child.stdout.take() {
+        spawn_line_reader(stdout, progress_tx);
+    }
 
     let mut tail = VecDeque::with_capacity(20);
-    let exit_status = loop {
+    let mut streamlink_exit = None;
+    let mut ffmpeg_exit = None;
+
+    loop {
         if cancel.load(Ordering::SeqCst) {
-            terminate_owned(&mut child).await;
+            terminate_owned(&mut streamlink_child).await;
+            terminate_owned(&mut ffmpeg_child).await;
+            pump.abort();
+            let _ = pump.await;
             let _ = fs::remove_file(output);
             return Ok(());
         }
-        while let Ok(line) = rx.try_recv() {
+
+        while let Ok(line) = log_rx.try_recv() {
             push_tail(&mut tail, &line);
         }
-        if let Some(exit) = child
-            .try_wait()
-            .context("Streamlink CHZZK 상태 확인 실패")?
-        {
-            break exit;
+        while let Ok(line) = progress_rx.try_recv() {
+            if let Some(media_seconds) = ffmpeg_progress_seconds(&line) {
+                update_download_progress(status, media_seconds, duration_seconds).await;
+            }
         }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    };
-    while let Ok(line) = rx.try_recv() {
+
+        if streamlink_exit.is_none() {
+            streamlink_exit = streamlink_child
+                .try_wait()
+                .context("Streamlink CHZZK 상태 확인 실패")?;
+            if let Some(exit) = streamlink_exit.as_ref() {
+                if !exit.success() {
+                    terminate_owned(&mut ffmpeg_child).await;
+                    pump.abort();
+                    let _ = pump.await;
+                    let _ = fs::remove_file(output);
+                    while let Ok(line) = log_rx.try_recv() {
+                        push_tail(&mut tail, &line);
+                    }
+                    bail!(
+                        "Streamlink CHZZK 다운로드 실패 (exit={}): {}",
+                        exit_code(*exit),
+                        redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
+                    );
+                }
+            }
+        }
+
+        if ffmpeg_exit.is_none() {
+            ffmpeg_exit = ffmpeg_child
+                .try_wait()
+                .context("FFmpeg CHZZK 상태 확인 실패")?;
+            if let Some(exit) = ffmpeg_exit.as_ref() {
+                if !exit.success() {
+                    terminate_owned(&mut streamlink_child).await;
+                    pump.abort();
+                    let _ = pump.await;
+                    let _ = fs::remove_file(output);
+                    while let Ok(line) = log_rx.try_recv() {
+                        push_tail(&mut tail, &line);
+                    }
+                    bail!(
+                        "FFmpeg CHZZK MPEG-TS 저장 실패 (exit={}): {}",
+                        exit_code(*exit),
+                        redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
+                    );
+                }
+            }
+        }
+
+        if streamlink_exit.is_some() && ffmpeg_exit.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    while let Ok(line) = progress_rx.try_recv() {
+        if let Some(media_seconds) = ffmpeg_progress_seconds(&line) {
+            update_download_progress(status, media_seconds, duration_seconds).await;
+        }
+    }
+    while let Ok(line) = log_rx.try_recv() {
         push_tail(&mut tail, &line);
     }
-    if !exit_status.success() {
+
+    let copied = pump
+        .await
+        .context("CHZZK Streamlink-to-FFmpeg pipe task join failed")?
+        .context("CHZZK Streamlink-to-FFmpeg pipe failed")?;
+    if copied == 0 {
         let _ = fs::remove_file(output);
-        bail!(
-            "Streamlink CHZZK 다운로드 실패 (exit={}): {}",
-            exit_code(exit_status),
-            redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
-        );
+        bail!("CHZZK Streamlink MPEG-TS pipe produced no media bytes");
     }
+
     let size = fs::metadata(output)
         .with_context(|| format!("Streamlink CHZZK output missing: {}", output.display()))?
         .len();
@@ -1670,10 +1848,10 @@ mod tests {
     }
 
     #[test]
-    fn chzzk_api_metadata_maps_milliseconds_to_seconds() {
+    fn chzzk_api_metadata_preserves_seconds() {
         let content = serde_json::json!({
             "videoTitle": "테스트 VOD",
-            "duration": 1234567,
+            "duration": 29856,
             "publishDate": "2026-09-13 10:00:00",
             "channel": {
                 "channelName": "테스트 채널",
@@ -1684,10 +1862,22 @@ mod tests {
         assert_eq!(metadata.title, "테스트 VOD");
         assert_eq!(metadata.streamer, "테스트 채널");
         assert_eq!(metadata.date, "260913");
-        assert_eq!(metadata.duration_seconds, 1234);
-        let view = analysis_view("https://chzzk.naver.com/video/1", &metadata);
+        assert_eq!(metadata.duration_seconds, 29856);
+        let view = analysis_view("https://chzzk.naver.com/video/15185683", &metadata);
         assert_eq!(view.part_count, 1);
-        assert_eq!(view.parts[0].duration_seconds, 1234);
+        assert_eq!(view.parts[0].duration_seconds, 29856);
+    }
+
+    #[test]
+    fn ffmpeg_media_progress_drives_chzzk_percent_and_time() {
+        assert_eq!(
+            ffmpeg_progress_seconds("out_time_us=3600000000"),
+            Some(3600.0)
+        );
+        let percent = download_progress_percent(3600.0, 7200);
+        assert!((percent - 47.5).abs() < 0.001);
+        assert_eq!(format_media_time(29856.0), "08:17:36");
+        assert_eq!(download_progress_percent(99999.0, 29856), 95.0);
     }
 
     #[test]
