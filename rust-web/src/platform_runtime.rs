@@ -12,6 +12,87 @@ pub(crate) fn configure_utf8_cli(command: &mut Command) {
     command.env("PYTHONIOENCODING", "utf-8");
 }
 
+/// Durable process-tree owner retained for a runtime child.
+///
+/// On Windows this owns a kill-on-close Job Object captured from the stable
+/// root PID as soon as the process is spawned. The Job survives root-process
+/// exit, so descendants cannot escape merely because `Child::try_wait()` has
+/// already reaped the root. Other platforms keep a zero-sized boundary until
+/// Phase 20 provides their native process-group implementation.
+pub(crate) struct OwnedProcessTree {
+    #[cfg(windows)]
+    root_pid: u32,
+    #[cfg(windows)]
+    job: Option<windows_tree::OwnedTreeJob>,
+}
+
+impl OwnedProcessTree {
+    pub(crate) fn capture(root_pid: u32) -> Result<Self> {
+        #[cfg(windows)]
+        {
+            let job = windows_tree::OwnedTreeJob::capture(root_pid)
+                .with_context(|| format!("failed to retain Windows process tree pid={root_pid}"))?;
+            Ok(Self { root_pid, job })
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = root_pid;
+            Ok(Self {})
+        }
+    }
+
+    /// Synchronous retained-owner cleanup used when polling observes the root
+    /// already exited. Root exit is not treated as descendant cleanup.
+    pub(crate) fn terminate_now(&self) -> Result<()> {
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate()
+                .context("failed to terminate retained Windows process Job")?;
+        }
+        Ok(())
+    }
+
+    /// Terminates the retained owned tree and reaps the root child.
+    pub(crate) async fn terminate(&mut self, child: &mut Child) -> Result<Option<i32>> {
+        #[cfg(windows)]
+        {
+            // Preserve the exact-PID tree request as a best-effort fast path.
+            // The retained Job Object is authoritative and remains enforceable
+            // even if this command fails or the root has already exited.
+            let _ = Command::new("taskkill.exe")
+                .arg("/PID")
+                .arg(self.root_pid.to_string())
+                .arg("/T")
+                .arg("/F")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+
+            self.terminate_now()?;
+
+            // Keep the retained owner alive until the captured lineage is gone.
+            // The stored root PID is still usable after the Tokio Child root has
+            // been reaped, which closes the caller-side root-exit race.
+            for _ in 0..200 {
+                if windows_tree::process_tree_pids(self.root_pid)?.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }
+
+        #[cfg(not(windows))]
+        if child.try_wait()?.is_none() {
+            let _ = child.kill().await;
+        }
+
+        Ok(child.wait().await.ok().and_then(|status| status.code()))
+    }
+}
+
 /// Terminates only the process tree rooted at a child spawned by this server.
 ///
 /// Do not use root-process exit as proof that descendants are gone. The checked
@@ -27,12 +108,8 @@ pub(crate) async fn terminate_owned(child: &mut Child) {
     }
 }
 
-/// Checked owned-tree termination used by LIVE recorder cleanup.
-///
-/// On Windows the root PID is first captured together with its current
-/// descendants in a kill-on-close Job Object. Future descendants of captured
-/// members inherit the Job. We therefore never interpret `Child::try_wait()`
-/// on the root as proof that the whole tree is gone.
+/// Checked owned-tree termination used for callers that did not retain an owner
+/// from spawn. LIVE recorder cleanup uses `OwnedProcessTree` instead.
 pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<i32>> {
     #[cfg(windows)]
     if let Some(pid) = child.id() {
@@ -345,7 +422,7 @@ pub(crate) fn restrict_private_dir(_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::terminate_owned_checked;
+    use super::{OwnedProcessTree, terminate_owned_checked};
     use std::process::Stdio;
     use tokio::process::Command;
 
@@ -375,8 +452,8 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn windows_job_retains_descendant_after_root_exit() {
-        use super::windows_tree::{OwnedTreeJob, process_tree_pids};
+    async fn windows_retained_tree_owner_survives_root_exit() {
+        use super::windows_tree::process_tree_pids;
         use std::{
             env, fs,
             time::{Duration, Instant},
@@ -426,9 +503,10 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
 
-        let job = OwnedTreeJob::capture(root_pid)
-            .unwrap()
-            .expect("root tree must exist while capture starts");
+        // This mirrors the production LIVE shape: retain ownership while the
+        // root still exists, keep that owner in the recording, then allow the
+        // root to exit before cleanup is requested.
+        let mut owner = OwnedProcessTree::capture(root_pid).unwrap();
         root.wait().await.unwrap();
 
         assert!(
@@ -438,7 +516,7 @@ mod tests {
             "descendant should still be alive after the root exits"
         );
 
-        job.terminate().unwrap();
+        owner.terminate(&mut root).await.unwrap();
         for _ in 0..200 {
             if !process_tree_pids(root_pid)
                 .unwrap()
@@ -451,6 +529,6 @@ mod tests {
         }
 
         let _ = fs::remove_file(&pid_file);
-        panic!("Job Object did not terminate surviving descendant pid={descendant_pid}");
+        panic!("retained Job Object did not terminate surviving descendant pid={descendant_pid}");
     }
 }
