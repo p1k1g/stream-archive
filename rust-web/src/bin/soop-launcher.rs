@@ -16,7 +16,7 @@ use std::{
 #[cfg(windows)]
 use windows_sys::Win32::UI::{
     Shell::ShellExecuteW,
-    WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, SW_SHOWNORMAL},
+    WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW, SW_SHOWNORMAL},
 };
 
 #[cfg(windows)]
@@ -34,7 +34,11 @@ enum Probe {
 
 #[cfg(windows)]
 fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
-    value.as_ref().encode_wide().chain(std::iter::once(0)).collect()
+    value
+        .as_ref()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 #[cfg(windows)]
@@ -44,7 +48,9 @@ fn local_endpoint() -> (SocketAddr, String) {
         .rsplit_once(':')
         .and_then(|(_, value)| value.parse::<u16>().ok())
         .unwrap_or(8787);
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().expect("valid loopback endpoint");
+    let addr: SocketAddr = format!("127.0.0.1:{port}")
+        .parse()
+        .expect("valid loopback endpoint");
     (addr, format!("http://127.0.0.1:{port}/"))
 }
 
@@ -78,7 +84,9 @@ fn shell_open(file: &OsStr, directory: Option<&Path>) -> Result<(), String> {
     let operation = wide("open");
     let file = wide(file);
     let directory_wide = directory.map(wide);
-    let directory_ptr = directory_wide.as_ref().map_or(null(), |value| value.as_ptr());
+    let directory_ptr = directory_wide
+        .as_ref()
+        .map_or(null(), |value| value.as_ptr());
     let result = unsafe {
         ShellExecuteW(
             null_mut(),
@@ -90,7 +98,10 @@ fn shell_open(file: &OsStr, directory: Option<&Path>) -> Result<(), String> {
         )
     };
     if (result as isize) <= 32 {
-        Err(format!("Windows ShellExecute failed with code {}", result as isize))
+        Err(format!(
+            "Windows ShellExecute failed with code {}",
+            result as isize
+        ))
     } else {
         Ok(())
     }
@@ -112,7 +123,8 @@ fn show_error(message: &str) {
 
 #[cfg(windows)]
 fn executable_dir() -> Result<PathBuf, String> {
-    let exe = env::current_exe().map_err(|err| format!("실행 파일 위치를 확인하지 못했습니다.\n{err}"))?;
+    let exe = env::current_exe()
+        .map_err(|err| format!("실행 파일 위치를 확인하지 못했습니다.\n{err}"))?;
     exe.parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "실행 파일 폴더를 확인하지 못했습니다.".to_string())

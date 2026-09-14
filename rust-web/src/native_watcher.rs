@@ -7,7 +7,8 @@ use crate::{
     support::platform::{
         PlatformId,
         live::{
-            LiveBroadcast, LiveProbe, LiveSession, StreamResolveConfig, ensure_supported, session_for,
+            LiveBroadcast, LiveProbe, LiveSession, StreamResolveConfig, ensure_supported,
+            session_for,
         },
     },
 };
@@ -54,7 +55,11 @@ fn stream_passwords() -> &'static StdMutex<HashMap<String, StreamPassword>> {
 }
 
 fn channel_key(platform: PlatformId, account: &str) -> String {
-    format!("{}:{}", platform.as_str(), account.trim().to_ascii_lowercase())
+    format!(
+        "{}:{}",
+        platform.as_str(),
+        account.trim().to_ascii_lowercase()
+    )
 }
 
 fn scoped_channel_target(target: &str) -> Option<(PlatformId, &str)> {
@@ -260,11 +265,7 @@ impl NativeWatcherManager {
 
     pub async fn status(&self) -> Result<WatcherStatus> {
         let mut runtime = self.runtime.lock().await;
-        if runtime
-            .task
-            .as_ref()
-            .is_some_and(|task| task.is_finished())
-        {
+        if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
             if let Some(task) = runtime.task.take() {
                 finish_watcher_task(task, &self.logs, &self.snapshot, "status reap").await;
             }
@@ -518,7 +519,10 @@ async fn run_native_watcher(
     Ok(())
 }
 
-fn create_sessions(channels: &[Channel], client: &Client) -> Result<HashMap<PlatformId, LiveSession>> {
+fn create_sessions(
+    channels: &[Channel],
+    client: &Client,
+) -> Result<HashMap<PlatformId, LiveSession>> {
     let mut sessions = HashMap::new();
     ensure_sessions(&mut sessions, channels, client)?;
     Ok(sessions)
@@ -562,10 +566,8 @@ async fn refresh_soop_login(
         .await
     {
         Ok(login) => {
-            logs.push(format!(
-                "[RUST:AUTH] SOOP login {context} OK : {login}"
-            ))
-            .await
+            logs.push(format!("[RUST:AUTH] SOOP login {context} OK : {login}"))
+                .await
         }
         Err(err) => {
             logs.push(format!(
@@ -697,7 +699,10 @@ async fn handle_command(
     .await;
 }
 
-async fn recover_auth_required(session: &mut LiveSession, config: &WatcherConfig) -> Result<String> {
+async fn recover_auth_required(
+    session: &mut LiveSession,
+    config: &WatcherConfig,
+) -> Result<String> {
     session
         .recover_auth(&config.soop_username, &config.soop_password)
         .await
@@ -715,9 +720,7 @@ async fn poll_channels(
         let Some(state) = states.get_mut(&key) else {
             continue;
         };
-        if !state.channel.enabled
-            || state.recording.is_some()
-            || Instant::now() < state.next_check
+        if !state.channel.enabled || state.recording.is_some() || Instant::now() < state.next_check
         {
             continue;
         }
@@ -757,7 +760,8 @@ async fn poll_channels(
                 }
                 if !live.password_required {
                     clear_stream_password(platform, &state.channel.account);
-                } else if stream_password_for(platform, &state.channel.account, &live.id).is_none() {
+                } else if stream_password_for(platform, &state.channel.account, &live.id).is_none()
+                {
                     state.status = "PASSWORD_REQUIRED".into();
                     state.last_broadcast_id = Some(live.id.clone());
                     state.detail = Some("방송 비밀번호 입력이 필요합니다. 비밀번호는 현재 방송 동안 메모리에만 유지됩니다.".into());
@@ -773,7 +777,8 @@ async fn poll_channels(
                     state.suppressed_broadcast_id = None;
                 }
 
-                match start_recording(&state.channel, &live, config, session, recorder, logs).await {
+                match start_recording(&state.channel, &live, config, session, recorder, logs).await
+                {
                     Ok(recording) => {
                         state.last_broadcast_id = Some(live.id);
                         state.status = "RECORDING".into();
@@ -976,7 +981,8 @@ async fn start_recording(
     recorder: &RecorderManager,
     logs: &LogBuffer,
 ) -> Result<Recording> {
-    let password = stream_password_for(channel.platform, &channel.account, &live.id).unwrap_or_default();
+    let password =
+        stream_password_for(channel.platform, &channel.account, &live.id).unwrap_or_default();
     let resolve_config = StreamResolveConfig {
         worker_url: &config.worker_url,
         worker_api_key: &config.worker_api_key,
@@ -1178,6 +1184,7 @@ fn resolve_streamlink(backend_dir: &Path, map: &BTreeMap<String, String>) -> Res
         }
     }
 
+    #[allow(unused_mut)]
     let mut candidates = vec![backend_dir.join("streamlink.exe")];
     #[cfg(windows)]
     {
@@ -1224,9 +1231,7 @@ fn unique_output_file(
         "BJ_TITLE" => format!("{date}_{channel}_{title}"),
         "TITLE_NUMBER" => {
             for number in 1..=9999 {
-                let path = dir.join(format!(
-                    "{date}_{title}_{number:02}_{channel}.{extension}"
-                ));
+                let path = dir.join(format!("{date}_{title}_{number:02}_{channel}.{extension}"));
                 if !path.exists() {
                     return Ok(path);
                 }
@@ -1377,39 +1382,44 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
 
-        let first_chzzk = unique_output_file(
-            &dir,
-            "Channel",
-            "Title",
-            "TITLE_NUMBER",
-            PlatformId::Chzzk,
-        )
-        .unwrap();
+        let first_chzzk =
+            unique_output_file(&dir, "Channel", "Title", "TITLE_NUMBER", PlatformId::Chzzk)
+                .unwrap();
         assert_eq!(first_chzzk.extension().and_then(|v| v.to_str()), Some("ts"));
-        assert!(first_chzzk.file_name().unwrap().to_string_lossy().contains("_01_"));
+        assert!(
+            first_chzzk
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("_01_")
+        );
         fs::write(&first_chzzk, b"existing").unwrap();
 
-        let second_chzzk = unique_output_file(
-            &dir,
-            "Channel",
-            "Title",
-            "TITLE_NUMBER",
-            PlatformId::Chzzk,
-        )
-        .unwrap();
-        assert_eq!(second_chzzk.extension().and_then(|v| v.to_str()), Some("ts"));
-        assert!(second_chzzk.file_name().unwrap().to_string_lossy().contains("_02_"));
+        let second_chzzk =
+            unique_output_file(&dir, "Channel", "Title", "TITLE_NUMBER", PlatformId::Chzzk)
+                .unwrap();
+        assert_eq!(
+            second_chzzk.extension().and_then(|v| v.to_str()),
+            Some("ts")
+        );
+        assert!(
+            second_chzzk
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("_02_")
+        );
 
-        let first_soop = unique_output_file(
-            &dir,
-            "Channel",
-            "Title",
-            "TITLE_NUMBER",
-            PlatformId::Soop,
-        )
-        .unwrap();
+        let first_soop =
+            unique_output_file(&dir, "Channel", "Title", "TITLE_NUMBER", PlatformId::Soop).unwrap();
         assert_eq!(first_soop.extension().and_then(|v| v.to_str()), Some("ts"));
-        assert!(first_soop.file_name().unwrap().to_string_lossy().contains("_02_"));
+        assert!(
+            first_soop
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("_02_")
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -1426,7 +1436,10 @@ mod tests {
 
         let mut disabled_soop = channel("SOOP", "disabled");
         disabled_soop.enabled = false;
-        assert!(!channels_require_soop(&[disabled_soop, chzzk_channel(true)]));
+        assert!(!channels_require_soop(&[
+            disabled_soop,
+            chzzk_channel(true)
+        ]));
 
         assert!(channels_require_soop(&[
             channel("SOOP", "enabled"),
@@ -1468,9 +1481,7 @@ mod tests {
 
         mark_watcher_stopped(&mut states);
 
-        let live = states
-            .get(&channel_key(PlatformId::Soop, "live"))
-            .unwrap();
+        let live = states.get(&channel_key(PlatformId::Soop, "live")).unwrap();
         assert_eq!(live.status, "WATCHER_STOPPED");
         assert!(live.last_broadcast_id.is_none());
         assert!(live.suppressed_broadcast_id.is_none());

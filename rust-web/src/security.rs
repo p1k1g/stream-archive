@@ -4,6 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::{fs, path::Path};
 
 pub const DPAPI_PREFIX: &str = "dpapi:v1:";
+#[cfg(windows)]
 const DPAPI_ENTROPY: &[u8] = b"SOOPLiveDownloader:v1";
 #[cfg(test)]
 const SECRET_KEYS: &[&str] = &[

@@ -104,6 +104,8 @@ CREATE INDEX IF NOT EXISTS ix_vod_queue_state_created
 pub struct Store {
     inner: Arc<Mutex<Connection>>,
     path: PathBuf,
+    // Read-through snapshot of committed SQLite state. Mutations update this
+    // only after their transaction commits; it is not a second authority.
     settings_cache: Arc<RwLock<BTreeMap<String, String>>>,
     channels_cache: Arc<RwLock<Vec<Channel>>>,
 }
@@ -319,7 +321,11 @@ impl Store {
             .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
         Ok(keys
             .iter()
-            .filter_map(|key| cache.get(*key).map(|value| ((*key).to_string(), value.clone())))
+            .filter_map(|key| {
+                cache
+                    .get(*key)
+                    .map(|value| ((*key).to_string(), value.clone()))
+            })
             .collect())
     }
 
@@ -528,9 +534,11 @@ fn table_columns(conn: &Connection, table: &str) -> Result<Vec<(String, i64)>> {
         _ => anyhow::bail!("unsupported schema table: {table}"),
     };
     let mut stmt = conn.prepare(sql)?;
-    stmt.query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+    stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(Into::into)
 }
 
 fn add_platform_column_if_missing(conn: &Connection, table: &str) -> Result<()> {

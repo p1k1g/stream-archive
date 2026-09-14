@@ -148,13 +148,6 @@ impl LiveSession {
             _ => bail!("LIVE 세션과 방송 payload 플랫폼이 일치하지 않습니다."),
         }
     }
-
-    pub fn platform(&self) -> PlatformId {
-        match self {
-            Self::Soop(_) => PlatformId::Soop,
-            Self::Chzzk(_) => PlatformId::Chzzk,
-        }
-    }
 }
 
 pub fn session_for(

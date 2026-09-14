@@ -1,9 +1,5 @@
 use crate::{model::Channel, support::platform::PlatformId};
 use anyhow::{Context, Result, bail};
-#[cfg(test)]
-use atomic_write_file::AtomicWriteFile;
-#[cfg(test)]
-use std::io::Write;
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
     env, fs,
@@ -258,91 +254,6 @@ pub fn parse_channels(content: &str) -> Result<Vec<Channel>> {
     Ok(channels)
 }
 
-pub fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let hidden: HashSet<&str> = HIDDEN_SETTING_KEYS.iter().copied().collect();
-    let mut result = BTreeMap::new();
-    for raw in content.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        if hidden.contains(key) {
-            result.insert(key.to_string(), value.trim().to_string());
-        }
-    }
-    Ok(result)
-}
-
-pub fn resolve_setting_path(backend_dir: &Path, raw: &str) -> PathBuf {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return backend_dir.to_path_buf();
-    }
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        backend_dir.join(path)
-    }
-}
-
-#[cfg(test)]
-pub fn write_settings_atomic(path: &Path, values: &BTreeMap<String, String>) -> Result<()> {
-    write_key_values_atomic(path, values)
-}
-
-#[cfg(test)]
-pub fn write_channels_atomic(path: &Path, channels: &[Channel]) -> Result<()> {
-    let mut out = String::new();
-    for channel in channels {
-        if channel.platform != PlatformId::Soop {
-            continue;
-        }
-        out.push_str(&format!(
-            "{}|{}|{}|{}\r\n",
-            if channel.enabled { "Y" } else { "N" },
-            channel.name,
-            channel.account,
-            channel.outdir
-        ));
-    }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let mut file = AtomicWriteFile::options()
-        .open(path)
-        .with_context(|| format!("failed to open {} for atomic write", path.display()))?;
-    file.write_all(out.as_bytes())?;
-    file.commit()
-        .with_context(|| format!("failed to commit {}", path.display()))?;
-    Ok(())
-}
-
-#[cfg(test)]
-fn write_key_values_atomic(path: &Path, values: &BTreeMap<String, String>) -> Result<()> {
-    let mut out = String::new();
-    for (key, value) in values {
-        out.push_str(key);
-        out.push('=');
-        out.push_str(value);
-        out.push_str("\r\n");
-    }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let mut file = AtomicWriteFile::options()
-        .open(path)
-        .with_context(|| format!("failed to open {} for atomic write", path.display()))?;
-    file.write_all(out.as_bytes())?;
-    file.commit()
-        .with_context(|| format!("failed to commit {}", path.display()))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,9 +271,8 @@ mod tests {
     #[test]
     fn parses_legacy_channel_line_endings() {
         for separator in ["\n", "\r\n", "\r"] {
-            let content = format!(
-                "\u{feff}Y|Alpha|alpha|C:\\A{separator}N|Beta|beta|C:\\B{separator}"
-            );
+            let content =
+                format!("\u{feff}Y|Alpha|alpha|C:\\A{separator}N|Beta|beta|C:\\B{separator}");
             let channels = parse_channels(&content).unwrap();
             assert_eq!(channels.len(), 2, "separator={separator:?}");
             assert_eq!(channels[0].name, "Alpha");

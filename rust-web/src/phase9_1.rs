@@ -1,11 +1,13 @@
-use super::{authorize, AppState, ApiResult};
+use super::{ApiResult, AppState, authorize};
 use axum::{
-    extract::State,
-    http::{header::HOST, HeaderMap, StatusCode},
     Json,
+    extract::State,
+    http::{HeaderMap, StatusCode, header::HOST},
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde_json::{json, Value};
+#[cfg(windows)]
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde_json::{Value, json};
+#[cfg(windows)]
 use std::process::Command;
 
 pub(crate) async fn api_local_picker(
@@ -17,18 +19,33 @@ pub(crate) async fn api_local_picker(
     if !direct_local_request_allowed(&state.bind, &headers) {
         return Err((
             StatusCode::FORBIDDEN,
-            "native picker is available only from a direct 127.0.0.1/localhost browser session".into(),
+            "native picker is available only from a direct 127.0.0.1/localhost browser session"
+                .into(),
         ));
     }
 
-    let kind = body.get("kind").and_then(Value::as_str).unwrap_or("").trim();
+    let kind = body
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if !matches!(kind, "folder" | "file") {
-        return Err((StatusCode::BAD_REQUEST, "kind must be folder or file".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "kind must be folder or file".into(),
+        ));
     }
 
-    let filter = body.get("filter").and_then(Value::as_str).unwrap_or("all").trim();
+    let filter = body
+        .get("filter")
+        .and_then(Value::as_str)
+        .unwrap_or("all")
+        .trim();
     if !matches!(filter, "all" | "exe" | "cookie") {
-        return Err((StatusCode::BAD_REQUEST, "filter must be all, exe or cookie".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "filter must be all, exe or cookie".into(),
+        ));
     }
 
     let mut initial = body
@@ -41,14 +58,22 @@ pub(crate) async fn api_local_picker(
         initial.clear();
     }
     if initial.len() > 4096 || initial.contains('\0') {
-        return Err((StatusCode::BAD_REQUEST, "initial_path is invalid or too long".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "initial_path is invalid or too long".into(),
+        ));
     }
 
     let kind = kind.to_string();
     let filter = filter.to_string();
     let selected = tokio::task::spawn_blocking(move || run_native_picker(&kind, &filter, &initial))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("picker task failed: {e}")))?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("picker task failed: {e}"),
+            )
+        })?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     Ok(Json(match selected {
@@ -82,9 +107,14 @@ fn direct_local_request_allowed(bind: &str, headers: &HeaderMap) -> bool {
         return false;
     }
 
-    !["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"]
-        .into_iter()
-        .any(|name| headers.contains_key(name))
+    ![
+        "forwarded",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-real-ip",
+    ]
+    .into_iter()
+    .any(|name| headers.contains_key(name))
 }
 
 #[cfg(windows)]
@@ -205,7 +235,7 @@ $dialog.Dispose()
 #[cfg(test)]
 mod tests {
     use super::direct_local_request_allowed;
-    use axum::http::{header::HOST, HeaderMap, HeaderValue};
+    use axum::http::{HeaderMap, HeaderValue, header::HOST};
 
     fn headers(host: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -215,22 +245,34 @@ mod tests {
 
     #[test]
     fn allows_direct_ipv4_loopback() {
-        assert!(direct_local_request_allowed("127.0.0.1:8787", &headers("127.0.0.1:8787")));
+        assert!(direct_local_request_allowed(
+            "127.0.0.1:8787",
+            &headers("127.0.0.1:8787")
+        ));
     }
 
     #[test]
     fn allows_direct_localhost() {
-        assert!(direct_local_request_allowed("localhost:8787", &headers("localhost:8787")));
+        assert!(direct_local_request_allowed(
+            "localhost:8787",
+            &headers("localhost:8787")
+        ));
     }
 
     #[test]
     fn rejects_non_loopback_bind() {
-        assert!(!direct_local_request_allowed("0.0.0.0:8787", &headers("127.0.0.1:8787")));
+        assert!(!direct_local_request_allowed(
+            "0.0.0.0:8787",
+            &headers("127.0.0.1:8787")
+        ));
     }
 
     #[test]
     fn rejects_remote_host() {
-        assert!(!direct_local_request_allowed("127.0.0.1:8787", &headers("recorder.example.com")));
+        assert!(!direct_local_request_allowed(
+            "127.0.0.1:8787",
+            &headers("recorder.example.com")
+        ));
     }
 
     #[test]

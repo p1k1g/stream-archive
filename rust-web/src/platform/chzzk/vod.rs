@@ -1,4 +1,5 @@
 use super::auth::{ChzzkAuth, ChzzkAuthState};
+use crate::platform_runtime::{configure_utf8_cli, restrict_private_dir, terminate_owned};
 use crate::{
     backend::{LogBuffer, read_safe_settings, settings_path},
     model::{
@@ -14,13 +15,15 @@ use fs2::FileExt;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::Value;
+#[cfg(windows)]
+use std::process::Command as StdCommand;
 use std::{
     collections::VecDeque,
     env,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Command as StdCommand, ExitStatus, Stdio},
+    process::{ExitStatus, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -29,7 +32,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    process::{Child, Command},
+    process::Command,
     sync::{Mutex, RwLock, mpsc},
     task::JoinHandle,
 };
@@ -762,16 +765,31 @@ async fn update_download_progress(
     };
 }
 
-fn spawn_line_reader<R>(reader: R, tx: mpsc::UnboundedSender<String>)
+fn spawn_line_reader<R>(reader: R, tx: mpsc::Sender<String>) -> JoinHandle<()>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = tx.send(line);
+            if tx.send(line).await.is_err() {
+                break;
+            }
         }
-    });
+    })
+}
+
+async fn join_reader_tasks(tasks: Vec<JoinHandle<()>>) {
+    for task in tasks {
+        let _ = task.await;
+    }
+}
+
+async fn abort_reader_tasks(tasks: Vec<JoinHandle<()>>) {
+    for task in &tasks {
+        task.abort();
+    }
+    join_reader_tasks(tasks).await;
 }
 
 async fn run_streamlink_download(
@@ -784,7 +802,7 @@ async fn run_streamlink_download(
     cancel: &AtomicBool,
 ) -> Result<()> {
     let mut streamlink_command = Command::new(streamlink);
-    configure_python_cli_command(&mut streamlink_command);
+    configure_utf8_cli(&mut streamlink_command);
     streamlink_command
         .args(args)
         .stdin(Stdio::null())
@@ -869,18 +887,22 @@ async fn run_streamlink_download(
         copied
     });
 
-    let (log_tx, mut log_rx) = mpsc::unbounded_channel::<String>();
+    // External tools can write much faster than the status loop consumes. Keep
+    // the pipe readers bounded so a noisy process cannot grow server memory
+    // without limit; awaiting send also provides natural backpressure.
+    let (log_tx, mut log_rx) = mpsc::channel::<String>(256);
+    let mut reader_tasks = Vec::with_capacity(3);
     if let Some(stderr) = streamlink_child.stderr.take() {
-        spawn_line_reader(stderr, log_tx.clone());
+        reader_tasks.push(spawn_line_reader(stderr, log_tx.clone()));
     }
     if let Some(stderr) = ffmpeg_child.stderr.take() {
-        spawn_line_reader(stderr, log_tx.clone());
+        reader_tasks.push(spawn_line_reader(stderr, log_tx.clone()));
     }
     drop(log_tx);
 
-    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+    let (progress_tx, mut progress_rx) = mpsc::channel::<String>(256);
     if let Some(stdout) = ffmpeg_child.stdout.take() {
-        spawn_line_reader(stdout, progress_tx);
+        reader_tasks.push(spawn_line_reader(stdout, progress_tx));
     }
 
     let mut tail = VecDeque::with_capacity(20);
@@ -893,6 +915,7 @@ async fn run_streamlink_download(
             terminate_owned(&mut ffmpeg_child).await;
             pump.abort();
             let _ = pump.await;
+            abort_reader_tasks(reader_tasks).await;
             let _ = fs::remove_file(output);
             return Ok(());
         }
@@ -915,6 +938,7 @@ async fn run_streamlink_download(
                     terminate_owned(&mut ffmpeg_child).await;
                     pump.abort();
                     let _ = pump.await;
+                    abort_reader_tasks(reader_tasks).await;
                     let _ = fs::remove_file(output);
                     while let Ok(line) = log_rx.try_recv() {
                         push_tail(&mut tail, &line);
@@ -937,6 +961,7 @@ async fn run_streamlink_download(
                     terminate_owned(&mut streamlink_child).await;
                     pump.abort();
                     let _ = pump.await;
+                    abort_reader_tasks(reader_tasks).await;
                     let _ = fs::remove_file(output);
                     while let Ok(line) = log_rx.try_recv() {
                         push_tail(&mut tail, &line);
@@ -956,12 +981,12 @@ async fn run_streamlink_download(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    while let Ok(line) = progress_rx.try_recv() {
+    while let Some(line) = progress_rx.recv().await {
         if let Some(media_seconds) = ffmpeg_progress_seconds(&line) {
             update_download_progress(status, media_seconds, duration_seconds).await;
         }
     }
-    while let Ok(line) = log_rx.try_recv() {
+    while let Some(line) = log_rx.recv().await {
         push_tail(&mut tail, &line);
     }
 
@@ -969,6 +994,7 @@ async fn run_streamlink_download(
         .await
         .context("CHZZK Streamlink-to-FFmpeg pipe task join failed")?
         .context("CHZZK Streamlink-to-FFmpeg pipe failed")?;
+    join_reader_tasks(reader_tasks).await;
     if copied == 0 {
         let _ = fs::remove_file(output);
         bail!("CHZZK Streamlink MPEG-TS pipe produced no media bytes");
@@ -989,11 +1015,6 @@ async fn run_streamlink_download(
     Ok(())
 }
 
-fn configure_python_cli_command(command: &mut Command) {
-    command.env("PYTHONUTF8", "1");
-    command.env("PYTHONIOENCODING", "utf-8");
-}
-
 async fn run_capture(
     program: &Path,
     args: &[String],
@@ -1002,7 +1023,7 @@ async fn run_capture(
     label: &str,
 ) -> Result<String> {
     let mut command = Command::new(program);
-    configure_python_cli_command(&mut command);
+    configure_utf8_cli(&mut command);
     let mut child = command
         .args(args)
         .stdin(Stdio::null())
@@ -1031,6 +1052,8 @@ async fn run_capture(
     let exit = loop {
         if cancel.load(Ordering::SeqCst) {
             terminate_owned(&mut child).await;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
             bail!("{label} 취소됨");
         }
         if let Some(exit) = child
@@ -1051,30 +1074,6 @@ async fn run_capture(
         );
     }
     Ok(String::from_utf8_lossy(&stdout).into_owned())
-}
-
-async fn terminate_owned(child: &mut Child) {
-    #[cfg(windows)]
-    {
-        if let Some(pid) = child.id() {
-            let _ = Command::new("taskkill.exe")
-                .arg("/PID")
-                .arg(pid.to_string())
-                .arg("/T")
-                .arg("/F")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
-        }
-        let _ = child.wait().await;
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
 }
 
 fn chzzk_cookie_file(job_dir: &Path) -> Result<Option<PathBuf>> {
@@ -1150,6 +1149,7 @@ fn resolve_streamlink_tool(
             }
         }
     }
+    #[allow(unused_mut)]
     let mut candidates = vec![backend.join("streamlink.exe")];
     #[cfg(windows)]
     {
@@ -1269,7 +1269,7 @@ fn job_dir(backend: &Path) -> Result<JobDirGuard> {
             preparing.display()
         )
     })?;
-    if let Err(err) = restrict_job_dir(&preparing) {
+    if let Err(err) = restrict_private_dir(&preparing) {
         let _ = fs::remove_dir_all(&preparing);
         return Err(err);
     }
@@ -1328,45 +1328,6 @@ fn job_dir(backend: &Path) -> Result<JobDirGuard> {
     let _ = FileExt::unlock(&creation_lock);
     drop(creation_lock);
     Ok(JobDirGuard { path: dir, lock })
-}
-
-#[cfg(windows)]
-fn restrict_job_dir(dir: &Path) -> Result<()> {
-    let username = env::var("USERNAME").context("Windows USERNAME 환경 변수가 없습니다.")?;
-    let domain = env::var("USERDOMAIN").unwrap_or_default();
-    let identity = if domain.trim().is_empty() || domain == "." {
-        username
-    } else {
-        format!("{domain}\\{username}")
-    };
-    let status = StdCommand::new("icacls.exe")
-        .arg(dir)
-        .arg("/inheritance:r")
-        .arg("/grant:r")
-        .arg(format!("{identity}:(OI)(CI)F"))
-        .arg("/Q")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("CHZZK 임시 폴더 ACL 설정 실패: {}", dir.display()))?;
-    if !status.success() {
-        let _ = fs::remove_dir_all(dir);
-        bail!("CHZZK 임시 폴더를 현재 사용자 전용으로 제한하지 못했습니다.");
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn restrict_job_dir(dir: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("CHZZK 임시 폴더 권한 설정 실패: {}", dir.display()))
-}
-
-#[cfg(not(any(windows, unix)))]
-fn restrict_job_dir(_dir: &Path) -> Result<()> {
-    Ok(())
 }
 
 #[cfg(unix)]

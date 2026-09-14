@@ -155,3 +155,7 @@ Normal CI runs Rust unit tests and the Windows native compile check. The manual 
 ## Phase boundary
 
 Phase 6 completes the planned migration/productization sequence. Future work can be treated as smaller maintenance releases for runtime bugs, UX improvements, optional history-retention policy, or packaging enhancements rather than another mandatory migration phase.
+
+## Runtime platform boundary
+
+OS-specific process termination and private-directory permission behavior is centralized in `rust-web/src/platform_runtime.rs`; provider modules must not add process-name-wide termination or inline OS ACL logic.

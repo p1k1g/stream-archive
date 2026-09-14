@@ -5,6 +5,7 @@ mod model;
 mod native_watcher;
 mod phase8;
 mod phase9_1;
+mod platform_runtime;
 mod primary_config;
 mod realtime;
 mod recorder;
