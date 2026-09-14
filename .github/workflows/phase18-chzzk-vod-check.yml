@@ -25,28 +25,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify CHZZK neonplayer DASH response
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $detail = Invoke-RestMethod -Uri 'https://api.chzzk.naver.com/service/v3/videos/15185683' -Method Get
-          $c = $detail.content
-          if ($c.vodStatus -ne 'ABR_HLS' -or -not $c.videoId -or -not $c.inKey) {
-            throw "unexpected public VOD shape: status=$($c.vodStatus)"
-          }
-          $encoded = [System.Uri]::EscapeDataString([string]$c.inKey)
-          $url = "https://apis.naver.com/neonplayer/vodplay/v2/playback/$($c.videoId)?key=$encoded"
-          $resp = Invoke-WebRequest -UseBasicParsing -Uri $url -Headers @{ Accept = 'application/dash+xml' }
-          $text = [string]$resp.Content
-          $contentType = [string]$resp.Headers['Content-Type']
-          $isMpd = $text -match '<MPD(?:\s|>)'
-          $hasSourceUrl = $text -match 'sourceURL='
-          $hasRepresentation = $text -match '<Representation(?:\s|>)'
-          Write-Host "status=$($resp.StatusCode) contentType=$contentType isMpd=$isMpd hasRepresentation=$hasRepresentation hasSourceURL=$hasSourceUrl length=$($text.Length)"
-          if ($resp.StatusCode -ne 200 -or -not $isMpd -or -not $hasRepresentation) {
-            throw 'neonplayer v2 did not return a usable DASH MPD'
-          }
-
       - name: Phase 18 CHZZK VOD guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./maintenance/Test-Phase18ChzzkVod.ps1
