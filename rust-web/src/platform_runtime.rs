@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 #[cfg(windows)]
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::{Child, Command};
 
 pub(crate) fn configure_utf8_cli(command: &mut Command) {
@@ -14,30 +15,80 @@ pub(crate) fn configure_utf8_cli(command: &mut Command) {
 }
 
 /// Terminates only the process tree rooted at a child spawned by this server.
+///
+/// Callers that do not surface termination errors must not return while a live
+/// owned tree can still exist. Keep retrying the checked primitive until the
+/// child has exited or the Windows tree kill succeeds.
 pub(crate) async fn terminate_owned(child: &mut Child) {
-    let _ = terminate_owned_checked(child).await;
+    loop {
+        match terminate_owned_checked(child).await {
+            Ok(_) => return,
+            Err(_) => {
+                if child.try_wait().ok().flatten().is_some() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
 }
 
 /// Checked form used when failure to stop an owned tree must be surfaced.
+///
+/// On Windows a transient `taskkill` launch/exit failure is retried before an
+/// error is returned. If all attempts fail while the child is still running,
+/// the `Child` is deliberately left alive and owned by the caller so it can be
+/// retained and retried rather than dropped with descendants potentially alive.
 pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<i32>> {
     #[cfg(windows)]
     if let Some(pid) = child.id() {
-        let status = Command::new("taskkill.exe")
-            .arg("/PID")
-            .arg(pid.to_string())
-            .arg("/T")
-            .arg("/F")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-        if !status?.success() && child.try_wait()?.is_none() {
-            bail!("taskkill failed for owned pid={pid}");
+        const ATTEMPTS: usize = 3;
+        let mut last_failure = String::new();
+        let mut tree_stopped = false;
+
+        for attempt in 0..ATTEMPTS {
+            match Command::new("taskkill.exe")
+                .arg("/PID")
+                .arg(pid.to_string())
+                .arg("/T")
+                .arg("/F")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+            {
+                Ok(status) if status.success() => {
+                    tree_stopped = true;
+                    break;
+                }
+                Ok(status) => {
+                    if let Some(exit) = child.try_wait()? {
+                        return Ok(exit.code());
+                    }
+                    last_failure = format!("taskkill exit={:?}", status.code());
+                }
+                Err(err) => {
+                    if let Some(exit) = child.try_wait()? {
+                        return Ok(exit.code());
+                    }
+                    last_failure = format!("taskkill launch failed: {err}");
+                }
+            }
+
+            if attempt + 1 < ATTEMPTS {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+
+        if !tree_stopped && child.try_wait()?.is_none() {
+            bail!("failed to terminate owned pid={pid} tree after {ATTEMPTS} attempts: {last_failure}");
         }
     }
+
     #[cfg(not(windows))]
     let _ = child.kill().await;
+
     Ok(child.wait().await.ok().and_then(|status| status.code()))
 }
 
