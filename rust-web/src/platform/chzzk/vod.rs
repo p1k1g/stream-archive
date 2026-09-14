@@ -1042,7 +1042,10 @@ fn claim_collision_path(dir: &Path, base: &str, extension: &str) -> Result<Desti
             .create(true)
             .open(&claim_path)
             .with_context(|| {
-                format!("CHZZK VOD destination claim 열기 실패: {}", claim_path.display())
+                format!(
+                    "CHZZK VOD destination claim 열기 실패: {}",
+                    claim_path.display()
+                )
             })?;
         match lock.try_lock_exclusive() {
             Ok(()) => {
@@ -1130,7 +1133,10 @@ fn publish_by_copy(
     let temp = destination.finalizing_path();
     if temp.is_file() {
         fs::remove_file(&temp).with_context(|| {
-            format!("CHZZK VOD stale destination 임시 파일 정리 실패: {}", temp.display())
+            format!(
+                "CHZZK VOD stale destination 임시 파일 정리 실패: {}",
+                temp.display()
+            )
         })?;
     }
     if cancel.load(Ordering::SeqCst) {
@@ -1138,15 +1144,17 @@ fn publish_by_copy(
     }
 
     let publish = (|| -> Result<bool> {
-        let mut input = File::open(source).with_context(|| {
-            format!("CHZZK VOD staging 파일 열기 실패: {}", source.display())
-        })?;
+        let mut input = File::open(source)
+            .with_context(|| format!("CHZZK VOD staging 파일 열기 실패: {}", source.display()))?;
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temp)
             .with_context(|| {
-                format!("CHZZK VOD destination 임시 파일 생성 실패: {}", temp.display())
+                format!(
+                    "CHZZK VOD destination 임시 파일 생성 실패: {}",
+                    temp.display()
+                )
             })?;
         let mut buffer = vec![0_u8; COPY_BUFFER_SIZE];
         loop {
@@ -1166,10 +1174,16 @@ fn publish_by_copy(
             })?;
         }
         output.flush().with_context(|| {
-            format!("CHZZK VOD destination 임시 파일 flush 실패: {}", temp.display())
+            format!(
+                "CHZZK VOD destination 임시 파일 flush 실패: {}",
+                temp.display()
+            )
         })?;
         output.sync_all().with_context(|| {
-            format!("CHZZK VOD destination 임시 파일 sync 실패: {}", temp.display())
+            format!(
+                "CHZZK VOD destination 임시 파일 sync 실패: {}",
+                temp.display()
+            )
         })?;
         drop(output);
 
