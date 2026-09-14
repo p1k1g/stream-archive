@@ -25,6 +25,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Probe public CHZZK VOD playback fallback
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($videoNo in @('15185683','15028162')) {
+            $detail = Invoke-RestMethod -Uri "https://api.chzzk.naver.com/service/v3/videos/$videoNo" -Method Get
+            $c = $detail.content
+            Write-Host "video=$videoNo code=$($detail.code) vodStatus=$($c.vodStatus) adult=$($c.adult) membership=$($c.membershipBenefitType) hasInKey=$([bool]$c.inKey) hasRewind=$([bool]$c.liveRewindPlaybackJson)"
+            $rewind = $c.liveRewindPlaybackJson
+            if (-not $rewind) {
+              try {
+                $auto = Invoke-RestMethod -Uri "https://api.chzzk.naver.com/service/v1/videos/$videoNo/live-rewind/auto-play-info" -Method Get
+                if ($auto.content -and $auto.content.liveRewindPlaybackJson) { $rewind = $auto.content.liveRewindPlaybackJson }
+                elseif ($auto.liveRewindPlaybackJson) { $rewind = $auto.liveRewindPlaybackJson }
+              } catch {
+                Write-Host "video=$videoNo autoPlayError=$($_.Exception.Message)"
+              }
+            }
+            if ($rewind) {
+              $p = $rewind | ConvertFrom-Json
+              foreach ($m in @($p.media)) {
+                if ($m.path) {
+                  $u = [Uri]$m.path
+                  Write-Host "video=$videoNo mediaId=$($m.mediaId) protocol=$($m.protocol) host=$($u.Host) tracks=$(@($m.encodingTrack).Count)"
+                }
+              }
+            }
+          }
+
       - name: Phase 18 CHZZK VOD guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./maintenance/Test-Phase18ChzzkVod.ps1
