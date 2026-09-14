@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-# Phase 18 contract: CHZZK API metadata + Streamlink using the shared LIVE MPEG-TS player pipeline.
+# Phase 18 final contract: CHZZK API metadata + bounded cancellation-aware lookup + Streamlink using the shared LIVE MPEG-TS player pipeline.
 $root = Split-Path $PSScriptRoot -Parent
 
 function Read-RepoFile([string]$relativePath) {
