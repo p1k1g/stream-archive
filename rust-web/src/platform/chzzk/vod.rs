@@ -460,17 +460,21 @@ async fn load_metadata(
             metadata_from_json(&value)
         }
         Err(err) => {
-            if let Ok(fallback) = load_public_playback_fallback(vod_url).await {
-                logs.push(
-                    "[VOD:CHZZK] yt-dlp metadata failed; using public CHZZK playback fallback",
-                )
-                .await;
-                return Ok(fallback.metadata);
-            }
             if is_source_url_extractor_bug(&err) {
-                return Err(err).context(
-                    "yt-dlp CHZZK DASH parser hit the known sourceURL bug and the public playback fallback was unavailable",
-                );
+                match load_public_playback_fallback(vod_url).await {
+                    Ok(fallback) => {
+                        logs.push(
+                            "[VOD:CHZZK] yt-dlp sourceURL bug detected; using public CHZZK playback fallback",
+                        )
+                        .await;
+                        return Ok(fallback.metadata);
+                    }
+                    Err(fallback_err) => {
+                        return Err(err).context(format!(
+                            "yt-dlp CHZZK DASH parser hit the known sourceURL bug and the public fallback lookup also failed: {fallback_err:#}"
+                        ));
+                    }
+                }
             }
             let state = ChzzkAuth::load()
                 .map(|auth| auth.state())
@@ -492,9 +496,7 @@ async fn load_metadata(
 
 fn is_source_url_extractor_bug(err: &anyhow::Error) -> bool {
     let text = format!("{err:#}");
-    text.contains("KeyError('sourceURL')")
-        || text.contains("KeyError(\"sourceURL\")")
-        || text.contains("KeyError('sourceURL')")
+    text.contains("KeyError('sourceURL')") || text.contains("KeyError(\"sourceURL\")")
 }
 
 async fn load_public_playback_fallback(vod_url: &str) -> Result<PublicPlaybackFallback> {
@@ -543,13 +545,9 @@ fn public_playback_from_value(value: &Value) -> Result<PublicPlaybackFallback> {
             .filter(|value| !value.trim().is_empty())
             .context("CHZZK ABR_HLS response has no public inKey")?;
         let mut url = Url::parse(&format!(
-            "https://apis.naver.com/neonplayer/vodplay/v1/playback/{media_id}"
+            "https://apis.naver.com/neonplayer/vodplay/v2/playback/{media_id}"
         ))?;
-        url.query_pairs_mut()
-            .append_pair("key", in_key)
-            .append_pair("env", "real")
-            .append_pair("lc", "en_US")
-            .append_pair("cpl", "en_US");
+        url.query_pairs_mut().append_pair("key", in_key);
         return Ok(PublicPlaybackFallback {
             metadata,
             playback_url: url.into(),
@@ -593,6 +591,25 @@ fn metadata_from_chzzk_content(content: &Value) -> Result<Metadata> {
         .get("publishDate")
         .and_then(Value::as_str)
         .and_then(short_date)
+        .or_else(|| {
+            content
+                .get("publishDateAt")
+                .and_then(|value| {
+                    value
+                        .as_i64()
+                        .or_else(|| value.as_f64().map(|number| number as i64))
+                })
+                .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
+                .map(|timestamp| {
+                    let local = timestamp.with_timezone(&Local);
+                    format!(
+                        "{:02}{:02}{:02}",
+                        local.year() % 100,
+                        local.month(),
+                        local.day()
+                    )
+                })
+        })
         .unwrap_or_else(today_short_date);
     Ok(Metadata {
         title,
@@ -799,6 +816,8 @@ async fn run_ffmpeg_fallback(
         .arg("-hide_banner")
         .arg("-nostdin")
         .arg("-y")
+        .arg("-headers")
+        .arg("Accept: application/dash+xml\r\n")
         .arg("-i")
         .arg(playback_url)
         .arg("-c")
@@ -1843,7 +1862,11 @@ mod tests {
         let fallback = public_playback_from_value(&value).unwrap();
         assert_eq!(fallback.metadata.title, "public vod");
         assert_eq!(fallback.metadata.qualities.len(), 1);
-        assert!(fallback.playback_url.contains("/playback/ABCDEF012345?"));
+        assert!(
+            fallback
+                .playback_url
+                .contains("/vodplay/v2/playback/ABCDEF012345?")
+        );
         assert!(fallback.playback_url.contains("key=abc%2Bdef%2Fghi"));
         assert!(!fallback.playback_url.contains("NID_AUT"));
         assert!(!fallback.playback_url.contains("NID_SES"));
