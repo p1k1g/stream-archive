@@ -360,9 +360,9 @@ impl RecorderManager {
             // Root exit is only a status signal. The retained Job Object still
             // owns any surviving FFmpeg/player descendant, so enforce that
             // ownership before the watcher is allowed to take/drop Recording.
-            rec.owned_tree
-                .terminate_now()
-                .with_context(|| format!("failed to clean retained recorder tree pid={}", rec.pid))?;
+            rec.owned_tree.terminate_now().with_context(|| {
+                format!("failed to clean retained recorder tree pid={}", rec.pid)
+            })?;
             return Ok(RecordingPoll::Exited(status.code()));
         }
         if rec.last_monitor.elapsed() < Duration::from_secs(config.monitor_interval.max(1)) {
