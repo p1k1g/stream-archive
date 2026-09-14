@@ -1,0 +1,61 @@
+name: Phase 18 review cancel fix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/phase18-review-cancel-fix.yml"
+      - ".github/scripts/phase18_review_cancel_fix.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase18-review-cancel-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase18-chzzk-vod
+          fetch-depth: 0
+
+      - name: Apply API timeout and cancellation fix
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          python .github/scripts/phase18_review_cancel_fix.py
+          if ($LASTEXITCODE -ne 0) { throw 'patch failed' }
+          rustfmt --edition 2024 rust-web/src/platform/chzzk/vod.rs
+          if ($LASTEXITCODE -ne 0) { throw 'rustfmt apply failed' }
+
+      - name: Validate Phase 18 and Rust
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          ./maintenance/Test-Phase18ChzzkVod.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Phase 18 guard failed' }
+          rustfmt --edition 2024 --check rust-web/src/platform/chzzk/vod.rs
+          if ($LASTEXITCODE -ne 0) { throw 'rustfmt check failed' }
+          cargo test --locked --manifest-path rust-web/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
+          cargo check --locked --manifest-path rust-web/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo check failed' }
+
+      - name: Commit review fix
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add rust-web/src/platform/chzzk/vod.rs maintenance/Test-Phase18ChzzkVod.ps1
+          if (git diff --cached --quiet) {
+            Write-Host 'Review fix already committed.'
+            exit 0
+          }
+          git commit -m 'Make CHZZK API lookup cancellable'
+          if ($LASTEXITCODE -ne 0) { throw 'commit failed' }
+          git push origin HEAD:phase18-chzzk-vod
+          if ($LASTEXITCODE -ne 0) { throw 'push failed' }
