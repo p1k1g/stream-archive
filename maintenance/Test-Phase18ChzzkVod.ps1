@@ -119,6 +119,15 @@ Assert-Match $chzzkVod 'completed_state_wins_over_late_cancellation' 'COMPLETED-
 Assert-Match $chzzkVod 'stale_finalizing_is_reclaimed_under_destination_claim' 'Stale finalizing reclamation regression test is missing.'
 Assert-Match $chzzkVod 'atomic_copy_publish_keeps_partial_data_out_of_final_name' 'Atomic publication success regression test is missing.'
 
+# CHZZK API metadata lookup must be bounded and cancellation-aware.
+Assert-Match $chzzkVod 'Client::builder\(\)' 'CHZZK video-detail API client must use an explicit builder.'
+Assert-Match $chzzkVod 'connect_timeout\(CHZZK_API_CONNECT_TIMEOUT\)' 'CHZZK video-detail API connect timeout is missing.'
+Assert-Match $chzzkVod '\.timeout\(CHZZK_API_TOTAL_TIMEOUT\)' 'CHZZK video-detail API total timeout is missing.'
+Assert-Match $chzzkVod 'tokio::select!' 'CHZZK video-detail API lookup is not cancellation-raced.'
+Assert-Match $chzzkVod 'wait_for_cancel\(cancel\)' 'CHZZK video-detail API cancellation waiter is missing.'
+Assert-Match $chzzkVod 'chzzk_api_timeouts_are_bounded' 'CHZZK API timeout regression test is missing.'
+Assert-Match $chzzkVod 'cancellation_waiter_observes_atomic_flag' 'CHZZK API cancellation regression test is missing.'
+
 # Common VOD model contract: CHZZK is one logical part and still uses queue/history status.
 Assert-Match $chzzkVod 'part_count:\s*1' 'CHZZK VOD analysis must expose one logical part.'
 Assert-Match $chzzkVod 'current\.platform = PlatformId::Chzzk' 'CHZZK VOD runtime status does not preserve platform identity.'

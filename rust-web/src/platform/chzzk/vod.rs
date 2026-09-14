@@ -45,6 +45,9 @@ const MEDIA_FILE_NAME: &str = "media.ts";
 const DESTINATION_CLAIM_SUFFIX: &str = ".soop-downloader.claim";
 const FINALIZING_SUFFIX: &str = ".soop-downloader.finalizing";
 const COPY_BUFFER_SIZE: usize = 1024 * 1024;
+const CHZZK_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CHZZK_API_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 struct ChzzkTools {
@@ -448,22 +451,27 @@ async fn load_chzzk_metadata(
     }
 
     let video_no = video_id(vod_url)?;
-    let client = Client::new();
+    let client = Client::builder()
+        .connect_timeout(CHZZK_API_CONNECT_TIMEOUT)
+        .timeout(CHZZK_API_TOTAL_TIMEOUT)
+        .build()
+        .context("CHZZK video detail client build failed")?;
     let mut request = client.get(format!(
         "https://api.chzzk.naver.com/service/v3/videos/{video_no}"
     ));
     if let Some(cookie) = auth.cookie_header() {
         request = request.header(reqwest::header::COOKIE, cookie);
     }
-    let value: Value = request
-        .send()
-        .await
-        .context("CHZZK video detail request failed")?
-        .error_for_status()
-        .context("CHZZK video detail HTTP error")?
-        .json()
-        .await
-        .context("CHZZK video detail JSON parse failed")?;
+    let response = tokio::select! {
+        result = request.send() => result.context("CHZZK video detail request failed")?,
+        _ = wait_for_cancel(cancel) => bail!("CHZZK VOD metadata request cancelled"),
+    }
+    .error_for_status()
+    .context("CHZZK video detail HTTP error")?;
+    let value: Value = tokio::select! {
+        result = response.json() => result.context("CHZZK video detail JSON parse failed")?,
+        _ = wait_for_cancel(cancel) => bail!("CHZZK VOD metadata request cancelled"),
+    };
     if value.get("code").and_then(Value::as_i64) != Some(200) {
         bail!("CHZZK video detail API returned a non-success response");
     }
@@ -490,6 +498,12 @@ async fn load_chzzk_metadata(
     ))
     .await;
     Ok(metadata)
+}
+
+async fn wait_for_cancel(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(CANCEL_POLL_INTERVAL).await;
+    }
 }
 
 async fn streamlink_quality_options(
@@ -1568,6 +1582,27 @@ fn exit_code(status: ExitStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chzzk_api_timeouts_are_bounded() {
+        assert!(CHZZK_API_CONNECT_TIMEOUT <= CHZZK_API_TOTAL_TIMEOUT);
+        assert!(CHZZK_API_TOTAL_TIMEOUT <= Duration::from_secs(30));
+        assert!(CANCEL_POLL_INTERVAL <= Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn cancellation_waiter_observes_atomic_flag() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let setter = cancel.clone();
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            setter.store(true, Ordering::SeqCst);
+        });
+        tokio::time::timeout(Duration::from_secs(1), wait_for_cancel(cancel.as_ref()))
+            .await
+            .expect("cancellation waiter timed out");
+        task.await.unwrap();
+    }
 
     #[test]
     fn recognizes_only_chzzk_video_urls() {
