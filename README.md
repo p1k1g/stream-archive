@@ -112,6 +112,12 @@ Portable package에는 외부 도구를 번들하지 않습니다. Web 설정에
 - `SOOP_BACKUP_DIR`: Web 백업 디렉터리
 - `SOOP_NO_PAUSE`: 빌드 스크립트의 대기 프롬프트 비활성화
 
+## 관리 토큰 복구
+
+`SOOP_WEB_TOKEN`을 지정하지 않으면 서버가 관리 토큰을 자동 생성합니다. 생성된 토큰은 서버 시작 시 콘솔에 출력되고 `backend/.rust-web/web-token.txt`에 저장됩니다. 브라우저 자격 증명이나 세션을 잃은 경우 이 파일의 토큰으로 다시 인증할 수 있습니다.
+
+`backend/.rust-web/web-token.txt`는 관리 권한을 주는 secret으로 취급해야 하며 공유하거나 커밋하지 마세요. `SOOP_WEB_TOKEN`을 직접 지정한 경우에는 해당 환경변수 값을 사용합니다.
+
 ## HTTPS / reverse proxy
 
 권장 구조는 Rust 서버를 `127.0.0.1:8787`에 유지하고 Caddy/Nginx에서 HTTPS를 종료하는 방식입니다.
