@@ -27,6 +27,24 @@ jobs:
         run: |
           python .github/scripts/phase18_codex_review_fix.py
           if ($LASTEXITCODE -ne 0) { throw 'patch failed' }
+          @'
+          from pathlib import Path
+          p = Path('maintenance/Test-Phase18ChzzkVod.ps1')
+          lines = p.read_text(encoding='utf-8').splitlines()
+          out = []
+          replaced = False
+          for line in lines:
+              if 'Streamlink owned tree is not terminated when downstream FFmpeg setup fails.' in line:
+                  out.append("Assert-Match $chzzkVod 'let mut ffmpeg_child = match ffmpeg_command\\.spawn\\(\\)' 'Downstream FFmpeg spawn is not handled explicitly.'")
+                  out.append("Assert-Match $chzzkVod 'terminate_owned\\(&mut streamlink_child\\)\\.await;' 'Streamlink owned tree is not explicitly terminated on downstream setup failures.'")
+                  replaced = True
+              else:
+                  out.append(line)
+          if not replaced:
+              raise RuntimeError('strict Streamlink cleanup guard line missing')
+          p.write_text('\n'.join(out) + '\n', encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'guard normalization failed' }
           rustfmt --edition 2024 rust-web/src/platform/chzzk/vod.rs
           if ($LASTEXITCODE -ne 0) { throw 'rustfmt failed' }
 
