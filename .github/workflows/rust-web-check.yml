@@ -93,7 +93,16 @@ jobs:
 
       - name: Rust unit tests
         shell: bash
-        run: cargo test --locked --manifest-path rust-web/Cargo.toml
+        run: |
+          if [[ "${{ matrix.platform }}" == "windows" ]]; then
+            # The retained Job Object test launches a real PowerShell child and
+            # descendant. Running the Windows test harness serially avoids CI
+            # scheduler/AV contention from turning its bounded startup wait into
+            # a false negative while preserving the ownership assertion itself.
+            cargo test --locked --manifest-path rust-web/Cargo.toml -- --test-threads=1
+          else
+            cargo test --locked --manifest-path rust-web/Cargo.toml
+          fi
 
       - name: Native compile check
         shell: bash
