@@ -77,11 +77,13 @@ jobs:
           $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $path))
           $out = New-Object System.Collections.Generic.List[string]
           foreach ($line in $lines) {
-            if ($line.Contains('Downstream FFmpeg spawn is not handled explicitly.')) {
+            if ($line.Contains('Downstream FFmpeg spawn is not handled explicitly.') -or
+                $line.Contains('Downstream FFmpeg must establish retained ownership before execution.')) {
               $out.Add('Assert-Match $chzzkVod ''spawn_owned\(&mut ffmpeg_command\)'' ''Downstream FFmpeg must establish retained ownership before execution.''')
               continue
             }
-            if ($line.Contains('Streamlink owned tree is not explicitly terminated on downstream setup failures.')) {
+            if ($line.Contains('Streamlink owned tree is not explicitly terminated on downstream setup failures.') -or
+                $line.Contains('Streamlink retained tree must be explicitly terminated on downstream setup failures.')) {
               $out.Add('Assert-Match $chzzkVod ''streamlink_tree\.terminate\(&mut streamlink_child\)'' ''Streamlink retained tree must be explicitly terminated on downstream setup failures.''')
               continue
             }
