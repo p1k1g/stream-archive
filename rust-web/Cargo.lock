@@ -1208,7 +1208,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "soop-web"
+name = "stream-archive-server"
 version = "0.5.2"
 dependencies = [
  "anyhow",

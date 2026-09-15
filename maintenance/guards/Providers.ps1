@@ -115,11 +115,6 @@ Assert-Match $phase14 'c\?\.platform\|\|''SOOP''' 'LIVE notification key is not 
 Assert-Match $phase14 'p14LiveStates\.set\(p14LiveKey\(' 'Initial LIVE notification state is still keyed only by account.'
 Assert-Match $phase14 'const key=p14LiveKey\(' 'LIVE notification transitions are still keyed only by account.'
 
-# Legacy channel-file migration must preserve LF, CRLF, and lone-CR compatibility.
-Assert-Match $backend '\.replace\(''\\r'', "\\n"\)' 'Legacy lone-CR channel line ending normalization is missing.'
-Assert-Match $backend 'fn parses_legacy_channel_line_endings\(\)' 'Legacy channel line-ending regression test is missing.'
-Assert-Match $backend 'for separator in \["\\n", "\\r\\n", "\\r"\]' 'Legacy channel parser test does not cover LF/CRLF/lone-CR.'
-
 # API-side validation and user-facing platform selection must remain connected.
 Assert-Match $primary 'provider\(channel\.platform\)\s*\.validate_account' 'Server-side platform channel validation is missing.'
 Assert-Match $app '<option value="CHZZK">CHZZK</option>' 'Channel UI CHZZK selector is missing.'

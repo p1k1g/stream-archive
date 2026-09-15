@@ -147,7 +147,10 @@ impl Store {
         let source = Connection::open(&legacy)
             .with_context(|| format!("failed to open legacy database {}", legacy.display()))?;
         let mut target = Connection::open(path).with_context(|| {
-            format!("failed to create Stream Archive database {}", path.display())
+            format!(
+                "failed to create Stream Archive database {}",
+                path.display()
+            )
         })?;
         {
             let backup = Backup::new(&source, &mut target)?;
