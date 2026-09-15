@@ -161,7 +161,7 @@ fn validate_writable_backup_directory(value: &str) -> Result<()> {
         .unwrap_or_default()
         .as_nanos();
     let probe = path.join(format!(
-        ".soop-recorder-write-test-{}-{nonce}",
+        ".stream-archive-write-test-{}-{nonce}",
         std::process::id()
     ));
     fs::write(&probe, b"")

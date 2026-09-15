@@ -10,7 +10,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-cargo run --release --bin soop-web --manifest-path ".\rust-web\Cargo.toml"
+cargo run --release --bin stream-archive-server --manifest-path ".\rust-web\Cargo.toml"
 set "RC=%ERRORLEVEL%"
 
 echo.

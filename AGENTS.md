@@ -1,59 +1,63 @@
 # Repository Guide
 
-이 저장소의 현재 제품 런타임은 Rust-only 입니다.
+이 저장소의 현재 제품 런타임은 Rust + SQLite 기반입니다.
 
 ## Canonical runtime
 
 - `rust-web/src/main.rs`: Axum server/API orchestration
 - `rust-web/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration
-- `rust-web/src/recorder.rs`: streamlink process ownership/lifecycle
+- `rust-web/src/recorder.rs`: Streamlink/FFmpeg process ownership/lifecycle
 - `rust-web/src/platform/live.rs`: platform-neutral LIVE provider facade/session types
-- `rust-web/src/platform/soop/live.rs`: SOOP LIVE login/discovery/password/stream resolution
-- `rust-web/src/vod.rs`: public/legacy VOD compatibility facade
 - `rust-web/src/platform/vod.rs`: platform-neutral VOD lifecycle/dispatch
-- `rust-web/src/platform/soop/vod.rs`: SOOP VOD authentication/analyze/download/merge implementation
-- `rust-web/src/security.rs`: Windows DPAPI secret protection
-- `rust-web/src/store.rs`: SQLite persistence/history
+- `rust-web/src/platform/soop/*`: SOOP provider implementation
+- `rust-web/src/platform/chzzk/*`: CHZZK provider implementation
+- `rust-web/src/security.rs`: secret protection boundary
+- `rust-web/src/store.rs`: canonical SQLite persistence/config/history
 - `rust-web/src/history_storage.rs`: history queries and storage diagnostics APIs
 - `rust-web/src/local_picker.rs`: localhost-only Windows file/folder picker bridge
-- `rust-web/src/backend.rs`: INI/TXT compatibility layer
+- `rust-web/src/backend.rs`: log buffer and backend-directory resolution
 - `rust-web/web/*`: browser UI
 
-Provider-specific network/authentication/stream mechanics live under `rust-web/src/platform/<provider>/`; common queue/history/API orchestration must depend on the platform-neutral facades rather than a provider implementation directly.
+Provider-specific network/authentication/stream mechanics live under `rust-web/src/platform/<provider>/`. Common queue/history/API orchestration must depend on the platform-neutral facades rather than a provider implementation directly.
 
-## Runtime compatibility files
+## Configuration source of truth
 
-Phase 5.2 전까지 다음 파일 형식은 유지한다.
+`data/stream-archive.db` is the canonical source of truth for settings, channels, encrypted secrets, LIVE/VOD history, queue state, and backup policy.
 
-- `backend/SOOP_LIVE_SETTING.ini`
-- `backend/SOOP_LIVE_CHANNELS.txt`
-- `backend/vod/SOOP_VOD_SETTING.ini`
+Do not reintroduce runtime INI/TXT mirrors or one-off config-file readers. Product-wide runtime environment variables use the `STREAM_ARCHIVE_*` namespace. Provider-specific credentials such as `SOOP_USERNAME`, `SOOP_PASSWORD`, `CHZZK_NID_AUT`, and `CHZZK_NID_SES` remain provider-scoped settings.
 
-저장소에는 example 파일만 추적한다. 비밀번호/API key 같은 secret은 커밋하지 않는다.
+The only retained transition bridge is the bounded `soop.db` -> `stream-archive.db` database filename migration. Do not add broader legacy compatibility layers without an explicit migration requirement.
 
 ## Process ownership rule
 
-절대로 `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, `taskkill /IM yt-dlp.exe`처럼 프로세스 이름 전체를 종료하지 않는다.
+Never terminate tools globally with image-name commands such as `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, or `taskkill /IM yt-dlp.exe`.
 
-서버가 직접 생성하고 소유한 PID/process tree만 종료한다. Windows에서는 exact owned PID tree 방식만 사용한다.
+The server may terminate only process trees it created and owns. Windows ownership/termination rules live behind `platform_runtime` and are guarded by runtime-contract tests.
 
 ## Build and test
 
 ```powershell
-.\RUN_RUST_WEB.bat
-.\BUILD_RUST_WEB.bat
-.\PACKAGE_RUST_WEB.bat
+.\RUN_DEV.bat
+.\BUILD_RELEASE.bat
+.\BUILD_PORTABLE.bat
 ```
 
 Rust checks:
 
 ```powershell
-cargo test --manifest-path rust-web/Cargo.toml
-cargo check --manifest-path rust-web/Cargo.toml
+cargo fmt --manifest-path rust-web/Cargo.toml -- --check
+cargo test --locked --manifest-path rust-web/Cargo.toml
+cargo check --locked --manifest-path rust-web/Cargo.toml
+```
+
+Runtime contracts:
+
+```powershell
+.\maintenance\Test-RuntimeContracts.ps1
 ```
 
 ## Architecture boundary
 
-WinUI/PowerShell 구현은 Phase 5.1에서 제거되었다. 새 기능이나 bug fix를 위해 legacy GUI/backend를 다시 추가하지 않는다.
+The old WinUI/PowerShell runtime and INI/TXT configuration path are retired. New functionality and bug fixes must stay in the Rust/SQLite runtime and must not restore those legacy paths merely for compatibility.
 
-INI/TXT를 제거하거나 DB-only로 전환하는 작업은 Phase 5.2 범위로 취급한다.
+Windows-specific behavior should remain isolated behind platform/runtime boundaries so Linux/macOS support can be added without provider or orchestration rewrites.

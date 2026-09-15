@@ -284,7 +284,7 @@ async function p166LoadBackupPath(){
     input.value=settings?.values?.BACKUP_DIR||'';input.placeholder=backups?.directory||'기본 백업 위치';input.dataset.resolved=backups?.directory||'';
     const editable=backups?.directory_editable!==false;
     input.disabled=!editable;document.querySelectorAll('[data-p166-backup-action]').forEach(btn=>btn.disabled=!editable);
-    if(note)note.textContent=editable?'비워두면 프로그램 폴더 바깥의 기본 soop-recorder-backups 위치를 사용합니다. 위치 변경은 즉시 다음 백업/목록 조회부터 적용되며 기존 백업 파일은 자동 이동하지 않습니다.':'SOOP_BACKUP_DIR 환경변수가 설정되어 있어 UI에서 백업 위치를 변경할 수 없습니다.';
+    if(note)note.textContent=editable?'비워두면 프로그램 폴더 바깥의 기본 stream-archive-backups 위치를 사용합니다. 위치 변경은 즉시 다음 백업/목록 조회부터 적용되며 기존 백업 파일은 자동 이동하지 않습니다.':'STREAM_ARCHIVE_BACKUP_DIR 환경변수가 설정되어 있어 UI에서 백업 위치를 변경할 수 없습니다.';
   }catch(e){if(note)note.textContent='백업 위치 조회 실패: '+e.message}
 }
 async function p166PickBackupPath(){
@@ -315,7 +315,7 @@ function p166InstallBackupPath(){
   card.querySelector('[data-p166-backup-action="pick"]').addEventListener('click',p166PickBackupPath);
   card.querySelector('[data-p166-backup-action="default"]').addEventListener('click',()=>{card.querySelector('#p166BackupDir').value=''});
   card.querySelector('[data-p166-backup-action="save"]').addEventListener('click',p166SaveBackupPath);
-  const oldHint=card.nextElementSibling;if(oldHint?.classList.contains('hint'))oldHint.textContent='백업 디렉토리는 UI에서 변경할 수 있습니다. SOOP_BACKUP_DIR 환경변수가 설정된 경우 환경변수 위치가 우선하며 UI 입력은 잠깁니다.';
+  const oldHint=card.nextElementSibling;if(oldHint?.classList.contains('hint'))oldHint.textContent='백업 디렉토리는 UI에서 변경할 수 있습니다. STREAM_ARCHIVE_BACKUP_DIR 환경변수가 설정된 경우 환경변수 위치가 우선하며 UI 입력은 잠깁니다.';
   document.querySelector('[data-settings-tab="backup"]')?.addEventListener('click',()=>setTimeout(p166LoadBackupPath,0));
   document.getElementById('p12BackupRefresh')?.addEventListener('click',()=>setTimeout(p166LoadBackupPath,0));
   p166LoadBackupPath();

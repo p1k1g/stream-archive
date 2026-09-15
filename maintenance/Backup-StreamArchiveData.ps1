@@ -1,5 +1,5 @@
 param(
-    [string]$DataDir = $env:SOOP_DATA_DIR,
+    [string]$DataDir = $env:STREAM_ARCHIVE_DATA_DIR,
     [string]$BackupDir = "",
     [int]$Keep = 10,
     [int]$RetentionDays = 30
@@ -16,11 +16,9 @@ function Resolve-DataDir {
 }
 
 function Assert-ServerStopped {
-    $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.ProcessName -in @('soop-server', 'soop-web')
-    }
+    $running = Get-Process -Name 'stream-archive-server' -ErrorAction SilentlyContinue
     if ($running) {
-        throw 'SOOP server is running. Stop it with Ctrl+C before backing up SQLite.'
+        throw 'Stream Archive server is running. Stop it with Ctrl+C before backing up SQLite.'
     }
 }
 
@@ -41,18 +39,18 @@ function Assert-SqliteFile {
 
 Assert-ServerStopped
 $dataRoot = Resolve-DataDir $DataDir
-$dbPath = Join-Path $dataRoot 'soop.db'
+$dbPath = Join-Path $dataRoot 'stream-archive.db'
 Assert-SqliteFile $dbPath
 
 if ([string]::IsNullOrWhiteSpace($BackupDir)) {
     $appRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-    $BackupDir = Join-Path (Split-Path $appRoot -Parent) 'soop-recorder-backups'
+    $BackupDir = Join-Path (Split-Path $appRoot -Parent) 'stream-archive-backups'
 }
 $backupRoot = [System.IO.Path]::GetFullPath($BackupDir)
 New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
 
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$backupPath = Join-Path $backupRoot "soop_manual_$stamp.db"
+$backupPath = Join-Path $backupRoot "stream_archive_manual_$stamp.db"
 Copy-Item -LiteralPath $dbPath -Destination $backupPath -Force
 Assert-SqliteFile $backupPath
 
@@ -60,7 +58,6 @@ $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $backupPath).Hash.ToLowerIn
 $meta = [ordered]@{
     created_at = (Get-Date).ToString('o')
     source = $dbPath
-    backup = $backupPath
     sha256 = $hash
     size_bytes = (Get-Item -LiteralPath $backupPath).Length
     kind = 'manual'
@@ -69,7 +66,7 @@ $meta = [ordered]@{
 $meta | ConvertTo-Json | Set-Content -LiteralPath "$backupPath.json" -Encoding UTF8
 
 function Get-OwnedBackupFiles {
-    Get-ChildItem -LiteralPath $backupRoot -Filter 'soop_*.db' -File | Where-Object {
+    Get-ChildItem -LiteralPath $backupRoot -Filter 'stream_archive_*.db' -File | Where-Object {
         Test-Path -LiteralPath "$($_.FullName).json" -PathType Leaf
     }
 }

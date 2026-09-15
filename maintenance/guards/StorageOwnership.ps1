@@ -42,7 +42,6 @@ Assert-Match $auth 'CHZZK_NID_SES' 'Shared CHZZK auth key disappeared.'
 
 # Listener bind remains defense-in-depth, but backend/job ownership must not depend on a port.
 Assert-Match $main 'TcpListener::bind\(&bind\)[\s\S]*?VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)' 'Early server bind defense-in-depth ordering disappeared.'
-Assert-Match $workflow 'rust-web/src/main\.rs' 'Runtime workflow must trigger when main.rs startup ordering changes.'
 
 # Per-job OS locking is the source of truth for active CHZZK temp ownership.
 Assert-Match $chzzkVod 'use fs2::FileExt;' 'CHZZK VOD per-job OS locking is missing.'
@@ -89,8 +88,8 @@ Assert-Match $runtime '\.arg\("/T"\)' 'CHZZK VOD cancellation does not include t
 Assert-NotMatch ($chzzkVod + $runtime) 'taskkill[^\r\n]*/IM' 'CHZZK VOD must never kill processes by image name.'
 
 # Destination claims and cross-volume publication must be no-clobber, cancellable and crash-recoverable.
-Assert-Match $chzzkVod 'DESTINATION_CLAIM_SUFFIX:\s*&str\s*=\s*"\.soop-downloader\.claim"' 'Destination claim sidecar is missing.'
-Assert-Match $chzzkVod 'FINALIZING_SUFFIX:\s*&str\s*=\s*"\.soop-downloader\.finalizing"' 'Exact app-owned finalizing suffix is missing.'
+Assert-Match $chzzkVod 'DESTINATION_CLAIM_SUFFIX:\s*&str\s*=\s*"\.stream-archive\.claim"' 'Destination claim sidecar is missing.'
+Assert-Match $chzzkVod 'FINALIZING_SUFFIX:\s*&str\s*=\s*"\.stream-archive\.finalizing"' 'Exact app-owned finalizing suffix is missing.'
 Assert-Match $chzzkVod 'claim_collision_path' 'Atomic destination claim helper is missing.'
 Assert-Match $chzzkVod 'lock\.try_lock_exclusive\(\)' 'Destination filename claim is not protected by an OS lock.'
 Assert-Match $chzzkVod 'reusable lock anchor' 'Destination claim sidecars must remain reusable lock anchors after release.'

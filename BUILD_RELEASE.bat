@@ -6,15 +6,15 @@ where cargo.exe >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Rust cargo.exe was not found in PATH.
   echo Install Rust from https://rustup.rs/ and reopen this terminal.
-  if /I not "%SOOP_NO_PAUSE%"=="1" pause
+  if /I not "%STREAM_ARCHIVE_NO_PAUSE%"=="1" pause
   exit /b 1
 )
 
 cargo build --locked --release --manifest-path ".\rust-web\Cargo.toml"
 if errorlevel 1 (
   echo.
-  echo [ERROR] Rust web build failed.
-  if /I not "%SOOP_NO_PAUSE%"=="1" pause
+  echo [ERROR] Stream Archive release build failed.
+  if /I not "%STREAM_ARCHIVE_NO_PAUSE%"=="1" pause
   exit /b 1
 )
 
@@ -24,8 +24,8 @@ echo  STREAM ARCHIVE BUILD COMPLETE
 echo ========================================
 echo.
 echo Output:
-echo   rust-web\target\release\soop-web.exe
-echo   rust-web\target\release\soop-launcher.exe
+echo   rust-web\target\release\stream-archive-server.exe
+echo   rust-web\target\release\stream-archive-launcher.exe
 echo.
-if /I not "%SOOP_NO_PAUSE%"=="1" pause
+if /I not "%STREAM_ARCHIVE_NO_PAUSE%"=="1" pause
 endlocal

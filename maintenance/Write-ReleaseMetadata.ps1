@@ -12,9 +12,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $metadata = $metadataJson | ConvertFrom-Json
-$package = $metadata.packages | Where-Object { $_.name -eq 'soop-web' } | Select-Object -First 1
+$package = $metadata.packages | Where-Object { $_.name -eq 'stream-archive-server' } | Select-Object -First 1
 if ($null -eq $package -or [string]::IsNullOrWhiteSpace([string]$package.version)) {
-    throw 'Unable to resolve soop-web package version from cargo metadata'
+    throw 'Unable to resolve stream-archive-server package version from cargo metadata'
 }
 
 $commit = 'unknown'
@@ -31,7 +31,7 @@ if ($parent) {
 }
 
 $lines = [string[]]@(
-    'product=SOOP Downloader',
+    'product=Stream Archive',
     ('version=' + $package.version),
     ('commit=' + $commit),
     ('built_at=' + (Get-Date).ToString('o'))

@@ -1,4 +1,4 @@
-name: Rust web portable release
+name: Stream Archive portable release
 
 on:
   workflow_dispatch:
@@ -23,39 +23,40 @@ jobs:
 
       - name: Build and assemble portable package
         shell: cmd
-        run: PACKAGE_RUST_WEB.bat
+        run: BUILD_PORTABLE.bat
 
       - name: Verify package checksum metadata
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $root = './dist/stream-archive'
           $expected = @{}
-          foreach ($line in Get-Content ./dist/soop-recorder/SHA256SUMS.txt) {
+          foreach ($line in Get-Content "$root/SHA256SUMS.txt") {
             if ($line -match '^([0-9a-fA-F]{64})\s+(.+)$') {
               $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
             }
           }
-          foreach ($name in @('soop-server.exe', 'soop-launcher.exe')) {
+          foreach ($name in @('stream-archive-server.exe', 'stream-archive-launcher.exe')) {
             if (-not $expected.ContainsKey($name)) { throw "checksum missing: $name" }
-            $actual = (Get-FileHash -Algorithm SHA256 (Join-Path './dist/soop-recorder' $name)).Hash.ToLowerInvariant()
+            $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $root $name)).Hash.ToLowerInvariant()
             if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
           }
-          if (-not (Test-Path ./dist/soop-recorder/docs/LOCAL_LAUNCHER.md -PathType Leaf)) { throw 'LOCAL_LAUNCHER.md missing' }
-          Get-Content ./dist/soop-recorder/RELEASE_INFO.txt
+          if (-not (Test-Path "$root/docs/LOCAL_LAUNCHER.md" -PathType Leaf)) { throw 'LOCAL_LAUNCHER.md missing' }
+          Get-Content "$root/RELEASE_INFO.txt"
 
       - name: Archive portable package
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: Compress-Archive -Path ./dist/soop-recorder/* -DestinationPath ./soop-recorder-windows-x64.zip -Force
+        run: Compress-Archive -Path ./dist/stream-archive/* -DestinationPath ./stream-archive-windows-x64.zip -Force
 
       - name: Write archive checksum
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          $h=(Get-FileHash -Algorithm SHA256 ./soop-recorder-windows-x64.zip).Hash.ToLowerInvariant()
-          "$h  soop-recorder-windows-x64.zip" | Set-Content ./soop-recorder-windows-x64.zip.sha256 -Encoding ascii
+          $h=(Get-FileHash -Algorithm SHA256 ./stream-archive-windows-x64.zip).Hash.ToLowerInvariant()
+          "$h  stream-archive-windows-x64.zip" | Set-Content ./stream-archive-windows-x64.zip.sha256 -Encoding ascii
 
       - uses: actions/upload-artifact@v4
         with:
-          name: soop-recorder-windows-x64
+          name: stream-archive-windows-x64
           path: |
-            ./soop-recorder-windows-x64.zip
-            ./soop-recorder-windows-x64.zip.sha256
+            ./stream-archive-windows-x64.zip
+            ./stream-archive-windows-x64.zip.sha256
           retention-days: 1

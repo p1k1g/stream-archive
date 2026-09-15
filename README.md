@@ -4,8 +4,6 @@
 
 Rust + Axum + SQLite 기반으로 동작하며, 현재는 Windows portable 환경을 중심으로 지원합니다. LIVE/VOD 수명주기, Queue, 설정, History, 백업/복구를 Rust 런타임에서 관리하고 Streamlink · yt-dlp · FFmpeg를 미디어 처리 도구로 사용합니다.
 
-> 일부 실행 파일·폴더·환경 변수에는 기존 `SOOP` 명칭이 남아 있습니다. 현재 단계에서는 호환성을 위해 내부 식별자는 유지하고, 제품 표시 이름은 **Stream Archive**로 사용합니다.
-
 ## 주요 기능
 
 ### SOOP
@@ -19,7 +17,7 @@ Rust + Axum + SQLite 기반으로 동작하며, 현재는 Windows portable 환�
 
 - LIVE 자동 녹화
 - VOD 분석 및 다운로드
-- NID_AUT / NID_SES 기반 인증 정보 지원
+- `NID_AUT` / `NID_SES` 기반 인증 정보 지원
 - 공개/인증 필요 콘텐츠 처리
 
 ### 공통
@@ -63,12 +61,12 @@ Portable package에는 외부 미디어 도구가 포함되지 않습니다. Web
 
 ### 2. 실행
 
-Portable package에서는 `RUN.bat` 또는 `soop-launcher.exe`를 실행합니다.
+Portable package에서는 `RUN.bat` 또는 `stream-archive-launcher.exe`를 실행합니다.
 
 ```text
-RUN.bat / soop-launcher.exe
+RUN.bat / stream-archive-launcher.exe
         ↓
-soop-server.exe
+stream-archive-server.exe
         ↓
 http://127.0.0.1:8787/
 ```
@@ -78,7 +76,7 @@ http://127.0.0.1:8787/
 개발 환경에서 직접 실행하려면 저장소 루트에서 다음을 사용합니다.
 
 ```powershell
-.\RUN_RUST_WEB.bat
+.\RUN_DEV.bat
 ```
 
 ### 3. 종료
@@ -112,8 +110,8 @@ Browser
   │
   ▼
 Rust / Axum Web
-  ├─ SQLite: data/soop.db
-  │    └─ settings / channels / history source of truth
+  ├─ SQLite: data/stream-archive.db
+  │    └─ settings / channels / queue / history source of truth
   │
   ├─ NativeWatcherManager
   │    └─ provider LIVE facade
@@ -127,27 +125,21 @@ Rust / Axum Web
             └─ API / streamlink / ffmpeg
 ```
 
-현재 제품 런타임은 Rust/SQLite 중심입니다. 기존 WinUI 3 및 PowerShell 기반 LIVE/VOD 구현은 저장소에서 제거되었습니다.
+현재 제품 런타임은 Rust/SQLite 중심입니다. 이전 WinUI/PowerShell 런타임과 INI/TXT 설정 mirror는 저장소에서 제거했습니다.
 
 ## 데이터와 보안
 
 기본 SQLite 위치는 다음과 같습니다.
 
 ```text
-data/soop.db
+data/stream-archive.db
 ```
 
-`data/soop.db`가 설정, 채널, History의 canonical source of truth입니다.
+`data/stream-archive.db`가 설정, 채널, Queue, History와 backup policy의 canonical source of truth입니다.
 
-`SOOP_DATA_DIR` 환경변수로 데이터 디렉터리를 변경할 수 있습니다.
+`STREAM_ARCHIVE_DATA_DIR` 환경변수로 데이터 디렉터리를 변경할 수 있습니다.
 
-다음 legacy 파일은 마이그레이션 호환을 위해 SQLite에서 생성되는 mirror이며 수동 편집 내용은 authoritative하지 않습니다.
-
-```text
-backend/SOOP_LIVE_SETTING.ini
-backend/SOOP_LIVE_CHANNELS.txt
-backend/vod/SOOP_VOD_SETTING.ini
-```
+이전 개발 버전의 `data/soop.db`만 존재하고 `stream-archive.db`가 없는 경우에는 시작 시 새 파일명으로 한 번 이전합니다. INI/TXT 설정 파일을 런타임 원본이나 mirror로 사용하지 않습니다.
 
 Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_SES` 같은 민감 정보가 CurrentUser DPAPI로 암호화된 형태로 SQLite에 저장됩니다. Web API는 평문 secret을 반환하지 않습니다.
 
@@ -159,12 +151,12 @@ Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_S
 
 ## 관리 토큰
 
-`SOOP_WEB_TOKEN`을 지정하지 않으면 서버가 관리 토큰을 자동 생성합니다.
+`STREAM_ARCHIVE_TOKEN`을 지정하지 않으면 서버가 관리 토큰을 자동 생성합니다.
 
 생성된 토큰은 서버 시작 시 콘솔에 출력되고 다음 위치에 저장됩니다.
 
 ```text
-backend/.rust-web/web-token.txt
+backend/.stream-archive/web-token.txt
 ```
 
 브라우저 자격 증명이나 세션을 잃은 경우 이 토큰으로 다시 인증할 수 있습니다.
@@ -176,16 +168,16 @@ backend/.rust-web/web-token.txt
 ### 개발 / 로컬 실행
 
 ```powershell
-.\RUN_RUST_WEB.bat
+.\RUN_DEV.bat
 ```
 
 ### Release build
 
 ```powershell
-.\BUILD_RUST_WEB.bat
+.\BUILD_RELEASE.bat
 ```
 
-Release build는 tracked `Cargo.lock`을 사용하여 다음과 같은 locked dependency 정책으로 빌드됩니다.
+Release build는 tracked `Cargo.lock`을 사용하여 locked dependency 정책으로 빌드합니다.
 
 ```text
 cargo build --locked --release
@@ -194,51 +186,48 @@ cargo build --locked --release
 ### Portable package
 
 ```powershell
-.\PACKAGE_RUST_WEB.bat
+.\BUILD_PORTABLE.bat
 ```
 
 기본 출력 위치:
 
 ```text
-dist\soop-recorder
+dist\stream-archive
 ```
 
 주요 패키지 구성:
 
 ```text
-soop-server.exe
-soop-launcher.exe
+stream-archive-server.exe
+stream-archive-launcher.exe
 RUN.bat
 RUN_SERVER_CONSOLE.bat
 BACKUP_DATA.bat
 RESTORE_DATA.bat
 RELEASE_INFO.txt
 SHA256SUMS.txt
-backend\...
-maintenance\Backup-SoopData.ps1
-maintenance\Restore-SoopData.ps1
+maintenance\Backup-StreamArchiveData.ps1
+maintenance\Restore-StreamArchiveData.ps1
 docs\...
 data\
 ```
 
-현재 내부 바이너리/폴더 이름의 `soop-*` 명칭은 호환성을 위해 유지합니다.
-
 ## 백업 / 복구
 
-SQLite primary 전환 이후 핵심 백업 대상은 `data/soop.db`입니다.
+SQLite primary 전환 이후 핵심 백업 대상은 `data/stream-archive.db`입니다.
 
-일관된 오프라인 백업을 위해 서버를 `Ctrl+C`로 종료한 뒤 실행하는 것을 권장합니다.
+Web UI의 설정 → 백업에서 온라인 백업을 관리할 수 있습니다. 기본 관리형 백업 위치는 portable 디렉터리의 형제 폴더인 `stream-archive-backups`이며, `STREAM_ARCHIVE_BACKUP_DIR`로 위치를 고정할 수 있습니다.
+
+오프라인 수동 백업은 서버를 `Ctrl+C`로 종료한 뒤 portable package의 다음 스크립트를 사용할 수 있습니다.
 
 ```powershell
 .\BACKUP_DATA.bat
 ```
 
-기본적으로 `data\backups` 아래에 timestamp가 포함된 DB와 SHA-256 metadata를 생성하고 최신 10개를 유지합니다.
-
 복구:
 
 ```powershell
-.\RESTORE_DATA.bat -BackupFile .\data\backups\soop_YYYYMMDD_HHMMSS.db
+.\RESTORE_DATA.bat -BackupFile ..\stream-archive-backups\stream_archive_manual_YYYYMMDD_HHMMSS.db
 ```
 
 복구 스크립트는 서버 실행 중에는 동작하지 않으며, 기존 DB의 `pre_restore_*.db` 안전 복사본을 만든 뒤 교체합니다.
@@ -249,12 +238,15 @@ SQLite primary 전환 이후 핵심 백업 대상은 `data/soop.db`입니다.
 
 | 환경 변수 | 설명 |
 |---|---|
-| `SOOP_WEB_BIND` | 수신 주소. 기본값 `127.0.0.1:8787` |
-| `SOOP_WEB_TOKEN` | 선택적 고정 관리 토큰 |
-| `SOOP_START_WATCHER` | 서버 시작 후 watcher 자동 시작 여부 |
-| `SOOP_DATA_DIR` | SQLite 데이터 디렉터리 |
-| `SOOP_BACKUP_DIR` | Web 백업 디렉터리 |
-| `SOOP_NO_PAUSE` | 빌드 스크립트 대기 프롬프트 비활성화 |
+| `STREAM_ARCHIVE_BIND` | 수신 주소. 기본값 `127.0.0.1:8787` |
+| `STREAM_ARCHIVE_TOKEN` | 선택적 고정 관리 토큰 |
+| `STREAM_ARCHIVE_START_WATCHER` | 서버 시작 후 watcher 자동 시작 여부 |
+| `STREAM_ARCHIVE_BACKEND_DIR` | backend 디렉터리 override |
+| `STREAM_ARCHIVE_DATA_DIR` | SQLite 데이터 디렉터리 |
+| `STREAM_ARCHIVE_BACKUP_DIR` | Web 백업 디렉터리 override |
+| `STREAM_ARCHIVE_NO_PAUSE` | Windows build script의 대기 프롬프트 비활성화 |
+
+SOOP/CHZZK 계정 정보처럼 특정 provider에 속하는 설정 키는 provider namespace를 유지합니다.
 
 ## HTTPS / 원격 접근
 
@@ -310,6 +302,13 @@ Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow
 - SQLite source-of-truth 정리
 - OS-specific runtime boundary 통합
 - Runtime contract / CI consolidation
+
+### Phase 19.5 🚧 Namespace / Legacy Cleanup
+
+- 제품 namespace를 `Stream Archive`로 통일
+- app-wide 환경변수와 runtime 파일명을 `STREAM_ARCHIVE_*` / `stream-archive-*`로 정리
+- INI/TXT compatibility path와 dead code 제거
+- portable/build/release 이름 정리
 
 ### Phase 20 🚧 Cross-platform Readiness
 

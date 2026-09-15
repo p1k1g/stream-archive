@@ -21,14 +21,12 @@ use windows_sys::Win32::UI::{
 
 #[cfg(windows)]
 const APP_MARKER: &str = "<title>Stream Archive</title>";
-#[cfg(windows)]
-const LEGACY_MARKER: &str = "SOOP Recorder";
 
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Probe {
     Closed,
-    Soop,
+    StreamArchive,
     Other,
 }
 
@@ -43,7 +41,7 @@ fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
 
 #[cfg(windows)]
 fn local_endpoint() -> (SocketAddr, String) {
-    let bind = env::var("SOOP_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    let bind = env::var("STREAM_ARCHIVE_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let port = bind
         .rsplit_once(':')
         .and_then(|(_, value)| value.parse::<u16>().ok())
@@ -69,11 +67,8 @@ fn probe(addr: SocketAddr) -> Probe {
     }
     let mut response = String::new();
     let _ = stream.take(32 * 1024).read_to_string(&mut response);
-    if response.contains(APP_MARKER)
-        || response.contains("Stream Archive")
-        || response.contains(LEGACY_MARKER)
-    {
-        Probe::Soop
+    if response.contains(APP_MARKER) || response.contains("Stream Archive") {
+        Probe::StreamArchive
     } else {
         Probe::Other
     }
@@ -134,7 +129,7 @@ fn executable_dir() -> Result<PathBuf, String> {
 fn run() -> Result<(), String> {
     let (addr, url) = local_endpoint();
     match probe(addr) {
-        Probe::Soop => {
+        Probe::StreamArchive => {
             shell_open(OsStr::new(&url), None)?;
             return Ok(());
         }
@@ -148,10 +143,10 @@ fn run() -> Result<(), String> {
     }
 
     let dir = executable_dir()?;
-    let server = dir.join("soop-server.exe");
+    let server = dir.join("stream-archive-server.exe");
     if !server.is_file() {
         return Err(format!(
-            "soop-server.exe를 찾지 못했습니다.\n{}",
+            "stream-archive-server.exe를 찾지 못했습니다.\n{}",
             server.display()
         ));
     }
@@ -162,7 +157,7 @@ fn run() -> Result<(), String> {
 
     for _ in 0..150 {
         thread::sleep(Duration::from_millis(100));
-        if probe(addr) == Probe::Soop {
+        if probe(addr) == Probe::StreamArchive {
             shell_open(OsStr::new(&url), None)?;
             return Ok(());
         }
@@ -182,7 +177,7 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("soop-launcher is only supported on Windows.");
+    eprintln!("stream-archive-launcher is only supported on Windows.");
 }
 
 #[cfg(all(test, windows))]
@@ -191,7 +186,7 @@ mod tests {
 
     #[test]
     fn endpoint_defaults_to_loopback() {
-        unsafe { env::remove_var("SOOP_WEB_BIND") };
+        unsafe { env::remove_var("STREAM_ARCHIVE_BIND") };
         let (addr, url) = local_endpoint();
         assert_eq!(addr.to_string(), "127.0.0.1:8787");
         assert_eq!(url, "http://127.0.0.1:8787/");

@@ -1,89 +1,114 @@
-# SOOP Downloader Operations
+# Stream Archive Operations
 
-Phase 6 operational guidance for the Rust/SQLite runtime.
+Operational guidance for the current Rust/SQLite runtime.
 
 ## Source of truth
 
-The primary database is `data/soop.db` unless `SOOP_DATA_DIR` is set. Settings, channels, encrypted secrets, LIVE history, and VOD history are stored there.
+The primary database is `data/stream-archive.db` unless `STREAM_ARCHIVE_DATA_DIR` is set. Settings, channels, encrypted secrets, VOD queue state, LIVE history, VOD history, and backup policy are stored there.
 
-The files under `backend/` are compatibility mirrors generated from SQLite. Do not use them as the primary backup after the Phase 5.2 cutover.
+Runtime INI/TXT mirrors are retired. Do not create or edit `SOOP_LIVE_SETTING.ini`, `SOOP_LIVE_CHANNELS.txt`, or `SOOP_VOD_SETTING.ini` as application configuration.
 
-## Backup
+For users upgrading from an earlier private build, startup performs only a bounded database filename migration: if `stream-archive.db` does not exist but `soop.db` does, the database is copied into the new canonical filename and the old database file is removed after the SQLite backup completes successfully.
 
-For a consistent portable backup, stop the SOOP server first with `Ctrl+C`. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
+## Online backup
+
+The Web UI under Settings -> Backup uses SQLite's online backup API and can create managed backups while the server is running.
+
+Defaults:
+
+- backup enabled;
+- every 24 hours;
+- keep at most 10 managed backups;
+- remove managed backups older than 3 days;
+- default directory is the sibling `stream-archive-backups` folder outside the replaceable portable package directory.
+
+Set `STREAM_ARCHIVE_BACKUP_DIR` to force a specific backup directory. When the environment override is present the directory field in the Web UI is read-only, while retention settings remain editable.
+
+Managed backup names use the `stream_archive_*.db` prefix and include companion `.db.json` metadata. Files without valid metadata are not automatically pruned.
+
+## Offline manual backup
+
+For an offline maintenance backup, stop `stream-archive-server.exe` cleanly with `Ctrl+C` first. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
 
 From the repository root or portable package root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-SoopData.ps1
+powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1
 ```
 
 The script:
 
-- refuses to run while `soop-server` or `soop-web` is active;
+- refuses to run while `stream-archive-server` is active;
 - validates the SQLite header;
-- writes a timestamped `.db` backup under `data/backups` by default;
-- writes a companion JSON file with size and SHA-256;
-- keeps the newest 10 backups by default.
+- backs up `stream-archive.db`;
+- writes a timestamped `stream_archive_manual_*.db` file;
+- writes companion JSON metadata with size and SHA-256;
+- uses the sibling `stream-archive-backups` directory by default;
+- keeps the newest 10 managed backups by default.
 
 Custom retention:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-SoopData.ps1 -Keep 30
+powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1 -Keep 30 -RetentionDays 30
 ```
 
 Custom data directory:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-SoopData.ps1 -DataDir D:\SOOP_DATA
+powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1 -DataDir D:\StreamArchiveData
 ```
 
 ## Restore
 
-Stop the server before restore. Restore replaces the authoritative SQLite database, so it should never run concurrently with the server.
+Restore is destructive to the active authoritative database and therefore requires the watcher, active VOD work, and VOD queue to be stopped. The Web restore path enforces these runtime conditions and creates a `pre_restore` safety backup first.
+
+Offline restore:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\maintenance\Restore-SoopData.ps1 -BackupFile .\data\backups\soop_YYYYMMDD_HHMMSS.db
+powershell -ExecutionPolicy Bypass -File .\maintenance\Restore-StreamArchiveData.ps1 -BackupFile ..\stream-archive-backups\stream_archive_manual_YYYYMMDD_HHMMSS.db
 ```
 
 The restore script:
 
-- refuses to run while the SOOP server is active;
+- refuses to run while `stream-archive-server` is active;
 - validates the SQLite header;
-- verifies SHA-256 when the companion JSON exists;
-- makes a `pre_restore_*.db` safety copy of the current database;
+- verifies SHA-256 when companion metadata exists;
+- creates a `pre_restore_*.db` safety copy of the current database;
 - removes stale `-wal` and `-shm` sidecars;
-- copies through a temporary file before replacing `soop.db`.
+- copies through a temporary file before replacing `stream-archive.db`.
 
-After restore, launch the server and verify settings, channel list, LIVE history, and VOD history before resuming unattended operation.
+After restore, launch the server and verify settings, channels, LIVE history, VOD history, and queue state before resuming unattended operation.
 
-## Backup retention
-
-`Backup-SoopData.ps1 -Keep N` controls local database-backup retention. `0` disables pruning. This is separate from LIVE/VOD history retention inside SQLite.
+The Web restore path also reinitializes authentication and invalidates all browser sessions so restoring an older database cannot resurrect an old session.
 
 ## Upgrade procedure
 
 1. Stop the running server with `Ctrl+C`.
-2. Run a database backup.
+2. Create a database backup.
 3. Keep the previous portable package until the new version has been exercised.
-4. Replace the executable/package files, but keep the existing `data` directory.
+4. Replace executable/package files while preserving the existing `data` directory.
 5. Start the new server and verify `/api/status`, settings, channels, history, LIVE start/stop, and VOD analyze/download.
 6. Roll back by stopping the new server, restoring the previous package, and restoring the pre-upgrade database backup if necessary.
 
+## Portable package replacement
+
+`BUILD_PORTABLE.bat` writes to `dist\stream-archive`. For local rebuilds it preserves the existing package's `data` directory and `backend\.stream-archive` management-token directory before replacing package files, then restores them into the rebuilt package. GitHub Actions builds use a clean package instead.
+
+Do not copy old INI/TXT configuration files into a new package. SQLite is the only runtime configuration source.
+
+## Runtime environment overrides
+
+- `STREAM_ARCHIVE_BIND`: Axum listener, default `127.0.0.1:8787`.
+- `STREAM_ARCHIVE_TOKEN`: optional fixed recovery/management token.
+- `STREAM_ARCHIVE_START_WATCHER`: watcher auto-start flag.
+- `STREAM_ARCHIVE_BACKEND_DIR`: explicit backend directory.
+- `STREAM_ARCHIVE_DATA_DIR`: explicit SQLite data directory.
+- `STREAM_ARCHIVE_BACKUP_DIR`: explicit managed backup directory.
+
+Provider-specific account settings such as `SOOP_USERNAME`, `SOOP_PASSWORD`, `CHZZK_NID_AUT`, and `CHZZK_NID_SES` remain provider-scoped settings stored in SQLite.
+
 ## Incident notes
 
-The process-lifecycle invariant remains unchanged: the application may terminate only child-process trees it owns. Never use broad `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, or similar commands as operational cleanup.
+The process-lifecycle invariant is strict: the application may terminate only child-process trees it created and owns. Never use broad `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, `taskkill /IM yt-dlp.exe`, or equivalent process-name cleanup.
 
-
-## Phase 12 backup / retention
-
-- Web UI: Settings -> Backup.
-- Default backup directory: sibling `soop-recorder-backups` next to the portable application folder, not inside `data`.
-- Override with `SOOP_BACKUP_DIR`.
-- Automatic defaults: enabled, every 24 hours, keep 10 managed backups, remove managed backups older than 3 days.
-- Backup enabled/interval/keep-count/retention are editable from the Backup UI; existing persisted values are preserved during upgrades.
-- Metadata-less legacy backups are excluded from automatic retention cleanup for safety.
-- SQLite backups use the online backup API and may be created while LIVE recording is active.
-- Restore requires Watcher and VOD to be stopped. A `pre_restore` safety backup is created first.
-- Restore invalidates all browser sessions so an old database cannot resurrect a previously valid session.
-- `BACKUP_DATA.bat` remains available for offline/manual maintenance and uses the same external backup location.
+If a package rebuild or restore fails because a file is locked, stop Stream Archive cleanly and retry rather than terminating unrelated media-tool processes.

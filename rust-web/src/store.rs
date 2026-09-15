@@ -1,18 +1,14 @@
 use crate::{
-    backend::{
-        HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS, channels_path, read_channels, read_safe_settings,
-        settings_path,
-    },
+    backend::{HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS},
     model::{Channel, LiveHistoryItem, VodJobStatus},
     primary_config::VOD_TOOL_KEYS,
     support::platform::PlatformId,
-    vod_tool_settings,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, backup::Backup, params};
+use rusqlite::{Connection, OpenFlags, backup::Backup, params};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock},
@@ -20,12 +16,10 @@ use std::{
 
 static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
 
-const SCHEMA_SQL: &str = r#"
-CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
+const DATABASE_FILE: &str = "stream-archive.db";
+const LEGACY_DATABASE_FILE: &str = "soop.db";
 
+const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -110,13 +104,6 @@ pub struct Store {
     channels_cache: Arc<RwLock<Vec<Channel>>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct MigrationSummary {
-    pub settings: usize,
-    pub channels: usize,
-    pub imported: bool,
-}
-
 pub fn init_global(store: Store) -> Result<()> {
     GLOBAL_STORE
         .set(store)
@@ -132,16 +119,56 @@ pub fn global() -> Result<Store> {
 
 impl Store {
     pub fn default_path(backend_dir: &Path) -> PathBuf {
-        if let Ok(value) = env::var("SOOP_DATA_DIR") {
+        if let Ok(value) = env::var("STREAM_ARCHIVE_DATA_DIR") {
             if !value.trim().is_empty() {
-                return PathBuf::from(value).join("soop.db");
+                return PathBuf::from(value).join(DATABASE_FILE);
             }
         }
         backend_dir
             .parent()
             .unwrap_or(backend_dir)
             .join("data")
-            .join("soop.db")
+            .join(DATABASE_FILE)
+    }
+
+    pub fn migrate_legacy_database(path: &Path) -> Result<bool> {
+        if path.is_file() {
+            return Ok(false);
+        }
+        let Some(parent) = path.parent() else {
+            return Ok(false);
+        };
+        let legacy = parent.join(LEGACY_DATABASE_FILE);
+        if !legacy.is_file() {
+            return Ok(false);
+        }
+
+        fs::create_dir_all(parent)?;
+        let source = Connection::open(&legacy)
+            .with_context(|| format!("failed to open legacy database {}", legacy.display()))?;
+        let mut target = Connection::open(path).with_context(|| {
+            format!(
+                "failed to create Stream Archive database {}",
+                path.display()
+            )
+        })?;
+        {
+            let backup = Backup::new(&source, &mut target)?;
+            backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
+        }
+        target.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        drop(target);
+        drop(source);
+
+        fs::remove_file(&legacy)
+            .with_context(|| format!("failed to remove legacy database {}", legacy.display()))?;
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = sidecar_path(&legacy, suffix);
+            if sidecar.exists() {
+                let _ = fs::remove_file(sidecar);
+            }
+        }
+        Ok(true)
     }
 
     pub fn open(path: PathBuf) -> Result<Self> {
@@ -167,12 +194,67 @@ impl Store {
             settings_cache: Arc::new(RwLock::new(settings_cache)),
             channels_cache: Arc::new(RwLock::new(channels_cache)),
         };
+        store.ensure_runtime_defaults()?;
         store.recover_interrupted()?;
         Ok(store)
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn ensure_runtime_defaults(&self) -> Result<()> {
+        let defaults = [
+            ("CHECK_INTERVAL", "30"),
+            ("CHANNEL_RELOAD_INTERVAL", "2"),
+            ("RECORD_RETRY_INTERVAL", "5"),
+            ("RECORD_STALL_TIMEOUT", "90"),
+            ("RECORD_MONITOR_INTERVAL", "5"),
+            ("WORKER_MAX_RETRY", "3"),
+            ("CONSOLE_REFRESH_INTERVAL", "5"),
+            ("CONSOLE_AUTO_FORMAT", "Y"),
+            ("CHANNEL_NAME_WIDTH", "AUTO"),
+            ("CONSOLE_COLOR", "Y"),
+            ("CONSOLE_SHOW_PATH", "N"),
+            ("GUI_NOTIFY_RECORD_START", "N"),
+            ("GUI_NOTIFY_RECORD_FINISH", "Y"),
+            ("GUI_NOTIFY_WARNING", "Y"),
+            ("MIN_FREE_SPACE_GB", "20"),
+            ("OUTPUT_DIR", ""),
+            ("QUALITY", "best"),
+            ("FILE_NAME_PATTERN", "LEGACY"),
+            ("STREAMLINK_PATH", "AUTO"),
+            ("STREAMLINK_FALLBACK", "AUTO"),
+            ("SOOP_USERNAME", ""),
+            ("CLOUDFLARE_WORKER_URL", ""),
+            ("MASTER_QUALITY", "auto"),
+            ("LOG_ENABLED", "Y"),
+            ("LOG_DIR", ".\\logs"),
+            ("LOG_RETENTION_DAYS", "30"),
+            ("BACKUP_ENABLED", "Y"),
+            ("BACKUP_INTERVAL_HOURS", "24"),
+            ("BACKUP_KEEP_COUNT", "10"),
+            ("BACKUP_RETENTION_DAYS", "3"),
+            ("BACKUP_DIR", ""),
+            ("YT_DLP_PATH", ""),
+            ("FFMPEG_PATH", ""),
+        ];
+        let mut missing = BTreeMap::new();
+        {
+            let cache = self
+                .settings_cache
+                .read()
+                .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+            for (key, value) in defaults {
+                if !cache.contains_key(key) {
+                    missing.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+        if !missing.is_empty() {
+            self.sync_settings(&missing, "runtime-default")?;
+        }
+        Ok(())
     }
 
     pub fn backup_to(&self, destination: &Path) -> Result<()> {
@@ -207,13 +289,13 @@ impl Store {
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
         target.execute_batch("PRAGMA foreign_keys=ON;")?;
-        // A valid older backup may predate newer tables/columns. Restore first,
-        // then upgrade it to the current multi-platform schema before cache refresh.
         target.execute_batch(SCHEMA_SQL)?;
         ensure_multiplatform_schema(&mut target)?;
         target.execute_batch(SCHEMA_SQL)?;
         target.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         self.refresh_config_cache_from_conn(&target)?;
+        drop(target);
+        self.ensure_runtime_defaults()?;
         Ok(())
     }
 
@@ -225,6 +307,7 @@ impl Store {
         conn.execute_batch(SCHEMA_SQL)?;
         self.refresh_config_cache_from_conn(&conn)?;
         drop(conn);
+        self.ensure_runtime_defaults()?;
         self.recover_interrupted()?;
         Ok(())
     }
@@ -265,35 +348,6 @@ impl Store {
             params![now],
         )?;
         Ok(())
-    }
-
-    pub fn bootstrap_primary_once(&self, backend_dir: &Path) -> Result<MigrationSummary> {
-        if self.meta_value("sqlite_primary_bootstrap")?.as_deref() == Some("1") {
-            return Ok(MigrationSummary {
-                settings: self.settings_count()?,
-                channels: self.channels()?.len(),
-                imported: false,
-            });
-        }
-
-        let mut live_settings = read_safe_settings(&settings_path(backend_dir))?;
-        for (key, value) in read_hidden_settings(&settings_path(backend_dir))? {
-            live_settings.insert(key, value);
-        }
-        let channels = read_channels(&channels_path(backend_dir))?;
-        let vod_settings = vod_tool_settings::read(backend_dir)?;
-
-        self.sync_settings(&live_settings, "legacy-import-live")?;
-        self.sync_settings(&vod_settings, "legacy-import-vod")?;
-        self.sync_channels(&channels)?;
-        self.set_meta("sqlite_primary_bootstrap", "1")?;
-        self.set_meta("sqlite_primary_bootstrap_at", &Utc::now().to_rfc3339())?;
-
-        Ok(MigrationSummary {
-            settings: live_settings.len() + vod_settings.len(),
-            channels: channels.len(),
-            imported: true,
-        })
     }
 
     pub fn safe_settings(&self) -> Result<BTreeMap<String, String>> {
@@ -393,32 +447,6 @@ impl Store {
         Ok(())
     }
 
-    fn meta_value(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn()?;
-        conn.query_row("SELECT value FROM meta WHERE key=?1", params![key], |row| {
-            row.get(0)
-        })
-        .optional()
-        .map_err(Into::into)
-    }
-
-    fn set_meta(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![key, value],
-        )?;
-        Ok(())
-    }
-
-    fn settings_count(&self) -> Result<usize> {
-        Ok(self
-            .settings_cache
-            .read()
-            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?
-            .len())
-    }
-
     pub fn start_live(&self, item: &LiveHistoryItem) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -515,6 +543,12 @@ impl Store {
             .get(key)
             .cloned())
     }
+}
+
+fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
 }
 
 fn ensure_multiplatform_schema(conn: &mut Connection) -> Result<()> {
@@ -645,27 +679,6 @@ fn load_channels_from_conn(conn: &Connection) -> Result<Vec<Channel>> {
         .collect()
 }
 
-fn read_hidden_settings(path: &Path) -> Result<BTreeMap<String, String>> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let hidden: HashSet<&str> = HIDDEN_SETTING_KEYS.iter().copied().collect();
-    let mut values = BTreeMap::new();
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        if hidden.contains(key) {
-            values.insert(key.to_string(), value.trim().to_string());
-        }
-    }
-    Ok(values)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,7 +714,7 @@ mod tests {
     #[test]
     fn runtime_config_cache_tracks_committed_writes() {
         let dir = tempdir().unwrap();
-        let store = Store::open(dir.path().join("soop.db")).unwrap();
+        let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();
         store
             .sync_settings(
                 &BTreeMap::from([("OUTPUT_DIR".into(), "C:\\cached-live".into())]),
@@ -725,7 +738,7 @@ mod tests {
     #[test]
     fn channel_cache_preserves_database_sort_order_after_write() {
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("soop.db");
+        let db_path = dir.path().join(DATABASE_FILE);
         let store = Store::open(db_path.clone()).unwrap();
         store
             .sync_channels(&[
@@ -751,6 +764,31 @@ mod tests {
             .map(|channel| channel.account)
             .collect::<Vec<_>>();
         assert_eq!(after_restart, immediate);
+    }
+
+    #[test]
+    fn legacy_database_filename_is_migrated_once() {
+        let dir = tempdir().unwrap();
+        let legacy = dir.path().join(LEGACY_DATABASE_FILE);
+        let legacy_store = Store::open(legacy.clone()).unwrap();
+        legacy_store
+            .sync_settings(
+                &BTreeMap::from([("OUTPUT_DIR".into(), "C:\\legacy-live".into())]),
+                "test",
+            )
+            .unwrap();
+        drop(legacy_store);
+
+        let current = dir.path().join(DATABASE_FILE);
+        assert!(Store::migrate_legacy_database(&current).unwrap());
+        let migrated = Store::open(current.clone()).unwrap();
+        assert_eq!(
+            migrated.setting_value("OUTPUT_DIR").unwrap().as_deref(),
+            Some("C:\\legacy-live")
+        );
+        assert!(current.is_file());
+        assert!(!legacy.is_file());
+        assert!(!Store::migrate_legacy_database(&current).unwrap());
     }
 
     #[test]
@@ -799,7 +837,7 @@ mod tests {
     #[test]
     fn unchanged_vod_history_upsert_does_not_touch_updated_at() {
         let dir = tempdir().unwrap();
-        let store = Store::open(dir.path().join("soop.db")).unwrap();
+        let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();
         let status = completed_vod_status("완료");
         store.upsert_vod(&status).unwrap();
         {

@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$BackupFile,
-    [string]$DataDir = $env:SOOP_DATA_DIR
+    [string]$DataDir = $env:STREAM_ARCHIVE_DATA_DIR
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,11 +15,9 @@ function Resolve-DataDir {
 }
 
 function Assert-ServerStopped {
-    $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.ProcessName -in @('soop-server', 'soop-web')
-    }
+    $running = Get-Process -Name 'stream-archive-server' -ErrorAction SilentlyContinue
     if ($running) {
-        throw 'SOOP server is running. Stop it with Ctrl+C before restoring SQLite.'
+        throw 'Stream Archive server is running. Stop it with Ctrl+C before restoring SQLite.'
     }
 }
 
@@ -55,14 +53,14 @@ if (Test-Path -LiteralPath $metadataPath) {
 
 $dataRoot = Resolve-DataDir $DataDir
 New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
-$target = Join-Path $dataRoot 'soop.db'
+$target = Join-Path $dataRoot 'stream-archive.db'
 
 if (Test-Path -LiteralPath $target) {
     $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
     $appRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-    $safetyDir = Join-Path (Split-Path $appRoot -Parent) 'soop-recorder-backups'
+    $safetyDir = Join-Path (Split-Path $appRoot -Parent) 'stream-archive-backups'
     New-Item -ItemType Directory -Force -Path $safetyDir | Out-Null
-    $safety = Join-Path $safetyDir "pre_restore_$stamp.db"
+    $safety = Join-Path $safetyDir "stream_archive_pre_restore_$stamp.db"
     Copy-Item -LiteralPath $target -Destination $safety -Force
     Write-Host "Current database safety copy: $safety"
 }
@@ -80,4 +78,4 @@ Assert-SqliteFile $temp
 Move-Item -LiteralPath $temp -Destination $target -Force
 
 Write-Host "Restore complete: $target"
-Write-Host 'Start the SOOP server and verify settings, channels, and history.'
+Write-Host 'Start Stream Archive and verify settings, channels, and history.'
