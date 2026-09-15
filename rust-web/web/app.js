@@ -11,7 +11,7 @@ function getToken(){if(!token){token=(prompt('SOOP 관리 토큰을 입력하세
 async function api(path,opt={}){getToken();const h=new Headers(opt.headers||{});h.set('Authorization','Bearer '+token);if(opt.body)h.set('Content-Type','application/json');const r=await fetch(path,{...opt,headers:h});if(r.status===401){sessionStorage.removeItem('soopToken');token='';throw new Error('토큰이 올바르지 않습니다.')}const t=await r.text();const v=t?(()=>{try{return JSON.parse(t)}catch{return t}})():null;if(!r.ok)throw new Error(typeof v==='string'?v:JSON.stringify(v));return v}
 function toast(s){$('toast').textContent=s;$('toast').className='show';setTimeout(()=>$('toast').className='',1800)}
 function bytes(n){if(!n)return '-';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]}
-function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]))}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function statusText(s){return labels[s]||s||'-'}
 function when(v){if(!v)return '-';try{return new Date(v).toLocaleString()}catch{return v}}
 function duration(s){s=Number(s||0);if(!s)return '-';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60);return h?`${h}h ${m}m ${sec}s`:(m?`${m}m ${sec}s`:`${sec}s`)}
