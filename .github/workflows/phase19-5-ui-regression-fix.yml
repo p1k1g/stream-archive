@@ -32,7 +32,7 @@ jobs:
           $text = $text.Replace("toast('Watcher '+(a==='start'?'start':'stop'))", "toast('Watcher '+(a==='start'?'시작':'중지'))")
           $text = [regex]::Replace(
             $text,
-            '(?m)^if \(\$providers -notmatch .*main\.rs.*\) \{$',
+            '(?m)^if \(\$providers -notmatch [^\r\n]*main\.rs[^\r\n]*$',
             'if ($providers.IndexOf(''rust-web/src/main.rs'', [System.StringComparison]::Ordinal) -lt 0) {'
           )
           $text = $text.Replace('Assert-Match \$chzzkVod', 'Assert-Match \`$chzzkVod')
