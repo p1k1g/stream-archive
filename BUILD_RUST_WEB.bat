@@ -20,7 +20,7 @@ if errorlevel 1 (
 
 echo.
 echo ========================================
-echo  SOOP RUST WEB BUILD COMPLETE
+echo  STREAM ARCHIVE BUILD COMPLETE
 echo ========================================
 echo.
 echo Output:
