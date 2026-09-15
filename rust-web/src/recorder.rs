@@ -274,12 +274,12 @@ impl RecorderManager {
             .id()
             .ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
 
-        // Retain Windows tree ownership immediately from the stable root PID.
-        // This happens before any polling can reap the root, so a Streamlink
-        // exit can never erase our ability to terminate an inherited FFmpeg
-        // player/descendant. On capture failure, do not return while the
+        // Retain Windows tree ownership immediately from the exact spawned
+        // Child handle. PID snapshots are used only after that handle identity
+        // is pinned, so a root PID reuse can never redirect Job ownership to an
+        // unrelated process. On capture failure, do not return while the
         // just-spawned owned process tree may still be alive.
-        let owned_tree = match OwnedProcessTree::capture(pid) {
+        let owned_tree = match OwnedProcessTree::capture(&child) {
             Ok(owner) => owner,
             Err(err) => {
                 terminate_owned(&mut child).await;
