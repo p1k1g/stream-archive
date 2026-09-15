@@ -75,14 +75,14 @@ jobs:
           Replace-Regex $index '<p class="hint">[^<]*SOOP_LIVE_SETTING\.ini[^<]*</p>' '<p class="hint">SQLite is the canonical settings and channel store.</p>'
           Replace-Regex $index '<p class="hint">Phase 7[^<]*</p>' ''
           Replace-Literal $index '<strong><i></i> SOOP</strong>' '<strong><i></i> SOOP / CHZZK</strong>'
-          Replace-Regex $index '(<div class="p135-platform-card">.*?<strong><i></i> SOOP / CHZZK</strong>)<small>.*?</small>' '$1<small>LIVE / VOD</small>'
+          Replace-Regex $index '(<strong><i></i> SOOP / CHZZK</strong>)\s*<small>.*?</small>' '$1<small>LIVE / VOD</small>'
           Replace-Literal $index 'C:\SOOP_VOD' 'C:\StreamArchive\VOD'
           Replace-Literal $index 'soop-recorder-backups' 'stream-archive-backups'
           Replace-Literal $index 'SOOP_BACKUP_DIR' 'STREAM_ARCHIVE_BACKUP_DIR'
           Replace-Literal $index 'xDetachLegacyBackupSave' 'xDetachInlineBackupSave'
 
-          Replace-Literal 'rust-web/web/phase14.js' 'soop-recorder-backups' 'stream-archive-backups'
-          Replace-Literal 'rust-web/web/phase14.js' 'SOOP_BACKUP_DIR' 'STREAM_ARCHIVE_BACKUP_DIR'
+          Replace-Literal 'rust-web/web/phase14.js' 'soop-recorder-backups' 'stream-archive-backups' -Optional
+          Replace-Literal 'rust-web/web/phase14.js' 'SOOP_BACKUP_DIR' 'STREAM_ARCHIVE_BACKUP_DIR' -Optional
 
           $oldEnv = [ordered]@{
             'SOOP_WEB_BIND'='STREAM_ARCHIVE_BIND'
