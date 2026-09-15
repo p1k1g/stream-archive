@@ -16,6 +16,23 @@ on:
       - "SECURITY.md"
       - "CONTRIBUTING.md"
       - ".github/workflows/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "rust-web/**"
+      - "RUN_DEV.bat"
+      - "BUILD_RELEASE.bat"
+      - "BUILD_PORTABLE.bat"
+      - "maintenance/**"
+      - "docs/**"
+      - "deploy/**"
+      - "README.md"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES.md"
+      - "SECURITY.md"
+      - "CONTRIBUTING.md"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 concurrency:
@@ -23,8 +40,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  windows-check:
-    runs-on: windows-latest
+  core-check:
+    name: core-check (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+          - platform: linux
+            os: ubuntu-latest
+          - platform: macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -42,41 +70,70 @@ jobs:
           components: rustfmt, clippy
 
       - name: Environment
-        shell: powershell
+        shell: bash
         run: |
+          echo "platform=${{ matrix.platform }}"
           rustc --version
           cargo --version
           cargo clippy --version
           node --version
           git --version
 
-      - name: Runtime contract guard
-        shell: powershell
-        run: ./maintenance/Test-RuntimeContracts.ps1
-
       - name: JavaScript syntax check
-        shell: powershell
+        shell: bash
         run: |
-          Get-ChildItem ./rust-web/web -Filter *.js | ForEach-Object {
-            node --check $_.FullName
-            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $($_.Name)" }
-          }
+          set -euo pipefail
+          for file in ./rust-web/web/*.js; do
+            node --check "$file"
+          done
 
       - name: Rust format check
-        shell: powershell
+        shell: bash
         run: cargo fmt --manifest-path rust-web/Cargo.toml -- --check
 
       - name: Rust unit tests
-        shell: powershell
+        shell: bash
         run: cargo test --locked --manifest-path rust-web/Cargo.toml
 
-      - name: Windows native compile check
-        shell: powershell
+      - name: Native compile check
+        shell: bash
         run: cargo check --locked --manifest-path rust-web/Cargo.toml
 
       - name: Rust clippy advisory
-        shell: powershell
+        shell: bash
         run: cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets
+
+  windows-check:
+    name: windows-check
+    needs: core-check
+    if: ${{ always() }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Enforce cross-platform core results
+        shell: powershell
+        run: |
+          if ('${{ needs.core-check.result }}' -ne 'success') {
+            throw 'One or more Windows/Linux/macOS core checks failed.'
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Environment
+        shell: powershell
+        run: |
+          rustc --version
+          cargo --version
+          git --version
+
+      - name: Runtime contract guard
+        shell: powershell
+        run: ./maintenance/Test-RuntimeContracts.ps1
 
       - name: Windows portable package smoke
         shell: cmd
