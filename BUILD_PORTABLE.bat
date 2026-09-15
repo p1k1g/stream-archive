@@ -55,6 +55,8 @@ copy /y "docs\OPERATIONS.md" "%OUT%\docs\OPERATIONS.md" >nul || exit /b 1
 copy /y "docs\REVERSE_PROXY.md" "%OUT%\docs\REVERSE_PROXY.md" >nul || exit /b 1
 copy /y "docs\LOCAL_LAUNCHER.md" "%OUT%\docs\LOCAL_LAUNCHER.md" >nul || exit /b 1
 copy /y "deploy\Caddyfile.example" "%OUT%\Caddyfile.example" >nul || exit /b 1
+copy /y "LICENSE" "%OUT%\LICENSE" >nul || exit /b 1
+copy /y "THIRD_PARTY_NOTICES.md" "%OUT%\THIRD_PARTY_NOTICES.md" >nul || exit /b 1
 
 if "%PRESERVE_RUNTIME%"=="1" (
     if exist "%PRESERVE%\data" (
@@ -96,7 +98,7 @@ echo Portable package created: %OUT%
 if "%PRESERVE_RUNTIME%"=="1" echo Existing local data/history and management token were preserved when present.
 echo Default launch: RUN.bat ^> stream-archive-launcher.exe ^> local server ^> default browser.
 echo Direct troubleshooting: RUN_SERVER_CONSOLE.bat
-echo Included: launcher, maintenance scripts, operations docs, Caddy template, release metadata, SHA256 checksums.
+echo Included: launcher, maintenance scripts, operations docs, license notices, Caddy template, release metadata, SHA256 checksums.
 echo Backups: default to a sibling stream-archive-backups folder outside the replaceable portable package directory.
 echo External tools are not bundled. Configure Streamlink, yt-dlp and ffmpeg paths or install them in PATH.
 endlocal

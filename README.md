@@ -2,7 +2,37 @@
 
 **SOOP과 CHZZK의 LIVE 녹화 및 VOD 다운로드를 하나의 Web UI에서 관리하는 로컬 미디어 아카이브입니다.**
 
-Rust + Axum + SQLite 기반으로 동작하며, 현재는 Windows portable 환경을 중심으로 지원합니다. LIVE/VOD 수명주기, Queue, 설정, History, 백업/복구를 Rust 런타임에서 관리하고 Streamlink · yt-dlp · FFmpeg를 미디어 처리 도구로 사용합니다.
+Rust + Axum + SQLite 기반으로 동작하며, 현재는 Windows portable 환경을 중심으로 지원합니다. LIVE/VOD 수명주기, Queue, 설정, History, 백업/복구를 Rust 런타임에서 관리하고 Streamlink · yt-dlp · FFmpeg를 외부 미디어 처리 도구로 사용합니다.
+
+> [!IMPORTANT]
+> Stream Archive는 현재 **SOOP LIVE/VOD와 CHZZK LIVE/VOD만 지원**합니다. CATCH, 클립, 쇼츠/짧은 영상 및 기타 별도 콘텐츠 유형은 지원하지 않습니다.
+
+## 프로젝트 성격 및 안정성 안내
+
+Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 있는 오픈소스 프로젝트이며, 개발 과정에서 AI-assisted development를 적극적으로 활용하고 있습니다.
+
+자동화된 테스트와 실제 사용 환경에서의 검증을 병행하고 있지만, 성숙한 상용 소프트웨어처럼 모든 운영체제·환경·예외 상황에서의 완전한 동작을 보장하지는 않습니다. 일부 기능과 UI, 내부 구조는 지속적으로 개선되고 있으며 변경될 수 있습니다.
+
+중요한 녹화물과 설정 데이터는 별도로 백업해 두는 것을 권장합니다. 문제를 발견한 경우 재현 조건과 로그를 포함해 GitHub Issue로 알려주시면 개선에 도움이 됩니다.
+
+## 지원 범위
+
+현재 지원하는 콘텐츠 유형은 다음과 같습니다.
+
+- SOOP LIVE 녹화
+- SOOP VOD 분석 및 다운로드
+- CHZZK LIVE 녹화
+- CHZZK VOD 분석 및 다운로드
+
+현재 지원하지 않는 콘텐츠 유형은 다음과 같습니다.
+
+- SOOP/CHZZK 클립
+- CATCH
+- 쇼츠/짧은 영상 형식
+- 별도 게시물/커뮤니티 콘텐츠
+- 기타 LIVE/VOD 외 콘텐츠 유형
+
+지원 대상은 SOOP 및 CHZZK의 일반 LIVE/VOD 흐름에 한정됩니다.
 
 ## 주요 기능
 
@@ -40,6 +70,7 @@ Rust + Axum + SQLite 기반으로 동작하며, 현재는 Windows portable 환�
 | Web UI 관리 | ✅ | ✅ |
 | Queue / History | ✅ | ✅ |
 | 취소 / 재시도 | ✅ | ✅ |
+| 클립 / CATCH / 기타 콘텐츠 | ❌ | ❌ |
 
 | 운영체제 | 상태 |
 |---|---|
@@ -58,6 +89,8 @@ Rust + Axum + SQLite 기반으로 동작하며, 현재는 Windows portable 환�
 - `ffmpeg`
 
 Portable package에는 외부 미디어 도구가 포함되지 않습니다. Web 설정에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요.
+
+각 외부 도구는 각 프로젝트의 라이선스와 배포 조건을 따릅니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참고하세요.
 
 ### 2. 실행
 
@@ -266,6 +299,20 @@ Launcher는 Windows Firewall, router port forwarding 또는 reverse proxy를 자
 
 Caddy/Nginx 예제와 운영 보안 주의사항은 `docs/REVERSE_PROXY.md`를 참고하세요.
 
+## 프로젝트 및 서비스 관련 안내
+
+Stream Archive는 독립적인 오픈소스 프로젝트이며 SOOP, NAVER, CHZZK, Streamlink, FFmpeg, yt-dlp와 제휴·승인·후원 관계가 없습니다. 각 명칭과 상표는 해당 권리자에게 귀속됩니다.
+
+사용자는 Stream Archive를 사용하는 과정에서 적용되는 법률, 저작권 규정 및 각 서비스의 이용약관을 확인하고 준수할 책임이 있습니다. 본 프로젝트는 콘텐츠에 대한 권리를 부여하거나 서비스 측 접근 제한을 우회할 권리를 제공하지 않습니다.
+
+보안 취약점 제보 방법은 `SECURITY.md`, 기여 방법은 `CONTRIBUTING.md`를 참고하세요.
+
+## 라이선스
+
+Stream Archive 자체 코드는 **GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)**로 공개합니다.
+
+Streamlink, FFmpeg, yt-dlp는 Stream Archive에 포함된 코드가 아니라 별도로 설치·탐지·실행되는 외부 도구이며 각 프로젝트의 라이선스를 따릅니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참고하세요.
+
 ## 개발 / CI
 
 Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 수행합니다.
@@ -283,6 +330,8 @@ Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 
 
 Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow_dispatch` 방식입니다.
 
+Phase 20에서는 Windows/Linux/macOS 3개 운영체제의 GitHub-hosted CI와 cross-platform runtime 검증을 확대할 예정입니다.
+
 ## 문서
 
 | 문서 | 내용 |
@@ -291,6 +340,9 @@ Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow
 | `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
 | `docs/REVERSE_PROXY.md` | Caddy/Nginx HTTPS reverse proxy 구성 |
 | `docs/PHASE19_AUDIT.md` | Runtime hardening, ownership, architecture audit 및 Phase 20 경계 |
+| `THIRD_PARTY_NOTICES.md` | 외부 도구 및 라이선스 안내 |
+| `SECURITY.md` | 보안 취약점 제보 정책 |
+| `CONTRIBUTING.md` | 기여 및 PR 가이드 |
 
 ## Roadmap
 
@@ -303,7 +355,7 @@ Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow
 - OS-specific runtime boundary 통합
 - Runtime contract / CI consolidation
 
-### Phase 19.5 🚧 Namespace / Legacy Cleanup
+### Phase 19.5 ✅ Namespace / Legacy Cleanup
 
 - 제품 namespace를 `Stream Archive`로 통일
 - app-wide 환경변수와 runtime 파일명을 `STREAM_ARCHIVE_*` / `stream-archive-*`로 정리
@@ -314,6 +366,7 @@ Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow
 
 예정 작업:
 
+- Windows/Linux/macOS CI matrix
 - Unix process-group ownership / termination
 - Linux/macOS secret storage
 - Native cross-platform picker
