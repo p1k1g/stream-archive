@@ -10,6 +10,11 @@ on:
       - "maintenance/**"
       - "docs/**"
       - "deploy/**"
+      - "README.md"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES.md"
+      - "SECURITY.md"
+      - "CONTRIBUTING.md"
       - ".github/workflows/**"
   workflow_dispatch:
 
@@ -19,58 +24,56 @@ concurrency:
 
 jobs:
   windows-check:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
       - name: Environment
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: |
           rustc --version
           cargo --version
           cargo clippy --version
+          node --version
           git --version
 
       - name: Runtime contract guard
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: ./maintenance/Test-RuntimeContracts.ps1
 
       - name: JavaScript syntax check
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: |
-          $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
-          $node = if ($nodeCommand) { $nodeCommand.Source } else { $null }
-          if (-not $node) {
-            $runnerRoot = Split-Path (Split-Path $env:RUNNER_TEMP -Parent) -Parent
-            $node = Get-ChildItem (Join-Path $runnerRoot 'externals') -Directory -Filter 'node*' -ErrorAction SilentlyContinue |
-              Sort-Object Name -Descending |
-              ForEach-Object { Join-Path $_.FullName 'bin\node.exe' } |
-              Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-              Select-Object -First 1
-          }
-          if (-not $node) { throw 'Node executable was not found on PATH or in the GitHub runner externals directory.' }
-          & $node --version
-          if ($LASTEXITCODE -ne 0) { throw 'Node version check failed.' }
           Get-ChildItem ./rust-web/web -Filter *.js | ForEach-Object {
-            & $node --check $_.FullName
+            node --check $_.FullName
             if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $($_.Name)" }
           }
 
       - name: Rust format check
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: cargo fmt --manifest-path rust-web/Cargo.toml -- --check
 
       - name: Rust unit tests
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: cargo test --locked --manifest-path rust-web/Cargo.toml
 
       - name: Windows native compile check
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: cargo check --locked --manifest-path rust-web/Cargo.toml
 
       - name: Rust clippy advisory
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets
 
       - name: Windows portable package smoke
@@ -78,7 +81,7 @@ jobs:
         run: BUILD_PORTABLE.bat
 
       - name: Verify portable package
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: |
           $root = './dist/stream-archive'
           $required = @(
@@ -89,6 +92,8 @@ jobs:
             "$root/BACKUP_DATA.bat",
             "$root/RESTORE_DATA.bat",
             "$root/Caddyfile.example",
+            "$root/LICENSE",
+            "$root/THIRD_PARTY_NOTICES.md",
             "$root/RELEASE_INFO.txt",
             "$root/SHA256SUMS.txt",
             "$root/maintenance/Backup-StreamArchiveData.ps1",
@@ -122,10 +127,20 @@ jobs:
           $caddy = Get-Content "$root/Caddyfile.example" -Raw
           if ($caddy -notmatch 'reverse_proxy\s+127\.0\.0\.1:8787') { throw 'Caddy template upstream mismatch' }
 
+          $license = Get-Content "$root/LICENSE" -Raw
+          if ($license -notmatch 'GNU AFFERO GENERAL PUBLIC LICENSE') { throw 'AGPL license text missing from package' }
+
+          $thirdParty = Get-Content "$root/THIRD_PARTY_NOTICES.md" -Raw
+          foreach ($tool in @('Streamlink', 'FFmpeg', 'yt-dlp')) {
+            if ($thirdParty -notmatch [regex]::Escape($tool)) { throw "Third-party notice missing: $tool" }
+          }
+
           $metadata = cargo metadata --locked --no-deps --format-version 1 --manifest-path ./rust-web/Cargo.toml | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
-          $cargoVersion = ($metadata.packages | Where-Object { $_.name -eq 'stream-archive-server' } | Select-Object -First 1).version
+          $package = $metadata.packages | Where-Object { $_.name -eq 'stream-archive-server' } | Select-Object -First 1
+          $cargoVersion = $package.version
           if ([string]::IsNullOrWhiteSpace($cargoVersion)) { throw 'stream-archive-server version not found in cargo metadata' }
+          if ($package.license -ne 'AGPL-3.0-or-later') { throw "Cargo license mismatch: $($package.license)" }
 
           $releaseMap = @{}
           foreach ($line in Get-Content "$root/RELEASE_INFO.txt") {
