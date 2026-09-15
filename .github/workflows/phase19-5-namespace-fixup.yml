@@ -101,7 +101,7 @@ jobs:
           }
           $tracked = git ls-files
           foreach ($path in $tracked) {
-            if ($path -eq '.github/workflows/phase19-5-namespace-fixup.yml') { continue }
+            if ($path -in @('.github/workflows/phase19-5-namespace-fixup.yml','maintenance/guards/ReleaseSafety.ps1')) { continue }
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
             $ext = [IO.Path]::GetExtension($path).ToLowerInvariant()
             if ($ext -notin @('.rs','.js','.html','.css','.md','.ps1','.bat','.cmd','.yml','.yaml','.toml','.txt','.ini')) { continue }
