@@ -5,20 +5,23 @@ on:
 
 jobs:
   windows-portable:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Environment
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: |
           rustc --version
           cargo --version
           git --version
 
       - name: Unit tests
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: cargo test --locked --manifest-path ./rust-web/Cargo.toml
 
       - name: Build and assemble portable package
@@ -26,9 +29,17 @@ jobs:
         run: BUILD_PORTABLE.bat
 
       - name: Verify package checksum metadata
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: |
           $root = './dist/stream-archive'
+          $required = @(
+            "$root/LICENSE",
+            "$root/THIRD_PARTY_NOTICES.md"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
+          }
+
           $expected = @{}
           foreach ($line in Get-Content "$root/SHA256SUMS.txt") {
             if ($line -match '^([0-9a-fA-F]{64})\s+(.+)$') {
@@ -41,14 +52,15 @@ jobs:
             if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
           }
           if (-not (Test-Path "$root/docs/LOCAL_LAUNCHER.md" -PathType Leaf)) { throw 'LOCAL_LAUNCHER.md missing' }
+          if ((Get-Content "$root/LICENSE" -Raw) -notmatch 'GNU AFFERO GENERAL PUBLIC LICENSE') { throw 'AGPL license text missing from package' }
           Get-Content "$root/RELEASE_INFO.txt"
 
       - name: Archive portable package
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: Compress-Archive -Path ./dist/stream-archive/* -DestinationPath ./stream-archive-windows-x64.zip -Force
 
       - name: Write archive checksum
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: powershell
         run: |
           $h=(Get-FileHash -Algorithm SHA256 ./stream-archive-windows-x64.zip).Hash.ToLowerInvariant()
           "$h  stream-archive-windows-x64.zip" | Set-Content ./stream-archive-windows-x64.zip.sha256 -Encoding ascii
