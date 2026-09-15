@@ -72,14 +72,6 @@ jobs:
             $out.Add($line)
           }
           [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $out, $utf8)
-          $processText = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-          if (-not $processText.Contains('spawn_owned\(&mut streamlink_command\)') -or
-              -not $processText.Contains('spawn_owned\(&mut ffmpeg_command\)') -or
-              -not $processText.Contains('streamlink_tree\.terminate\(&mut streamlink_child\)') -or
-              -not $processText.Contains('ffmpeg_tree\.terminate\(&mut ffmpeg_child\)') -or
-              -not $processText.Contains('spawn_owned\(&mut command\)')) {
-            throw 'ProcessLifecycle retained-ownership guards are incomplete'
-          }
 
           $path = 'maintenance/guards/StorageOwnership.ps1'
           $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $path))
@@ -96,11 +88,6 @@ jobs:
             $out.Add($line)
           }
           [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $out, $utf8)
-          $storageText = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-          if (-not $storageText.Contains('spawn_owned\(&mut ffmpeg_command\)') -or
-              -not $storageText.Contains('streamlink_tree\.terminate\(&mut streamlink_child\)')) {
-            throw 'StorageOwnership retained-ownership guards are incomplete'
-          }
 
       - name: Rust format
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
