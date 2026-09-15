@@ -4,7 +4,7 @@
 
 Rust + Axum + SQLite 기반으로 동작하며, 현재는 Windows portable 환경을 중심으로 지원합니다. LIVE/VOD 수명주기, Queue, 설정, History, 백업/복구를 Rust 런타임에서 관리하고 Streamlink · yt-dlp · FFmpeg를 미디어 처리 도구로 사용합니다.
 
-> 저장소 이름과 일부 실행 파일/환경 변수에는 기존 `SOOP` 명칭이 남아 있습니다. 현재 단계에서는 호환성을 위해 내부 식별자는 유지하고, 제품 표시 이름만 **Stream Archive**로 사용합니다.
+> 일부 실행 파일·폴더·환경 변수에는 기존 `SOOP` 명칭이 남아 있습니다. 현재 단계에서는 호환성을 위해 내부 식별자는 유지하고, 제품 표시 이름은 **Stream Archive**로 사용합니다.
 
 ## 주요 기능
 
