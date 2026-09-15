@@ -135,8 +135,8 @@ fn run_native_picker(kind: &str, filter: &str, initial: &str) -> Result<Option<S
             "-Command",
             script,
         ])
-        .env("SOOP_PICKER_INITIAL", initial)
-        .env("SOOP_PICKER_FILTER", filter)
+        .env("STREAM_ARCHIVE_PICKER_INITIAL", initial)
+        .env("STREAM_ARCHIVE_PICKER_FILTER", filter)
         .output()
         .map_err(|e| format!("failed to start Windows PowerShell picker: {e}"))?;
 
@@ -182,9 +182,9 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = 'SOOP Recorder - 폴더 선택'
+$dialog.Description = 'Stream Archive - 폴더 선택'
 $dialog.ShowNewFolderButton = $true
-$initial = [Environment]::GetEnvironmentVariable('SOOP_PICKER_INITIAL')
+$initial = [Environment]::GetEnvironmentVariable('STREAM_ARCHIVE_PICKER_INITIAL')
 if ($initial -and [IO.Directory]::Exists($initial)) {
     $dialog.SelectedPath = $initial
 }
@@ -203,7 +203,7 @@ Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.CheckFileExists = $true
 $dialog.Multiselect = $false
-$mode = [Environment]::GetEnvironmentVariable('SOOP_PICKER_FILTER')
+$mode = [Environment]::GetEnvironmentVariable('STREAM_ARCHIVE_PICKER_FILTER')
 if ($mode -eq 'exe') {
     $dialog.Filter = 'Executable files (*.exe)|*.exe|All files (*.*)|*.*'
 } elseif ($mode -eq 'cookie') {
@@ -211,7 +211,7 @@ if ($mode -eq 'exe') {
 } else {
     $dialog.Filter = 'All files (*.*)|*.*'
 }
-$initial = [Environment]::GetEnvironmentVariable('SOOP_PICKER_INITIAL')
+$initial = [Environment]::GetEnvironmentVariable('STREAM_ARCHIVE_PICKER_INITIAL')
 if ($initial) {
     if ([IO.File]::Exists($initial)) {
         $dialog.InitialDirectory = [IO.Path]::GetDirectoryName($initial)
