@@ -1,0 +1,45 @@
+name: Normalize public license
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "LICENSE"
+      - ".github/workflows/normalize-public-license.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  normalize-license:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'pre-public-readiness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install canonical AGPL-3.0 text
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            https://www.gnu.org/licenses/agpl-3.0.txt \
+            --output LICENSE
+          grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
+          grep -q 'END OF TERMS AND CONDITIONS' LICENSE
+          test "$(wc -l < LICENSE)" -gt 600
+
+          if git diff --quiet -- LICENSE; then
+            echo 'LICENSE already contains the canonical AGPL-3.0 text.'
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add LICENSE
+          git commit -m 'Install full AGPL-3.0 license text'
+          git push origin "HEAD:${{ github.head_ref }}"
