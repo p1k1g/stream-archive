@@ -459,10 +459,8 @@ mod windows_tree {
                         if child_pid == parent_pid {
                             continue;
                         }
-                        let Some((process, identity)) = open_identity(
-                            child_pid,
-                            PROCESS_SET_QUOTA | PROCESS_TERMINATE,
-                        )?
+                        let Some((process, identity)) =
+                            open_identity(child_pid, PROCESS_SET_QUOTA | PROCESS_TERMINATE)?
                         else {
                             continue;
                         };
@@ -557,14 +555,20 @@ mod windows_tree {
                 let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
                 if thread.is_null() {
                     return Err(std::io::Error::last_os_error()).with_context(|| {
-                        format!("OpenThread failed for suspended child thread={}", entry.th32ThreadID)
+                        format!(
+                            "OpenThread failed for suspended child thread={}",
+                            entry.th32ThreadID
+                        )
                     });
                 }
                 let thread = OwnedHandle(thread as isize);
                 let previous = unsafe { ResumeThread(thread.raw()) };
                 if previous == u32::MAX {
                     return Err(std::io::Error::last_os_error()).with_context(|| {
-                        format!("ResumeThread failed for child thread={}", entry.th32ThreadID)
+                        format!(
+                            "ResumeThread failed for child thread={}",
+                            entry.th32ThreadID
+                        )
                     });
                 }
                 resumed += 1;
