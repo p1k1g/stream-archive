@@ -1,61 +1,209 @@
-# SOOP Downloader
+# Stream Archive
 
-Rust/Axum 기반의 SOOP LIVE/VOD 다운로드 관리 서버입니다.
+**SOOP과 CHZZK의 LIVE 녹화 및 VOD 다운로드를 하나의 Web UI에서 관리하는 로컬 미디어 아카이브입니다.**
 
-## 현재 구조
+Rust + Axum + SQLite 기반으로 동작하며, 현재는 Windows portable 환경을 중심으로 지원합니다. LIVE/VOD 수명주기, Queue, 설정, History, 백업/복구를 Rust 런타임에서 관리하고 Streamlink · yt-dlp · FFmpeg를 미디어 처리 도구로 사용합니다.
 
-현재 제품 런타임은 Rust/SQLite 기반이며, SOOP과 CHZZK의 LIVE/VOD 작업을 하나의 Web UI에서 관리합니다. 배포/백업/복구 절차까지 Windows portable package에 포함됩니다.
+> 저장소 이름과 일부 실행 파일/환경 변수에는 기존 `SOOP` 명칭이 남아 있습니다. 현재 단계에서는 호환성을 위해 내부 식별자는 유지하고, 제품 표시 이름만 **Stream Archive**로 사용합니다.
+
+## 주요 기능
+
+### SOOP
+
+- LIVE 자동 녹화
+- VOD 분석 및 다운로드
+- 녹화 채널 관리
+- 저장 경로 및 품질 설정
+
+### CHZZK
+
+- LIVE 자동 녹화
+- VOD 분석 및 다운로드
+- NID_AUT / NID_SES 기반 인증 정보 지원
+- 공개/인증 필요 콘텐츠 처리
+
+### 공통
+
+- Web UI 기반 관리
+- LIVE watcher 및 녹화 상태 관리
+- VOD Queue / History / 재시도 / 취소
+- SQLite 기반 설정·채널·History 저장
+- 서버 종료 시 소유한 LIVE/VOD child process 정리
+- 데이터 백업 / 복구
+- Windows portable package
+- 관리 토큰 및 secret 보호
+
+## 지원 현황
+
+| 기능 | SOOP | CHZZK |
+|---|:---:|:---:|
+| LIVE 녹화 | ✅ | ✅ |
+| VOD 다운로드 | ✅ | ✅ |
+| Web UI 관리 | ✅ | ✅ |
+| Queue / History | ✅ | ✅ |
+| 취소 / 재시도 | ✅ | ✅ |
+
+| 운영체제 | 상태 |
+|---|---|
+| Windows | ✅ 현재 지원 |
+| Linux | 🚧 Phase 20 준비 |
+| macOS | 🚧 Phase 20 준비 |
+
+## 빠른 시작
+
+### 1. 외부 도구 준비
+
+다음 도구가 필요합니다.
+
+- `streamlink`
+- `yt-dlp`
+- `ffmpeg`
+
+Portable package에는 외부 미디어 도구가 포함되지 않습니다. Web 설정에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요.
+
+### 2. 실행
+
+Portable package에서는 `RUN.bat` 또는 `soop-launcher.exe`를 실행합니다.
 
 ```text
-Browser
-  -> Rust Axum Web (soop-web)
-     -> SQLite data/soop.db  [settings/channels/history source of truth]
-     -> NativeWatcherManager
-        -> provider LIVE facade -> RecorderManager -> streamlink
-     -> provider VOD facade
-        -> SOOP -> yt-dlp / ffmpeg
-        -> CHZZK -> API / streamlink / ffmpeg
+RUN.bat / soop-launcher.exe
+        ↓
+soop-server.exe
+        ↓
+http://127.0.0.1:8787/
 ```
 
-기존 WinUI 3와 PowerShell LIVE/VOD 구현은 저장소에서 제거되었습니다.
+서버가 실행 중이 아니면 launcher가 서버를 시작하고 Web UI가 준비된 뒤 기본 브라우저를 엽니다. 이미 서버가 실행 중이면 기존 Web UI만 엽니다.
 
-## SQLite primary
-
-기본 SQLite 위치:
-
-```text
-data/soop.db
-```
-
-`SOOP_DATA_DIR` 환경변수로 위치를 변경할 수 있습니다.
-
-`data/soop.db`가 source of truth입니다. `backend/SOOP_LIVE_SETTING.ini`, `backend/SOOP_LIVE_CHANNELS.txt`, `backend/vod/SOOP_VOD_SETTING.ini`는 마이그레이션 호환을 위해 SQLite에서 생성되는 mirror이며 수동 편집 내용은 authoritative하지 않습니다.
-
-SOOP 비밀번호, Cloudflare API key, CHZZK NID_AUT/NID_SES는 Windows CurrentUser DPAPI로 암호화한 문자열만 SQLite에 저장합니다. Web API는 평문 secret을 반환하지 않습니다.
-
-## 실행
-
-개발/로컬 실행:
+개발 환경에서 직접 실행하려면 저장소 루트에서 다음을 사용합니다.
 
 ```powershell
 .\RUN_RUST_WEB.bat
 ```
 
-Release build:
+### 3. 종료
+
+서버 콘솔에서 `Ctrl+C`를 누릅니다.
+
+Stream Archive는 종료 과정에서 자신이 소유한 LIVE/VOD child process를 정리합니다. 프로세스 이름 전체를 대상으로 하는 `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe` 같은 방식은 사용하지 않습니다.
+
+## 기본 사용 흐름
+
+### LIVE
+
+1. Web UI에서 플랫폼과 채널을 등록합니다.
+2. 저장 경로와 필요한 설정을 구성합니다.
+3. Watcher를 시작합니다.
+4. 방송이 시작되면 Recorder가 LIVE 녹화를 시작합니다.
+5. 방송 종료, 수동 중지 또는 서버 종료 시 소유한 녹화 프로세스를 정리합니다.
+
+### VOD
+
+1. SOOP 또는 CHZZK VOD URL을 입력합니다.
+2. 콘텐츠 정보를 분석합니다.
+3. 다운로드를 Queue에 등록합니다.
+4. 진행 상태, 완료 내역, 실패/재시도 상태를 Web UI에서 확인합니다.
+5. 필요하면 실행 중 작업을 취소할 수 있습니다.
+
+## 런타임 구조
+
+```text
+Browser
+  │
+  ▼
+Rust / Axum Web
+  ├─ SQLite: data/soop.db
+  │    └─ settings / channels / history source of truth
+  │
+  ├─ NativeWatcherManager
+  │    └─ provider LIVE facade
+  │         └─ RecorderManager
+  │              └─ streamlink / ffmpeg
+  │
+  └─ provider VOD facade
+       ├─ SOOP
+       │    └─ yt-dlp / ffmpeg
+       └─ CHZZK
+            └─ API / streamlink / ffmpeg
+```
+
+현재 제품 런타임은 Rust/SQLite 중심입니다. 기존 WinUI 3 및 PowerShell 기반 LIVE/VOD 구현은 저장소에서 제거되었습니다.
+
+## 데이터와 보안
+
+기본 SQLite 위치는 다음과 같습니다.
+
+```text
+data/soop.db
+```
+
+`data/soop.db`가 설정, 채널, History의 canonical source of truth입니다.
+
+`SOOP_DATA_DIR` 환경변수로 데이터 디렉터리를 변경할 수 있습니다.
+
+다음 legacy 파일은 마이그레이션 호환을 위해 SQLite에서 생성되는 mirror이며 수동 편집 내용은 authoritative하지 않습니다.
+
+```text
+backend/SOOP_LIVE_SETTING.ini
+backend/SOOP_LIVE_CHANNELS.txt
+backend/vod/SOOP_VOD_SETTING.ini
+```
+
+Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_SES` 같은 민감 정보가 CurrentUser DPAPI로 암호화된 형태로 SQLite에 저장됩니다. Web API는 평문 secret을 반환하지 않습니다.
+
+기본 수신 주소는 로컬 loopback입니다.
+
+```text
+127.0.0.1:8787
+```
+
+## 관리 토큰
+
+`SOOP_WEB_TOKEN`을 지정하지 않으면 서버가 관리 토큰을 자동 생성합니다.
+
+생성된 토큰은 서버 시작 시 콘솔에 출력되고 다음 위치에 저장됩니다.
+
+```text
+backend/.rust-web/web-token.txt
+```
+
+브라우저 자격 증명이나 세션을 잃은 경우 이 토큰으로 다시 인증할 수 있습니다.
+
+`web-token.txt`는 관리 권한을 부여하는 secret이므로 공유하거나 Git에 커밋하지 마세요.
+
+## 빌드
+
+### 개발 / 로컬 실행
+
+```powershell
+.\RUN_RUST_WEB.bat
+```
+
+### Release build
 
 ```powershell
 .\BUILD_RUST_WEB.bat
 ```
 
-Release build는 tracked `Cargo.lock`을 사용하는 `cargo build --locked --release`로 수행합니다.
+Release build는 tracked `Cargo.lock`을 사용하여 다음과 같은 locked dependency 정책으로 빌드됩니다.
 
-Portable package:
+```text
+cargo build --locked --release
+```
+
+### Portable package
 
 ```powershell
 .\PACKAGE_RUST_WEB.bat
 ```
 
-패키지는 `dist\soop-recorder`에 생성되며 다음을 포함합니다.
+기본 출력 위치:
+
+```text
+dist\soop-recorder
+```
+
+주요 패키지 구성:
 
 ```text
 soop-server.exe
@@ -69,23 +217,23 @@ SHA256SUMS.txt
 backend\...
 maintenance\Backup-SoopData.ps1
 maintenance\Restore-SoopData.ps1
-docs\OPERATIONS.md
-docs\REVERSE_PROXY.md
-docs\LOCAL_LAUNCHER.md
+docs\...
 data\
 ```
 
-서버는 OS 서비스로 등록되지 않으며 사용자가 직접 실행합니다. `Ctrl+C`로 종료하면 서버가 소유한 LIVE/VOD child process도 함께 정리합니다.
+현재 내부 바이너리/폴더 이름의 `soop-*` 명칭은 호환성을 위해 유지합니다.
 
 ## 백업 / 복구
 
-SQLite primary 전환 이후 백업 대상은 `data/soop.db`입니다. 일관된 백업을 위해 서버를 `Ctrl+C`로 종료한 뒤 실행하세요.
+SQLite primary 전환 이후 핵심 백업 대상은 `data/soop.db`입니다.
+
+일관된 오프라인 백업을 위해 서버를 `Ctrl+C`로 종료한 뒤 실행하는 것을 권장합니다.
 
 ```powershell
 .\BACKUP_DATA.bat
 ```
 
-기본적으로 `data\backups` 아래에 timestamp DB와 SHA-256 metadata를 만들고 최신 10개를 유지합니다.
+기본적으로 `data\backups` 아래에 timestamp가 포함된 DB와 SHA-256 metadata를 생성하고 최신 10개를 유지합니다.
 
 복구:
 
@@ -93,48 +241,86 @@ SQLite primary 전환 이후 백업 대상은 `data/soop.db`입니다. 일관된
 .\RESTORE_DATA.bat -BackupFile .\data\backups\soop_YYYYMMDD_HHMMSS.db
 ```
 
-복구 스크립트는 서버 실행 중에는 동작하지 않고, 기존 DB의 `pre_restore_*.db` 안전 복사본을 만든 뒤 교체합니다. 자세한 절차는 `docs/OPERATIONS.md`를 참고하세요.
+복구 스크립트는 서버 실행 중에는 동작하지 않으며, 기존 DB의 `pre_restore_*.db` 안전 복사본을 만든 뒤 교체합니다.
 
-## 외부 도구
-
-- streamlink
-- yt-dlp
-- ffmpeg
-
-Portable package에는 외부 도구를 번들하지 않습니다. Web 설정에서 경로를 지정하거나 PATH를 사용하세요.
+자세한 운영 절차는 `docs/OPERATIONS.md`를 참고하세요.
 
 ## 런타임 환경 변수
 
-- `SOOP_WEB_BIND`: 수신 주소(기본값 `127.0.0.1:8787`)
-- `SOOP_WEB_TOKEN`: 선택적 고정 관리 토큰
-- `SOOP_START_WATCHER`: 서버 시작 후 watcher 자동 시작 여부
-- `SOOP_DATA_DIR`: SQLite 데이터 디렉터리
-- `SOOP_BACKUP_DIR`: Web 백업 디렉터리
-- `SOOP_NO_PAUSE`: 빌드 스크립트의 대기 프롬프트 비활성화
+| 환경 변수 | 설명 |
+|---|---|
+| `SOOP_WEB_BIND` | 수신 주소. 기본값 `127.0.0.1:8787` |
+| `SOOP_WEB_TOKEN` | 선택적 고정 관리 토큰 |
+| `SOOP_START_WATCHER` | 서버 시작 후 watcher 자동 시작 여부 |
+| `SOOP_DATA_DIR` | SQLite 데이터 디렉터리 |
+| `SOOP_BACKUP_DIR` | Web 백업 디렉터리 |
+| `SOOP_NO_PAUSE` | 빌드 스크립트 대기 프롬프트 비활성화 |
 
-## 관리 토큰 복구
+## HTTPS / 원격 접근
 
-`SOOP_WEB_TOKEN`을 지정하지 않으면 서버가 관리 토큰을 자동 생성합니다. 생성된 토큰은 서버 시작 시 콘솔에 출력되고 `backend/.rust-web/web-token.txt`에 저장됩니다. 브라우저 자격 증명이나 세션을 잃은 경우 이 파일의 토큰으로 다시 인증할 수 있습니다.
-
-`backend/.rust-web/web-token.txt`는 관리 권한을 주는 secret으로 취급해야 하며 공유하거나 커밋하지 마세요. `SOOP_WEB_TOKEN`을 직접 지정한 경우에는 해당 환경변수 값을 사용합니다.
-
-## HTTPS / reverse proxy
-
-권장 구조는 Rust 서버를 `127.0.0.1:8787`에 유지하고 Caddy/Nginx에서 HTTPS를 종료하는 방식입니다.
+원격 접근이 필요하면 Rust 서버는 loopback에 유지하고 Caddy/Nginx 같은 reverse proxy에서 HTTPS를 종료하는 구성을 권장합니다.
 
 ```text
-Internet / LAN -> HTTPS reverse proxy -> 127.0.0.1:8787 -> SOOP Rust Web
+Internet / LAN
+      ↓
+HTTPS reverse proxy
+      ↓
+127.0.0.1:8787
+      ↓
+Stream Archive
 ```
 
-Caddy/Nginx 예제와 운영 보안 주의사항은 `docs/REVERSE_PROXY.md`에 정리되어 있습니다.
+Launcher는 Windows Firewall, router port forwarding 또는 reverse proxy를 자동 구성하지 않습니다.
 
-## Release workflow
+Caddy/Nginx 예제와 운영 보안 주의사항은 `docs/REVERSE_PROXY.md`를 참고하세요.
 
-`.github/workflows/rust-web-release.yml`은 수동 `workflow_dispatch` 방식입니다. release job은 locked dependency unit test, Windows portable build, package 내부 `soop-server.exe` SHA-256 검증, ZIP 생성 및 ZIP checksum 생성을 수행합니다.
+## 개발 / CI
 
-## 운영 문서
+Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 수행합니다.
 
-- `docs/OPERATIONS.md`: DB backup/restore, upgrade/rollback 절차
-- `docs/REVERSE_PROXY.md`: Caddy/Nginx HTTPS reverse proxy 구성
+주요 검증 항목:
 
-현재 아키텍처와 Phase 20 후속 경계는 `docs/PHASE19_AUDIT.md`에 기록되어 있습니다.
+- Runtime contract guard
+- JavaScript syntax check
+- Whole-crate `cargo fmt --check`
+- Rust unit tests
+- Windows native compile check
+- Clippy advisory
+- Windows portable package smoke test
+- Portable package verification
+
+Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow_dispatch` 방식입니다.
+
+## 문서
+
+| 문서 | 내용 |
+|---|---|
+| `docs/LOCAL_LAUNCHER.md` | Windows local launcher 사용 방법 |
+| `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
+| `docs/REVERSE_PROXY.md` | Caddy/Nginx HTTPS reverse proxy 구성 |
+| `docs/PHASE19_AUDIT.md` | Runtime hardening, ownership, architecture audit 및 Phase 20 경계 |
+
+## Roadmap
+
+### Phase 19 ✅ Runtime Hardening / Cleanup
+
+- Runtime resource ownership 및 cleanup 강화
+- LIVE process-tree ownership 강화
+- CHZZK VOD bounded reader / cancellation cleanup
+- SQLite source-of-truth 정리
+- OS-specific runtime boundary 통합
+- Runtime contract / CI consolidation
+
+### Phase 20 🚧 Cross-platform Readiness
+
+예정 작업:
+
+- Unix process-group ownership / termination
+- Linux/macOS secret storage
+- Native cross-platform picker
+- Cross-platform launcher / packaging / tool discovery
+- Linux/macOS integration coverage
+
+---
+
+**Stream Archive**는 현재 Windows에서 SOOP과 CHZZK의 LIVE/VOD를 안정적으로 관리하는 것을 우선 목표로 하며, 이후 Linux/macOS 지원을 위한 경계를 단계적으로 확장할 예정입니다.
