@@ -34,7 +34,7 @@ if "%PRESERVE_RUNTIME%"=="1" (
 if exist "%OUT%" rmdir /s /q "%OUT%"
 if exist "%OUT%" (
     echo ERROR: Existing portable package could not be removed.
-    echo Stop the SOOP server/launcher and retry PACKAGE_RUST_WEB.bat.
+    echo Stop the Stream Archive server/launcher and retry PACKAGE_RUST_WEB.bat.
     if "%PRESERVE_RUNTIME%"=="1" if exist "%PRESERVE%\data" (
         if not exist "%OUT%\data" mkdir "%OUT%\data" 2>nul
         powershell -NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -LiteralPath '.\%PRESERVE%\data\*' -Destination '.\%OUT%\data' -Recurse -Force" >nul 2>nul
