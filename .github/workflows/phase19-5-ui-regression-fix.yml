@@ -48,6 +48,61 @@ jobs:
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./maintenance/Apply-UiRegressionFix.ps1
 
+      - name: Align strengthened process guards
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+
+          $path = 'maintenance/guards/ProcessLifecycle.ps1'
+          $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $path))
+          $out = New-Object System.Collections.Generic.List[string]
+          $streamlinkGuard = 0
+          $ffmpegGuard = 0
+          foreach ($line in $lines) {
+            if ($line.Contains('CHZZK VOD setup/failure paths must terminate owned Streamlink.')) {
+              $out.Add('Assert-Match $chzzkVod ''spawn_owned\(&mut streamlink_command\)'' ''CHZZK VOD Streamlink must enter retained ownership before execution.''')
+              $streamlinkGuard++
+              continue
+            }
+            if ($line.Contains('CHZZK VOD cancellation must terminate owned FFmpeg.')) {
+              $out.Add('Assert-Match $chzzkVod ''spawn_owned\(&mut ffmpeg_command\)'' ''CHZZK VOD FFmpeg must enter retained ownership before execution.''')
+              $out.Add('Assert-Match $chzzkVod ''streamlink_tree\.terminate\(&mut streamlink_child\)'' ''CHZZK VOD cancellation must terminate retained Streamlink ownership.''')
+              $out.Add('Assert-Match $chzzkVod ''ffmpeg_tree\.terminate\(&mut ffmpeg_child\)'' ''CHZZK VOD cancellation must terminate retained FFmpeg ownership.''')
+              $out.Add('Assert-Match $chzzkVod ''spawn_owned\(&mut command\)'' ''CHZZK VOD analyze commands must use retained ownership.''')
+              $out.Add('Assert-NotMatch $chzzkVod ''terminate_owned\(&mut (?:streamlink_child|ffmpeg_child|child)\)'' ''CHZZK VOD must not fall back to compatibility tree recapture for its external tools.''')
+              $ffmpegGuard++
+              continue
+            }
+            $out.Add($line)
+          }
+          if ($streamlinkGuard -ne 1 -or $ffmpegGuard -ne 1) {
+            throw "ProcessLifecycle guard replacement mismatch streamlink=$streamlinkGuard ffmpeg=$ffmpegGuard"
+          }
+          [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $out, $utf8)
+
+          $path = 'maintenance/guards/StorageOwnership.ps1'
+          $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $path))
+          $out = New-Object System.Collections.Generic.List[string]
+          $ffmpegStorage = 0
+          $streamlinkStorage = 0
+          foreach ($line in $lines) {
+            if ($line.Contains('Downstream FFmpeg spawn is not handled explicitly.')) {
+              $out.Add('Assert-Match $chzzkVod ''spawn_owned\(&mut ffmpeg_command\)'' ''Downstream FFmpeg must establish retained ownership before execution.''')
+              $ffmpegStorage++
+              continue
+            }
+            if ($line.Contains('Streamlink owned tree is not explicitly terminated on downstream setup failures.')) {
+              $out.Add('Assert-Match $chzzkVod ''streamlink_tree\.terminate\(&mut streamlink_child\)'' ''Streamlink retained tree must be explicitly terminated on downstream setup failures.''')
+              $streamlinkStorage++
+              continue
+            }
+            $out.Add($line)
+          }
+          if ($ffmpegStorage -ne 1 -or $streamlinkStorage -ne 1) {
+            throw "StorageOwnership guard replacement mismatch ffmpeg=$ffmpegStorage streamlink=$streamlinkStorage"
+          }
+          [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $out, $utf8)
+
       - name: Rust format
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: cargo fmt --manifest-path rust-web/Cargo.toml
