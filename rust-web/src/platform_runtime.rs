@@ -167,7 +167,6 @@ mod windows_tree {
         collections::{HashMap, HashSet, VecDeque},
         ffi::c_void,
         mem::size_of,
-        os::windows::io::AsRawHandle,
         ptr,
     };
     use tokio::process::Child;
@@ -238,7 +237,7 @@ mod windows_tree {
 
     fn child_identity(child: &Child) -> Result<ProcessIdentity> {
         let pid = child.id().context("spawned child PID unavailable")?;
-        let handle = child.as_raw_handle() as HANDLE;
+        let handle = child.raw_handle() as HANDLE;
         Ok(ProcessIdentity {
             pid,
             creation_time: process_creation_time(handle)
@@ -314,7 +313,7 @@ mod windows_tree {
             };
 
             let job = Self::create()?;
-            let root_handle = child.as_raw_handle() as HANDLE;
+            let root_handle = child.raw_handle() as HANDLE;
             job.assign_handle(root_handle).with_context(|| {
                 format!(
                     "failed to assign exact spawned root pid={} to Job",
