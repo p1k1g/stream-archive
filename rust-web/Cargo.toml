@@ -1,8 +1,8 @@
 [package]
-name = "soop-web"
+name = "stream-archive-server"
 version = "0.5.2"
 edition = "2024"
-default-run = "soop-web"
+default-run = "stream-archive-server"
 
 [dependencies]
 anyhow = "1"
