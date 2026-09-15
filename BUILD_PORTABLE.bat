@@ -2,8 +2,19 @@
 setlocal
 cd /d "%~dp0"
 
-set "STREAM_ARCHIVE_NO_PAUSE=1"
-call BUILD_RELEASE.bat || exit /b 1
+where cargo.exe >nul 2>nul
+if errorlevel 1 (
+  echo [ERROR] Rust cargo.exe was not found in PATH.
+  echo Install Rust from https://rustup.rs/ and reopen this terminal.
+  exit /b 1
+)
+
+cargo build --locked --release --manifest-path ".\rust-web\Cargo.toml"
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Stream Archive release build failed.
+  exit /b 1
+)
 
 set "OUT=dist\stream-archive"
 set "PRESERVE=dist\.stream-archive-preserve"
