@@ -1571,7 +1571,14 @@ fn resolve_tools(backend: &Path, yt_dlp: &str, ffmpeg: &str) -> Result<Tools> {
     let vod = backend.join("vod");
     let yt_dlp = resolve_executable(yt_dlp, &[vod.join("yt-dlp.exe")], &["yt-dlp.exe", "yt-dlp"])
         .ok_or_else(|| anyhow!("yt-dlp를 찾을 수 없습니다."))?;
-    let ffmpeg = resolve_executable(ffmpeg, &[vod.join("ffmpeg.exe")], &["ffmpeg.exe", "ffmpeg"]);
+    let ffmpeg = resolve_executable(
+        ffmpeg,
+        &[
+            vod.join("ffmpeg.exe"),
+            PathBuf::from(r"C:\Program Files\Streamlink\ffmpeg\ffmpeg.exe"),
+        ],
+        &["ffmpeg.exe", "ffmpeg"],
+    );
     Ok(Tools { yt_dlp, ffmpeg })
 }
 

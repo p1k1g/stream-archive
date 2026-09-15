@@ -1,5 +1,5 @@
 use super::auth::{ChzzkAuth, ChzzkAuthState};
-use crate::platform_runtime::{configure_utf8_cli, restrict_private_dir, terminate_owned};
+use crate::platform_runtime::{configure_utf8_cli, restrict_private_dir, spawn_owned};
 use crate::{
     backend::{LogBuffer, read_safe_settings, settings_path},
     model::{
@@ -838,13 +838,13 @@ async fn run_streamlink_download(
             streamlink_command.current_dir(parent);
         }
     }
-    let mut streamlink_child = streamlink_command
-        .spawn()
-        .with_context(|| format!("Streamlink 실행 실패: {}", streamlink.display()))?;
+    let (mut streamlink_child, mut streamlink_tree) = spawn_owned(&mut streamlink_command)
+        .await
+        .with_context(|| format!("Streamlink start failed: {}", streamlink.display()))?;
     let mut streamlink_stdout = match streamlink_child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            terminate_owned(&mut streamlink_child).await;
+            let _ = streamlink_tree.terminate(&mut streamlink_child).await;
             bail!("Streamlink stdout unavailable");
         }
     };
@@ -889,18 +889,18 @@ async fn run_streamlink_download(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut ffmpeg_child = match ffmpeg_command.spawn() {
-        Ok(child) => child,
+    let (mut ffmpeg_child, mut ffmpeg_tree) = match spawn_owned(&mut ffmpeg_command).await {
+        Ok(owned) => owned,
         Err(err) => {
-            terminate_owned(&mut streamlink_child).await;
-            return Err(err).with_context(|| format!("FFmpeg 실행 실패: {}", ffmpeg.display()));
+            let _ = streamlink_tree.terminate(&mut streamlink_child).await;
+            return Err(err).with_context(|| format!("FFmpeg start failed: {}", ffmpeg.display()));
         }
     };
     let mut ffmpeg_stdin = match ffmpeg_child.stdin.take() {
         Some(stdin) => stdin,
         None => {
-            terminate_owned(&mut streamlink_child).await;
-            terminate_owned(&mut ffmpeg_child).await;
+            let _ = streamlink_tree.terminate(&mut streamlink_child).await;
+            let _ = ffmpeg_tree.terminate(&mut ffmpeg_child).await;
             bail!("FFmpeg stdin unavailable");
         }
     };
@@ -935,8 +935,8 @@ async fn run_streamlink_download(
 
     loop {
         if cancel.load(Ordering::SeqCst) {
-            terminate_owned(&mut streamlink_child).await;
-            terminate_owned(&mut ffmpeg_child).await;
+            let _ = streamlink_tree.terminate(&mut streamlink_child).await;
+            let _ = ffmpeg_tree.terminate(&mut ffmpeg_child).await;
             pump.abort();
             let _ = pump.await;
             abort_reader_tasks(reader_tasks).await;
@@ -959,7 +959,7 @@ async fn run_streamlink_download(
                 .context("Streamlink CHZZK 상태 확인 실패")?;
             if let Some(exit) = streamlink_exit.as_ref() {
                 if !exit.success() {
-                    terminate_owned(&mut ffmpeg_child).await;
+                    let _ = ffmpeg_tree.terminate(&mut ffmpeg_child).await;
                     pump.abort();
                     let _ = pump.await;
                     drain_failed_reader_tasks(
@@ -985,7 +985,7 @@ async fn run_streamlink_download(
                 .context("FFmpeg CHZZK 상태 확인 실패")?;
             if let Some(exit) = ffmpeg_exit.as_ref() {
                 if !exit.success() {
-                    terminate_owned(&mut streamlink_child).await;
+                    let _ = streamlink_tree.terminate(&mut streamlink_child).await;
                     pump.abort();
                     let _ = pump.await;
                     drain_failed_reader_tasks(
@@ -1054,14 +1054,15 @@ async fn run_capture(
 ) -> Result<String> {
     let mut command = Command::new(program);
     configure_utf8_cli(&mut command);
-    let mut child = command
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .with_context(|| format!("{label} 프로세스 실행 실패: {}", program.display()))?;
+        .kill_on_drop(true);
+    let (mut child, mut owned_tree) = spawn_owned(&mut command)
+        .await
+        .with_context(|| format!("{label} process start failed: {}", program.display()))?;
     let mut stdout = child
         .stdout
         .take()
@@ -1081,7 +1082,7 @@ async fn run_capture(
 
     let exit = loop {
         if cancel.load(Ordering::SeqCst) {
-            terminate_owned(&mut child).await;
+            let _ = owned_tree.terminate(&mut child).await;
             let _ = stdout_task.await;
             let _ = stderr_task.await;
             bail!("{label} 취소됨");
