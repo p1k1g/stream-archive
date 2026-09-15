@@ -1,0 +1,135 @@
+name: Phase 19.5 namespace fixup
+
+on:
+  push:
+    branches:
+      - phase19.5-stream-archive-namespace
+
+permissions:
+  contents: write
+
+jobs:
+  fixup:
+    if: github.event.head_commit.message != 'Apply Stream Archive namespace cleanup'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase19.5-stream-archive-namespace
+          fetch-depth: 0
+
+      - name: Apply namespace cleanup
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Replace-Literal {
+            param(
+              [Parameter(Mandatory=$true)][string]$Path,
+              [Parameter(Mandatory=$true)][string]$Old,
+              [Parameter(Mandatory=$true)][string]$New,
+              [switch]$Optional
+            )
+            $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+            if (-not $text.Contains($Old)) {
+              if ($Optional) { return }
+              throw "Expected text not found in $Path : $Old"
+            }
+            $text = $text.Replace($Old, $New)
+            [IO.File]::WriteAllText((Resolve-Path -LiteralPath $Path), $text, [Text.UTF8Encoding]::new($false))
+          }
+
+          # Cargo package identity must agree with Cargo.toml for --locked builds.
+          Replace-Literal 'rust-web/Cargo.lock' 'name = "soop-web"' 'name = "stream-archive-server"'
+
+          # App-owned CHZZK publication markers use the product namespace.
+          Replace-Literal 'rust-web/src/platform/chzzk/vod.rs' '.soop-downloader.claim' '.stream-archive.claim'
+          Replace-Literal 'rust-web/src/platform/chzzk/vod.rs' '.soop-downloader.finalizing' '.stream-archive.finalizing'
+          Replace-Literal 'maintenance/guards/StorageOwnership.ps1' '\.soop-downloader\.claim' '\.stream-archive\.claim'
+          Replace-Literal 'maintenance/guards/StorageOwnership.ps1' '\.soop-downloader\.finalizing' '\.stream-archive\.finalizing'
+
+          # Remove dead pre-SQLite import/restore UI and hidden legacy history DOM.
+          $index = 'rust-web/web/index.html'
+          Replace-Literal $index '<button id="restoreChannels" class="secondary">백업 복구</button> ' ''
+          Replace-Literal $index '<input id="channelBackupFile" type="file" accept=".txt,.bak,text/plain" hidden>' ''
+          Replace-Literal $index '<p class="hint">기존 SOOP_LIVE_CHANNELS.txt 또는 .bak 파일을 선택하면 SQLite 채널 목록으로 복구합니다.</p>' ''
+          Replace-Literal $index '<section style="display:none" aria-hidden="true"><div class="title"><h2>Legacy History Refresh</h2><button id="refreshHistory">새로고침</button></div><div class="table"><table><tbody id="liveHistory"></tbody></table></div><div class="table"><table><tbody id="vodHistory"></tbody></table></div></section>' ''
+          Replace-Literal $index '<button id="importSettings" class="secondary">이전 설정 가져오기</button> ' ''
+          Replace-Literal $index '<input id="settingsImportFile" type="file" accept=".ini,.bak,text/plain" hidden>' ''
+          Replace-Literal $index '<p class="hint">SOOP_LIVE_SETTING.ini/.bak를 선택하면 일반 설정과 VOD 도구 경로를 SQLite로 가져옵니다. 비밀번호/API Key는 안전상 자동 가져오지 않습니다.</p>' '<p class="hint">설정과 채널은 SQLite에 저장되며 Web UI에서 직접 관리합니다.</p>'
+          Replace-Literal $index '<p class="hint">Phase 7부터 Watcher는 SQLite를 직접 읽습니다. INI/TXT는 호환/백업용 미러이며 런타임 원본이 아닙니다.</p>' ''
+          Replace-Literal $index '<strong><i></i> SOOP</strong>' '<strong><i></i> SOOP · CHZZK</strong>'
+          Replace-Literal $index '<small>현재 활성 · 추후 다른 스트리밍 플랫폼 확장 예정</small>' '<small>LIVE / VOD 지원</small>'
+          Replace-Literal $index 'C:\SOOP_VOD' 'C:\StreamArchive\VOD'
+          Replace-Literal $index 'soop-recorder-backups' 'stream-archive-backups'
+          Replace-Literal $index 'SOOP_BACKUP_DIR' 'STREAM_ARCHIVE_BACKUP_DIR'
+          Replace-Literal $index 'xDetachLegacyBackupSave' 'xDetachInlineBackupSave'
+
+          # Phase 14 contains the older copy of the backup helper text.
+          Replace-Literal 'rust-web/web/phase14.js' 'soop-recorder-backups' 'stream-archive-backups'
+          Replace-Literal 'rust-web/web/phase14.js' 'SOOP_BACKUP_DIR' 'STREAM_ARCHIVE_BACKUP_DIR'
+
+          # No app-wide pre-rename environment variables should remain in active code/docs.
+          $oldEnv = [ordered]@{
+            'SOOP_WEB_BIND'='STREAM_ARCHIVE_BIND'
+            'SOOP_WEB_TOKEN'='STREAM_ARCHIVE_TOKEN'
+            'SOOP_START_WATCHER'='STREAM_ARCHIVE_START_WATCHER'
+            'SOOP_DATA_DIR'='STREAM_ARCHIVE_DATA_DIR'
+            'SOOP_BACKUP_DIR'='STREAM_ARCHIVE_BACKUP_DIR'
+            'SOOP_BACKEND_DIR'='STREAM_ARCHIVE_BACKEND_DIR'
+            'SOOP_NO_PAUSE'='STREAM_ARCHIVE_NO_PAUSE'
+          }
+          $tracked = git ls-files
+          foreach ($path in $tracked) {
+            if ($path -eq '.github/workflows/phase19-5-namespace-fixup.yml') { continue }
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            $ext = [IO.Path]::GetExtension($path).ToLowerInvariant()
+            if ($ext -notin @('.rs','.js','.html','.css','.md','.ps1','.bat','.cmd','.yml','.yaml','.toml','.txt','.ini')) { continue }
+            $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            $next = $text
+            foreach ($entry in $oldEnv.GetEnumerator()) { $next = $next.Replace($entry.Key, $entry.Value) }
+            if ($next -ne $text) {
+              [IO.File]::WriteAllText((Resolve-Path -LiteralPath $path), $next, [Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
+
+      - name: Runtime contracts
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./maintenance/Test-RuntimeContracts.ps1
+
+      - name: Rust format
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: cargo fmt --manifest-path rust-web/Cargo.toml -- --check
+
+      - name: Rust tests
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: cargo test --locked --manifest-path rust-web/Cargo.toml
+
+      - name: Rust check
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: cargo check --locked --manifest-path rust-web/Cargo.toml
+
+      - name: JavaScript syntax
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          Get-ChildItem ./rust-web/web -Filter *.js | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $($_.Name)" }
+          }
+
+      - name: Commit fixup
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          if (git diff --cached --quiet) {
+            Write-Host 'No fixup changes required.'
+            exit 0
+          }
+          git commit -m "Apply Stream Archive namespace cleanup"
+          git push origin HEAD:phase19.5-stream-archive-namespace
