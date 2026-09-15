@@ -14,6 +14,6 @@ cargo run --release --bin soop-web --manifest-path ".\rust-web\Cargo.toml"
 set "RC=%ERRORLEVEL%"
 
 echo.
-echo SOOP Rust Web exited with code %RC%.
+echo Stream Archive exited with code %RC%.
 pause
 exit /b %RC%
