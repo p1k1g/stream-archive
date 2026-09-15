@@ -45,25 +45,28 @@ try {
     }
 
     $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
-    $package = Read-RepoFile 'PACKAGE_RUST_WEB.bat'
+    $package = Read-RepoFile 'BUILD_PORTABLE.bat'
+    $manifest = Read-RepoFile 'rust-web/Cargo.toml'
     Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
     Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
     foreach ($trigger in @(
-        'rust-web/src/platform/\*\*',
-        'rust-web/src/platform_runtime\.rs',
-        'rust-web/src/recorder\.rs',
-        'rust-web/src/vod_queue\.rs',
-        'rust-web/src/main\.rs',
-        'rust-web/src/backend\.rs',
-        'rust-web/web/\*\*',
-        'maintenance/\*\*'
+        'rust-web/\*\*',
+        'RUN_DEV\.bat',
+        'BUILD_RELEASE\.bat',
+        'BUILD_PORTABLE\.bat',
+        'maintenance/\*\*',
+        'docs/\*\*',
+        'deploy/\*\*'
     )) {
         Assert-Match $workflow $trigger "Runtime workflow path coverage is missing: $trigger"
     }
-    Assert-Match $workflow 'PACKAGE_RUST_WEB\.bat' 'Portable package smoke step is missing.'
+    Assert-Match $workflow 'BUILD_PORTABLE\.bat' 'Portable package smoke step is missing.'
     Assert-Match $workflow 'Verify portable package' 'Portable package verification step is missing.'
-    Assert-Match $package 'soop-server\.exe' 'Portable package must include the Rust server.'
-    Assert-Match $package 'soop-launcher\.exe' 'Portable package must include the native launcher.'
+    Assert-Match $package 'stream-archive-server\.exe' 'Portable package must include the Stream Archive server.'
+    Assert-Match $package 'stream-archive-launcher\.exe' 'Portable package must include the native Stream Archive launcher.'
+    Assert-Match $package 'dist\\stream-archive' 'Portable package output must use the Stream Archive namespace.'
+    Assert-Match $manifest 'name\s*=\s*"stream-archive-server"' 'Cargo package must use the Stream Archive namespace.'
+    Assert-NotMatch $package 'soop-server|soop-launcher|soop-recorder|SOOP_NO_PAUSE|\.rust-web' 'Portable packaging must not reintroduce generic legacy app names.'
     Write-Host "Release safety contracts passed across $($tracked.Count) tracked files."
 }
 finally {
