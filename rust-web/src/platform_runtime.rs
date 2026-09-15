@@ -235,9 +235,15 @@ mod windows_tree {
         Ok(filetime_value(creation))
     }
 
+    fn child_raw_handle(child: &Child) -> Result<HANDLE> {
+        child
+            .raw_handle()
+            .context("spawned child process handle unavailable")
+    }
+
     fn child_identity(child: &Child) -> Result<ProcessIdentity> {
         let pid = child.id().context("spawned child PID unavailable")?;
-        let handle = child.raw_handle() as HANDLE;
+        let handle = child_raw_handle(child)?;
         Ok(ProcessIdentity {
             pid,
             creation_time: process_creation_time(handle)
@@ -313,7 +319,7 @@ mod windows_tree {
             };
 
             let job = Self::create()?;
-            let root_handle = child.raw_handle() as HANDLE;
+            let root_handle = child_raw_handle(child)?;
             job.assign_handle(root_handle).with_context(|| {
                 format!(
                     "failed to assign exact spawned root pid={} to Job",
