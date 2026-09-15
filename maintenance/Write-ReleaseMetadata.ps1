@@ -17,10 +17,25 @@ if ($null -eq $package -or [string]::IsNullOrWhiteSpace([string]$package.version
     throw 'Unable to resolve stream-archive-server package version from cargo metadata'
 }
 
+# Source archives downloaded from GitHub do not contain a .git directory.
+# Release metadata must still be generated successfully in that case; the
+# commit field is informational and may remain "unknown" outside a checkout.
 $commit = 'unknown'
 if (Get-Command git -ErrorAction SilentlyContinue) {
-    $candidate = (& git rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($candidate)) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell can promote native stderr to a terminating
+        # NativeCommandError while ErrorActionPreference is Stop. Suppress that
+        # probe-only error so a non-Git source tree is a supported build input.
+        $ErrorActionPreference = 'SilentlyContinue'
+        $candidate = (& git rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
+        $gitExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($gitExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($candidate)) {
         $commit = $candidate.Trim()
     }
 }
