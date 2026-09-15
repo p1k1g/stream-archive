@@ -3,6 +3,8 @@ name = "stream-archive-server"
 version = "0.5.2"
 edition = "2024"
 default-run = "stream-archive-server"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/p1k1g/stream-archive"
 
 [dependencies]
 anyhow = "1"
