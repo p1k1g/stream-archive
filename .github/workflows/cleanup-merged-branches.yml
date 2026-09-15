@@ -1,0 +1,62 @@
+name: Cleanup merged branches
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cleanup-merged-branches.yml"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'pre-public-readiness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Delete only branches backed by merged PRs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deleted=0
+          skipped=0
+
+          while IFS= read -r branch; do
+            case "$branch" in
+              main|pre-public-readiness)
+                continue
+                ;;
+            esac
+
+            open_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$branch" --json number --jq 'length')"
+            merged_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --head "$branch" --json number --jq 'length')"
+
+            if [ "$open_count" -ne 0 ]; then
+              echo "SKIP open PR: $branch"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if [ "$merged_count" -eq 0 ]; then
+              echo "SKIP no merged PR evidence: $branch"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            echo "DELETE merged branch: $branch"
+            git push origin --delete "$branch"
+            deleted=$((deleted + 1))
+          done < <(git ls-remote --heads origin | sed 's#.*refs/heads/##' | sort)
+
+          echo "Deleted branches: $deleted"
+          echo "Skipped branches: $skipped"
