@@ -30,13 +30,19 @@ jobs:
           $text = $text.Replace('onclick=.*\r?$', 'onclick=[^\r\n]*\r?$')
           $text = $text.Replace('Promise\.all\(\[.*\r?$', 'Promise\.all\(\[[^\r\n]*\r?$')
           $text = $text.Replace("toast('Watcher '+(a==='start'?'start':'stop'))", "toast('Watcher '+(a==='start'?'시작':'중지'))")
-          $text = [regex]::Replace(
-            $text,
-            '(?m)^if \(\$providers -notmatch [^\r\n]*main\.rs[^\r\n]*$',
-            'if ($providers.IndexOf(''rust-web/src/main.rs'', [System.StringComparison]::Ordinal) -lt 0) {'
-          )
           $text = $text.Replace('Assert-Match \$chzzkVod', 'Assert-Match \`$chzzkVod')
           [System.IO.File]::WriteAllText((Resolve-Path -LiteralPath $path), $text, [System.Text.UTF8Encoding]::new($false))
+
+          $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $path))
+          $providerGuardFixes = 0
+          for ($i = 0; $i -lt $lines.Length; $i++) {
+            if ($lines[$i].Contains('if ($providers -notmatch') -and $lines[$i].Contains('main.rs')) {
+              $lines[$i] = "if (`$providers.IndexOf('rust-web/src/main.rs', [System.StringComparison]::Ordinal) -lt 0) {"
+              $providerGuardFixes++
+            }
+          }
+          if ($providerGuardFixes -ne 1) { throw "provider guard preprocessing expected 1 line, found $providerGuardFixes" }
+          [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $lines, [System.Text.UTF8Encoding]::new($false))
 
       - name: Apply focused fixes
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
