@@ -518,7 +518,7 @@ fn inspect_backup(path: &Path) -> Result<BackupInfo> {
     let actual_sha = sha256_file(path)?;
     let db_ok = verify_sqlite(path).is_ok();
     let integrity = match &metadata {
-        Some(meta) if !db_ok => "INVALID_SQLITE",
+        Some(_) if !db_ok => "INVALID_SQLITE",
         Some(meta)
             if meta.sha256.eq_ignore_ascii_case(&actual_sha) && meta.size_bytes == size_bytes =>
         {

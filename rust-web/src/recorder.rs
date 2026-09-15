@@ -1,3 +1,4 @@
+use crate::platform_runtime::{OwnedProcessTree, spawn_owned};
 use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
@@ -52,8 +53,9 @@ pub struct Recording {
     pub started_at: DateTime<Utc>,
     pub history_id: String,
     child: Child,
+    owned_tree: OwnedProcessTree,
     output_dir: PathBuf,
-    cookie_file: Option<CookieFile>,
+    _cookie_file: Option<CookieFile>,
     last_size: u64,
     last_growth: Instant,
     last_monitor: Instant,
@@ -262,15 +264,21 @@ impl RecorderManager {
             }
         }
 
-        let mut child = command.spawn().with_context(|| {
+        // Windows LIVE starts suspended inside the common runtime boundary.
+        // The exact Streamlink process handle enters the retained Job Object
+        // before the first user instruction executes, then the process resumes.
+        // Consequently an immediate FFmpeg/player child inherits the Job and
+        // there is no spawn-time PID/snapshot adoption race.
+        let (mut child, owned_tree) = spawn_owned(&mut command).await.with_context(|| {
             format!(
-                "failed to start Streamlink: {}",
+                "failed to start retained Streamlink: {}",
                 config.streamlink.display()
             )
         })?;
         let pid = child
             .id()
             .ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
+
         if let Some(stderr) = child.stderr.take() {
             let logs = self.logs.clone();
             let account = account.to_string();
@@ -325,8 +333,9 @@ impl RecorderManager {
             started_at,
             history_id,
             child,
+            owned_tree,
             output_dir,
-            cookie_file,
+            _cookie_file: cookie_file,
             last_size: 0,
             last_growth: Instant::now(),
             last_monitor: Instant::now(),
@@ -339,6 +348,12 @@ impl RecorderManager {
             .try_wait()
             .context("failed to query Streamlink status")?
         {
+            // Root exit is only a status signal. The retained Job Object still
+            // owns any surviving FFmpeg/player descendant, so enforce that
+            // ownership before the watcher is allowed to take/drop Recording.
+            rec.owned_tree.terminate_now().with_context(|| {
+                format!("failed to clean retained recorder tree pid={}", rec.pid)
+            })?;
             return Ok(RecordingPoll::Exited(status.code()));
         }
         if rec.last_monitor.elapsed() < Duration::from_secs(config.monitor_interval.max(1)) {
@@ -364,29 +379,13 @@ impl RecorderManager {
     }
 
     pub async fn stop(&self, rec: &mut Recording) -> Result<Option<i32>> {
-        if rec.child.try_wait()?.is_none() {
-            #[cfg(windows)]
-            {
-                let status = Command::new("taskkill.exe")
-                    .arg("/PID")
-                    .arg(rec.pid.to_string())
-                    .arg("/T")
-                    .arg("/F")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .await?;
-                if !status.success() && rec.child.try_wait()?.is_none() {
-                    bail!("taskkill failed for recorder pid={}", rec.pid);
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = rec.child.kill().await;
-            }
-        }
-        Ok(rec.child.wait().await.ok().and_then(|s| s.code()))
+        // Always terminate through the retained owner, even if the root child
+        // was already reaped. Root exit is not proof that inherited descendants
+        // are gone.
+        rec.owned_tree
+            .terminate(&mut rec.child)
+            .await
+            .with_context(|| format!("failed to stop recorder pid={}", rec.pid))
     }
 
     pub async fn log_finished(&self, channel: &str, account: &str, rec: &Recording, reason: &str) {

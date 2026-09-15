@@ -2,10 +2,15 @@ name: Rust web check
 
 on:
   pull_request:
-    branches:
-      - main
     paths:
       - "rust-web/**"
+      - "rust-web/src/platform/**"
+      - "rust-web/src/platform_runtime.rs"
+      - "rust-web/src/recorder.rs"
+      - "rust-web/src/vod_queue.rs"
+      - "rust-web/src/main.rs"
+      - "rust-web/src/backend.rs"
+      - "rust-web/web/**"
       - "BUILD_RUST_WEB.bat"
       - "RUN_RUST_WEB.bat"
       - "PACKAGE_RUST_WEB.bat"
@@ -14,8 +19,7 @@ on:
       - "deploy/**"
       - "backend/*.example.*"
       - "backend/vod/*.example.ini"
-      - ".github/workflows/rust-web-check.yml"
-      - ".github/workflows/rust-web-release.yml"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 concurrency:
@@ -37,21 +41,9 @@ jobs:
           cargo clippy --version
           git --version
 
-      - name: Phase 15/16 architecture guard
+      - name: Runtime contract guard
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: ./maintenance/Test-Phase15Architecture.ps1
-
-      - name: Phase 17 CHZZK guard
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: ./maintenance/Test-Phase17Chzzk.ps1
-
-      - name: Owned process lifecycle guard
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: ./maintenance/Test-ProcessLifecycle.ps1
-
-      - name: Public release safety scan
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: ./maintenance/Test-PublicReleaseSafety.ps1
+        run: ./maintenance/Test-RuntimeContracts.ps1
 
       - name: JavaScript syntax check
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -74,12 +66,9 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $($_.Name)" }
           }
 
-      # The repository contains formatting drift in older untouched modules. Keep
-      # the common/provider boundary strict without turning architecture PRs into
-      # a whole-repository whitespace rewrite.
-      - name: Rust format check (platform provider boundary)
+      - name: Rust format check
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: rustfmt --edition 2024 --check rust-web/src/platform/mod.rs rust-web/src/platform/live.rs rust-web/src/platform/vod.rs rust-web/src/platform/soop/mod.rs rust-web/src/platform/chzzk/mod.rs rust-web/src/platform/chzzk/auth.rs rust-web/src/platform/chzzk/live.rs rust-web/src/support.rs
+        run: cargo fmt --manifest-path rust-web/Cargo.toml -- --check
 
       - name: Rust unit tests
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"

@@ -60,7 +60,6 @@ pub struct PlatformCapabilities {
 }
 
 pub trait PlatformProvider: Send + Sync {
-    fn id(&self) -> PlatformId;
     fn display_name(&self) -> &'static str;
     fn capabilities(&self) -> PlatformCapabilities;
     fn validate_account(&self, account: &str) -> Result<()>;

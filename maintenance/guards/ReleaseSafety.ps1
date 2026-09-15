@@ -1,9 +1,11 @@
-$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Common.ps1')
 
-$root = Split-Path $PSScriptRoot -Parent
+$root = $script:RuntimeContractsRoot
 Push-Location $root
 try {
-    $tracked = (& git ls-files) | Where-Object { $_ -and $_ -ne 'maintenance/Test-PublicReleaseSafety.ps1' }
+    $tracked = (& git ls-files) | Where-Object {
+        $_ -and $_ -ne 'maintenance/guards/ReleaseSafety.ps1'
+    }
     if ($LASTEXITCODE -ne 0) { throw 'git ls-files failed' }
 
     $textExtensions = @('.rs','.js','.css','.html','.md','.ps1','.bat','.cmd','.yml','.yaml','.toml','.ini','.txt','.json','.example')
@@ -42,7 +44,27 @@ try {
         throw "Public release safety scan found $($violations.Count) potential secret/privacy issue(s)."
     }
 
-    Write-Host "Public release safety scan passed across $($tracked.Count) tracked files."
+    $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
+    $package = Read-RepoFile 'PACKAGE_RUST_WEB.bat'
+    Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
+    Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
+    foreach ($trigger in @(
+        'rust-web/src/platform/\*\*',
+        'rust-web/src/platform_runtime\.rs',
+        'rust-web/src/recorder\.rs',
+        'rust-web/src/vod_queue\.rs',
+        'rust-web/src/main\.rs',
+        'rust-web/src/backend\.rs',
+        'rust-web/web/\*\*',
+        'maintenance/\*\*'
+    )) {
+        Assert-Match $workflow $trigger "Runtime workflow path coverage is missing: $trigger"
+    }
+    Assert-Match $workflow 'PACKAGE_RUST_WEB\.bat' 'Portable package smoke step is missing.'
+    Assert-Match $workflow 'Verify portable package' 'Portable package verification step is missing.'
+    Assert-Match $package 'soop-server\.exe' 'Portable package must include the Rust server.'
+    Assert-Match $package 'soop-launcher\.exe' 'Portable package must include the native launcher.'
+    Write-Host "Release safety contracts passed across $($tracked.Count) tracked files."
 }
 finally {
     Pop-Location

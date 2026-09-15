@@ -1,4 +1,4 @@
-use super::{PlatformCapabilities, PlatformId, PlatformProvider};
+use super::{PlatformCapabilities, PlatformProvider};
 use anyhow::{Result, bail};
 use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
@@ -13,10 +13,6 @@ pub(crate) static CHZZK: ChzzkProvider = ChzzkProvider;
 pub(crate) struct ChzzkProvider;
 
 impl PlatformProvider for ChzzkProvider {
-    fn id(&self) -> PlatformId {
-        PlatformId::Chzzk
-    }
-
     fn display_name(&self) -> &'static str {
         "CHZZK"
     }

@@ -1,22 +1,4 @@
-$ErrorActionPreference = 'Stop'
-
-$root = Split-Path $PSScriptRoot -Parent
-
-function Read-RepoFile([string]$relativePath) {
-    $path = Join-Path $root $relativePath
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Missing required Phase 17 file: $relativePath"
-    }
-    return Get-Content -LiteralPath $path -Raw -Encoding UTF8
-}
-
-function Assert-Match([string]$text, [string]$pattern, [string]$message) {
-    if ($text -notmatch $pattern) { throw $message }
-}
-
-function Assert-NotMatch([string]$text, [string]$pattern, [string]$message) {
-    if ($text -match $pattern) { throw $message }
-}
+. (Join-Path $PSScriptRoot 'Common.ps1')
 
 $platform = Read-RepoFile 'rust-web/src/platform/mod.rs'
 $platformLive = Read-RepoFile 'rust-web/src/platform/live.rs'
@@ -30,12 +12,14 @@ $backend = Read-RepoFile 'rust-web/src/backend.rs'
 $app = Read-RepoFile 'rust-web/web/app.js'
 $phase8 = Read-RepoFile 'rust-web/web/phase8.js'
 $phase14 = Read-RepoFile 'rust-web/web/phase14.js'
+$soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'
 
-# Provider registration / Phase 17 LIVE boundary. Phase 18 may enable VOD separately.
+# Provider registration / CHZZK LIVE boundary. CHZZK VOD may enable VOD separately.
 Assert-Match $platform 'Chzzk' 'PlatformId::Chzzk registration is missing.'
 Assert-Match $platform 'PlatformId::Chzzk\s*=>\s*&chzzk::CHZZK' 'CHZZK provider dispatch is missing.'
 Assert-Match $chzzk 'live:\s*true' 'CHZZK LIVE capability must remain enabled.'
 Assert-Match $chzzk 'vod:\s*(?:false|true)' 'CHZZK provider VOD capability field is missing.'
+Assert-Match $soopVod 'tools\.yt_dlp' 'SOOP VOD must remain yt-dlp based.'
 Assert-Match $chzzk 'account\.len\(\)\s*!=\s*32' 'CHZZK channel ID length validation is missing.'
 Assert-Match $chzzk 'is_ascii_hexdigit' 'CHZZK channel ID hex validation is missing.'
 
@@ -152,4 +136,4 @@ Assert-Match $app 'function deactivateChzzkSettings\(destination=''''\)' 'CHZZK 
 Assert-Match $app 'destination===''notifications''' 'Leaving CHZZK for Notifications does not preserve notification panel isolation.'
 Assert-Match $app 'deactivateChzzkSettings\(tab\.dataset\.settingsTab\|\|''''\)' 'CHZZK settings tab listeners do not pass their destination identity.'
 
-Write-Host 'Phase 17 CHZZK LIVE regression checks passed.'
+Write-Host 'Provider contracts passed.'

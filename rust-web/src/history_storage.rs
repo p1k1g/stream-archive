@@ -1,5 +1,5 @@
 use crate::{
-    AppState, ApiResult, authorize, internal_error,
+    ApiResult, AppState, authorize, internal_error,
     model::{HistoryResponse, LiveHistoryItem, VodHistoryItem},
     support::platform::PlatformId,
 };

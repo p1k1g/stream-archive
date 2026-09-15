@@ -1,10 +1,11 @@
 mod auth;
 mod backend;
 mod backup;
+mod history_storage;
+mod local_picker;
 mod model;
 mod native_watcher;
-mod phase8;
-mod phase9_1;
+mod platform_runtime;
 mod primary_config;
 mod realtime;
 mod recorder;
@@ -179,9 +180,12 @@ async fn main() -> Result<()> {
         .route("/api/events", get(realtime::api_events))
         .route("/api/diagnostics", get(api_diagnostics))
         .route("/api/logs", get(api_logs))
-        .route("/api/history", get(phase8::api_history))
-        .route("/api/storage", get(phase8::api_storage))
-        .route("/api/storage/check", post(phase8::api_storage_check))
+        .route("/api/history", get(history_storage::api_history))
+        .route("/api/storage", get(history_storage::api_storage))
+        .route(
+            "/api/storage/check",
+            post(history_storage::api_storage_check),
+        )
         .route(
             "/api/backups",
             get(backup::api_list).post(backup::api_create),
@@ -190,7 +194,7 @@ async fn main() -> Result<()> {
             "/api/backups/{file_name}/restore",
             post(backup::api_restore),
         )
-        .route("/api/local-picker", post(phase9_1::api_local_picker))
+        .route("/api/local-picker", post(local_picker::api_local_picker))
         .route("/api/settings", get(api_settings).put(api_update_settings))
         .route("/api/secrets", get(api_secrets).put(api_update_secrets))
         .route("/api/channels", get(api_channels).put(api_update_channels))

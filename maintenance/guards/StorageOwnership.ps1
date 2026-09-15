@@ -1,23 +1,4 @@
-$ErrorActionPreference = 'Stop'
-
-# Phase 18 final contract: CHZZK API metadata + cancellation-aware lookup + Streamlink DASH-to-MPEG-TS mux + VOD-owned FFmpeg TS finalizer/progress.
-$root = Split-Path $PSScriptRoot -Parent
-
-function Read-RepoFile([string]$relativePath) {
-    $path = Join-Path $root $relativePath
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Missing required Phase 18 file: $relativePath"
-    }
-    return Get-Content -LiteralPath $path -Raw -Encoding UTF8
-}
-
-function Assert-Match([string]$text, [string]$pattern, [string]$message) {
-    if ($text -notmatch $pattern) { throw $message }
-}
-
-function Assert-NotMatch([string]$text, [string]$pattern, [string]$message) {
-    if ($text -match $pattern) { throw $message }
-}
+. (Join-Path $PSScriptRoot 'Common.ps1')
 
 $platform = Read-RepoFile 'rust-web/src/platform/mod.rs'
 $chzzk = Read-RepoFile 'rust-web/src/platform/chzzk/mod.rs'
@@ -27,7 +8,8 @@ $queue = Read-RepoFile 'rust-web/src/vod_queue.rs'
 $auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
 $recorder = Read-RepoFile 'rust-web/src/recorder.rs'
 $main = Read-RepoFile 'rust-web/src/main.rs'
-$workflow = Read-RepoFile '.github/workflows/phase18-chzzk-vod-check.yml'
+$runtime = Read-RepoFile 'rust-web/src/platform_runtime.rs'
+$workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
 
 # Platform registration / URL routing.
 Assert-Match $chzzk 'pub mod vod;' 'CHZZK VOD provider module is not registered.'
@@ -46,13 +28,13 @@ Assert-Match $vodFacade 'ensure_idle\(\)\.await\?' 'Cross-provider VOD start gua
 Assert-Match $vodFacade 'running_provider\(\)' 'VOD status/cancel cannot recover the actually running provider.'
 Assert-NotMatch $queue 'api\.chzzk\.naver\.com|NID_AUT|NID_SES' 'Provider-specific CHZZK network/auth logic leaked into vod_queue.rs.'
 
-# Existing Phase 17 encrypted CHZZK auth must be reused; plaintext temp data is private and scavenged.
-Assert-Match $chzzkVod 'ChzzkAuth::load\(\)' 'CHZZK VOD does not reuse the encrypted Phase 17 authentication store.'
+# Existing CHZZK auth encrypted CHZZK auth must be reused; plaintext temp data is private and scavenged.
+Assert-Match $chzzkVod 'ChzzkAuth::load\(\)' 'CHZZK VOD does not reuse the encrypted CHZZK auth authentication store.'
 Assert-Match $chzzkVod 'chzzk-cookies\.txt' 'CHZZK VOD temporary Netscape cookie transport is missing.'
 Assert-Match $chzzkVod 'JobDirGuard' 'CHZZK VOD temporary job/cookie cleanup guard is missing.'
 Assert-Match $chzzkVod 'cleanup_stale_job_dirs' 'Stale CHZZK VOD job directory scavenging is missing.'
-Assert-Match $chzzkVod 'restrict_job_dir' 'CHZZK VOD temporary directory permission hardening is missing.'
-Assert-Match $chzzkVod 'icacls\.exe' 'Windows current-user-only CHZZK temp ACL setup is missing.'
+Assert-Match $chzzkVod 'restrict_private_dir' 'CHZZK VOD temporary directory permission hardening is missing.'
+Assert-Match $runtime 'icacls\.exe' 'Windows current-user-only CHZZK temp ACL setup is missing.'
 Assert-Match $chzzkVod 'NID_\(\?:AUT\|SES\)' 'CHZZK VOD secret redaction coverage is missing.'
 Assert-NotMatch $chzzkVod 'NID_AUT=.*--|NID_SES=.*--' 'CHZZK cookies must not be put directly on process arguments.'
 Assert-Match $auth 'CHZZK_NID_AUT' 'Shared CHZZK auth key disappeared.'
@@ -60,7 +42,7 @@ Assert-Match $auth 'CHZZK_NID_SES' 'Shared CHZZK auth key disappeared.'
 
 # Listener bind remains defense-in-depth, but backend/job ownership must not depend on a port.
 Assert-Match $main 'TcpListener::bind\(&bind\)[\s\S]*?VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)' 'Early server bind defense-in-depth ordering disappeared.'
-Assert-Match $workflow 'rust-web/src/main\.rs' 'Phase 18 workflow must trigger when main.rs startup ordering changes.'
+Assert-Match $workflow 'rust-web/src/main\.rs' 'Runtime workflow must trigger when main.rs startup ordering changes.'
 
 # Per-job OS locking is the source of truth for active CHZZK temp ownership.
 Assert-Match $chzzkVod 'use fs2::FileExt;' 'CHZZK VOD per-job OS locking is missing.'
@@ -99,12 +81,12 @@ Assert-Match $recorder '-c copy' 'Shared CHZZK player pipeline is no longer stre
 Assert-Match $chzzkVod 'streamlink_json_builds_quality_options' 'CHZZK Streamlink quality regression test is missing.'
 Assert-Match $chzzkVod 'maps_legacy_height_quality_to_streamlink_selector' 'CHZZK legacy quality mapping regression test is missing.'
 Assert-NotMatch $chzzkVod '"--dump-single-json"|"--merge-output-format"|run_ffmpeg_fallback|is_source_url_extractor_bug|tools\.yt_dlp' 'Legacy CHZZK yt-dlp/direct-DASH fallback code returned.'
-Assert-Match $chzzkVod 'taskkill\.exe' 'Windows owned-process cancellation path is missing.'
+Assert-Match $runtime 'taskkill\.exe' 'Windows owned-process cancellation path is missing.'
 Assert-Match $chzzkVod 'let mut ffmpeg_child = match ffmpeg_command\.spawn\(\)' 'Downstream FFmpeg spawn is not handled explicitly.'
 Assert-Match $chzzkVod 'terminate_owned\(&mut streamlink_child\)\.await;' 'Streamlink owned tree is not explicitly terminated on downstream setup failures.'
-Assert-Match $chzzkVod '\.arg\("/PID"\)' 'CHZZK VOD cancellation is not PID scoped.'
-Assert-Match $chzzkVod '\.arg\("/T"\)' 'CHZZK VOD cancellation does not include the owned child tree.'
-Assert-NotMatch $chzzkVod 'taskkill[^\r\n]*/IM' 'CHZZK VOD must never kill processes by image name.'
+Assert-Match $runtime '\.arg\("/PID"\)' 'CHZZK VOD cancellation is not PID scoped.'
+Assert-Match $runtime '\.arg\("/T"\)' 'CHZZK VOD cancellation does not include the owned child tree.'
+Assert-NotMatch ($chzzkVod + $runtime) 'taskkill[^\r\n]*/IM' 'CHZZK VOD must never kill processes by image name.'
 
 # Destination claims and cross-volume publication must be no-clobber, cancellable and crash-recoverable.
 Assert-Match $chzzkVod 'DESTINATION_CLAIM_SUFFIX:\s*&str\s*=\s*"\.soop-downloader\.claim"' 'Destination claim sidecar is missing.'
@@ -149,4 +131,4 @@ Assert-Match $chzzkVod 'stale_chzzk_job_dirs_are_scavenged_only' 'CHZZK stale-jo
 Assert-Match $chzzkVod 'cleanup_is_scoped_to_unique_job_directory' 'CHZZK owned-temp cleanup regression test is missing.'
 Assert-Match $chzzkVod 'streamlink_staging_name_is_short_and_title_independent' 'CHZZK Windows long-path regression test is missing.'
 
-Write-Host 'Phase 18 CHZZK VOD regression checks passed.'
+Write-Host 'Storage ownership and CHZZK VOD contracts passed.'

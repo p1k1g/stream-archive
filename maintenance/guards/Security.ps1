@@ -1,0 +1,23 @@
+. (Join-Path $PSScriptRoot 'Common.ps1')
+
+$backend = Read-RepoFile 'rust-web/src/backend.rs'
+$security = Read-RepoFile 'rust-web/src/security.rs'
+$auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
+$chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
+$recorder = Read-RepoFile 'rust-web/src/recorder.rs'
+$runtime = Read-RepoFile 'rust-web/src/platform_runtime.rs'
+
+Assert-Match $backend '"CHZZK_NID_AUT"' 'NID_AUT must remain a hidden setting.'
+Assert-Match $backend '"CHZZK_NID_SES"' 'NID_SES must remain a hidden setting.'
+Assert-Match $auth 'unprotect_secret' 'CHZZK auth must use the common encrypted secret boundary.'
+Assert-Match $security 'CryptProtectData' 'Windows secret protection must remain DPAPI-backed.'
+Assert-Match $chzzkVod 'ChzzkAuth::load\(\)' 'CHZZK VOD must reuse encrypted CHZZK auth.'
+Assert-Match $chzzkVod 'chzzk-cookies\.txt' 'CHZZK VOD must use temporary cookie-file transport.'
+Assert-Match $chzzkVod 'restrict_private_dir\(&preparing\)' 'CHZZK VOD must invoke the platform private-directory boundary.'
+Assert-Match $runtime 'icacls\.exe' 'Windows private-directory implementation must use ACL tooling.'
+Assert-Match $runtime '/inheritance:r' 'Windows private directories must remove inherited permissions.'
+Assert-Match $runtime '\(OI\)\(CI\)F' 'Windows private directories must grant the current owner required access.'
+Assert-Match $runtime 'from_mode\(0o700\)' 'Unix private directories must use mode 0700.'
+Assert-NotMatch ($chzzkVod + $recorder) '--http-cookie\s+NID_|NID_AUT=.*--|NID_SES=.*--' 'CHZZK secrets must not appear directly in process arguments.'
+Assert-Match $chzzkVod 'NID_\(\?:AUT\|SES\)' 'CHZZK VOD logs/errors must redact Naver cookie values.'
+Write-Host 'Security contracts passed.'

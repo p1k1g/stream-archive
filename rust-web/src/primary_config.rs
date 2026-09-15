@@ -1,7 +1,9 @@
+#[cfg(test)]
+use crate::support::platform::PlatformId;
 use crate::{
     backend::{HIDDEN_SETTING_KEYS, SAFE_SETTING_KEYS},
     model::Channel,
-    support::platform::{PlatformId, provider},
+    support::platform::provider,
 };
 use anyhow::{Context, Result, bail};
 use std::{
@@ -164,12 +166,8 @@ fn validate_writable_backup_directory(value: &str) -> Result<()> {
     ));
     fs::write(&probe, b"")
         .with_context(|| format!("BACKUP_DIR is not writable: {}", path.display()))?;
-    fs::remove_file(&probe).with_context(|| {
-        format!(
-            "BACKUP_DIR write test cleanup failed: {}",
-            probe.display()
-        )
-    })?;
+    fs::remove_file(&probe)
+        .with_context(|| format!("BACKUP_DIR write test cleanup failed: {}", probe.display()))?;
     Ok(())
 }
 
@@ -278,10 +276,7 @@ mod tests {
     fn backup_directory_must_be_creatable_and_writable() {
         let dir = tempdir().unwrap();
         let target = dir.path().join("nested").join("backups");
-        let updates = BTreeMap::from([(
-            "BACKUP_DIR".into(),
-            target.display().to_string(),
-        )]);
+        let updates = BTreeMap::from([("BACKUP_DIR".into(), target.display().to_string())]);
         assert!(validate_setting_updates(&updates).is_ok());
         assert!(target.is_dir());
     }
@@ -291,10 +286,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let target = dir.path().join("not-a-directory");
         fs::write(&target, b"file").unwrap();
-        let updates = BTreeMap::from([(
-            "BACKUP_DIR".into(),
-            target.display().to_string(),
-        )]);
+        let updates = BTreeMap::from([("BACKUP_DIR".into(), target.display().to_string())]);
         assert!(validate_setting_updates(&updates).is_err());
     }
 }

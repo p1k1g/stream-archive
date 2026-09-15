@@ -1,0 +1,88 @@
+. (Join-Path $PSScriptRoot 'Common.ps1')
+
+$recorder = Read-RepoFile 'rust-web/src/recorder.rs'
+$watcher = Read-RepoFile 'rust-web/src/native_watcher.rs'
+$vodFacade = Read-RepoFile 'rust-web/src/vod.rs'
+$soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'
+$chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
+$runtime = Read-RepoFile 'rust-web/src/platform_runtime.rs'
+$allRuntime = $recorder + $soopVod + $chzzkVod + $runtime
+
+Assert-Match $recorder '\.kill_on_drop\(true\)' 'LIVE Streamlink child must retain kill-on-drop fallback.'
+Assert-NotMatch $vodFacade 'taskkill\.exe|yt-dlp|ffmpeg|sooplive\.com' 'Root VOD facade must remain provider/process neutral.'
+Assert-Match $chzzkVod 'terminate_owned\(&mut streamlink_child\)\.await' 'CHZZK VOD setup/failure paths must terminate owned Streamlink.'
+Assert-Match $chzzkVod 'terminate_owned\(&mut ffmpeg_child\)\.await' 'CHZZK VOD cancellation must terminate owned FFmpeg.'
+Assert-Match $chzzkVod 'abort_reader_tasks\(reader_tasks\)\.await' 'CHZZK VOD cancellation must reap line readers.'
+Assert-Match $chzzkVod 'drain_failed_reader_tasks\(' 'CHZZK VOD process failures must drain bounded stderr readers before reporting the error.'
+Assert-Match $chzzkVod 'join_reader_tasks\(tasks\)\.await' 'CHZZK VOD reader tasks must be joined after draining.'
+Assert-Match $chzzkVod 'mpsc::channel::<String>\(256\)' 'External-tool line transport must remain bounded.'
+Assert-Match $runtime 'async fn spawn_owned\(command: &mut Command\)' 'Retained owned-process spawn primitive is missing.'
+Assert-Match $runtime 'async fn terminate_owned\(child: &mut Child\)' 'Common owned-process termination primitive is missing.'
+Assert-Match $runtime 'struct OwnedProcessTree' 'Durable retained owned-tree type is missing.'
+Assert-Match $runtime 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE' 'Windows retained process tree must use kill-on-close Job ownership.'
+Assert-Match $runtime 'AssignProcessToJobObject' 'Windows retained process tree must assign owned members to the Job.'
+Assert-Match $runtime 'TerminateJobObject' 'Windows retained process tree must have an authoritative tree-termination primitive.'
+Assert-Match $runtime 'QueryInformationJobObject' 'Retained Job cleanup must query the Job directly rather than infer liveness from a historical root PID.'
+Assert-Match $runtime 'ActiveProcesses' 'Retained Job cleanup must verify that no Job members remain before returning.'
+Assert-Match $runtime 'self\.job\.active_process_count\(\)' 'Retained Job cleanup must loop on authoritative Job membership.'
+Assert-NotMatch $runtime 'self\.root_pid' 'Retained process ownership must not reuse a historical root PID after spawn.'
+
+# The production LIVE owner must exist before Streamlink executes. Creating the
+# process suspended and assigning the exact Child handle before ResumeThread is
+# what closes both the short-lived-root and pre-assignment descendant races.
+Assert-Match $runtime 'CREATE_SUSPENDED' 'Windows retained LIVE spawn must create the child suspended.'
+Assert-Match $runtime 'creation_flags\(CREATE_SUSPENDED\)' 'Windows retained LIVE spawn must apply CREATE_SUSPENDED before spawn.'
+Assert-Match $runtime 'capture_suspended_child\(&child\)' 'Windows retained LIVE spawn must capture the exact suspended Child handle.'
+Assert-Match $runtime 'assign_handle\(root_handle\)' 'Windows Job capture must assign the exact spawned root handle.'
+Assert-Match $runtime 'resume_child_threads\(&child\)' 'Windows retained LIVE spawn must resume only after Job ownership is established.'
+Assert-Match $runtime 'TH32CS_SNAPTHREAD' 'Suspended child resume must enumerate the child threads explicitly.'
+Assert-Match $runtime 'ResumeThread' 'Suspended child must be resumed after exact Job assignment.'
+Assert-Match $runtime '\.raw_handle\(\)' 'Windows retained ownership must use the exact spawned Child process handle.'
+Assert-Match $recorder 'spawn_owned\(&mut command\)\.await' 'LIVE recorder must use the suspended owned-spawn boundary.'
+Assert-NotMatch $recorder 'OwnedProcessTree::capture\(&child\)' 'LIVE recorder must not reconstruct retained ownership after a normal spawn.'
+Assert-NotMatch $recorder 'OwnedProcessTree::capture\(pid\)' 'LIVE recorder must never establish retained ownership from a reusable numeric PID alone.'
+
+# Compatibility capture for already-running children still uses ToolHelp. The
+# exact root is assigned first, every snapshot must still contain that same root
+# creation identity, and descendant identities must predate the snapshot cutoff.
+# Enumeration failures must propagate rather than masquerade as an empty tree.
+Assert-Match $runtime 'capture_running_child\(child: &Child\)' 'Compatibility running-child capture boundary is missing.'
+Assert-Match $runtime 'failed to assign exact running root pid=.*before snapshot' 'Running-child capture must assign the exact root before descendant snapshots.'
+Assert-Match $runtime 'snapshot_root_is_current' 'Compatibility snapshots must bind the snapshot root to the original process identity.'
+Assert-Match $runtime 'snapshot\.present\.contains\(&root\.pid\)' 'Compatibility snapshots must require the original root PID to be present in the snapshot.'
+Assert-Match $runtime 'current_root == Some\(root\)' 'Compatibility snapshots must reject absent or reused root identities.'
+Assert-Match $runtime 'compatibility snapshot root identity is absent or changed' 'Absent/reused compatibility roots must fail capture instead of traversing unrelated descendants.'
+Assert-Match $runtime 'cutoff_creation_time' 'ToolHelp descendant absorption must carry a snapshot creation-time cutoff.'
+Assert-Match $runtime 'identity\.creation_time <= snapshot\.cutoff_creation_time' 'Snapshot descendants must be creation-time bound to their snapshot.'
+Assert-Match $runtime 'snapshot-bound pid=' 'Snapshot descendant assignment must use the verified process handle/identity.'
+Assert-Match $runtime 'GetProcessTimes' 'Windows process identity must include creation time.'
+Assert-Match $runtime 'struct ProcessIdentity' 'Windows snapshot assignments must carry stable process identity.'
+Assert-Match $runtime 'CreateToolhelp32Snapshot' 'Windows compatibility capture must discover already-existing descendants.'
+Assert-Match $runtime 'Process32FirstW failed' 'ToolHelp process enumeration must propagate first-entry failures.'
+Assert-Match $runtime 'Process32NextW failed' 'ToolHelp process enumeration must distinguish end-of-list from enumeration failures.'
+Assert-Match $runtime 'Thread32First failed' 'ToolHelp thread enumeration must propagate first-entry failures.'
+Assert-Match $runtime 'Thread32Next failed' 'ToolHelp thread enumeration must distinguish end-of-list from enumeration failures.'
+Assert-Match $runtime 'ERROR_NO_MORE_FILES' 'ToolHelp enumeration may only treat the documented end-of-list result as success.'
+
+Assert-Match $recorder 'owned_tree:\s*OwnedProcessTree' 'Recording must retain durable process-tree ownership for its whole lifetime.'
+Assert-Match $recorder 'rec\.owned_tree\s*\.terminate_now\(\)' 'Root-exit polling must enforce retained-tree cleanup before Recording can be dropped.'
+Assert-Match $recorder 'rec\.owned_tree\s*\.terminate\(&mut rec\.child\)' 'Recorder stop must always terminate through retained tree ownership, including after root exit.'
+Assert-NotMatch $recorder 'if rec\.child\.try_wait\(\)\?\.is_none\(\)\s*\{\s*return terminate_owned_checked' 'Recorder stop must not bypass retained-tree cleanup when the root is already reaped.'
+Assert-Match $watcher 'state\.recording\s*=\s*Some\(rec\)' 'Watcher must retain the Recording owner if checked cleanup returns an unexpected error.'
+Assert-Match $watcher 'channel removal deferred while recorder cleanup is retained' 'Removed channels must remain tracked if recorder cleanup returns an unexpected error.'
+Assert-RustTest $runtime 'owned_child_is_terminated_and_reaped' 'Owned-child termination/reaping behavior test is missing.'
+Assert-RustTest $runtime 'windows_owned_spawn_retains_immediate_descendant' 'Windows suspended-spawn descendant inheritance regression test is missing.'
+Assert-Match $runtime 'snapshot_cutoff_rejects_newer_identity' 'Windows snapshot PID-reuse cutoff regression check is missing.'
+Assert-Match $runtime 'snapshot_root_guard_rejects_absent_or_reused_identity' 'Windows compatibility snapshot root-identity regression check is missing.'
+Assert-Match $runtime 'taskkill\.exe' 'Windows exact-PID tree fallback for non-retained callers is missing.'
+Assert-Match $runtime '\.arg\("/PID"\)' 'Windows non-retained termination fallback must target the owned PID.'
+Assert-Match $runtime '\.arg\("/T"\)' 'Windows non-retained termination fallback must include descendants.'
+Assert-Match $runtime '\.arg\("/F"\)' 'Windows non-retained termination fallback must force cleanup when required.'
+Assert-NotMatch $allRuntime '(?i)taskkill(?:\.exe)?[^\r\n]*(?:/IM|\.arg\("/IM"\))' 'Process-name-wide taskkill /IM is forbidden.'
+Assert-NotMatch ($recorder + $soopVod + $chzzkVod) 'taskkill\.exe' 'Provider/runtime callers must use the common process boundary.'
+
+$stopCalls = [regex]::Matches($soopVod, 'stop_child\(&mut child\)\.await;').Count
+if ($stopCalls -lt 2) { throw "SOOP VOD cancellation must cover progress and capture children; found $stopCalls call(s)." }
+Assert-Match $soopVod 'if !exit\.success\(\)' 'SOOP capture must reject non-zero exits.'
+Assert-Match $soopVod 'if exit\.success\(\)' 'SOOP progress must distinguish successful exits.'
+Write-Host 'Process lifecycle contracts passed.'

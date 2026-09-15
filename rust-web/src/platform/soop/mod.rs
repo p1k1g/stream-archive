@@ -1,4 +1,4 @@
-use super::{PlatformCapabilities, PlatformId, PlatformProvider};
+use super::{PlatformCapabilities, PlatformProvider};
 use anyhow::{Result, bail};
 use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
@@ -12,10 +12,6 @@ pub(crate) static SOOP: SoopProvider = SoopProvider;
 pub(crate) struct SoopProvider;
 
 impl PlatformProvider for SoopProvider {
-    fn id(&self) -> PlatformId {
-        PlatformId::Soop
-    }
-
     fn display_name(&self) -> &'static str {
         "SOOP"
     }

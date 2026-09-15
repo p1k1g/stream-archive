@@ -212,9 +212,7 @@ impl VodQueueManager {
         if changed == 0 {
             bail!("대기/실행 중인 작업은 먼저 취소하세요.");
         }
-        self.logs
-            .push(format!("[VOD_QUEUE] removed id={id}"))
-            .await;
+        self.logs.push(format!("[VOD_QUEUE] removed id={id}")).await;
         Ok(())
     }
 
@@ -399,11 +397,6 @@ impl VodQueueManager {
             ],
         )?;
         Ok(())
-    }
-
-    fn list_items(&self) -> Result<Vec<VodQueueItem>> {
-        let conn = self.conn()?;
-        Self::list_items_from_conn(&conn)
     }
 
     fn list_items_from_conn(conn: &Connection) -> Result<Vec<VodQueueItem>> {

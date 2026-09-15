@@ -14,7 +14,6 @@ pub struct ChzzkBroadcast {
     pub live_id: String,
     pub channel_name: String,
     pub title: String,
-    pub adult: bool,
     pub requires_auth: bool,
 }
 
@@ -144,7 +143,6 @@ fn parse_probe_content(channel_id: &str, value: &Value, auth: &ChzzkAuth) -> Res
         live_id,
         channel_name,
         title,
-        adult,
         requires_auth,
     }))
 }
@@ -254,7 +252,7 @@ mod tests {
             panic!("expected live probe");
         };
         assert!(!live.requires_auth);
-        assert!(!live.adult);
+        assert!(!live.requires_auth);
     }
 
     #[test]
