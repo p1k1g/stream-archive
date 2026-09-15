@@ -14,22 +14,29 @@ pub(crate) fn configure_utf8_cli(command: &mut Command) {
 
 /// Durable process-tree owner retained for a runtime child.
 ///
-/// On Windows this owns a kill-on-close Job Object captured from the exact
-/// spawned child handle. The root process is assigned through that handle
-/// before PID-based descendant absorption, and snapshot assignments are pinned
-/// to process creation identities so PID reuse cannot redirect ownership.
+/// Windows LIVE callers should obtain this through [`spawn_owned`]. The child
+/// is created suspended, its exact process handle is assigned to a kill-on-close
+/// Job Object before the first user instruction can execute, and only then is
+/// the child resumed. This closes both the root-exit and descendant PID-reuse
+/// windows that exist when ownership is reconstructed after a normal spawn.
 pub(crate) struct OwnedProcessTree {
     #[cfg(windows)]
     job: windows_tree::OwnedTreeJob,
 }
 
 impl OwnedProcessTree {
+    /// Capture an already-running child for compatibility callers.
+    ///
+    /// Retained LIVE ownership must use `spawn_owned` instead: only suspended
+    /// creation can guarantee that no descendant exists before the root enters
+    /// the Job. This path assigns the exact root handle before any process
+    /// snapshot and uses snapshot-time creation cutoffs for retroactive members.
     pub(crate) fn capture(child: &Child) -> Result<Self> {
         #[cfg(windows)]
         {
             let pid = child.id().context("spawned child PID unavailable")?;
-            let job = windows_tree::OwnedTreeJob::capture_child(child)?
-                .with_context(|| format!("child exited before retained Job ownership pid={pid}"))?;
+            let job = windows_tree::OwnedTreeJob::capture_running_child(child)
+                .with_context(|| format!("failed to retain Windows process tree pid={pid}"))?;
             Ok(Self { job })
         }
 
@@ -49,9 +56,8 @@ impl OwnedProcessTree {
                 Ok(0) => break,
                 Ok(_) | Err(_) => {
                     // The retained Job handle is the authoritative identity.
-                    // Retry a transient TerminateJobObject/query failure
-                    // instead of returning ownership to watcher state while
-                    // any Job member may still be running.
+                    // Retry a transient TerminateJobObject/query failure instead
+                    // of returning while any Job member may still be running.
                     let _ = self.job.terminate();
                     std::thread::sleep(Duration::from_millis(25));
                 }
@@ -68,8 +74,8 @@ impl OwnedProcessTree {
                 Ok(0) => break,
                 Ok(_) | Err(_) => {
                     // Never fall back to a historical root PID here. The Job
-                    // was captured from the exact spawned Child handle and is
-                    // the only authoritative retained identity after spawn.
+                    // captured from the exact spawned Child handle is the only
+                    // authoritative retained identity after spawn.
                     let _ = self.job.terminate();
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
@@ -85,11 +91,66 @@ impl OwnedProcessTree {
     }
 }
 
+/// Spawns a runtime child with durable tree ownership established before the
+/// child can execute user code.
+///
+/// Windows uses `CREATE_SUSPENDED`, assigns the exact spawned process handle to
+/// a kill-on-close Job Object, and resumes the child only after assignment.
+/// Therefore the child cannot create an FFmpeg/player descendant outside the
+/// Job and no PID/tree snapshot is required for the retained LIVE path.
+pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedProcessTree)> {
+    #[cfg(windows)]
+    {
+        windows_tree::configure_suspended(command);
+        let mut child = command
+            .spawn()
+            .context("failed to spawn suspended owned child")?;
+        let pid = child.id().context("spawned child PID unavailable")?;
+
+        let job = match windows_tree::OwnedTreeJob::capture_suspended_child(&child) {
+            Ok(job) => job,
+            Err(err) => {
+                // CREATE_SUSPENDED guarantees the child has not executed and
+                // therefore cannot have created descendants yet. Direct-child
+                // cleanup is safe on this pre-ownership failure path.
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(err)
+                    .with_context(|| format!("failed to assign suspended child pid={pid} to Job"));
+            }
+        };
+
+        if let Err(err) = windows_tree::resume_child_threads(&child) {
+            // The root is already inside the authoritative Job. Keep ownership
+            // until every member is gone instead of dropping a kill-on-close
+            // handle while the caller still believes spawn succeeded.
+            loop {
+                match job.active_process_count() {
+                    Ok(0) => break,
+                    Ok(_) | Err(_) => {
+                        let _ = job.terminate();
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                }
+            }
+            let _ = child.wait().await;
+            return Err(err).with_context(|| format!("failed to resume owned child pid={pid}"));
+        }
+
+        Ok((child, OwnedProcessTree { job }))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let child = command.spawn().context("failed to spawn owned child")?;
+        Ok((child, OwnedProcessTree {}))
+    }
+}
+
 /// Terminates only the process tree rooted at a child spawned by this server.
 ///
-/// Do not use root-process exit as proof that descendants are gone. Windows
-/// cleanup first captures the exact spawned process handle into a Job Object;
-/// retained LIVE cleanup keeps that Job for the whole recording lifetime.
+/// This compatibility boundary is used by callers that do not retain a tree
+/// owner from spawn. New retained Windows lifetimes should use `spawn_owned`.
 pub(crate) async fn terminate_owned(child: &mut Child) {
     loop {
         if terminate_owned_checked(child).await.is_ok() {
@@ -99,8 +160,6 @@ pub(crate) async fn terminate_owned(child: &mut Child) {
     }
 }
 
-/// Checked owned-tree termination used for callers that did not retain an owner
-/// from spawn. LIVE recorder cleanup uses `OwnedProcessTree` instead.
 pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<i32>> {
     #[cfg(windows)]
     if child.id().is_some() {
@@ -120,11 +179,11 @@ async fn terminate_windows_tree(child: &Child) -> Result<()> {
             return Ok(());
         };
 
-        match windows_tree::OwnedTreeJob::capture_child(child) {
-            Ok(None) => return Ok(()),
-            Ok(Some(job)) => {
-                // The exact Child handle has already been assigned to this Job,
-                // so do not send a historical PID to taskkill after capture.
+        match windows_tree::OwnedTreeJob::capture_running_child(child) {
+            Ok(job) => {
+                // The exact root handle was assigned before any descendant
+                // snapshot. Snapshot absorption is creation-time bounded, so a
+                // PID reused after the ToolHelp snapshot cannot be adopted.
                 loop {
                     match job.active_process_count() {
                         Ok(0) => return Ok(()),
@@ -162,20 +221,21 @@ async fn terminate_windows_tree(child: &Child) -> Result<()> {
 
 #[cfg(windows)]
 mod windows_tree {
-    use anyhow::{Context, Result};
+    use anyhow::{Context, Result, anyhow};
     use std::{
         collections::{HashMap, HashSet, VecDeque},
         ffi::c_void,
         mem::size_of,
         ptr,
+        time::{SystemTime, UNIX_EPOCH},
     };
-    use tokio::process::Child;
+    use tokio::process::{Child, Command};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE},
         System::{
             Diagnostics::ToolHelp::{
                 CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-                TH32CS_SNAPPROCESS,
+                TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
             },
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
@@ -185,14 +245,17 @@ mod windows_tree {
                 SetInformationJobObject, TerminateJobObject,
             },
             Threading::{
-                GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
-                PROCESS_TERMINATE,
+                CREATE_SUSPENDED, GetProcessTimes, OpenProcess, OpenThread,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+                ResumeThread, THREAD_SUSPEND_RESUME,
             },
         },
     };
 
     const ERROR_ACCESS_DENIED: i32 = 5;
     const ERROR_INVALID_PARAMETER: i32 = 87;
+    const WINDOWS_UNIX_EPOCH_DELTA_SECONDS: u64 = 11_644_473_600;
+    const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
 
     struct OwnedHandle(isize);
 
@@ -218,8 +281,32 @@ mod windows_tree {
         creation_time: u64,
     }
 
+    struct ProcessSnapshot {
+        cutoff_creation_time: u64,
+        children: HashMap<u32, Vec<u32>>,
+        present: HashSet<u32>,
+    }
+
+    pub(super) fn configure_suspended(command: &mut Command) {
+        command.creation_flags(CREATE_SUSPENDED);
+    }
+
     fn filetime_value(value: FILETIME) -> u64 {
         ((value.dwHighDateTime as u64) << 32) | value.dwLowDateTime as u64
+    }
+
+    fn current_filetime_ticks() -> Result<u64> {
+        let elapsed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before Unix epoch")?;
+        let seconds = elapsed
+            .as_secs()
+            .checked_add(WINDOWS_UNIX_EPOCH_DELTA_SECONDS)
+            .context("Windows FILETIME seconds overflow")?;
+        let whole = seconds
+            .checked_mul(FILETIME_TICKS_PER_SECOND)
+            .context("Windows FILETIME tick overflow")?;
+        Ok(whole + u64::from(elapsed.subsec_nanos()) / 100)
     }
 
     fn process_creation_time(handle: HANDLE) -> Result<u64> {
@@ -277,6 +364,10 @@ mod windows_tree {
         Ok(open_identity(pid, 0)?.map(|(_, identity)| identity))
     }
 
+    fn identity_belongs_to_snapshot(identity: ProcessIdentity, snapshot: &ProcessSnapshot) -> bool {
+        identity.creation_time <= snapshot.cutoff_creation_time
+    }
+
     pub(super) struct OwnedTreeJob {
         handle: OwnedHandle,
     }
@@ -308,49 +399,94 @@ mod windows_tree {
             Ok(job)
         }
 
-        /// Capture the exact spawned root process first, then absorb descendants
-        /// that existed before Job assignment. Repeated snapshots are anchored
-        /// to the root's creation identity, so a reused numeric PID is never
-        /// followed or assigned to this retained Job.
-        pub(super) fn capture_child(child: &Child) -> Result<Option<Self>> {
-            let root = child_identity(child)?;
-            let Some(initial) = process_tree_identities(root)? else {
-                return Ok(None);
-            };
+        /// Exact retained ownership for a process created with CREATE_SUSPENDED.
+        /// No process snapshot happens before assignment, so the root cannot
+        /// create a descendant that escapes this Job.
+        pub(super) fn capture_suspended_child(child: &Child) -> Result<Self> {
+            let job = Self::create()?;
+            let root_handle = child_raw_handle(child)?;
+            job.assign_handle(root_handle)
+                .context("failed to assign exact suspended root handle to Job")?;
+            Ok(job)
+        }
 
+        /// Compatibility capture for an already-running child.
+        ///
+        /// The exact root handle is assigned first. Any descendants that existed
+        /// before that assignment are absorbed from ToolHelp snapshots only when
+        /// their creation time proves they existed at the corresponding snapshot,
+        /// preventing a post-snapshot PID reuse from being adopted into the Job.
+        pub(super) fn capture_running_child(child: &Child) -> Result<Self> {
+            let root = child_identity(child)?;
             let job = Self::create()?;
             let root_handle = child_raw_handle(child)?;
             job.assign_handle(root_handle).with_context(|| {
                 format!(
-                    "failed to assign exact spawned root pid={} to Job",
+                    "failed to assign exact running root pid={} to Job before snapshot",
                     root.pid
                 )
             })?;
+            job.absorb_preexisting_descendants(root)?;
+            Ok(job)
+        }
 
-            let mut assigned = HashSet::new();
-            assigned.insert(root);
-            let mut current = initial;
+        fn absorb_preexisting_descendants(&self, root: ProcessIdentity) -> Result<()> {
+            let mut assigned = HashSet::from([root]);
 
             loop {
-                for identity in current.iter().copied() {
-                    if assigned.contains(&identity) {
+                let snapshot = process_snapshot()?;
+                match query_identity(root.pid)? {
+                    Some(current) if current != root => {
+                        // The historical root PID now belongs to another process.
+                        // Never traverse a snapshot through that replacement.
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+
+                let mut added = 0usize;
+                let mut visited = HashSet::new();
+                let mut queue = VecDeque::from([root.pid]);
+
+                while let Some(parent_pid) = queue.pop_front() {
+                    if !visited.insert(parent_pid) {
                         continue;
                     }
-                    if job.assign_identity(identity)? {
-                        assigned.insert(identity);
+                    let Some(children) = snapshot.children.get(&parent_pid) else {
+                        continue;
+                    };
+                    for child_pid in children.iter().copied() {
+                        if child_pid == parent_pid {
+                            continue;
+                        }
+                        let Some((process, identity)) = open_identity(
+                            child_pid,
+                            PROCESS_SET_QUOTA | PROCESS_TERMINATE,
+                        )?
+                        else {
+                            continue;
+                        };
+                        if !identity_belongs_to_snapshot(identity, &snapshot) {
+                            // The PID currently names a process created after the
+                            // snapshot cutoff. It cannot be the snapshotted child.
+                            continue;
+                        }
+                        if assigned.insert(identity) {
+                            self.assign_handle(process.raw()).with_context(|| {
+                                format!(
+                                    "failed to assign snapshot-bound pid={} creation_time={} to Job",
+                                    identity.pid, identity.creation_time
+                                )
+                            })?;
+                            added += 1;
+                        }
+                        queue.push_back(child_pid);
                     }
                 }
 
-                let Some(after) = process_tree_identities(root)? else {
-                    // The original root exited or its numeric PID was reused.
-                    // Never follow that PID again. The exact root was already
-                    // assigned, and future descendants inherit its Job.
-                    return Ok(Some(job));
-                };
-                if after.iter().all(|identity| assigned.contains(identity)) {
-                    return Ok(Some(job));
+                if added == 0 {
+                    return Ok(());
                 }
-                current = after;
             }
         }
 
@@ -373,26 +509,6 @@ mod windows_tree {
                     .context("AssignProcessToJobObject failed");
             }
             Ok(())
-        }
-
-        fn assign_identity(&self, expected: ProcessIdentity) -> Result<bool> {
-            let Some((process, current)) =
-                open_identity(expected.pid, PROCESS_SET_QUOTA | PROCESS_TERMINATE)?
-            else {
-                return Ok(false);
-            };
-            if current != expected {
-                // PID was reused between the snapshot and OpenProcess. Never
-                // assign the replacement process to our retained Job.
-                return Ok(false);
-            }
-            self.assign_handle(process.raw()).with_context(|| {
-                format!(
-                    "failed to assign pinned owned pid={} creation_time={} to Job",
-                    expected.pid, expected.creation_time
-                )
-            })?;
-            Ok(true)
         }
 
         pub(super) fn active_process_count(&self) -> Result<u32> {
@@ -422,48 +538,57 @@ mod windows_tree {
         }
     }
 
-    fn process_tree_identities(root: ProcessIdentity) -> Result<Option<HashSet<ProcessIdentity>>> {
-        let (children, present) = process_snapshot()?;
-        if !present.contains(&root.pid) {
-            return Ok(None);
+    pub(super) fn resume_child_threads(child: &Child) -> Result<()> {
+        let pid = child.id().context("suspended child PID unavailable")?;
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error())
+                .context("CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD) failed");
         }
-        if query_identity(root.pid)? != Some(root) {
-            // The numeric root PID now names a different process. Never seed a
-            // traversal from it, even if the replacement has descendants.
-            return Ok(None);
-        }
-
-        let mut owned = HashSet::new();
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::from([root.pid]);
-        owned.insert(root);
-
-        while let Some(pid) = queue.pop_front() {
-            if !visited.insert(pid) {
-                continue;
-            }
-            if let Some(descendants) = children.get(&pid) {
-                for child_pid in descendants.iter().copied() {
-                    if child_pid == pid {
-                        continue;
-                    }
-                    if let Some(identity) = query_identity(child_pid)? {
-                        owned.insert(identity);
-                        queue.push_back(child_pid);
-                    }
+        let snapshot = OwnedHandle(snapshot as isize);
+        let mut entry = THREADENTRY32 {
+            dwSize: size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        let mut resumed = 0usize;
+        let mut ok = unsafe { Thread32First(snapshot.raw(), &mut entry) };
+        while ok != 0 {
+            if entry.th32OwnerProcessID == pid {
+                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+                if thread.is_null() {
+                    return Err(std::io::Error::last_os_error()).with_context(|| {
+                        format!("OpenThread failed for suspended child thread={}", entry.th32ThreadID)
+                    });
                 }
+                let thread = OwnedHandle(thread as isize);
+                let previous = unsafe { ResumeThread(thread.raw()) };
+                if previous == u32::MAX {
+                    return Err(std::io::Error::last_os_error()).with_context(|| {
+                        format!("ResumeThread failed for child thread={}", entry.th32ThreadID)
+                    });
+                }
+                resumed += 1;
             }
+            entry.dwSize = size_of::<THREADENTRY32>() as u32;
+            ok = unsafe { Thread32Next(snapshot.raw(), &mut entry) };
         }
-        Ok(Some(owned))
+        if resumed == 0 {
+            return Err(anyhow!("no suspended child thread found for pid={pid}"));
+        }
+        Ok(())
     }
 
-    fn process_snapshot() -> Result<(HashMap<u32, Vec<u32>>, HashSet<u32>)> {
+    fn process_snapshot() -> Result<ProcessSnapshot> {
+        // Take the cutoff before asking Windows for the snapshot. A process
+        // created after this instant is rejected even if its reused PID equals
+        // one present in the snapshot relationship.
+        let cutoff_creation_time = current_filetime_ticks()?;
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
         if snapshot == INVALID_HANDLE_VALUE {
             return Err(std::io::Error::last_os_error())
                 .context("CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS) failed");
         }
-        let snapshot = OwnedHandle(snapshot as isize);
+        let snapshot_handle = OwnedHandle(snapshot as isize);
 
         let mut entry = PROCESSENTRY32W {
             dwSize: size_of::<PROCESSENTRY32W>() as u32,
@@ -472,7 +597,7 @@ mod windows_tree {
         let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut present = HashSet::new();
 
-        let mut ok = unsafe { Process32FirstW(snapshot.raw(), &mut entry) };
+        let mut ok = unsafe { Process32FirstW(snapshot_handle.raw(), &mut entry) };
         while ok != 0 {
             present.insert(entry.th32ProcessID);
             children
@@ -480,23 +605,27 @@ mod windows_tree {
                 .or_default()
                 .push(entry.th32ProcessID);
             entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
-            ok = unsafe { Process32NextW(snapshot.raw(), &mut entry) };
+            ok = unsafe { Process32NextW(snapshot_handle.raw(), &mut entry) };
         }
-        Ok((children, present))
+        Ok(ProcessSnapshot {
+            cutoff_creation_time,
+            children,
+            present,
+        })
     }
 
     pub(super) fn process_tree_pids(root_pid: u32) -> Result<HashSet<u32>> {
-        let (children, present) = process_snapshot()?;
+        let snapshot = process_snapshot()?;
         let mut owned = HashSet::new();
         let mut queue = VecDeque::new();
-        if present.contains(&root_pid) || children.contains_key(&root_pid) {
+        if snapshot.present.contains(&root_pid) || snapshot.children.contains_key(&root_pid) {
             queue.push_back(root_pid);
         }
         while let Some(pid) = queue.pop_front() {
-            if present.contains(&pid) {
+            if snapshot.present.contains(&pid) {
                 owned.insert(pid);
             }
-            if let Some(descendants) = children.get(&pid) {
+            if let Some(descendants) = snapshot.children.get(&pid) {
                 for child in descendants {
                     if *child != pid && !owned.contains(child) {
                         queue.push_back(*child);
@@ -504,7 +633,7 @@ mod windows_tree {
                 }
             }
         }
-        if owned.is_empty() && !children.contains_key(&root_pid) {
+        if owned.is_empty() && !snapshot.children.contains_key(&root_pid) {
             return Ok(HashSet::new());
         }
         Ok(owned)
@@ -516,10 +645,25 @@ mod windows_tree {
     }
 
     #[cfg(test)]
-    pub(super) fn child_snapshot_rejects_wrong_creation_identity(child: &Child) -> Result<bool> {
-        let mut wrong = child_identity(child)?;
-        wrong.creation_time = wrong.creation_time.wrapping_add(1);
-        Ok(process_tree_identities(wrong)?.is_none())
+    pub(super) fn snapshot_cutoff_rejects_newer_identity() -> Result<bool> {
+        let snapshot = ProcessSnapshot {
+            cutoff_creation_time: 100,
+            children: HashMap::new(),
+            present: HashSet::new(),
+        };
+        Ok(identity_belongs_to_snapshot(
+            ProcessIdentity {
+                pid: 1,
+                creation_time: 100,
+            },
+            &snapshot,
+        ) && !identity_belongs_to_snapshot(
+            ProcessIdentity {
+                pid: 1,
+                creation_time: 101,
+            },
+            &snapshot,
+        ))
     }
 }
 
@@ -563,7 +707,7 @@ pub(crate) fn restrict_private_dir(_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OwnedProcessTree, terminate_owned_checked};
+    use super::{spawn_owned, terminate_owned_checked};
     use std::process::Stdio;
     use tokio::process::Command;
 
@@ -593,10 +737,8 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn windows_retained_tree_owner_survives_root_exit() {
-        use super::windows_tree::{
-            child_snapshot_rejects_wrong_creation_identity, process_tree_pids,
-        };
+    async fn windows_owned_spawn_retains_immediate_descendant() {
+        use super::windows_tree::{process_tree_pids, snapshot_cutoff_rejects_newer_identity};
         use std::{
             env, fs,
             time::{Duration, Instant},
@@ -610,10 +752,10 @@ mod tests {
         let script = concat!(
             "$p = Start-Process -FilePath \"$env:SystemRoot\\System32\\ping.exe\" ",
             "-ArgumentList @('-n','10','127.0.0.1') -WindowStyle Hidden -PassThru; ",
-            "[IO.File]::WriteAllText($env:SOOP_JOB_TEST_PID_FILE, [string]$p.Id); ",
-            "Start-Sleep -Milliseconds 1200"
+            "[IO.File]::WriteAllText($env:SOOP_JOB_TEST_PID_FILE, [string]$p.Id)"
         );
-        let mut root = Command::new("powershell.exe")
+        let mut command = Command::new("powershell.exe");
+        command
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -627,11 +769,10 @@ mod tests {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
-        let root_pid = root.id().unwrap();
+            .kill_on_drop(true);
 
+        let (mut root, mut owner) = spawn_owned(&mut command).await.unwrap();
+        let root_pid = root.id().unwrap();
         let started = Instant::now();
         let descendant_pid = loop {
             if let Ok(text) = fs::read_to_string(&pid_file)
@@ -646,22 +787,20 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
 
-        assert!(
-            child_snapshot_rejects_wrong_creation_identity(&root).unwrap(),
-            "snapshot traversal must reject a mismatched root creation identity"
-        );
-
-        // This mirrors the production LIVE shape: retain ownership from the
-        // exact spawned Child handle, keep that owner in the recording, then
-        // allow the root to exit before cleanup is requested.
-        let mut owner = OwnedProcessTree::capture(&root).unwrap();
         root.wait().await.unwrap();
-
+        assert!(
+            owner.job.active_process_count().unwrap() > 0,
+            "immediate descendant must already belong to retained Job after root exit"
+        );
         assert!(
             process_tree_pids(root_pid)
                 .unwrap()
                 .contains(&descendant_pid),
-            "descendant should still be alive after the root exits"
+            "descendant should still be alive after the short-lived root exits"
+        );
+        assert!(
+            snapshot_cutoff_rejects_newer_identity().unwrap(),
+            "snapshot identity cutoff must reject a process created after the snapshot boundary"
         );
 
         owner.terminate(&mut root).await.unwrap();
