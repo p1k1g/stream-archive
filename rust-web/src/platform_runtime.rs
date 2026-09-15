@@ -14,28 +14,28 @@ pub(crate) fn configure_utf8_cli(command: &mut Command) {
 
 /// Durable process-tree owner retained for a runtime child.
 ///
-/// On Windows this owns a kill-on-close Job Object captured from the stable
-/// root PID as soon as the process is spawned. The Job survives root-process
-/// exit, so descendants cannot escape merely because `Child::try_wait()` has
-/// already reaped the root. Other platforms keep a zero-sized boundary until
-/// Phase 20 provides their native process-group implementation.
+/// On Windows this owns a kill-on-close Job Object captured from the exact
+/// spawned child handle. The root process is assigned through that handle
+/// before PID-based descendant absorption, and snapshot assignments are pinned
+/// to process creation identities so PID reuse cannot redirect ownership.
 pub(crate) struct OwnedProcessTree {
     #[cfg(windows)]
-    job: Option<windows_tree::OwnedTreeJob>,
+    job: windows_tree::OwnedTreeJob,
 }
 
 impl OwnedProcessTree {
-    pub(crate) fn capture(root_pid: u32) -> Result<Self> {
+    pub(crate) fn capture(child: &Child) -> Result<Self> {
         #[cfg(windows)]
         {
-            let job = windows_tree::OwnedTreeJob::capture(root_pid)
-                .with_context(|| format!("failed to retain Windows process tree pid={root_pid}"))?;
+            let pid = child.id().context("spawned child PID unavailable")?;
+            let job = windows_tree::OwnedTreeJob::capture_child(child)?
+                .with_context(|| format!("child exited before retained Job ownership pid={pid}"))?;
             Ok(Self { job })
         }
 
         #[cfg(not(windows))]
         {
-            let _ = root_pid;
+            let _ = child;
             Ok(Self {})
         }
     }
@@ -44,18 +44,16 @@ impl OwnedProcessTree {
     /// already exited. Root exit is not treated as descendant cleanup.
     pub(crate) fn terminate_now(&self) -> Result<()> {
         #[cfg(windows)]
-        if let Some(job) = &self.job {
-            loop {
-                match job.active_process_count() {
-                    Ok(0) => break,
-                    Ok(_) | Err(_) => {
-                        // The retained Job handle is the authoritative identity.
-                        // Retry a transient TerminateJobObject/query failure
-                        // instead of returning ownership to watcher state while
-                        // any Job member may still be running.
-                        let _ = job.terminate();
-                        std::thread::sleep(Duration::from_millis(25));
-                    }
+        loop {
+            match self.job.active_process_count() {
+                Ok(0) => break,
+                Ok(_) | Err(_) => {
+                    // The retained Job handle is the authoritative identity.
+                    // Retry a transient TerminateJobObject/query failure
+                    // instead of returning ownership to watcher state while
+                    // any Job member may still be running.
+                    let _ = self.job.terminate();
+                    std::thread::sleep(Duration::from_millis(25));
                 }
             }
         }
@@ -65,17 +63,15 @@ impl OwnedProcessTree {
     /// Terminates the retained owned tree and reaps the root child.
     pub(crate) async fn terminate(&mut self, child: &mut Child) -> Result<Option<i32>> {
         #[cfg(windows)]
-        if let Some(job) = &self.job {
-            loop {
-                match job.active_process_count() {
-                    Ok(0) => break,
-                    Ok(_) | Err(_) => {
-                        // Never fall back to the historical root PID here: it
-                        // may already have exited and been reused by Windows.
-                        // The retained Job Object remains exact and authoritative.
-                        let _ = job.terminate();
-                        tokio::time::sleep(Duration::from_millis(25)).await;
-                    }
+        loop {
+            match self.job.active_process_count() {
+                Ok(0) => break,
+                Ok(_) | Err(_) => {
+                    // Never fall back to a historical root PID here. The Job
+                    // was captured from the exact spawned Child handle and is
+                    // the only authoritative retained identity after spawn.
+                    let _ = self.job.terminate();
+                    tokio::time::sleep(Duration::from_millis(25)).await;
                 }
             }
         }
@@ -91,10 +87,9 @@ impl OwnedProcessTree {
 
 /// Terminates only the process tree rooted at a child spawned by this server.
 ///
-/// Do not use root-process exit as proof that descendants are gone. The checked
-/// Windows primitive captures the owned tree in a kill-on-close Job Object
-/// before attempting termination, so ownership remains independently
-/// enforceable even when the root exits first.
+/// Do not use root-process exit as proof that descendants are gone. Windows
+/// cleanup first captures the exact spawned process handle into a Job Object;
+/// retained LIVE cleanup keeps that Job for the whole recording lifetime.
 pub(crate) async fn terminate_owned(child: &mut Child) {
     loop {
         if terminate_owned_checked(child).await.is_ok() {
@@ -108,8 +103,8 @@ pub(crate) async fn terminate_owned(child: &mut Child) {
 /// from spawn. LIVE recorder cleanup uses `OwnedProcessTree` instead.
 pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<i32>> {
     #[cfg(windows)]
-    if let Some(pid) = child.id() {
-        terminate_windows_tree(pid).await?;
+    if child.id().is_some() {
+        terminate_windows_tree(child).await?;
     }
 
     #[cfg(not(windows))]
@@ -119,25 +114,17 @@ pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<
 }
 
 #[cfg(windows)]
-async fn terminate_windows_tree(root_pid: u32) -> Result<()> {
+async fn terminate_windows_tree(child: &Child) -> Result<()> {
     loop {
-        match windows_tree::OwnedTreeJob::capture(root_pid) {
+        let Some(root_pid) = child.id() else {
+            return Ok(());
+        };
+
+        match windows_tree::OwnedTreeJob::capture_child(child) {
             Ok(None) => return Ok(()),
             Ok(Some(job)) => {
-                // Generic callers do not retain a Job from spawn. Preserve the
-                // exact-PID taskkill request as a best-effort compatibility
-                // fallback, then make the newly captured Job authoritative.
-                let _ = Command::new("taskkill.exe")
-                    .arg("/PID")
-                    .arg(root_pid.to_string())
-                    .arg("/T")
-                    .arg("/F")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .await;
-
+                // The exact Child handle has already been assigned to this Job,
+                // so do not send a historical PID to taskkill after capture.
                 loop {
                     match job.active_process_count() {
                         Ok(0) => return Ok(()),
@@ -149,9 +136,13 @@ async fn terminate_windows_tree(root_pid: u32) -> Result<()> {
                 }
             }
             Err(_) => {
-                // If Job setup is transiently unavailable, keep trying the
-                // exact-PID fallback and then retry Job capture. LIVE does not
-                // use this path because it retains its Job from spawn.
+                // Generic callers do not retain a Job from spawn. Preserve the
+                // exact-PID fallback only while the PID still resolves to the
+                // same process object as this Child handle. Never target a PID
+                // that has already been reused by Windows.
+                if !windows_tree::child_pid_is_current(child)? {
+                    return Ok(());
+                }
                 let _ = Command::new("taskkill.exe")
                     .arg("/PID")
                     .arg(root_pid.to_string())
@@ -162,9 +153,6 @@ async fn terminate_windows_tree(root_pid: u32) -> Result<()> {
                     .stderr(Stdio::null())
                     .status()
                     .await;
-                if windows_tree::process_tree_pids(root_pid)?.is_empty() {
-                    return Ok(());
-                }
             }
         }
 
@@ -179,24 +167,33 @@ mod windows_tree {
         collections::{HashMap, HashSet, VecDeque},
         ffi::c_void,
         mem::size_of,
+        os::windows::io::AsRawHandle,
         ptr,
     };
+    use tokio::process::Child;
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
+        Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE},
         System::{
             Diagnostics::ToolHelp::{
                 CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
                 TH32CS_SNAPPROCESS,
             },
             JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
-                QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+                AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+                JobObjectExtendedLimitInformation, QueryInformationJobObject,
+                SetInformationJobObject, TerminateJobObject,
             },
-            Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
+            Threading::{
+                GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+                PROCESS_TERMINATE,
+            },
         },
     };
+
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_INVALID_PARAMETER: i32 = 87;
 
     struct OwnedHandle(isize);
 
@@ -214,6 +211,71 @@ mod windows_tree {
                 }
             }
         }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    struct ProcessIdentity {
+        pid: u32,
+        creation_time: u64,
+    }
+
+    fn filetime_value(value: FILETIME) -> u64 {
+        ((value.dwHighDateTime as u64) << 32) | value.dwLowDateTime as u64
+    }
+
+    fn process_creation_time(handle: HANDLE) -> Result<u64> {
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        let ok = unsafe {
+            GetProcessTimes(
+                handle,
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error()).context("GetProcessTimes failed");
+        }
+        Ok(filetime_value(creation))
+    }
+
+    fn child_identity(child: &Child) -> Result<ProcessIdentity> {
+        let pid = child.id().context("spawned child PID unavailable")?;
+        let handle = child.as_raw_handle() as HANDLE;
+        Ok(ProcessIdentity {
+            pid,
+            creation_time: process_creation_time(handle)
+                .with_context(|| format!("failed to read creation identity for child pid={pid}"))?,
+        })
+    }
+
+    fn open_identity(pid: u32, access: u32) -> Result<Option<(OwnedHandle, ProcessIdentity)>> {
+        let process = unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(ERROR_INVALID_PARAMETER) {
+                return Ok(None);
+            }
+            if err.raw_os_error() == Some(ERROR_ACCESS_DENIED) {
+                return Err(err).with_context(|| format!("OpenProcess access denied for pid={pid}"));
+            }
+            return Ok(None);
+        }
+        let process = OwnedHandle(process as isize);
+        let identity = ProcessIdentity {
+            pid,
+            creation_time: process_creation_time(process.raw())
+                .with_context(|| format!("failed to read creation identity for pid={pid}"))?,
+        };
+        Ok(Some((process, identity)))
+    }
+
+    fn query_identity(pid: u32) -> Result<Option<ProcessIdentity>> {
+        Ok(open_identity(pid, 0)?.map(|(_, identity)| identity))
     }
 
     pub(super) struct OwnedTreeJob {
@@ -247,70 +309,88 @@ mod windows_tree {
             Ok(job)
         }
 
-        /// Capture the current root lineage. Assigning the root first makes
-        /// subsequently-created descendants inherit the Job; repeated process
-        /// snapshots then absorb descendants that existed before assignment.
-        pub(super) fn capture(root_pid: u32) -> Result<Option<Self>> {
-            let initial = process_tree_pids(root_pid)?;
-            if initial.is_empty() {
+        /// Capture the exact spawned root process first, then absorb descendants
+        /// that existed before Job assignment. Repeated snapshots are anchored
+        /// to the root's creation identity, so a reused numeric PID is never
+        /// followed or assigned to this retained Job.
+        pub(super) fn capture_child(child: &Child) -> Result<Option<Self>> {
+            let root = child_identity(child)?;
+            let Some(initial) = process_tree_identities(root)? else {
                 return Ok(None);
-            }
+            };
 
             let job = Self::create()?;
+            let root_handle = child.as_raw_handle() as HANDLE;
+            job.assign_handle(root_handle).with_context(|| {
+                format!("failed to assign exact spawned root pid={} to Job", root.pid)
+            })?;
+
             let mut assigned = HashSet::new();
+            assigned.insert(root);
+            let mut current = initial;
 
             loop {
-                let current = process_tree_pids(root_pid)?;
-                if current.is_empty() {
-                    return if assigned.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(job))
-                    };
-                }
-
-                for pid in current.iter().copied() {
-                    if assigned.contains(&pid) {
+                for identity in current.iter().copied() {
+                    if assigned.contains(&identity) {
                         continue;
                     }
-                    match job.assign(pid) {
-                        Ok(()) => {
-                            assigned.insert(pid);
-                        }
-                        Err(err) => {
-                            // A process may vanish between snapshot and open.
-                            // Ignore only that race; a still-live member that
-                            // cannot be assigned means Job ownership was not
-                            // established and must not be reported as success.
-                            if process_tree_pids(root_pid)?.contains(&pid) {
-                                return Err(err).with_context(|| {
-                                    format!("failed to assign owned pid={pid} to Job Object")
-                                });
-                            }
-                        }
+                    if job.assign_identity(identity)? {
+                        assigned.insert(identity);
                     }
                 }
 
-                let after = process_tree_pids(root_pid)?;
-                if after.iter().all(|pid| assigned.contains(pid)) {
+                let Some(after) = process_tree_identities(root)? else {
+                    // The original root exited or its numeric PID was reused.
+                    // Never follow that PID again. The exact root was already
+                    // assigned, and future descendants inherit its Job.
+                    return Ok(Some(job));
+                };
+                if after.iter().all(|identity| assigned.contains(identity)) {
                     return Ok(Some(job));
                 }
+                current = after;
             }
         }
 
-        fn assign(&self, pid: u32) -> Result<()> {
-            let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
-            if process.is_null() {
-                return Err(std::io::Error::last_os_error())
-                    .with_context(|| format!("OpenProcess failed for pid={pid}"));
+        fn contains_handle(&self, process: HANDLE) -> Result<bool> {
+            let mut in_job = 0;
+            let ok = unsafe { IsProcessInJob(process, self.handle.raw(), &mut in_job) };
+            if ok == 0 {
+                return Err(std::io::Error::last_os_error()).context("IsProcessInJob failed");
             }
-            let process = OwnedHandle(process as isize);
-            let ok = unsafe { AssignProcessToJobObject(self.handle.raw(), process.raw()) };
+            Ok(in_job != 0)
+        }
+
+        fn assign_handle(&self, process: HANDLE) -> Result<()> {
+            if self.contains_handle(process)? {
+                return Ok(());
+            }
+            let ok = unsafe { AssignProcessToJobObject(self.handle.raw(), process) };
             if ok == 0 {
                 return Err(std::io::Error::last_os_error())
-                    .with_context(|| format!("AssignProcessToJobObject failed for pid={pid}"));
+                    .context("AssignProcessToJobObject failed");
             }
             Ok(())
+        }
+
+        fn assign_identity(&self, expected: ProcessIdentity) -> Result<bool> {
+            let Some((process, current)) =
+                open_identity(expected.pid, PROCESS_SET_QUOTA | PROCESS_TERMINATE)?
+            else {
+                return Ok(false);
+            };
+            if current != expected {
+                // PID was reused between the snapshot and OpenProcess. Never
+                // assign the replacement process to our retained Job.
+                return Ok(false);
+            }
+            self.assign_handle(process.raw()).with_context(|| {
+                format!(
+                    "failed to assign pinned owned pid={} creation_time={} to Job",
+                    expected.pid, expected.creation_time
+                )
+            })?;
+            Ok(true)
         }
 
         pub(super) fn active_process_count(&self) -> Result<u32> {
@@ -340,7 +420,42 @@ mod windows_tree {
         }
     }
 
-    pub(super) fn process_tree_pids(root_pid: u32) -> Result<HashSet<u32>> {
+    fn process_tree_identities(root: ProcessIdentity) -> Result<Option<HashSet<ProcessIdentity>>> {
+        let (children, present) = process_snapshot()?;
+        if !present.contains(&root.pid) {
+            return Ok(None);
+        }
+        if query_identity(root.pid)? != Some(root) {
+            // The numeric root PID now names a different process. Never seed a
+            // traversal from it, even if the replacement has descendants.
+            return Ok(None);
+        }
+
+        let mut owned = HashSet::new();
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::from([root.pid]);
+        owned.insert(root);
+
+        while let Some(pid) = queue.pop_front() {
+            if !visited.insert(pid) {
+                continue;
+            }
+            if let Some(descendants) = children.get(&pid) {
+                for child_pid in descendants.iter().copied() {
+                    if child_pid == pid {
+                        continue;
+                    }
+                    if let Some(identity) = query_identity(child_pid)? {
+                        owned.insert(identity);
+                        queue.push_back(child_pid);
+                    }
+                }
+            }
+        }
+        Ok(Some(owned))
+    }
+
+    fn process_snapshot() -> Result<(HashMap<u32, Vec<u32>>, HashSet<u32>)> {
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
         if snapshot == INVALID_HANDLE_VALUE {
             return Err(std::io::Error::last_os_error())
@@ -365,7 +480,11 @@ mod windows_tree {
             entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
             ok = unsafe { Process32NextW(snapshot.raw(), &mut entry) };
         }
+        Ok((children, present))
+    }
 
+    pub(super) fn process_tree_pids(root_pid: u32) -> Result<HashSet<u32>> {
+        let (children, present) = process_snapshot()?;
         let mut owned = HashSet::new();
         let mut queue = VecDeque::new();
         if present.contains(&root_pid) || children.contains_key(&root_pid) {
@@ -383,13 +502,22 @@ mod windows_tree {
                 }
             }
         }
-
-        // If the root has already exited, it is intentionally absent from the
-        // result while descendants whose recorded parent is root_pid remain.
         if owned.is_empty() && !children.contains_key(&root_pid) {
             return Ok(HashSet::new());
         }
         Ok(owned)
+    }
+
+    pub(super) fn child_pid_is_current(child: &Child) -> Result<bool> {
+        let expected = child_identity(child)?;
+        Ok(query_identity(expected.pid)? == Some(expected))
+    }
+
+    #[cfg(test)]
+    pub(super) fn child_snapshot_rejects_wrong_creation_identity(child: &Child) -> Result<bool> {
+        let mut wrong = child_identity(child)?;
+        wrong.creation_time = wrong.creation_time.wrapping_add(1);
+        Ok(process_tree_identities(wrong)?.is_none())
     }
 }
 
@@ -464,7 +592,9 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn windows_retained_tree_owner_survives_root_exit() {
-        use super::windows_tree::process_tree_pids;
+        use super::windows_tree::{
+            child_snapshot_rejects_wrong_creation_identity, process_tree_pids,
+        };
         use std::{
             env, fs,
             time::{Duration, Instant},
@@ -514,10 +644,15 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
 
-        // This mirrors the production LIVE shape: retain ownership while the
-        // root still exists, keep that owner in the recording, then allow the
-        // root to exit before cleanup is requested.
-        let mut owner = OwnedProcessTree::capture(root_pid).unwrap();
+        assert!(
+            child_snapshot_rejects_wrong_creation_identity(&root).unwrap(),
+            "snapshot traversal must reject a mismatched root creation identity"
+        );
+
+        // This mirrors the production LIVE shape: retain ownership from the
+        // exact spawned Child handle, keep that owner in the recording, then
+        // allow the root to exit before cleanup is requested.
+        let mut owner = OwnedProcessTree::capture(&root).unwrap();
         root.wait().await.unwrap();
 
         assert!(
@@ -529,7 +664,7 @@ mod tests {
 
         owner.terminate(&mut root).await.unwrap();
         assert_eq!(
-            owner.job.as_ref().unwrap().active_process_count().unwrap(),
+            owner.job.active_process_count().unwrap(),
             0,
             "retained Job must be empty before cleanup returns"
         );
