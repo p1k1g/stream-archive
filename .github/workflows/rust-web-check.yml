@@ -171,8 +171,10 @@ jobs:
           if (-not (Test-Path -LiteralPath $output -PathType Leaf)) {
             throw 'source-archive metadata file was not created'
           }
-          $releaseInfo = Get-Content -LiteralPath $output -Raw
-          if ($releaseInfo -notmatch '(?m)^commit=unknown$') {
+          $commitLine = Get-Content -LiteralPath $output |
+            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+            Select-Object -First 1
+          if ($null -eq $commitLine -or $commitLine.TrimStart([char]0xFEFF).Trim() -ne 'commit=unknown') {
             throw 'source-archive metadata should use commit=unknown outside a Git checkout'
           }
 
