@@ -1,6 +1,6 @@
 # Reverse proxy deployment
 
-Keep the Stream Archive Rust server on loopback and expose only Caddy over HTTPS.
+Keep the Stream Archive Rust server on loopback and expose only Caddy or another reverse proxy over HTTPS.
 
 ```text
 Internet
@@ -51,9 +51,9 @@ YOUR_DOMAIN.example.com {
 
 Caddy automatically obtains and renews a public TLS certificate when:
 
-- the hostname resolves to your public IP,
-- inbound TCP 80/443 reach the Windows PC,
-- the ISP/router is not blocking those ports,
+- the hostname resolves to your public IP;
+- inbound TCP 80/443 reach the Windows PC;
+- the ISP/router is not blocking those ports;
 - the connection is not behind unsupported CGNAT.
 
 Start Caddy from the folder containing `caddy.exe` and `Caddyfile`:
@@ -63,7 +63,7 @@ Start Caddy from the folder containing `caddy.exe` and `Caddyfile`:
 .\caddy.exe run --config .\Caddyfile
 ```
 
-Keep the Stream Archive server running separately. Neither process is registered as an OS service by this project.
+Keep `stream-archive-server.exe` running separately. Neither process is registered as an OS service by this project.
 
 ## Windows firewall
 
@@ -85,19 +85,19 @@ If the router WAN address is in a private/CGNAT range such as `10.x.x.x`, `172.1
 For LAN-only troubleshooting you can bind Axum to all interfaces:
 
 ```powershell
-$env:SOOP_WEB_BIND="0.0.0.0:8787"
-.\soop-server.exe
+$env:STREAM_ARCHIVE_BIND="0.0.0.0:8787"
+.\stream-archive-server.exe
 ```
 
-Then forward/connect to the **PC LAN IPv4**, never `127.0.0.1`. For public internet use, switch back to `127.0.0.1:8787` and use Caddy.
+Then connect to the **PC LAN IPv4**, never `127.0.0.1`. For public internet use, switch back to `127.0.0.1:8787` and use an HTTPS reverse proxy.
 
 ## Security notes
 
-- The Web API requires the management bearer token, but HTTPS is still required when traffic leaves the local machine.
-- Do not put the token in the Caddyfile, Git, screenshots, or logs.
+- The Web API requires application authentication/recovery-token authorization, but HTTPS is still required when traffic leaves the local machine.
+- Do not put the recovery token in the Caddyfile, Git, screenshots, or logs.
 - Prefer VPN/LAN-only exposure if public internet access is unnecessary.
-- If exposing publicly, source-IP restrictions or an additional authentication layer at the proxy are worthwhile.
+- If exposing publicly, source-IP restrictions or an additional authentication layer at the proxy can provide another defense layer.
 
 ## Health check
 
-Open the HTTPS hostname and verify the UI loads. A bare unauthenticated `/api/status` request returning HTTP 401 is expected and confirms management data is not exposed anonymously.
+Open the HTTPS hostname and verify the UI loads. A bare unauthenticated management API request returning HTTP 401 is expected and confirms management data is not exposed anonymously.
