@@ -135,6 +135,30 @@ jobs:
         shell: powershell
         run: ./maintenance/Test-RuntimeContracts.ps1
 
+      - name: Source archive metadata smoke
+        shell: powershell
+        run: |
+          $scratch = Join-Path $env:RUNNER_TEMP 'stream-archive-no-git'
+          if (Test-Path -LiteralPath $scratch) {
+            Remove-Item -LiteralPath $scratch -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $scratch | Out-Null
+          $output = Join-Path $scratch 'RELEASE_INFO.txt'
+          Push-Location $scratch
+          try {
+            & "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" `
+              -OutputPath $output `
+              -ManifestPath "$env:GITHUB_WORKSPACE\rust-web\Cargo.toml"
+            if ($LASTEXITCODE -ne 0) { throw 'Write-ReleaseMetadata.ps1 failed outside a Git checkout' }
+          }
+          finally {
+            Pop-Location
+          }
+          $releaseInfo = Get-Content -LiteralPath $output -Raw
+          if ($releaseInfo -notmatch '(?m)^commit=unknown$') {
+            throw 'source-archive metadata should use commit=unknown outside a Git checkout'
+          }
+
       - name: Windows portable package smoke
         shell: cmd
         run: BUILD_PORTABLE.bat
