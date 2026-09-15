@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     env,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use tokio::sync::{RwLock, broadcast};
@@ -84,6 +84,16 @@ impl LogBuffer {
         let start = logs.len().saturating_sub(max_lines.max(1));
         logs.iter().skip(start).cloned().collect()
     }
+}
+
+// CHZZK VOD still passes a path-shaped settings handle. The value is deliberately
+// opaque: runtime settings are read from SQLite, never from an INI/TXT file.
+pub fn settings_path(_backend_dir: &Path) -> PathBuf {
+    PathBuf::new()
+}
+
+pub fn read_safe_settings(_unused_path: &Path) -> Result<BTreeMap<String, String>> {
+    crate::store::global()?.safe_settings()
 }
 
 #[cfg(windows)]
