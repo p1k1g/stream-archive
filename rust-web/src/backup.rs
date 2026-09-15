@@ -1,6 +1,4 @@
-use crate::{
-    ApiResult, AppState, authorize, internal_error, materialize_primary_files, store::Store,
-};
+use crate::{ApiResult, AppState, authorize, internal_error, store::Store};
 use anyhow::{Context, Result, bail};
 use axum::{
     Json,
@@ -19,6 +17,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+const BACKUP_PREFIX: &str = "stream_archive_";
 const DEFAULT_INTERVAL_HOURS: u64 = 24;
 const DEFAULT_KEEP_COUNT: usize = 10;
 const DEFAULT_RETENTION_DAYS: i64 = 3;
@@ -34,12 +33,9 @@ pub struct BackupPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BackupMetadata {
-    #[serde(default)]
     version: u32,
     created_at: String,
-    #[serde(default)]
     kind: String,
-    #[serde(default)]
     source: String,
     sha256: String,
     size_bytes: u64,
@@ -65,7 +61,7 @@ pub struct BackupManager {
 
 impl BackupManager {
     pub fn open(store: Store, backend_dir: &Path) -> Result<Self> {
-        let env_override = env::var("SOOP_BACKUP_DIR")
+        let env_override = env::var("STREAM_ARCHIVE_BACKUP_DIR")
             .ok()
             .is_some_and(|value| !value.trim().is_empty());
         let default_backup_dir = resolve_backup_dir(backend_dir)?;
@@ -80,7 +76,6 @@ impl BackupManager {
         fs::create_dir_all(&backup_dir).with_context(|| {
             format!("failed to create backup directory {}", backup_dir.display())
         })?;
-        manager.migrate_legacy_backups()?;
         Ok(manager)
     }
 
@@ -114,7 +109,7 @@ impl BackupManager {
             }
         }
         if !defaults.is_empty() {
-            self.store.sync_settings(&defaults, "phase12-default")?;
+            self.store.sync_settings(&defaults, "runtime-default")?;
         }
         Ok(())
     }
@@ -145,52 +140,6 @@ impl BackupManager {
             keep_count,
             retention_days,
         })
-    }
-
-    fn migrate_legacy_backups(&self) -> Result<usize> {
-        let Some(data_dir) = self.store.path().parent() else {
-            return Ok(0);
-        };
-        let legacy = data_dir.join("backups");
-        let backup_dir = self.backup_dir();
-        if !legacy.is_dir() || legacy == backup_dir {
-            return Ok(0);
-        }
-        let mut moved = 0;
-        for entry in fs::read_dir(&legacy)? {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Some(name) = path.file_name() else {
-                continue;
-            };
-            let name_text = name.to_string_lossy();
-            if !is_backup_artifact_name(&name_text) {
-                continue;
-            }
-            let target = backup_dir.join(name);
-            if target.exists() {
-                continue;
-            }
-            match fs::rename(&path, &target) {
-                Ok(()) => moved += 1,
-                Err(_) => {
-                    fs::copy(&path, &target)?;
-                    fs::remove_file(&path)?;
-                    moved += 1;
-                }
-            }
-        }
-        if legacy
-            .read_dir()
-            .map(|mut it| it.next().is_none())
-            .unwrap_or(false)
-        {
-            let _ = fs::remove_dir(&legacy);
-        }
-        Ok(moved)
     }
 
     pub async fn list(&self) -> Result<Vec<BackupInfo>> {
@@ -254,7 +203,7 @@ impl BackupManager {
         let backup_dir = self.backup_dir();
         fs::create_dir_all(&backup_dir)?;
         let stamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
-        let file_name = format!("soop_{kind}_{stamp}.db");
+        let file_name = format!("{BACKUP_PREFIX}{kind}_{stamp}.db");
         let path = backup_dir.join(&file_name);
         self.store.backup_to(&path)?;
         verify_sqlite(&path)?;
@@ -346,7 +295,7 @@ impl BackupManager {
     fn resolve_file(&self, file_name: &str) -> Result<PathBuf> {
         let trimmed = file_name.trim();
         if trimmed.is_empty()
-            || !trimmed.starts_with("soop_")
+            || !trimmed.starts_with(BACKUP_PREFIX)
             || !trimmed.ends_with(".db")
             || Path::new(trimmed).file_name().and_then(|v| v.to_str()) != Some(trimmed)
         {
@@ -457,7 +406,6 @@ pub(crate) async fn api_restore(
         .await
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
     state.auth.reinitialize().map_err(internal_error)?;
-    materialize_primary_files(&state.store, &state.backend_dir).map_err(internal_error)?;
     let invalidated = state
         .auth
         .invalidate_all_sessions()
@@ -477,11 +425,7 @@ pub(crate) async fn api_restore(
 fn is_backup_database_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
-        .is_some_and(|name| name.starts_with("soop_") && name.ends_with(".db"))
-}
-
-fn is_backup_artifact_name(name: &str) -> bool {
-    name.starts_with("soop_") && (name.ends_with(".db") || name.ends_with(".db.json"))
+        .is_some_and(|name| name.starts_with(BACKUP_PREFIX) && name.ends_with(".db"))
 }
 
 fn is_owned_backup(path: &Path) -> bool {
@@ -494,14 +438,14 @@ fn is_owned_backup(path: &Path) -> bool {
 }
 
 fn resolve_backup_dir(backend_dir: &Path) -> Result<PathBuf> {
-    if let Ok(value) = env::var("SOOP_BACKUP_DIR") {
+    if let Ok(value) = env::var("STREAM_ARCHIVE_BACKUP_DIR") {
         if !value.trim().is_empty() {
             return Ok(PathBuf::from(value));
         }
     }
     let app_root = backend_dir.parent().unwrap_or(backend_dir);
     let parent = app_root.parent().unwrap_or(app_root);
-    Ok(parent.join("soop-recorder-backups"))
+    Ok(parent.join("stream-archive-backups"))
 }
 
 fn inspect_backup(path: &Path) -> Result<BackupInfo> {
@@ -541,13 +485,7 @@ fn inspect_backup(path: &Path) -> Result<BackupInfo> {
         });
     let kind = metadata
         .as_ref()
-        .map(|m| {
-            if m.kind.trim().is_empty() {
-                infer_kind(&file_name)
-            } else {
-                m.kind.clone()
-            }
-        })
+        .map(|m| m.kind.clone())
         .unwrap_or_else(|| infer_kind(&file_name));
     Ok(BackupInfo {
         file_name,
@@ -565,7 +503,7 @@ fn infer_kind(file_name: &str) -> String {
             return kind.into();
         }
     }
-    "legacy".into()
+    "unknown".into()
 }
 
 fn verify_sqlite(path: &Path) -> Result<()> {
@@ -588,6 +526,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 fn parse_u64(value: Option<String>, default: u64) -> u64 {
     value.and_then(|v| v.parse().ok()).unwrap_or(default)
 }
+
 fn parse_i64(value: Option<String>, default: i64) -> i64 {
     value.and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -597,34 +536,32 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn backup_directory_is_sibling_of_application_root() {
+    fn setup() -> (tempfile::TempDir, PathBuf, PathBuf, Store) {
         let dir = tempdir().unwrap();
-        let app = dir.path().join("soop-recorder");
+        let app = dir.path().join("stream-archive");
         let backend = app.join("backend");
         fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(app.join("data").join("stream-archive.db")).unwrap();
+        (dir, app, backend, store)
+    }
+
+    #[test]
+    fn backup_directory_is_sibling_of_application_root() {
+        let (dir, _app, backend, _store) = setup();
         let resolved = resolve_backup_dir(&backend).unwrap();
-        assert_eq!(resolved, dir.path().join("soop-recorder-backups"));
+        assert_eq!(resolved, dir.path().join("stream-archive-backups"));
     }
 
     #[test]
     fn default_backup_retention_is_three_days() {
-        let dir = tempdir().unwrap();
-        let app = dir.path().join("soop-recorder");
-        let backend = app.join("backend");
-        fs::create_dir_all(&backend).unwrap();
-        let store = Store::open(app.join("data").join("soop.db")).unwrap();
+        let (_dir, _app, backend, store) = setup();
         let manager = BackupManager::open(store, &backend).unwrap();
         assert_eq!(manager.policy().unwrap().retention_days, 3);
     }
 
     #[test]
     fn persisted_backup_directory_updates_without_restart() {
-        let dir = tempdir().unwrap();
-        let app = dir.path().join("soop-recorder");
-        let backend = app.join("backend");
-        fs::create_dir_all(&backend).unwrap();
-        let store = Store::open(app.join("data").join("soop.db")).unwrap();
+        let (dir, _app, backend, store) = setup();
         let manager = BackupManager::open(store.clone(), &backend).unwrap();
         let first = dir.path().join("backup-a");
         let second = dir.path().join("backup-b");
@@ -652,11 +589,7 @@ mod tests {
 
     #[test]
     fn online_backup_round_trip_restores_database() {
-        let dir = tempdir().unwrap();
-        let app = dir.path().join("soop-recorder");
-        let backend = app.join("backend");
-        fs::create_dir_all(&backend).unwrap();
-        let store = Store::open(app.join("data").join("soop.db")).unwrap();
+        let (_dir, _app, backend, store) = setup();
         store
             .sync_settings(
                 &std::collections::BTreeMap::from([("TEST".into(), "before".into())]),
@@ -689,11 +622,7 @@ mod tests {
 
     #[test]
     fn retention_does_not_delete_unowned_databases() {
-        let dir = tempdir().unwrap();
-        let app = dir.path().join("soop-recorder");
-        let backend = app.join("backend");
-        fs::create_dir_all(&backend).unwrap();
-        let store = Store::open(app.join("data").join("soop.db")).unwrap();
+        let (_dir, _app, backend, store) = setup();
         let manager = BackupManager::open(store, &backend).unwrap();
         let unrelated = manager.backup_dir().join("other-application.db");
         rusqlite::Connection::open(&unrelated).unwrap();
@@ -707,34 +636,5 @@ mod tests {
         };
         manager.cleanup_locked(&policy).unwrap();
         assert!(unrelated.is_file());
-    }
-
-    #[test]
-    fn legacy_metadata_without_kind_or_version_remains_restorable() {
-        let dir = tempdir().unwrap();
-        let app = dir.path().join("soop-recorder");
-        let backend = app.join("backend");
-        fs::create_dir_all(&backend).unwrap();
-        let store = Store::open(app.join("data").join("soop.db")).unwrap();
-        let manager = BackupManager::open(store.clone(), &backend).unwrap();
-        let path = manager.backup_dir().join("soop_20260909_071240.db");
-        store.backup_to(&path).unwrap();
-        let sha = sha256_file(&path).unwrap();
-        let size = fs::metadata(&path).unwrap().len();
-        let legacy = json!({
-            "created_at": Utc::now().to_rfc3339(),
-            "source": store.path().display().to_string(),
-            "backup": path.display().to_string(),
-            "sha256": sha,
-            "size_bytes": size
-        });
-        fs::write(
-            path.with_extension("db.json"),
-            serde_json::to_vec_pretty(&legacy).unwrap(),
-        )
-        .unwrap();
-        let info = inspect_backup(&path).unwrap();
-        assert_eq!(info.integrity, "OK");
-        assert_eq!(info.kind, "legacy");
     }
 }
