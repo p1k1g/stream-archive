@@ -30,6 +30,12 @@ jobs:
           $text = $text.Replace('onclick=.*\r?$', 'onclick=[^\r\n]*\r?$')
           $text = $text.Replace('Promise\.all\(\[.*\r?$', 'Promise\.all\(\[[^\r\n]*\r?$')
           $text = $text.Replace("toast('Watcher '+(a==='start'?'start':'stop'))", "toast('Watcher '+(a==='start'?'시작':'중지'))")
+          $text = [regex]::Replace(
+            $text,
+            '(?m)^if \(\$providers -notmatch .*main\.rs.*\) \{$',
+            'if ($providers.IndexOf(''rust-web/src/main.rs'', [System.StringComparison]::Ordinal) -lt 0) {'
+          )
+          $text = $text.Replace('Assert-Match \$chzzkVod', 'Assert-Match \`$chzzkVod')
           [System.IO.File]::WriteAllText((Resolve-Path -LiteralPath $path), $text, [System.Text.UTF8Encoding]::new($false))
 
       - name: Apply focused fixes
