@@ -56,12 +56,9 @@ jobs:
           $path = 'maintenance/guards/ProcessLifecycle.ps1'
           $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $path))
           $out = New-Object System.Collections.Generic.List[string]
-          $streamlinkGuard = 0
-          $ffmpegGuard = 0
           foreach ($line in $lines) {
             if ($line.Contains('CHZZK VOD setup/failure paths must terminate owned Streamlink.')) {
               $out.Add('Assert-Match $chzzkVod ''spawn_owned\(&mut streamlink_command\)'' ''CHZZK VOD Streamlink must enter retained ownership before execution.''')
-              $streamlinkGuard++
               continue
             }
             if ($line.Contains('CHZZK VOD cancellation must terminate owned FFmpeg.')) {
@@ -70,18 +67,17 @@ jobs:
               $out.Add('Assert-Match $chzzkVod ''ffmpeg_tree\.terminate\(&mut ffmpeg_child\)'' ''CHZZK VOD cancellation must terminate retained FFmpeg ownership.''')
               $out.Add('Assert-Match $chzzkVod ''spawn_owned\(&mut command\)'' ''CHZZK VOD analyze commands must use retained ownership.''')
               $out.Add('Assert-NotMatch $chzzkVod ''terminate_owned\(&mut (?:streamlink_child|ffmpeg_child|child)\)'' ''CHZZK VOD must not fall back to compatibility tree recapture for its external tools.''')
-              $ffmpegGuard++
               continue
             }
             $out.Add($line)
           }
           [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $out, $utf8)
           $processText = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-          if ($processText -notmatch 'spawn_owned\(&mut streamlink_command\)' -or
-              $processText -notmatch 'spawn_owned\(&mut ffmpeg_command\)' -or
-              $processText -notmatch 'streamlink_tree\.terminate\(&mut streamlink_child\)' -or
-              $processText -notmatch 'ffmpeg_tree\.terminate\(&mut ffmpeg_child\)' -or
-              $processText -notmatch 'spawn_owned\(&mut command\)') {
+          if (-not $processText.Contains('spawn_owned\(&mut streamlink_command\)') -or
+              -not $processText.Contains('spawn_owned\(&mut ffmpeg_command\)') -or
+              -not $processText.Contains('streamlink_tree\.terminate\(&mut streamlink_child\)') -or
+              -not $processText.Contains('ffmpeg_tree\.terminate\(&mut ffmpeg_child\)') -or
+              -not $processText.Contains('spawn_owned\(&mut command\)')) {
             throw 'ProcessLifecycle retained-ownership guards are incomplete'
           }
 
@@ -101,8 +97,8 @@ jobs:
           }
           [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $out, $utf8)
           $storageText = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-          if ($storageText -notmatch 'spawn_owned\(&mut ffmpeg_command\)' -or
-              $storageText -notmatch 'streamlink_tree\.terminate\(&mut streamlink_child\)') {
+          if (-not $storageText.Contains('spawn_owned\(&mut ffmpeg_command\)') -or
+              -not $storageText.Contains('streamlink_tree\.terminate\(&mut streamlink_child\)')) {
             throw 'StorageOwnership retained-ownership guards are incomplete'
           }
 
