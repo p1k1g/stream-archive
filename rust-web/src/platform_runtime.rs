@@ -529,12 +529,7 @@ mod tests {
 
         owner.terminate(&mut root).await.unwrap();
         assert_eq!(
-            owner
-                .job
-                .as_ref()
-                .unwrap()
-                .active_process_count()
-                .unwrap(),
+            owner.job.as_ref().unwrap().active_process_count().unwrap(),
             0,
             "retained Job must be empty before cleanup returns"
         );
