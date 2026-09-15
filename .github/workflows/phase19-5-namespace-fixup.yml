@@ -65,6 +65,9 @@ jobs:
           Replace-Literal 'maintenance/guards/StorageOwnership.ps1' '\.soop-downloader\.claim' '\.stream-archive\.claim'
           Replace-Literal 'maintenance/guards/StorageOwnership.ps1' '\.soop-downloader\.finalizing' '\.stream-archive\.finalizing'
 
+          # CI already covers rust-web/**; the old per-file main.rs assertion is redundant.
+          Replace-Regex 'maintenance/guards/StorageOwnership.ps1' "Assert-Match \`$workflow 'rust-web/src/main\\.rs' 'Runtime workflow must trigger when main\\.rs startup ordering changes\\.'\s*" ''
+
           # The INI/TXT channel migration was intentionally retired before public release.
           Replace-Regex 'maintenance/guards/Providers.ps1' '# Legacy channel-file migration must preserve LF, CRLF, and lone-CR compatibility\..*?(?=# API-side validation)' ''
 
