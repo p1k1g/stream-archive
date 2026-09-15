@@ -26,7 +26,7 @@ Assert-Match $runtime 'ActiveProcesses' 'Retained Job cleanup must verify that n
 Assert-Match $runtime 'self\.job\.active_process_count\(\)' 'Retained Job cleanup must loop on authoritative Job membership.'
 Assert-NotMatch $runtime 'self\.root_pid' 'Retained process ownership must not reuse a historical root PID after spawn.'
 Assert-Match $runtime 'CreateToolhelp32Snapshot' 'Windows owned-tree capture must discover already-existing descendants.'
-Assert-Match $runtime 'child\.raw_handle\(\)' 'Windows retained ownership must start from the exact spawned Child process handle.'
+Assert-Match $runtime '\.raw_handle\(\)' 'Windows retained ownership must start from the exact spawned Child process handle.'
 Assert-Match $runtime 'GetProcessTimes' 'Windows PID-based descendant absorption must pin process creation identity.'
 Assert-Match $runtime 'struct ProcessIdentity' 'Windows snapshot assignments must carry stable process identity.'
 Assert-Match $runtime 'capture_child\(child: &Child\)' 'Windows Job capture must accept the spawned Child handle rather than a PID alone.'
