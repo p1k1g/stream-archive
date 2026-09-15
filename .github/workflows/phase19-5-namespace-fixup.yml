@@ -24,6 +24,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          function Write-Utf8NoBom {
+            param([string]$Path,[string]$Text)
+            [IO.File]::WriteAllText((Resolve-Path -LiteralPath $Path), $Text, [Text.UTF8Encoding]::new($false))
+          }
           function Replace-Literal {
             param(
               [Parameter(Mandatory=$true)][string]$Path,
@@ -36,8 +40,22 @@ jobs:
               if ($Optional) { return }
               throw "Expected text not found in $Path : $Old"
             }
-            $text = $text.Replace($Old, $New)
-            [IO.File]::WriteAllText((Resolve-Path -LiteralPath $Path), $text, [Text.UTF8Encoding]::new($false))
+            Write-Utf8NoBom $Path ($text.Replace($Old, $New))
+          }
+          function Replace-Regex {
+            param(
+              [Parameter(Mandatory=$true)][string]$Path,
+              [Parameter(Mandatory=$true)][string]$Pattern,
+              [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Replacement,
+              [switch]$Optional
+            )
+            $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+            $regex = [regex]::new($Pattern, [Text.RegularExpressions.RegexOptions]::Singleline)
+            if (-not $regex.IsMatch($text)) {
+              if ($Optional) { return }
+              throw "Expected pattern not found in $Path : $Pattern"
+            }
+            Write-Utf8NoBom $Path ($regex.Replace($text, $Replacement))
           }
 
           Replace-Literal 'rust-web/Cargo.lock' 'name = "soop-web"' 'name = "stream-archive-server"'
@@ -48,16 +66,16 @@ jobs:
           Replace-Literal 'maintenance/guards/StorageOwnership.ps1' '\.soop-downloader\.finalizing' '\.stream-archive\.finalizing'
 
           $index = 'rust-web/web/index.html'
-          Replace-Literal $index '<button id="restoreChannels" class="secondary">백업 복구</button> ' ''
-          Replace-Literal $index '<input id="channelBackupFile" type="file" accept=".txt,.bak,text/plain" hidden>' ''
-          Replace-Literal $index '<p class="hint">기존 SOOP_LIVE_CHANNELS.txt 또는 .bak 파일을 선택하면 SQLite 채널 목록으로 복구합니다.</p>' ''
-          Replace-Literal $index '<section style="display:none" aria-hidden="true"><div class="title"><h2>Legacy History Refresh</h2><button id="refreshHistory">새로고침</button></div><div class="table"><table><tbody id="liveHistory"></tbody></table></div><div class="table"><table><tbody id="vodHistory"></tbody></table></div></section>' ''
-          Replace-Literal $index '<button id="importSettings" class="secondary">이전 설정 가져오기</button> ' ''
-          Replace-Literal $index '<input id="settingsImportFile" type="file" accept=".ini,.bak,text/plain" hidden>' ''
-          Replace-Literal $index '<p class="hint">SOOP_LIVE_SETTING.ini/.bak를 선택하면 일반 설정과 VOD 도구 경로를 SQLite로 가져옵니다. 비밀번호/API Key는 안전상 자동 가져오지 않습니다.</p>' '<p class="hint">설정과 채널은 SQLite에 저장되며 Web UI에서 직접 관리합니다.</p>'
-          Replace-Literal $index '<p class="hint">Phase 7부터 Watcher는 SQLite를 직접 읽습니다. INI/TXT는 호환/백업용 미러이며 런타임 원본이 아닙니다.</p>' ''
-          Replace-Literal $index '<strong><i></i> SOOP</strong>' '<strong><i></i> SOOP · CHZZK</strong>'
-          Replace-Literal $index '<small>현재 활성 · 추후 다른 스트리밍 플랫폼 확장 예정</small>' '<small>LIVE / VOD 지원</small>'
+          Replace-Regex $index '<button id="restoreChannels"[^>]*>.*?</button>\s*' ''
+          Replace-Regex $index '<input id="channelBackupFile"[^>]*>' ''
+          Replace-Regex $index '<p class="hint">[^<]*SOOP_LIVE_CHANNELS\.txt[^<]*</p>' ''
+          Replace-Regex $index '<section style="display:none" aria-hidden="true">.*?id="vodHistory".*?</section>' ''
+          Replace-Regex $index '<button id="importSettings"[^>]*>.*?</button>\s*' ''
+          Replace-Regex $index '<input id="settingsImportFile"[^>]*>' ''
+          Replace-Regex $index '<p class="hint">[^<]*SOOP_LIVE_SETTING\.ini[^<]*</p>' '<p class="hint">SQLite is the canonical settings and channel store.</p>'
+          Replace-Regex $index '<p class="hint">Phase 7[^<]*</p>' ''
+          Replace-Literal $index '<strong><i></i> SOOP</strong>' '<strong><i></i> SOOP / CHZZK</strong>'
+          Replace-Regex $index '(<div class="p135-platform-card">.*?<strong><i></i> SOOP / CHZZK</strong>)<small>.*?</small>' '$1<small>LIVE / VOD</small>'
           Replace-Literal $index 'C:\SOOP_VOD' 'C:\StreamArchive\VOD'
           Replace-Literal $index 'soop-recorder-backups' 'stream-archive-backups'
           Replace-Literal $index 'SOOP_BACKUP_DIR' 'STREAM_ARCHIVE_BACKUP_DIR'
@@ -84,9 +102,7 @@ jobs:
             $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
             $next = $text
             foreach ($entry in $oldEnv.GetEnumerator()) { $next = $next.Replace($entry.Key, $entry.Value) }
-            if ($next -ne $text) {
-              [IO.File]::WriteAllText((Resolve-Path -LiteralPath $path), $next, [Text.UTF8Encoding]::new($false))
-            }
+            if ($next -ne $text) { Write-Utf8NoBom $path $next }
           }
 
           git diff --check
