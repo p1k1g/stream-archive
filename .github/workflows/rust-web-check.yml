@@ -144,15 +144,23 @@ jobs:
           }
           New-Item -ItemType Directory -Path $scratch | Out-Null
           $output = Join-Path $scratch 'RELEASE_INFO.txt'
+
           Push-Location $scratch
           try {
-            & "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" `
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+              "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" `
               -OutputPath $output `
               -ManifestPath "$env:GITHUB_WORKSPACE\rust-web\Cargo.toml"
-            if ($LASTEXITCODE -ne 0) { throw 'Write-ReleaseMetadata.ps1 failed outside a Git checkout' }
+            if ($LASTEXITCODE -ne 0) {
+              throw "Write-ReleaseMetadata.ps1 child process failed with exit code $LASTEXITCODE"
+            }
           }
           finally {
             Pop-Location
+          }
+
+          if (-not (Test-Path -LiteralPath $output -PathType Leaf)) {
+            throw 'source-archive metadata file was not created'
           }
           $releaseInfo = Get-Content -LiteralPath $output -Raw
           if ($releaseInfo -notmatch '(?m)^commit=unknown$') {
