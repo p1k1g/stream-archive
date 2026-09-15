@@ -1,0 +1,229 @@
+name: Phase 19.5 UI regression fixup
+
+on:
+  push:
+    branches:
+      - fix/phase19-5-ui-regressions
+    paths:
+      - .github/workflows/phase19-5-ui-regression-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-verify:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/phase19-5-ui-regressions
+          fetch-depth: 0
+
+      - name: Apply focused regression fixes
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Write-Utf8NoBom([string]$Path, [string]$Text) {
+            [System.IO.File]::WriteAllText((Resolve-Path $Path), $Text, [System.Text.UTF8Encoding]::new($false))
+          }
+          function Replace-Once([string]$Text, [string]$Pattern, [string]$Replacement, [string]$Label) {
+            $regex = [regex]::new($Pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+            $matches = $regex.Matches($Text)
+            if ($matches.Count -ne 1) { throw "$Label expected exactly one match, found $($matches.Count)" }
+            return $regex.Replace($Text, $Replacement, 1)
+          }
+
+          # app.js: Phase 19.5 removed legacy DOM, but stale direct bindings aborted the
+          # whole base script before channels/secrets/VOD/CHZZK initialization.
+          $appPath = 'rust-web/web/app.js'
+          $app = Get-Content -LiteralPath $appPath -Raw -Encoding UTF8
+          $app = [regex]::Replace($app, '(?m)^const importableLiveSettingKeys=.*\r?\n', '')
+          $app = [regex]::Replace($app, '(?m)^const hiddenImportKeys=.*\r?\n', '')
+          $app = Replace-Once $app 'function parseChannelBackup[\s\S]*?(?=async function loadSettings\(\))' '' 'remove legacy channel import code'
+          $app = Replace-Once $app 'function parseSettingsImport[\s\S]*?(?=function setSecretState\()' '' 'remove legacy settings import code'
+          $app = Replace-Once $app 'function liveHistoryRow[\s\S]*?(?=function renderLogs\()' '' 'remove dead legacy history renderer'
+          $app = [regex]::Replace($app, '(?m)^function normalizedLines\(text\).*\r?\n', '')
+
+          $authHelpers = @'
+async function testSoopAuth(){const btn=$('testSoopAuth');if(btn)btn.disabled=true;try{const result=await api('/api/secrets/test/soop',{method:'POST'});toast(`SOOP 인증 정상 · ${result.login_id||'login OK'} · Worker ${result.worker_status||'OK'}`)}catch(e){alert(e.message)}finally{if(btn)btn.disabled=false}}
+function installSoopAuthTest(){if($('testSoopAuth'))return;const save=$('saveSecrets');if(!save)return;const btn=document.createElement('button');btn.id='testSoopAuth';btn.type='button';btn.className='secondary';btn.textContent='인증 테스트';btn.onclick=()=>testSoopAuth();save.insertAdjacentElement('beforebegin',btn)}
+'@
+          $app = Replace-Once $app '(?m)^(async function saveSecrets\(\).*)\r?\n(?=async function saveChzzkSecrets)' ('$1' + "`n" + $authHelpers.TrimEnd() + "`n") 'insert SOOP auth test UI'
+          $app = $app.Replace('연령 제한 LIVE와 추후 CHZZK VOD에서 공통으로 사용하는 NAVER 로그인 쿠키입니다.', '연령 제한 LIVE와 CHZZK VOD에서 공통으로 사용하는 NAVER 로그인 쿠키입니다.')
+          $app = Replace-Once $app '(?m)^async function action\(a\).*\r?$' "async function action(a){try{await api('/api/watcher/'+a,{method:'POST'});toast('Watcher '+(a==='start'?'시작':'중지'));status();logs()}catch(e){alert(e.message)}}" 'remove dead legacy history action refresh'
+
+          $bindings = @'
+$('start').onclick=()=>action('start');$('stop').onclick=()=>action('stop');$('refreshStatus').onclick=status;$('refreshDiagnostics').onclick=diagnostics;$('add').onclick=()=>$('channels').appendChild(row());$('saveChannels').onclick=()=>saveChannels().catch(e=>alert(e.message));$('saveSettings').onclick=()=>saveSettings().catch(e=>alert(e.message));$('saveSecrets').onclick=()=>saveSecrets().catch(e=>alert(e.message));$('refreshLogs').onclick=logs;$('tokenBtn').onclick=()=>{sessionStorage.removeItem('soopToken');token='';location.reload()};$('vodAnalyze').onclick=vodAnalyze;$('vodDownload').onclick=vodDownload;$('vodCancel').onclick=vodCancel;
+'@
+          $app = Replace-Once $app '(?m)^\$\(''start''\)\.onclick=.*\r?$' $bindings.TrimEnd() 'replace base UI bindings'
+          $startup = "(async()=>{getToken();installSoopAuthTest();await Promise.all([status(),diagnostics(),loadChannels(),loadSettings(),loadSecrets(),vodStatus(),logs()]);startRealtime();setTimeout(installChzzkSettings,120)})().catch(e=>{startFallbackPolling();alert(e.message)});window.addEventListener('beforeunload',()=>{if(realtimeSource)realtimeSource.close()});"
+          $app = Replace-Once $app '(?m)^\(async\(\)=>\{getToken\(\);await Promise\.all\(\[.*\r?$' $startup 'replace base UI startup'
+          Write-Utf8NoBom $appPath $app
+
+          # main.rs: add an authenticated SOOP login + Worker API key test endpoint.
+          $mainPath = 'rust-web/src/main.rs'
+          $main = Get-Content -LiteralPath $mainPath -Raw -Encoding UTF8
+          $main = $main.Replace('use security::protect_secret;', 'use security::{protect_secret, unprotect_secret};')
+          $main = $main.Replace('use support::resolve_channel_name;', "use support::{`n    platform::{PlatformId, live::LiveSession},`n    resolve_channel_name,`n};")
+          $main = $main.Replace('.route("/api/secrets", get(api_secrets).put(api_update_secrets))', ".route(\"/api/secrets\", get(api_secrets).put(api_update_secrets))`n        .route(\"/api/secrets/test/soop\", post(api_test_soop_auth))")
+
+          $testFn = @'
+async fn api_test_soop_auth(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    authorize(&headers, &state)?;
+    let settings = state.store.live_settings_with_secrets().map_err(internal_error)?;
+    let username = settings.get("SOOP_USERNAME").cloned().unwrap_or_default();
+    let password = unprotect_secret(
+        settings.get("SOOP_PASSWORD").map(String::as_str).unwrap_or(""),
+        "SOOP_PASSWORD",
+    )
+    .map_err(internal_error)?;
+    let worker_url = settings
+        .get("CLOUDFLARE_WORKER_URL")
+        .cloned()
+        .unwrap_or_default();
+    let worker_key = unprotect_secret(
+        settings
+            .get("CLOUDFLARE_API_KEY")
+            .map(String::as_str)
+            .unwrap_or(""),
+        "CLOUDFLARE_API_KEY",
+    )
+    .map_err(internal_error)?;
+
+    for (label, value) in [
+        ("SOOP 아이디", username.as_str()),
+        ("SOOP 비밀번호", password.as_str()),
+        ("Worker URL", worker_url.as_str()),
+        ("Worker API Key", worker_key.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err((StatusCode::BAD_REQUEST, format!("{label}를 먼저 설정해 주세요.")));
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .no_proxy()
+        .http1_only()
+        .build()
+        .map_err(internal_error)?;
+    let mut session = LiveSession::new(PlatformId::Soop, client.clone()).map_err(internal_error)?;
+    let login_id = session
+        .login(&username, &password)
+        .await
+        .map_err(|err| (StatusCode::BAD_REQUEST, format!("SOOP 로그인 테스트 실패: {err:#}")))?;
+
+    let response = client
+        .post(&worker_url)
+        .header("X-API-Key", &worker_key)
+        .json(&json!({}))
+        .send()
+        .await
+        .map_err(|err| (StatusCode::BAD_REQUEST, format!("Worker 연결 테스트 실패: {err:#}")))?;
+    let worker_status = response.status();
+    if worker_status == reqwest::StatusCode::UNAUTHORIZED
+        || worker_status == reqwest::StatusCode::FORBIDDEN
+    {
+        return Err((StatusCode::BAD_REQUEST, "Worker API Key 인증에 실패했습니다.".into()));
+    }
+    // The bundled Worker authenticates before validating the request body. An
+    // empty JSON body therefore returns 400 when the URL/key pair is valid.
+    if worker_status != reqwest::StatusCode::BAD_REQUEST && !worker_status.is_success() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Worker endpoint 테스트 실패: HTTP {worker_status}"),
+        ));
+    }
+
+    state
+        .logs
+        .push(format!("[AUTH] SOOP credential test passed login_id={login_id}"))
+        .await;
+    Ok(Json(json!({
+        "login_id": login_id,
+        "worker_status": "OK"
+    })))
+}
+
+'@
+          $main = Replace-Once $main '(async fn api_update_secrets\([\s\S]*?\r?\n\}\r?\n\r?\n)(?=async fn api_channels\()' ('$1' + $testFn) 'insert SOOP auth test endpoint'
+
+          # Diagnostics should report the same bundled FFmpeg that the recorder
+          # already resolves from the official Streamlink Windows installation.
+          $oldFfmpeg = '[state.backend_dir.join("vod").join("ffmpeg.exe")]'
+          $newFfmpeg = '[`n            state.backend_dir.join("vod").join("ffmpeg.exe"),`n            PathBuf::from(r"C:\Program Files\Streamlink\ffmpeg\ffmpeg.exe"),`n        ]'
+          if (-not $main.Contains($oldFfmpeg)) { throw 'FFmpeg diagnostics candidate anchor missing' }
+          $main = $main.Replace($oldFfmpeg, $newFfmpeg)
+          Write-Utf8NoBom $mainPath $main
+
+          # Guard the exact regression: removed DOM must never remain in direct
+          # base-script bindings, while live controls/auth/VOD/CHZZK stay wired.
+          $guardPath = 'maintenance/guards/Providers.ps1'
+          $guard = Get-Content -LiteralPath $guardPath -Raw -Encoding UTF8
+          if ($guard -notmatch "Read-RepoFile 'rust-web/src/main.rs'") {
+            $guard = $guard.Replace("`$soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'", "`$soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'`n`$main = Read-RepoFile 'rust-web/src/main.rs'")
+          }
+          $extra = @'
+
+# Phase 19.5 UI cleanup must not abort app.js on DOM that was intentionally removed.
+Assert-NotMatch $app 'restoreChannels|channelBackupFile|importSettings|settingsImportFile|refreshHistory' 'Removed legacy DOM is still referenced by the base UI script.'
+Assert-Match $app '\$\(''add''\)\.onclick' 'Channel Add binding is missing from the base UI.'
+Assert-Match $app '\$\(''saveSecrets''\)\.onclick' 'SOOP secret-save binding is missing from the base UI.'
+Assert-Match $app '\$\(''vodAnalyze''\)\.onclick=vodAnalyze' 'VOD analyze binding is missing from the base UI.'
+Assert-Match $app 'setTimeout\(installChzzkSettings,120\)' 'CHZZK authentication tab installation is missing.'
+Assert-Match $app 'api\(''/api/secrets/test/soop''' 'SOOP authentication test UI is missing.'
+Assert-Match $main '"/api/secrets/test/soop"' 'SOOP authentication test endpoint is missing.'
+Assert-Match $main 'C:\\Program Files\\Streamlink\\ffmpeg\\ffmpeg\.exe' 'Diagnostics do not include the bundled Streamlink FFmpeg path.'
+'@
+          if ($guard -notmatch 'Phase 19\.5 UI cleanup must not abort') {
+            $guard += $extra
+          }
+          Write-Utf8NoBom $guardPath $guard
+
+      - name: Rust format
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: cargo fmt --manifest-path rust-web/Cargo.toml
+
+      - name: Runtime contracts
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./maintenance/Test-RuntimeContracts.ps1
+
+      - name: JavaScript syntax
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+          $node = if ($nodeCommand) { $nodeCommand.Source } else { $null }
+          if (-not $node) {
+            $runnerRoot = Split-Path (Split-Path $env:RUNNER_TEMP -Parent) -Parent
+            $node = Get-ChildItem (Join-Path $runnerRoot 'externals') -Directory -Filter 'node*' -ErrorAction SilentlyContinue |
+              Sort-Object Name -Descending |
+              ForEach-Object { Join-Path $_.FullName 'bin\node.exe' } |
+              Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+              Select-Object -First 1
+          }
+          if (-not $node) { throw 'Node executable not found' }
+          Get-ChildItem ./rust-web/web -Filter *.js | ForEach-Object { & $node --check $_.FullName; if ($LASTEXITCODE -ne 0) { throw "JS syntax failed: $($_.Name)" } }
+
+      - name: Rust tests and check
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          cargo test --locked --manifest-path rust-web/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
+          cargo check --locked --manifest-path rust-web/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo check failed' }
+
+      - name: Commit fixes
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rust-web/web/app.js rust-web/src/main.rs maintenance/guards/Providers.ps1
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
+          if (git diff --cached --quiet) { Write-Host 'No changes to commit'; exit 0 }
+          git commit -m "Fix Phase 19.5 UI initialization regressions"
+          git push origin HEAD:fix/phase19-5-ui-regressions
