@@ -28,7 +28,7 @@ jobs:
             param(
               [Parameter(Mandatory=$true)][string]$Path,
               [Parameter(Mandatory=$true)][string]$Old,
-              [Parameter(Mandatory=$true)][string]$New,
+              [Parameter(Mandatory=$true)][AllowEmptyString()][string]$New,
               [switch]$Optional
             )
             $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
@@ -40,16 +40,13 @@ jobs:
             [IO.File]::WriteAllText((Resolve-Path -LiteralPath $Path), $text, [Text.UTF8Encoding]::new($false))
           }
 
-          # Cargo package identity must agree with Cargo.toml for --locked builds.
           Replace-Literal 'rust-web/Cargo.lock' 'name = "soop-web"' 'name = "stream-archive-server"'
 
-          # App-owned CHZZK publication markers use the product namespace.
           Replace-Literal 'rust-web/src/platform/chzzk/vod.rs' '.soop-downloader.claim' '.stream-archive.claim'
           Replace-Literal 'rust-web/src/platform/chzzk/vod.rs' '.soop-downloader.finalizing' '.stream-archive.finalizing'
           Replace-Literal 'maintenance/guards/StorageOwnership.ps1' '\.soop-downloader\.claim' '\.stream-archive\.claim'
           Replace-Literal 'maintenance/guards/StorageOwnership.ps1' '\.soop-downloader\.finalizing' '\.stream-archive\.finalizing'
 
-          # Remove dead pre-SQLite import/restore UI and hidden legacy history DOM.
           $index = 'rust-web/web/index.html'
           Replace-Literal $index '<button id="restoreChannels" class="secondary">백업 복구</button> ' ''
           Replace-Literal $index '<input id="channelBackupFile" type="file" accept=".txt,.bak,text/plain" hidden>' ''
@@ -66,11 +63,9 @@ jobs:
           Replace-Literal $index 'SOOP_BACKUP_DIR' 'STREAM_ARCHIVE_BACKUP_DIR'
           Replace-Literal $index 'xDetachLegacyBackupSave' 'xDetachInlineBackupSave'
 
-          # Phase 14 contains the older copy of the backup helper text.
           Replace-Literal 'rust-web/web/phase14.js' 'soop-recorder-backups' 'stream-archive-backups'
           Replace-Literal 'rust-web/web/phase14.js' 'SOOP_BACKUP_DIR' 'STREAM_ARCHIVE_BACKUP_DIR'
 
-          # No app-wide pre-rename environment variables should remain in active code/docs.
           $oldEnv = [ordered]@{
             'SOOP_WEB_BIND'='STREAM_ARCHIVE_BIND'
             'SOOP_WEB_TOKEN'='STREAM_ARCHIVE_TOKEN'
