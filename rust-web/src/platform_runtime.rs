@@ -228,15 +228,8 @@ mod windows_tree {
         let mut exit = FILETIME::default();
         let mut kernel = FILETIME::default();
         let mut user = FILETIME::default();
-        let ok = unsafe {
-            GetProcessTimes(
-                handle,
-                &mut creation,
-                &mut exit,
-                &mut kernel,
-                &mut user,
-            )
-        };
+        let ok =
+            unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
         if ok == 0 {
             return Err(std::io::Error::last_os_error()).context("GetProcessTimes failed");
         }
@@ -261,7 +254,8 @@ mod windows_tree {
                 return Ok(None);
             }
             if err.raw_os_error() == Some(ERROR_ACCESS_DENIED) {
-                return Err(err).with_context(|| format!("OpenProcess access denied for pid={pid}"));
+                return Err(err)
+                    .with_context(|| format!("OpenProcess access denied for pid={pid}"));
             }
             return Ok(None);
         }
@@ -322,7 +316,10 @@ mod windows_tree {
             let job = Self::create()?;
             let root_handle = child.as_raw_handle() as HANDLE;
             job.assign_handle(root_handle).with_context(|| {
-                format!("failed to assign exact spawned root pid={} to Job", root.pid)
+                format!(
+                    "failed to assign exact spawned root pid={} to Job",
+                    root.pid
+                )
             })?;
 
             let mut assigned = HashSet::new();
