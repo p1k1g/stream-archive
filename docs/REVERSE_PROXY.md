@@ -1,6 +1,6 @@
 # Reverse proxy deployment
 
-Phase 7 recommends keeping the Rust server on loopback and exposing only Caddy over HTTPS.
+Keep the Stream Archive Rust server on loopback and expose only Caddy over HTTPS.
 
 ```text
 Internet
@@ -8,7 +8,7 @@ Internet
      -> PC LAN IPv4:80/443
         -> Caddy
            -> 127.0.0.1:8787
-              -> SOOP Rust Web
+              -> Stream Archive
 ```
 
 ## Important: 127.0.0.1 is not a port-forward target
@@ -23,7 +23,7 @@ TCP 80  -> 192.168.0.35:80
 TCP 443 -> 192.168.0.35:443
 ```
 
-Keep SOOP itself at the default `127.0.0.1:8787`. There is normally no reason to expose port 8787 directly.
+Keep Stream Archive itself at the default `127.0.0.1:8787`. There is normally no reason to expose port 8787 directly.
 
 Find the PC address with:
 
@@ -63,15 +63,15 @@ Start Caddy from the folder containing `caddy.exe` and `Caddyfile`:
 .\caddy.exe run --config .\Caddyfile
 ```
 
-Keep the SOOP server running separately. Neither process is registered as an OS service by this project.
+Keep the Stream Archive server running separately. Neither process is registered as an OS service by this project.
 
 ## Windows firewall
 
 If Caddy runs on the same Windows host, port 8787 can remain loopback-only and does not need an inbound firewall rule. Allow Caddy or TCP 80/443 instead. Example from an elevated PowerShell:
 
 ```powershell
-New-NetFirewallRule -DisplayName "SOOP Caddy HTTP"  -Direction Inbound -Protocol TCP -LocalPort 80  -Action Allow
-New-NetFirewallRule -DisplayName "SOOP Caddy HTTPS" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow
+New-NetFirewallRule -DisplayName "Stream Archive Caddy HTTP"  -Direction Inbound -Protocol TCP -LocalPort 80  -Action Allow
+New-NetFirewallRule -DisplayName "Stream Archive Caddy HTTPS" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow
 ```
 
 ## External testing
