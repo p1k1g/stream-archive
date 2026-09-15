@@ -13,12 +13,10 @@ $support = Read-RepoFile 'rust-web\src\support.rs'
 $watcher = Read-RepoFile 'rust-web\src\native_watcher.rs'
 $vodFacade = Read-RepoFile 'rust-web\src\vod.rs'
 $queue = Read-RepoFile 'rust-web\src\vod_queue.rs'
-$store = Read-RepoFile 'rust-web/src/store.rs'
-$main = Read-RepoFile 'rust-web/src/main.rs'
+$store = Read-RepoFile 'rust-web\src\store.rs'
+$main = Read-RepoFile 'rust-web\src\main.rs'
 
-
-
-# Frontend state state guarantees remain prerequisites for platform expansion.
+# Frontend state guarantees remain prerequisites for platform expansion.
 Assert-Match $app 'window\.StreamArchiveState\s*=\s*StreamArchiveState' 'app.js must expose the shared StreamArchiveState bus.'
 Assert-Match $app "StreamArchiveState\.publish\('status'" 'status must publish through StreamArchiveState.'
 Assert-Match $app "StreamArchiveState\.publish\('vod'" 'VOD status must publish through StreamArchiveState.'
@@ -36,10 +34,13 @@ Assert-NotMatch $phase14 'window\.api\s*=' 'Notification UI must not replace api
 Assert-NotMatch $phase14 'window\.applyRealtimeSnapshot\s*=' 'Notification UI must not replace applyRealtimeSnapshot.'
 Assert-NotMatch $phase14 '__p14Wrapped' 'Legacy Notification UI wrapper markers must stay removed.'
 
-# SQLite is authoritative; INI/TXT files are compatibility mirrors emitted from it.
-Assert-Match $main 'Store::open\(Store::default_path\(&backend_dir\)\)' 'Server startup must open the canonical SQLite store.'
-Assert-Match $main 'store\.bootstrap_primary_once\(&backend_dir\)' 'Legacy config import must remain a one-time SQLite bootstrap.'
-Assert-Match $main 'materialize_primary_files\(&store, &backend_dir\)' 'Compatibility mirrors must be materialized from SQLite.'
+# SQLite is the only runtime configuration/history authority.
+Assert-Match $main 'Store::migrate_legacy_database\(&db_path\)' 'Startup must perform only the bounded legacy database filename migration.'
+Assert-Match $main 'Store::open\(db_path\)' 'Server startup must open the canonical SQLite store.'
+Assert-Match $store 'const DATABASE_FILE:\s*&str\s*=\s*"stream-archive\.db"' 'Canonical database filename must use the Stream Archive namespace.'
+Assert-Match $store 'STREAM_ARCHIVE_DATA_DIR' 'Data directory environment override must use the Stream Archive namespace.'
+Assert-NotMatch $main 'bootstrap_primary_once|materialize_primary_files|SOOP_LIVE_SETTING\.ini|SOOP_LIVE_CHANNELS\.txt|SOOP_VOD_SETTING\.ini' 'Runtime must not import or emit legacy INI/TXT mirrors.'
+Assert-NotMatch $store 'legacy-import-live|legacy-import-vod|read_safe_settings|read_channels|read_hidden_settings' 'SQLite store must not depend on legacy config-file import helpers.'
 Assert-Match $store 'settings_cache: Arc<RwLock<BTreeMap<String, String>>>' 'Committed runtime settings cache is missing.'
 Assert-RustTest $store 'runtime_config_cache_tracks_committed_writes' 'Committed settings-cache behavior test is missing.'
 Assert-Match $store 'platform TEXT NOT NULL' 'Persistent history and queue schemas must retain platform identity.'
@@ -62,14 +63,12 @@ Assert-Match $support 'provider\(platform\)' 'Channel lookup must route through 
 Assert-NotMatch $watcher 'https?://[^\s"'']*sooplive\.com|player_live_api\.php|LoginAction\.php' 'Native watcher must not contain direct SOOP network endpoints.'
 Assert-Match $platformSoopLive 'player_live_api\.php' 'SOOP LIVE provider must own SOOP live discovery endpoints.'
 Assert-NotMatch $vodFacade 'sooplive\.com|CloudFront|yt-dlp|ffmpeg|taskkill\.exe' 'Root VOD facade must stay platform/process neutral.'
-# Common routing may contain provider URLs in tests, but must never implement
-# provider authentication, signed-cookie, or direct provider endpoint mechanics.
 Assert-NotMatch $platformVod 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'Common VOD facade must not own provider network/auth implementation details.'
 Assert-Match $platformSoopVod 'private_auth\.php' 'SOOP VOD provider must own SOOP authorization.'
 Assert-Match $platformSoopVod 'vod\.sooplive\.com' 'SOOP VOD provider must own SOOP VOD endpoints.'
 
-# Queue/orchestration may identify a provider and include routing fixtures in
-# tests, but must not contain provider authentication/network implementation.
+# Queue/orchestration may identify a provider and include routing fixtures in tests,
+# but must not contain provider authentication/network implementation.
 Assert-Match $queue 'detect_vod_platform' 'VOD queue must persist detected platform identity.'
 Assert-NotMatch $queue 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'VOD queue must remain provider-neutral.'
 
