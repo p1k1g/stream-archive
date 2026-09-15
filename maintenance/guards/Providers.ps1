@@ -13,6 +13,7 @@ $app = Read-RepoFile 'rust-web/web/app.js'
 $phase8 = Read-RepoFile 'rust-web/web/phase8.js'
 $phase14 = Read-RepoFile 'rust-web/web/phase14.js'
 $soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'
+$main = Read-RepoFile 'rust-web/src/main.rs'
 
 # Provider registration / CHZZK LIVE boundary. CHZZK VOD may enable VOD separately.
 Assert-Match $platform 'Chzzk' 'PlatformId::Chzzk registration is missing.'
@@ -132,3 +133,14 @@ Assert-Match $app 'destination===''notifications''' 'Leaving CHZZK for Notificat
 Assert-Match $app 'deactivateChzzkSettings\(tab\.dataset\.settingsTab\|\|''''\)' 'CHZZK settings tab listeners do not pass their destination identity.'
 
 Write-Host 'Provider contracts passed.'
+
+# Phase 19.5 UI cleanup regression: deleted DOM must not abort base initialization.
+Assert-NotMatch $app 'restoreChannels|channelBackupFile|importSettings|settingsImportFile|refreshHistory' 'Removed legacy DOM is still referenced by the base UI script.'
+Assert-Match $app '\$\(''add''\)\.onclick' 'Channel Add binding is missing from the base UI.'
+Assert-Match $app '\$\(''saveSecrets''\)\.onclick' 'SOOP secret-save binding is missing from the base UI.'
+Assert-Match $app '\$\(''vodAnalyze''\)\.onclick=vodAnalyze' 'VOD Analyze binding is missing from the base UI.'
+Assert-Match $app 'setTimeout\(installChzzkSettings,120\)' 'CHZZK authentication tab installation is missing.'
+Assert-Match $app 'api\(''/api/secrets/test/soop''' 'SOOP authentication test UI is missing.'
+Assert-Match $main '"/api/secrets/test/soop"' 'SOOP authentication test endpoint is missing.'
+Assert-Match $main 'C:\\Program Files\\Streamlink\\ffmpeg\\ffmpeg\.exe' 'Diagnostics do not include Streamlink bundled FFmpeg.'
+Assert-Match $soopVod 'C:\\Program Files\\Streamlink\\ffmpeg\\ffmpeg\.exe' 'SOOP VOD AUTO FFmpeg does not include Streamlink bundled FFmpeg.'

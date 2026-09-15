@@ -39,7 +39,7 @@ use primary_config::{
     apply_vod_tool_defaults, validate_channels, validate_secret_updates, validate_setting_updates,
     validate_vod_tool_updates,
 };
-use security::protect_secret;
+use security::{protect_secret, unprotect_secret};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -49,7 +49,10 @@ use std::{
     time::Duration,
 };
 use store::Store;
-use support::resolve_channel_name;
+use support::{
+    platform::{PlatformId, live::LiveSession},
+    resolve_channel_name,
+};
 use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -184,6 +187,7 @@ async fn main() -> Result<()> {
         .route("/api/local-picker", post(local_picker::api_local_picker))
         .route("/api/settings", get(api_settings).put(api_update_settings))
         .route("/api/secrets", get(api_secrets).put(api_update_secrets))
+        .route("/api/secrets/test/soop", post(api_test_soop_auth))
         .route("/api/channels", get(api_channels).put(api_update_channels))
         .route("/api/channels/resolve/{account}", get(api_channel_resolve))
         .route("/api/watcher/start", post(api_watcher_start))
@@ -452,7 +456,10 @@ async fn api_diagnostics(
     );
     let ffmpeg = diagnose_tool(
         vod.get("FFMPEG_PATH").map(String::as_str).unwrap_or(""),
-        &[state.backend_dir.join("vod").join("ffmpeg.exe")],
+        &[
+            state.backend_dir.join("vod").join("ffmpeg.exe"),
+            PathBuf::from(r"C:\Program Files\Streamlink\ffmpeg\ffmpeg.exe"),
+        ],
         "ffmpeg.exe",
     );
     Ok(Json(json!({
@@ -593,6 +600,101 @@ async fn api_update_secrets(
     ))
 }
 
+async fn api_test_soop_auth(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    authorize(&headers, &state)?;
+    let settings = state
+        .store
+        .live_settings_with_secrets()
+        .map_err(internal_error)?;
+    let username = settings.get("SOOP_USERNAME").cloned().unwrap_or_default();
+    let password = unprotect_secret(
+        settings
+            .get("SOOP_PASSWORD")
+            .map(String::as_str)
+            .unwrap_or(""),
+        "SOOP_PASSWORD",
+    )
+    .map_err(internal_error)?;
+    let worker_url = settings
+        .get("CLOUDFLARE_WORKER_URL")
+        .cloned()
+        .unwrap_or_default();
+    let worker_key = unprotect_secret(
+        settings
+            .get("CLOUDFLARE_API_KEY")
+            .map(String::as_str)
+            .unwrap_or(""),
+        "CLOUDFLARE_API_KEY",
+    )
+    .map_err(internal_error)?;
+
+    for (label, value) in [
+        ("SOOP username", username.as_str()),
+        ("SOOP password", password.as_str()),
+        ("Worker URL", worker_url.as_str()),
+        ("Worker API key", worker_key.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("{label} is not configured"),
+            ));
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .no_proxy()
+        .http1_only()
+        .build()
+        .map_err(internal_error)?;
+    let mut session = LiveSession::new(PlatformId::Soop, client.clone()).map_err(internal_error)?;
+    let login_id = session.login(&username, &password).await.map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("SOOP login test failed: {err:#}"),
+        )
+    })?;
+
+    let response = client
+        .post(&worker_url)
+        .header("X-API-Key", &worker_key)
+        .json(&json!({}))
+        .send()
+        .await
+        .map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Worker test failed: {err:#}"),
+            )
+        })?;
+    let worker_status = response.status();
+    if worker_status == reqwest::StatusCode::UNAUTHORIZED
+        || worker_status == reqwest::StatusCode::FORBIDDEN
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Worker API key authentication failed".into(),
+        ));
+    }
+    if worker_status != reqwest::StatusCode::BAD_REQUEST && !worker_status.is_success() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Worker endpoint test failed: HTTP {worker_status}"),
+        ));
+    }
+
+    state
+        .logs
+        .push(format!(
+            "[AUTH] SOOP credential test passed login_id={login_id}"
+        ))
+        .await;
+    Ok(Json(json!({"login_id": login_id, "worker_status": "OK"})))
+}
 async fn api_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
