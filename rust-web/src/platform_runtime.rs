@@ -21,8 +21,6 @@ pub(crate) fn configure_utf8_cli(command: &mut Command) {
 /// Phase 20 provides their native process-group implementation.
 pub(crate) struct OwnedProcessTree {
     #[cfg(windows)]
-    root_pid: u32,
-    #[cfg(windows)]
     job: Option<windows_tree::OwnedTreeJob>,
 }
 
@@ -32,7 +30,7 @@ impl OwnedProcessTree {
         {
             let job = windows_tree::OwnedTreeJob::capture(root_pid)
                 .with_context(|| format!("failed to retain Windows process tree pid={root_pid}"))?;
-            Ok(Self { root_pid, job })
+            Ok(Self { job })
         }
 
         #[cfg(not(windows))]
@@ -47,8 +45,19 @@ impl OwnedProcessTree {
     pub(crate) fn terminate_now(&self) -> Result<()> {
         #[cfg(windows)]
         if let Some(job) = &self.job {
-            job.terminate()
-                .context("failed to terminate retained Windows process Job")?;
+            loop {
+                match job.active_process_count() {
+                    Ok(0) => break,
+                    Ok(_) | Err(_) => {
+                        // The retained Job handle is the authoritative identity.
+                        // Retry a transient TerminateJobObject/query failure
+                        // instead of returning ownership to watcher state while
+                        // any Job member may still be running.
+                        let _ = job.terminate();
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -56,31 +65,18 @@ impl OwnedProcessTree {
     /// Terminates the retained owned tree and reaps the root child.
     pub(crate) async fn terminate(&mut self, child: &mut Child) -> Result<Option<i32>> {
         #[cfg(windows)]
-        {
-            // Preserve the exact-PID tree request as a best-effort fast path.
-            // The retained Job Object is authoritative and remains enforceable
-            // even if this command fails or the root has already exited.
-            let _ = Command::new("taskkill.exe")
-                .arg("/PID")
-                .arg(self.root_pid.to_string())
-                .arg("/T")
-                .arg("/F")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
-
-            self.terminate_now()?;
-
-            // Keep the retained owner alive until the captured lineage is gone.
-            // The stored root PID is still usable after the Tokio Child root has
-            // been reaped, which closes the caller-side root-exit race.
-            for _ in 0..200 {
-                if windows_tree::process_tree_pids(self.root_pid)?.is_empty() {
-                    break;
+        if let Some(job) = &self.job {
+            loop {
+                match job.active_process_count() {
+                    Ok(0) => break,
+                    Ok(_) | Err(_) => {
+                        // Never fall back to the historical root PID here: it
+                        // may already have exited and been reused by Windows.
+                        // The retained Job Object remains exact and authoritative.
+                        let _ = job.terminate();
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
                 }
-                tokio::time::sleep(Duration::from_millis(25)).await;
             }
         }
 
@@ -128,10 +124,9 @@ async fn terminate_windows_tree(root_pid: u32) -> Result<()> {
         match windows_tree::OwnedTreeJob::capture(root_pid) {
             Ok(None) => return Ok(()),
             Ok(Some(job)) => {
-                // Preserve the existing exact-PID Windows tree request as a
-                // best-effort fast path. Job ownership is the safety boundary:
-                // even if taskkill fails or the root exits during this await,
-                // the independently-owned descendants remain terminable.
+                // Generic callers do not retain a Job from spawn. Preserve the
+                // exact-PID taskkill request as a best-effort compatibility
+                // fallback, then make the newly captured Job authoritative.
                 let _ = Command::new("taskkill.exe")
                     .arg("/PID")
                     .arg(root_pid.to_string())
@@ -143,23 +138,20 @@ async fn terminate_windows_tree(root_pid: u32) -> Result<()> {
                     .status()
                     .await;
 
-                job.terminate()
-                    .context("failed to terminate Windows owned process Job")?;
-
-                // Do not return until the exact captured root lineage has
-                // disappeared from the process table. Root exit alone is not
-                // sufficient because a descendant may still be running.
-                for _ in 0..200 {
-                    if windows_tree::process_tree_pids(root_pid)?.is_empty() {
-                        return Ok(());
+                loop {
+                    match job.active_process_count() {
+                        Ok(0) => return Ok(()),
+                        Ok(_) | Err(_) => {
+                            let _ = job.terminate();
+                            tokio::time::sleep(Duration::from_millis(25)).await;
+                        }
                     }
-                    tokio::time::sleep(Duration::from_millis(25)).await;
                 }
             }
             Err(_) => {
                 // If Job setup is transiently unavailable, keep trying the
-                // exact-PID tree fallback and then retry Job capture. Never
-                // convert a root-only exit into cleanup success.
+                // exact-PID fallback and then retry Job capture. LIVE does not
+                // use this path because it retains its Job from spawn.
                 let _ = Command::new("taskkill.exe")
                     .arg("/PID")
                     .arg(root_pid.to_string())
@@ -198,8 +190,9 @@ mod windows_tree {
             },
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-                SetInformationJobObject, TerminateJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+                QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
             },
             Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
         },
@@ -318,6 +311,24 @@ mod windows_tree {
                     .with_context(|| format!("AssignProcessToJobObject failed for pid={pid}"));
             }
             Ok(())
+        }
+
+        pub(super) fn active_process_count(&self) -> Result<u32> {
+            let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            let ok = unsafe {
+                QueryInformationJobObject(
+                    self.handle.raw(),
+                    JobObjectBasicAccountingInformation,
+                    (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast::<c_void>(),
+                    size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("QueryInformationJobObject(BasicAccounting) failed");
+            }
+            Ok(info.ActiveProcesses)
         }
 
         pub(super) fn terminate(&self) -> Result<()> {
@@ -517,18 +528,16 @@ mod tests {
         );
 
         owner.terminate(&mut root).await.unwrap();
-        for _ in 0..200 {
-            if !process_tree_pids(root_pid)
+        assert_eq!(
+            owner
+                .job
+                .as_ref()
                 .unwrap()
-                .contains(&descendant_pid)
-            {
-                let _ = fs::remove_file(&pid_file);
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-
+                .active_process_count()
+                .unwrap(),
+            0,
+            "retained Job must be empty before cleanup returns"
+        );
         let _ = fs::remove_file(&pid_file);
-        panic!("retained Job Object did not terminate surviving descendant pid={descendant_pid}");
     }
 }
