@@ -1,4 +1,4 @@
-use crate::platform_runtime::{OwnedProcessTree, terminate_owned};
+use crate::platform_runtime::{OwnedProcessTree, spawn_owned};
 use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
@@ -264,29 +264,20 @@ impl RecorderManager {
             }
         }
 
-        let mut child = command.spawn().with_context(|| {
+        // Windows LIVE starts suspended inside the common runtime boundary.
+        // The exact Streamlink process handle enters the retained Job Object
+        // before the first user instruction executes, then the process resumes.
+        // Consequently an immediate FFmpeg/player child inherits the Job and
+        // there is no spawn-time PID/snapshot adoption race.
+        let (mut child, owned_tree) = spawn_owned(&mut command).await.with_context(|| {
             format!(
-                "failed to start Streamlink: {}",
+                "failed to start retained Streamlink: {}",
                 config.streamlink.display()
             )
         })?;
         let pid = child
             .id()
             .ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
-
-        // Retain Windows tree ownership immediately from the exact spawned
-        // Child handle. PID snapshots are used only after that handle identity
-        // is pinned, so a root PID reuse can never redirect Job ownership to an
-        // unrelated process. On capture failure, do not return while the
-        // just-spawned owned process tree may still be alive.
-        let owned_tree = match OwnedProcessTree::capture(&child) {
-            Ok(owner) => owner,
-            Err(err) => {
-                terminate_owned(&mut child).await;
-                return Err(err)
-                    .with_context(|| format!("failed to retain recorder process tree pid={pid}"));
-            }
-        };
 
         if let Some(stderr) = child.stderr.take() {
             let logs = self.logs.clone();
