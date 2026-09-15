@@ -38,9 +38,10 @@ The server may terminate only process trees it created and owns. Windows ownersh
 
 ```powershell
 .\RUN_DEV.bat
-.\BUILD_RELEASE.bat
 .\BUILD_PORTABLE.bat
 ```
+
+`BUILD_PORTABLE.bat` is the single Windows release/package entry point. It performs the locked release build and assembles the runnable `dist\stream-archive` package. For compile-only developer checks, invoke Cargo directly instead of adding another build wrapper.
 
 Rust checks:
 
