@@ -21,6 +21,17 @@ jobs:
           ref: fix/phase19-5-ui-regressions
           fetch-depth: 0
 
+      - name: Correct fixup regex boundaries
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $path = 'maintenance/Apply-UiRegressionFix.ps1'
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          $text = $text.Replace('function action\(a\).*\r?$', 'function action\(a\)[^\r\n]*\r?$')
+          $text = $text.Replace('onclick=.*\r?$', 'onclick=[^\r\n]*\r?$')
+          $text = $text.Replace('Promise\.all\(\[.*\r?$', 'Promise\.all\(\[[^\r\n]*\r?$')
+          $text = $text.Replace("toast('Watcher '+(a==='start'?'start':'stop'))", "toast('Watcher '+(a==='start'?'시작':'중지'))")
+          [System.IO.File]::WriteAllText((Resolve-Path -LiteralPath $path), $text, [System.Text.UTF8Encoding]::new($false))
+
       - name: Apply focused fixes
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./maintenance/Apply-UiRegressionFix.ps1
@@ -65,7 +76,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add rust-web/web/app.js rust-web/src/main.rs rust-web/src/platform/chzzk/vod.rs maintenance/guards/Providers.ps1 maintenance/guards/ProcessLifecycle.ps1 maintenance/guards/StorageOwnership.ps1
+          git add rust-web/web/app.js rust-web/src/main.rs rust-web/src/platform/soop/vod.rs rust-web/src/platform/chzzk/vod.rs maintenance/guards/Providers.ps1 maintenance/guards/ProcessLifecycle.ps1 maintenance/guards/StorageOwnership.ps1
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
           if (git diff --cached --quiet) { Write-Host 'No changes to commit'; exit 0 }
