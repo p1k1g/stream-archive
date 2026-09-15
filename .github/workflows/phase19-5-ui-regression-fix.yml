@@ -75,33 +75,36 @@ jobs:
             }
             $out.Add($line)
           }
-          if ($streamlinkGuard -ne 1 -or $ffmpegGuard -ne 1) {
-            throw "ProcessLifecycle guard replacement mismatch streamlink=$streamlinkGuard ffmpeg=$ffmpegGuard"
-          }
           [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $out, $utf8)
+          $processText = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          if ($processText -notmatch 'spawn_owned\(&mut streamlink_command\)' -or
+              $processText -notmatch 'spawn_owned\(&mut ffmpeg_command\)' -or
+              $processText -notmatch 'streamlink_tree\.terminate\(&mut streamlink_child\)' -or
+              $processText -notmatch 'ffmpeg_tree\.terminate\(&mut ffmpeg_child\)' -or
+              $processText -notmatch 'spawn_owned\(&mut command\)') {
+            throw 'ProcessLifecycle retained-ownership guards are incomplete'
+          }
 
           $path = 'maintenance/guards/StorageOwnership.ps1'
           $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $path))
           $out = New-Object System.Collections.Generic.List[string]
-          $ffmpegStorage = 0
-          $streamlinkStorage = 0
           foreach ($line in $lines) {
             if ($line.Contains('Downstream FFmpeg spawn is not handled explicitly.')) {
               $out.Add('Assert-Match $chzzkVod ''spawn_owned\(&mut ffmpeg_command\)'' ''Downstream FFmpeg must establish retained ownership before execution.''')
-              $ffmpegStorage++
               continue
             }
             if ($line.Contains('Streamlink owned tree is not explicitly terminated on downstream setup failures.')) {
               $out.Add('Assert-Match $chzzkVod ''streamlink_tree\.terminate\(&mut streamlink_child\)'' ''Streamlink retained tree must be explicitly terminated on downstream setup failures.''')
-              $streamlinkStorage++
               continue
             }
             $out.Add($line)
           }
-          if ($ffmpegStorage -ne 1 -or $streamlinkStorage -ne 1) {
-            throw "StorageOwnership guard replacement mismatch ffmpeg=$ffmpegStorage streamlink=$streamlinkStorage"
-          }
           [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $path), $out, $utf8)
+          $storageText = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          if ($storageText -notmatch 'spawn_owned\(&mut ffmpeg_command\)' -or
+              $storageText -notmatch 'streamlink_tree\.terminate\(&mut streamlink_child\)') {
+            throw 'StorageOwnership retained-ownership guards are incomplete'
+          }
 
       - name: Rust format
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
