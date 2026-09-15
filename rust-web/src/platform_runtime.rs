@@ -253,6 +253,7 @@ mod windows_tree {
     };
 
     const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_NO_MORE_FILES: i32 = 18;
     const ERROR_INVALID_PARAMETER: i32 = 87;
     const WINDOWS_UNIX_EPOCH_DELTA_SECONDS: u64 = 11_644_473_600;
     const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
@@ -368,6 +369,14 @@ mod windows_tree {
         identity.creation_time <= snapshot.cutoff_creation_time
     }
 
+    fn snapshot_root_is_current(
+        root: ProcessIdentity,
+        current_root: Option<ProcessIdentity>,
+        snapshot: &ProcessSnapshot,
+    ) -> bool {
+        snapshot.present.contains(&root.pid) && current_root == Some(root)
+    }
+
     pub(super) struct OwnedTreeJob {
         handle: OwnedHandle,
     }
@@ -414,8 +423,8 @@ mod windows_tree {
         ///
         /// The exact root handle is assigned first. Any descendants that existed
         /// before that assignment are absorbed from ToolHelp snapshots only when
-        /// their creation time proves they existed at the corresponding snapshot,
-        /// preventing a post-snapshot PID reuse from being adopted into the Job.
+        /// the snapshot still contains the exact original root identity and each
+        /// descendant's creation time proves it existed at that snapshot.
         pub(super) fn capture_running_child(child: &Child) -> Result<Self> {
             let root = child_identity(child)?;
             let job = Self::create()?;
@@ -435,13 +444,12 @@ mod windows_tree {
 
             loop {
                 let snapshot = process_snapshot()?;
-                match query_identity(root.pid)? {
-                    Some(current) if current != root => {
-                        // The historical root PID now belongs to another process.
-                        // Never traverse a snapshot through that replacement.
-                        return Ok(());
-                    }
-                    _ => {}
+                let current_root = query_identity(root.pid)?;
+                if !snapshot_root_is_current(root, current_root, &snapshot) {
+                    return Err(anyhow!(
+                        "compatibility snapshot root identity is absent or changed for pid={}",
+                        root.pid
+                    ));
                 }
 
                 let mut added = 0usize;
@@ -550,7 +558,10 @@ mod windows_tree {
         };
         let mut resumed = 0usize;
         let mut ok = unsafe { Thread32First(snapshot.raw(), &mut entry) };
-        while ok != 0 {
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error()).context("Thread32First failed");
+        }
+        loop {
             if entry.th32OwnerProcessID == pid {
                 let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
                 if thread.is_null() {
@@ -575,6 +586,13 @@ mod windows_tree {
             }
             entry.dwSize = size_of::<THREADENTRY32>() as u32;
             ok = unsafe { Thread32Next(snapshot.raw(), &mut entry) };
+            if ok == 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(ERROR_NO_MORE_FILES) {
+                    return Err(err).context("Thread32Next failed");
+                }
+                break;
+            }
         }
         if resumed == 0 {
             return Err(anyhow!("no suspended child thread found for pid={pid}"));
@@ -602,7 +620,10 @@ mod windows_tree {
         let mut present = HashSet::new();
 
         let mut ok = unsafe { Process32FirstW(snapshot_handle.raw(), &mut entry) };
-        while ok != 0 {
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error()).context("Process32FirstW failed");
+        }
+        loop {
             present.insert(entry.th32ProcessID);
             children
                 .entry(entry.th32ParentProcessID)
@@ -610,6 +631,13 @@ mod windows_tree {
                 .push(entry.th32ProcessID);
             entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
             ok = unsafe { Process32NextW(snapshot_handle.raw(), &mut entry) };
+            if ok == 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(ERROR_NO_MORE_FILES) {
+                    return Err(err).context("Process32NextW failed");
+                }
+                break;
+            }
         }
         Ok(ProcessSnapshot {
             cutoff_creation_time,
@@ -668,6 +696,35 @@ mod windows_tree {
             },
             &snapshot,
         ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn snapshot_root_guard_rejects_absent_or_reused_identity() -> bool {
+        let root = ProcessIdentity {
+            pid: 7,
+            creation_time: 100,
+        };
+        let reused = ProcessIdentity {
+            pid: 7,
+            creation_time: 200,
+        };
+        let mut snapshot = ProcessSnapshot {
+            cutoff_creation_time: 300,
+            children: HashMap::new(),
+            present: HashSet::from([root.pid]),
+        };
+
+        let exact_root_is_accepted = snapshot_root_is_current(root, Some(root), &snapshot);
+        let absent_root_is_rejected = !snapshot_root_is_current(root, None, &snapshot);
+        let reused_root_is_rejected = !snapshot_root_is_current(root, Some(reused), &snapshot);
+        snapshot.present.clear();
+        let missing_snapshot_root_is_rejected =
+            !snapshot_root_is_current(root, Some(root), &snapshot);
+
+        exact_root_is_accepted
+            && absent_root_is_rejected
+            && reused_root_is_rejected
+            && missing_snapshot_root_is_rejected
     }
 }
 
@@ -742,7 +799,10 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn windows_owned_spawn_retains_immediate_descendant() {
-        use super::windows_tree::{process_tree_pids, snapshot_cutoff_rejects_newer_identity};
+        use super::windows_tree::{
+            process_tree_pids, snapshot_cutoff_rejects_newer_identity,
+            snapshot_root_guard_rejects_absent_or_reused_identity,
+        };
         use std::{
             env, fs,
             time::{Duration, Instant},
@@ -805,6 +865,10 @@ mod tests {
         assert!(
             snapshot_cutoff_rejects_newer_identity().unwrap(),
             "snapshot identity cutoff must reject a process created after the snapshot boundary"
+        );
+        assert!(
+            snapshot_root_guard_rejects_absent_or_reused_identity(),
+            "compatibility snapshots must reject absent, reused, or missing root identities"
         );
 
         owner.terminate(&mut root).await.unwrap();

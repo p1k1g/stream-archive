@@ -42,18 +42,27 @@ Assert-Match $recorder 'spawn_owned\(&mut command\)\.await' 'LIVE recorder must 
 Assert-NotMatch $recorder 'OwnedProcessTree::capture\(&child\)' 'LIVE recorder must not reconstruct retained ownership after a normal spawn.'
 Assert-NotMatch $recorder 'OwnedProcessTree::capture\(pid\)' 'LIVE recorder must never establish retained ownership from a reusable numeric PID alone.'
 
-# Compatibility capture for already-running children still uses ToolHelp, but
-# root assignment occurs first and descendant identities are accepted only when
-# their creation time predates the snapshot cutoff. This prevents adopting a
-# replacement process that reused a snapshotted descendant PID.
+# Compatibility capture for already-running children still uses ToolHelp. The
+# exact root is assigned first, every snapshot must still contain that same root
+# creation identity, and descendant identities must predate the snapshot cutoff.
+# Enumeration failures must propagate rather than masquerade as an empty tree.
 Assert-Match $runtime 'capture_running_child\(child: &Child\)' 'Compatibility running-child capture boundary is missing.'
 Assert-Match $runtime 'failed to assign exact running root pid=.*before snapshot' 'Running-child capture must assign the exact root before descendant snapshots.'
+Assert-Match $runtime 'snapshot_root_is_current' 'Compatibility snapshots must bind the snapshot root to the original process identity.'
+Assert-Match $runtime 'snapshot\.present\.contains\(&root\.pid\)' 'Compatibility snapshots must require the original root PID to be present in the snapshot.'
+Assert-Match $runtime 'current_root == Some\(root\)' 'Compatibility snapshots must reject absent or reused root identities.'
+Assert-Match $runtime 'compatibility snapshot root identity is absent or changed' 'Absent/reused compatibility roots must fail capture instead of traversing unrelated descendants.'
 Assert-Match $runtime 'cutoff_creation_time' 'ToolHelp descendant absorption must carry a snapshot creation-time cutoff.'
 Assert-Match $runtime 'identity\.creation_time <= snapshot\.cutoff_creation_time' 'Snapshot descendants must be creation-time bound to their snapshot.'
 Assert-Match $runtime 'snapshot-bound pid=' 'Snapshot descendant assignment must use the verified process handle/identity.'
 Assert-Match $runtime 'GetProcessTimes' 'Windows process identity must include creation time.'
 Assert-Match $runtime 'struct ProcessIdentity' 'Windows snapshot assignments must carry stable process identity.'
 Assert-Match $runtime 'CreateToolhelp32Snapshot' 'Windows compatibility capture must discover already-existing descendants.'
+Assert-Match $runtime 'Process32FirstW failed' 'ToolHelp process enumeration must propagate first-entry failures.'
+Assert-Match $runtime 'Process32NextW failed' 'ToolHelp process enumeration must distinguish end-of-list from enumeration failures.'
+Assert-Match $runtime 'Thread32First failed' 'ToolHelp thread enumeration must propagate first-entry failures.'
+Assert-Match $runtime 'Thread32Next failed' 'ToolHelp thread enumeration must distinguish end-of-list from enumeration failures.'
+Assert-Match $runtime 'ERROR_NO_MORE_FILES' 'ToolHelp enumeration may only treat the documented end-of-list result as success.'
 
 Assert-Match $recorder 'owned_tree:\s*OwnedProcessTree' 'Recording must retain durable process-tree ownership for its whole lifetime.'
 Assert-Match $recorder 'rec\.owned_tree\s*\.terminate_now\(\)' 'Root-exit polling must enforce retained-tree cleanup before Recording can be dropped.'
@@ -64,6 +73,7 @@ Assert-Match $watcher 'channel removal deferred while recorder cleanup is retain
 Assert-RustTest $runtime 'owned_child_is_terminated_and_reaped' 'Owned-child termination/reaping behavior test is missing.'
 Assert-RustTest $runtime 'windows_owned_spawn_retains_immediate_descendant' 'Windows suspended-spawn descendant inheritance regression test is missing.'
 Assert-Match $runtime 'snapshot_cutoff_rejects_newer_identity' 'Windows snapshot PID-reuse cutoff regression check is missing.'
+Assert-Match $runtime 'snapshot_root_guard_rejects_absent_or_reused_identity' 'Windows compatibility snapshot root-identity regression check is missing.'
 Assert-Match $runtime 'taskkill\.exe' 'Windows exact-PID tree fallback for non-retained callers is missing.'
 Assert-Match $runtime '\.arg\("/PID"\)' 'Windows non-retained termination fallback must target the owned PID.'
 Assert-Match $runtime '\.arg\("/T"\)' 'Windows non-retained termination fallback must include descendants.'
