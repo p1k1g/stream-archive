@@ -11,8 +11,8 @@ use crate::{
     model::{Channel, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus},
     native_watcher::NativeWatcherManager,
     primary_config::{
-        apply_vod_tool_defaults, validate_channels, validate_secret_updates, validate_setting_updates,
-        validate_vod_tool_updates,
+        apply_vod_tool_defaults, validate_channels, validate_secret_updates,
+        validate_setting_updates, validate_vod_tool_updates,
     },
     security::protect_secret,
     store::{self, Store},
@@ -275,7 +275,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend = dir.path().join("app").join("backend");
         std::fs::create_dir_all(&backend).unwrap();
-        let db = dir.path().join("app").join("data").join("stream-archive.db");
+        let db = dir
+            .path()
+            .join("app")
+            .join("data")
+            .join("stream-archive.db");
         let store = Store::open(db.clone()).unwrap();
         let core = StreamArchiveCore::assemble(backend.clone(), store);
 
