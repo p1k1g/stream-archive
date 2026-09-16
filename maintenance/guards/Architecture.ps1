@@ -15,6 +15,8 @@ $vodFacade = Read-RepoFile 'rust-web\src\vod.rs'
 $queue = Read-RepoFile 'rust-web\src\vod_queue.rs'
 $store = Read-RepoFile 'rust-web\src\store.rs'
 $main = Read-RepoFile 'rust-web\src\main.rs'
+$lib = Read-RepoFile 'rust-web\src\lib.rs'
+$core = Read-RepoFile 'rust-web\src\app_core.rs'
 
 # Frontend state guarantees remain prerequisites for platform expansion.
 Assert-Match $app 'window\.StreamArchiveState\s*=\s*StreamArchiveState' 'app.js must expose the shared StreamArchiveState bus.'
@@ -45,6 +47,25 @@ Assert-Match $store 'settings_cache: Arc<RwLock<BTreeMap<String, String>>>' 'Com
 Assert-RustTest $store 'runtime_config_cache_tracks_committed_writes' 'Committed settings-cache behavior test is missing.'
 Assert-Match $store 'platform TEXT NOT NULL' 'Persistent history and queue schemas must retain platform identity.'
 Assert-Match $queue 'lifecycle_lock: Arc<Mutex<\(\)>>' 'Queue must share the global serialized VOD lifecycle lock.'
+
+# Phase 21 shared service boundary. Presentation/authentication concerns must stay
+# outside this facade so Slint and CLI callers can use Rust services directly.
+Assert-Match $lib 'pub\s+mod\s+app_core' 'Shared library must expose the Phase 21 application core.'
+Assert-Match $lib 'pub\s+mod\s+store' 'Shared library must expose canonical SQLite persistence.'
+Assert-Match $lib 'pub\s+mod\s+native_watcher' 'Shared library must expose the native watcher boundary.'
+Assert-Match $lib 'pub\s+mod\s+vod' 'Shared library must expose the VOD facade.'
+Assert-Match $core 'pub\s+struct\s+StreamArchiveCore' 'Phase 21 shared application facade is missing.'
+Assert-Match $core 'Store::default_path\(&backend_dir\)' 'Shared core must open the canonical SQLite path.'
+Assert-Match $core 'store::init_global\(store\.clone\(\)\)' 'Shared core must initialize the canonical global store for existing runtime modules.'
+Assert-Match $core 'validate_setting_updates\(updates\)' 'Shared core settings writes must preserve runtime validation.'
+Assert-Match $core 'validate_secret_updates\(updates\)' 'Shared core secret writes must preserve security validation.'
+Assert-Match $core 'protect_secret\(value\)' 'Shared core secret writes must use the native protection boundary.'
+Assert-Match $core 'validate_channels\(channels\)' 'Shared core channel writes must preserve provider validation.'
+Assert-Match $core 'apply_vod_tool_defaults' 'Shared core VOD operations must preserve canonical media-tool defaults.'
+Assert-Match $core 'lifecycle_lock: Arc<Mutex<\(\)>>' 'Shared core must serialize VOD lifecycle operations.'
+Assert-Match $core 'pub\s+async\s+fn\s+shutdown' 'Shared core must expose owned-runtime shutdown.'
+Assert-NotMatch $core 'axum|HeaderMap|StatusCode|Router' 'Shared core must stay independent from Axum/HTTP presentation concerns.'
+Assert-RustTest $core 'assembled_core_keeps_one_canonical_store_and_backend' 'Shared core canonical-store regression test is missing.'
 
 # Provider registry/facades.
 Assert-Match $platform 'pub\s+mod\s+live' 'Platform LIVE facade must be registered.'
