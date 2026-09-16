@@ -128,7 +128,9 @@ impl StreamArchiveCore {
         self.store.safe_settings()
     }
 
-    pub fn environment_settings(&self) -> Result<Vec<crate::environment_settings::EnvironmentSetting>> {
+    pub fn environment_settings(
+        &self,
+    ) -> Result<Vec<crate::environment_settings::EnvironmentSetting>> {
         let mut values = self.settings()?;
         values.extend(self.vod_tool_settings()?);
         Ok(crate::environment_settings::snapshot(&values))
@@ -152,9 +154,13 @@ impl StreamArchiveCore {
             Ok(values)
         });
         match values {
-            Ok(values) => crate::diagnostics::collect(self.backend_dir(), self.store.path(), &values),
+            Ok(values) => {
+                crate::diagnostics::collect(self.backend_dir(), self.store.path(), &values)
+            }
             Err(error) => crate::diagnostics::DiagnosticsSnapshot::unavailable(
-                Some(self.backend_dir()), Some(self.store.path()), &format!("{error:#}"),
+                Some(self.backend_dir()),
+                Some(self.store.path()),
+                &format!("{error:#}"),
             ),
         }
     }
@@ -322,11 +328,15 @@ mod tests {
     async fn environment_patch_is_atomic_and_uses_existing_web_keys() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("stream-archive.db");
-        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db.clone()).unwrap());
+        let core =
+            StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db.clone()).unwrap());
         let before = core.settings().unwrap();
         let invalid = BTreeMap::from([
             ("CHECK_INTERVAL".into(), "42".into()),
-            ("FFMPEG_PATH".into(), dir.path().join("missing.exe").display().to_string()),
+            (
+                "FFMPEG_PATH".into(),
+                dir.path().join("missing.exe").display().to_string(),
+            ),
         ]);
         assert!(core.update_environment_settings(&invalid).await.is_err());
         assert_eq!(core.settings().unwrap(), before);
@@ -341,5 +351,4 @@ mod tests {
         let reopened = Store::open(db).unwrap();
         assert_eq!(reopened.safe_settings().unwrap()["CHECK_INTERVAL"], "42");
     }
-
 }

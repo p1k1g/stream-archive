@@ -1,12 +1,19 @@
 use std::path::Path;
 use stream_archive_server::environment_settings::SettingKind;
 use windows::{
-    core::{w, HSTRING, HRESULT, Result},
     Win32::{
         Foundation::ERROR_CANCELLED,
-        System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED},
-        UI::Shell::{Common::COMDLG_FILTERSPEC, FileOpenDialog, IFileOpenDialog, IShellItem, SHCreateItemFromParsingName, FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, SIGDN_FILESYSPATH},
+        System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+            CoTaskMemFree, CoUninitialize,
+        },
+        UI::Shell::{
+            Common::COMDLG_FILTERSPEC, FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM,
+            FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
+            SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+        },
     },
+    core::{HRESULT, HSTRING, Result, w},
 };
 
 struct Apartment;
@@ -25,19 +32,28 @@ pub fn pick(kind: SettingKind, initial: &str) -> Result<Option<String>> {
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         let _apartment = Apartment;
-        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
-        let mut options = dialog.GetOptions()? | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_DONTADDTORECENT;
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+        let mut options =
+            dialog.GetOptions()? | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_DONTADDTORECENT;
         if kind == SettingKind::Directory {
             options |= FOS_PICKFOLDERS;
             dialog.SetTitle(w!("Stream Archive - Select folder"))?;
         } else {
             options |= FOS_FILEMUSTEXIST;
             dialog.SetTitle(w!("Stream Archive - Select executable"))?;
-            dialog.SetFileTypes(&[COMDLG_FILTERSPEC { pszName: w!("Windows executable"), pszSpec: w!("*.exe;*.com") }])?;
+            dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
+                pszName: w!("Windows executable"),
+                pszSpec: w!("*.exe;*.com"),
+            }])?;
         }
         dialog.SetOptions(options)?;
         let path = Path::new(initial);
-        let folder = if path.is_dir() { Some(path) } else { path.parent().filter(|p| p.is_dir()) };
+        let folder = if path.is_dir() {
+            Some(path)
+        } else {
+            path.parent().filter(|p| p.is_dir())
+        };
         if let Some(folder) = folder {
             let name = HSTRING::from(folder.as_os_str());
             if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&name, None) {

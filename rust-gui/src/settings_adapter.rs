@@ -10,7 +10,10 @@ pub struct SettingsDraft {
 
 impl SettingsDraft {
     pub fn load(&mut self, fields: Vec<EnvironmentSetting>) {
-        self.original = fields.iter().map(|field| (field.key.clone(), field.value.clone())).collect();
+        self.original = fields
+            .iter()
+            .map(|field| (field.key.clone(), field.value.clone()))
+            .collect();
         self.fields = fields;
     }
 
@@ -21,24 +24,38 @@ impl SettingsDraft {
     }
 
     pub fn patch(&self) -> BTreeMap<String, String> {
-        self.fields.iter().filter(|field| self.original.get(&field.key) != Some(&field.value)).map(|field| (field.key.clone(), field.value.clone())).collect()
+        self.fields
+            .iter()
+            .filter(|field| self.original.get(&field.key) != Some(&field.value))
+            .map(|field| (field.key.clone(), field.value.clone()))
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stream_archive_server::environment_settings::{snapshot, SettingKind};
+    use stream_archive_server::environment_settings::{SettingKind, snapshot};
 
     #[test]
     fn edits_only_changed_fields_and_reload_discards_draft() {
-        let fields = snapshot(&BTreeMap::from([("STREAMLINK_PATH".into(), "legacy-relative.exe".into())]));
+        let fields = snapshot(&BTreeMap::from([(
+            "STREAMLINK_PATH".into(),
+            "legacy-relative.exe".into(),
+        )]));
         let mut draft = SettingsDraft::default();
         draft.load(fields.clone());
         assert!(draft.patch().is_empty());
-        let index = draft.fields.iter().position(|f| f.key == "CHECK_INTERVAL").unwrap();
+        let index = draft
+            .fields
+            .iter()
+            .position(|f| f.key == "CHECK_INTERVAL")
+            .unwrap();
         draft.edit(index, "45".into());
-        assert_eq!(draft.patch(), BTreeMap::from([("CHECK_INTERVAL".into(), "45".into())]));
+        assert_eq!(
+            draft.patch(),
+            BTreeMap::from([("CHECK_INTERVAL".into(), "45".into())])
+        );
         assert_eq!(draft.fields[0].kind, SettingKind::Executable);
         draft.load(fields);
         assert!(draft.patch().is_empty());
