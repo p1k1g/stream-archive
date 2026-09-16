@@ -6,7 +6,8 @@ $vodFacade = Read-RepoFile 'rust-web/src/vod.rs'
 $soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'
 $chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
 $runtime = Read-RepoFile 'rust-web/src/platform_runtime.rs'
-$allRuntime = $recorder + $soopVod + $chzzkVod + $runtime
+$unixRuntime = Read-RepoFile 'rust-web/src/platform_runtime_unix.rs'
+$allRuntime = $recorder + $soopVod + $chzzkVod + $runtime + $unixRuntime
 
 Assert-Match $recorder '\.kill_on_drop\(true\)' 'LIVE Streamlink child must retain kill-on-drop fallback.'
 Assert-NotMatch $vodFacade 'taskkill\.exe|yt-dlp|ffmpeg|sooplive\.com' 'Root VOD facade must remain provider/process neutral.'
@@ -46,10 +47,27 @@ Assert-Match $recorder 'spawn_owned\(&mut command\)\.await' 'LIVE recorder must 
 Assert-NotMatch $recorder 'OwnedProcessTree::capture\(&child\)' 'LIVE recorder must not reconstruct retained ownership after a normal spawn.'
 Assert-NotMatch $recorder 'OwnedProcessTree::capture\(pid\)' 'LIVE recorder must never establish retained ownership from a reusable numeric PID alone.'
 
-# Compatibility capture for already-running children still uses ToolHelp. The
-# exact root is assigned first, every snapshot must still contain that same root
-# creation identity, and descendant identities must predate the snapshot cutoff.
-# Enumeration failures must propagate rather than masquerade as an empty tree.
+# Unix retained children enter a dedicated process group in the child before
+# exec. Cancellation first requests graceful TERM shutdown and then escalates to
+# KILL only for members that remain in that owned group. Compatibility capture
+# may never adopt the server's own process group.
+Assert-Match $runtime 'platform_runtime_unix\.rs' 'Unix retained ownership module is not connected to the common runtime boundary.'
+Assert-Match $runtime 'unix_group::configure_process_group\(command\)' 'Unix owned spawn must configure an isolated process group before spawn.'
+Assert-Match $runtime 'unix_group::OwnedProcessGroup::from_spawned_child\(&child\)' 'Unix owned spawn must retain the group identity from the spawned child.'
+Assert-Match $unixRuntime '\.process_group\(0\)' 'Unix child must become a process-group leader before exec.'
+Assert-Match $unixRuntime 'getpgid\(expected\)' 'Unix compatibility capture must verify existing process-group identity.'
+Assert-Match $unixRuntime 'actual != expected' 'Unix compatibility capture must reject children that are not isolated group leaders.'
+Assert-Match $unixRuntime 'libc::kill\(-self\.pgid, signal\)' 'Unix termination must target only the retained process group.'
+Assert-Match $unixRuntime 'libc::SIGTERM' 'Unix retained cleanup must request graceful termination first.'
+Assert-Match $unixRuntime 'libc::SIGKILL' 'Unix retained cleanup must escalate to SIGKILL when the group remains.'
+Assert-Match $unixRuntime 'impl Drop for OwnedProcessGroup' 'Unix retained ownership must fail closed if an owner is dropped unexpectedly.'
+Assert-NotMatch $unixRuntime 'pkill|killall' 'Unix retained cleanup must not use process-name-wide termination.'
+
+# Compatibility capture for already-running Windows children still uses
+# ToolHelp. The exact root is assigned first, every snapshot must still contain
+# that same root creation identity, and descendant identities must predate the
+# snapshot cutoff. Enumeration failures must propagate rather than masquerade as
+# an empty tree.
 Assert-Match $runtime 'capture_running_child\(child: &Child\)' 'Compatibility running-child capture boundary is missing.'
 Assert-Match $runtime 'failed to assign exact running root pid=.*before snapshot' 'Running-child capture must assign the exact root before descendant snapshots.'
 Assert-Match $runtime 'snapshot_root_is_current' 'Compatibility snapshots must bind the snapshot root to the original process identity.'
@@ -65,7 +83,7 @@ Assert-Match $runtime 'CreateToolhelp32Snapshot' 'Windows compatibility capture 
 Assert-Match $runtime 'Process32FirstW failed' 'ToolHelp process enumeration must propagate first-entry failures.'
 Assert-Match $runtime 'Process32NextW failed' 'ToolHelp process enumeration must distinguish end-of-list from enumeration failures.'
 Assert-Match $runtime 'Thread32First failed' 'ToolHelp thread enumeration must propagate first-entry failures.'
-Assert-Match $runtime 'Thread32Next failed' 'ToolHelp thread enumeration must distinguish end-of-list from enumeration failures.'
+Assert-Match $runtime 'Thread32NextW failed' 'ToolHelp thread enumeration must distinguish end-of-list from enumeration failures.'
 Assert-Match $runtime 'ERROR_NO_MORE_FILES' 'ToolHelp enumeration may only treat the documented end-of-list result as success.'
 
 Assert-Match $recorder 'owned_tree:\s*OwnedProcessTree' 'Recording must retain durable process-tree ownership for its whole lifetime.'
@@ -75,6 +93,7 @@ Assert-NotMatch $recorder 'if rec\.child\.try_wait\(\)\?\.is_none\(\)\s*\{\s*ret
 Assert-Match $watcher 'state\.recording\s*=\s*Some\(rec\)' 'Watcher must retain the Recording owner if checked cleanup returns an unexpected error.'
 Assert-Match $watcher 'channel removal deferred while recorder cleanup is retained' 'Removed channels must remain tracked if recorder cleanup returns an unexpected error.'
 Assert-RustTest $runtime 'owned_child_is_terminated_and_reaped' 'Owned-child termination/reaping behavior test is missing.'
+Assert-RustTest $runtime 'unix_owned_spawn_retains_descendant_after_root_exit' 'Unix process-group descendant ownership regression test is missing.'
 Assert-RustTest $runtime 'windows_owned_spawn_retains_immediate_descendant' 'Windows suspended-spawn descendant inheritance regression test is missing.'
 Assert-Match $runtime 'snapshot_cutoff_rejects_newer_identity' 'Windows snapshot PID-reuse cutoff regression check is missing.'
 Assert-Match $runtime 'snapshot_root_guard_rejects_absent_or_reused_identity' 'Windows compatibility snapshot root-identity regression check is missing.'
@@ -83,6 +102,7 @@ Assert-Match $runtime '\.arg\("/PID"\)' 'Windows non-retained termination fallba
 Assert-Match $runtime '\.arg\("/T"\)' 'Windows non-retained termination fallback must include descendants.'
 Assert-Match $runtime '\.arg\("/F"\)' 'Windows non-retained termination fallback must force cleanup when required.'
 Assert-NotMatch $allRuntime '(?i)taskkill(?:\.exe)?[^\r\n]*(?:/IM|\.arg\("/IM"\))' 'Process-name-wide taskkill /IM is forbidden.'
+Assert-NotMatch $allRuntime '(?i)(?:pkill|killall)[^\r\n]*' 'Process-name-wide Unix termination is forbidden.'
 Assert-NotMatch ($recorder + $soopVod + $chzzkVod) 'taskkill\.exe' 'Provider/runtime callers must use the common process boundary.'
 
 $stopCalls = [regex]::Matches($soopVod, 'stop_child\(&mut child\)\.await;').Count
