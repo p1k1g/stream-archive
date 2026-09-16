@@ -835,19 +835,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn unix_owned_spawn_retains_descendant_after_root_exit() {
+        use super::unix_group::{test_process_exists, test_process_group};
         use std::{
             env, fs,
             time::{Duration, Instant},
         };
         use uuid::Uuid;
-
-        fn process_exists(pid: libc::pid_t) -> bool {
-            let rc = unsafe { libc::kill(pid, 0) };
-            if rc == 0 {
-                return true;
-            }
-            std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-        }
 
         let pid_file = env::temp_dir().join(format!(
             "stream-archive-pgroup-test-{}.pid",
@@ -869,7 +862,7 @@ mod tests {
         let started = Instant::now();
         let descendant_pid = loop {
             if let Ok(text) = fs::read_to_string(&pid_file)
-                && let Ok(pid) = text.trim().parse::<libc::pid_t>()
+                && let Ok(pid) = text.trim().parse::<i32>()
             {
                 break pid;
             }
@@ -880,26 +873,28 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
 
-        let descendant_pgid = unsafe { libc::getpgid(descendant_pid) };
+        let descendant_pgid = test_process_group(descendant_pid).unwrap();
         assert_eq!(
             descendant_pgid,
-            libc::pid_t::try_from(root_pid).unwrap(),
+            i32::try_from(root_pid).unwrap(),
             "descendant must inherit the Stream Archive-owned process group"
         );
 
         root.wait().await.unwrap();
         assert!(
-            process_exists(descendant_pid),
+            test_process_exists(descendant_pid),
             "descendant should remain alive after the short-lived root exits"
         );
 
         owner.terminate_now().unwrap();
         let cleanup_started = Instant::now();
-        while process_exists(descendant_pid) && cleanup_started.elapsed() < Duration::from_secs(5) {
+        while test_process_exists(descendant_pid)
+            && cleanup_started.elapsed() < Duration::from_secs(5)
+        {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         assert!(
-            !process_exists(descendant_pid),
+            !test_process_exists(descendant_pid),
             "owned Unix descendant must be gone after process-group cleanup"
         );
         let _ = fs::remove_file(&pid_file);
