@@ -4,8 +4,9 @@
 
 ## Canonical runtime
 
-- `rust-web/src/main.rs`: Axum server/API orchestration
-- `rust-web/src/lib.rs`: shared Rust library boundary; Phase 20 starts with reusable tool discovery and Phase 21 should move reusable core interfaces behind this boundary rather than duplicating runtime logic
+- `rust-web/src/main.rs`: 현재 Axum server/API presentation orchestration. Phase 21 동안 기존 Web UI의 regression reference로 유지하며, 새로운 제품 로직을 이 파일에 추가하지 않는다.
+- `rust-web/src/lib.rs`: shared Rust library boundary. Phase 21부터 reusable runtime/service modules를 이 경계로 노출한다.
+- `rust-web/src/app_core.rs`: `StreamArchiveCore` service facade. SQLite/settings/secrets/channels/LIVE watcher/VOD/process lifecycle을 HTTP와 분리해 Slint/CLI에서 직접 재사용하기 위한 canonical application boundary
 - `rust-web/src/tool_discovery.rs`: cross-platform Streamlink/yt-dlp/FFmpeg discovery
 - `rust-web/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI baseline
 - `rust-web/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration
@@ -16,12 +17,12 @@
 - `rust-web/src/platform/chzzk/*`: CHZZK provider implementation
 - `rust-web/src/security.rs`: secret protection boundary
 - `rust-web/src/store.rs`: canonical SQLite persistence/config/history
-- `rust-web/src/history_storage.rs`: history queries and storage diagnostics APIs
-- `rust-web/src/local_picker.rs`: localhost-only Windows file/folder picker bridge; retained for the current Web UI but not a cross-platform Phase 20 target
+- `rust-web/src/history_storage.rs`: current Web history queries and storage diagnostics APIs
+- `rust-web/src/local_picker.rs`: localhost-only Windows file/folder picker bridge; retained only for the current Web UI until Slint native picker parity
 - `rust-web/src/backend.rs`: log buffer and backend-directory resolution
-- `rust-web/web/*`: current browser UI; retained through Phase 20 while Phase 21 Slint parity is developed
+- `rust-web/web/*`: current browser UI; retained while Phase 21 Slint parity is developed
 
-Provider-specific network/authentication/stream mechanics live under `rust-web/src/platform/<provider>/`. Common queue/history/API orchestration must depend on the platform-neutral facades rather than a provider implementation directly.
+Provider-specific network/authentication/stream mechanics live under `rust-web/src/platform/<provider>/`. Common queue/history/presentation orchestration must depend on the platform-neutral facades rather than a provider implementation directly.
 
 ## Configuration source of truth
 
@@ -31,13 +32,15 @@ Do not reintroduce runtime INI/TXT mirrors or one-off config-file readers. Produ
 
 The Phase 20 Unix CLI also writes canonical SQLite settings directly; it must not become a second configuration authority. Tool discovery persists only the existing runtime keys such as `STREAMLINK_PATH`, `YT_DLP_PATH`, and `FFMPEG_PATH`.
 
+Phase 21 Slint code must use `StreamArchiveCore`/shared library services rather than opening a second SQLite connection as a new authority or reproducing settings/secret validation in UI callbacks.
+
 The only retained transition bridge is the bounded `soop.db` -> `stream-archive.db` database filename migration. Do not add broader legacy compatibility layers without an explicit migration requirement.
 
 ## Process ownership rule
 
 Never terminate tools globally with image-name/process-name commands such as `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, `pkill ffmpeg`, or `killall streamlink`.
 
-The server may terminate only process trees/groups it created and owns. Windows Job Object ownership and Unix process-group ownership live behind `platform_runtime` and are guarded by runtime-contract tests.
+The runtime may terminate only process trees/groups it created and owns. Windows Job Object ownership and Unix process-group ownership live behind `platform_runtime` and are guarded by runtime-contract tests. Slint must call the shared runtime lifecycle instead of spawning or killing media tools directly.
 
 ## Build and test
 
@@ -48,7 +51,7 @@ Windows product/package flow:
 .\BUILD_PORTABLE.bat
 ```
 
-`BUILD_PORTABLE.bat` is the single Windows release/package entry point. It performs the locked release build and assembles the runnable `dist\stream-archive` package. For compile-only developer checks, invoke Cargo directly instead of adding another build wrapper.
+`BUILD_PORTABLE.bat` is the single Windows release/package entry point until the Phase 21 Slint packaging migration explicitly replaces it. It performs the locked release build and assembles the runnable `dist\stream-archive` package. For compile-only developer checks, invoke Cargo directly instead of adding another build wrapper.
 
 Unix/headless Phase 20 flow:
 
@@ -78,6 +81,15 @@ Runtime contracts:
 
 The old WinUI/PowerShell runtime and INI/TXT configuration path are retired. New functionality and bug fixes must stay in the Rust/SQLite runtime and must not restore those legacy paths merely for compatibility.
 
-Phase 20 is a runtime-readiness phase. Linux/macOS should use CLI/headless interfaces rather than receiving a second GUI implementation. Do not add a cross-platform native picker or Unix GUI launcher merely to mirror Windows.
+Phase 20 established the runtime-readiness baseline. Linux/macOS keep CLI/headless interfaces rather than receiving a second GUI implementation. Do not add a cross-platform native picker or Unix GUI launcher merely to mirror Windows.
 
-Phase 21 will introduce a Slint-based Windows native GUI. Slint should consume shared Rust library/service interfaces instead of reimplementing provider, storage, process, security, queue, or backup logic. Keep the current browser UI until equivalent Slint functionality is validated; remove Web UI/Axum presentation routes incrementally only after parity and regression checks pass.
+Phase 21 introduces a Slint-based Windows native GUI. The intended dependency direction is:
+
+```text
+Slint UI --------┐
+Unix CLI --------┼--> StreamArchiveCore / shared Rust library
+Axum Web adapter ┘             |
+                               +--> SQLite / Watcher / VOD / Security / Process ownership
+```
+
+Presentation layers must not call each other. In particular, Slint must not use localhost HTTP as its application API and must not duplicate provider, storage, process, security, queue, or backup logic. Browser authentication/session concerns remain Web-only. Keep the current browser UI until equivalent Slint functionality is validated; remove Web UI/Axum presentation routes incrementally only after parity and regression checks pass.
