@@ -102,9 +102,7 @@ fn channel_view(channel: ChannelRuntimeStatus, watcher_running: bool) -> LiveCha
         },
         started_at: channel.started_at.unwrap_or_default(),
         detail: channel.detail.unwrap_or_default(),
-        can_stop_once: watcher_running
-            && channel.status == "RECORDING"
-            && !suppressed,
+        can_stop_once: watcher_running && channel.status == "RECORDING" && !suppressed,
         can_resume: watcher_running && suppressed,
         can_recheck: watcher_running && channel.status != "DISABLED",
         password_required: watcher_running && channel.status == "PASSWORD_REQUIRED",
