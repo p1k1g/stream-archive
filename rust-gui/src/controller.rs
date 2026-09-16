@@ -1,5 +1,6 @@
 use crate::{
-    AppState, DiagnosticRow, LiveChannelRow, MainWindow, SettingRow, live_adapter, native_picker,
+    AppState, ChannelConfigRow, DiagnosticRow, LiveChannelRow, MainWindow, SettingRow,
+    channels_adapter::ChannelsDraft, live_adapter, native_picker,
     settings_adapter::SettingsDraft,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
@@ -15,7 +16,7 @@ use stream_archive_server::{
     backend::resolve_backend_dir,
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
-    model::NativeWatcherStatus,
+    model::{Channel, NativeWatcherStatus},
 };
 
 enum Request {
@@ -23,11 +24,27 @@ enum Request {
     Reload,
     Save(BTreeMap<String, String>),
     Pick(usize, SettingKind, String),
-    LiveStatus { poll: bool },
+    ConfigReload,
+    ChannelsSave(Vec<Channel>),
+    ProviderSave {
+        username: String,
+        worker_url: String,
+        secrets: BTreeMap<String, String>,
+    },
+    ProviderTestSoop,
+    LiveStatus {
+        poll: bool,
+    },
     LiveStart,
     LiveStop,
-    LiveAction { target: String, action: String },
-    LivePassword { target: String, password: String },
+    LiveAction {
+        target: String,
+        action: String,
+    },
+    LivePassword {
+        target: String,
+        password: String,
+    },
 }
 
 enum Response {
@@ -39,6 +56,15 @@ enum Response {
         channel_count: String,
         message: String,
     },
+    Configuration {
+        channels: Vec<Channel>,
+        username: String,
+        worker_url: String,
+        secrets: BTreeMap<String, bool>,
+        message: String,
+    },
+    ConfigMessage(String),
+    ConfigError(String),
     Picked(usize, Option<String>),
     Live {
         status: NativeWatcherStatus,
@@ -75,6 +101,39 @@ fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str
             .channels()
             .map(|c| c.len().to_string())
             .unwrap_or_else(|_| "Unavailable".into()),
+        message: message.into(),
+    }
+}
+
+fn configuration_snapshot(core: &StreamArchiveCore, message: &str) -> Response {
+    let settings = match core.settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            return Response::ConfigError(format!(
+                "Provider settings load failed: {error:#}"
+            ));
+        }
+    };
+    let channels = match core.channels() {
+        Ok(channels) => channels,
+        Err(error) => {
+            return Response::ConfigError(format!("Channel list load failed: {error:#}"));
+        }
+    };
+    let secrets = match core.configured_secrets() {
+        Ok(secrets) => secrets,
+        Err(error) => {
+            return Response::ConfigError(format!("Secret status load failed: {error:#}"));
+        }
+    };
+    Response::Configuration {
+        channels,
+        username: settings.get("SOOP_USERNAME").cloned().unwrap_or_default(),
+        worker_url: settings
+            .get("CLOUDFLARE_WORKER_URL")
+            .cloned()
+            .unwrap_or_default(),
+        secrets,
         message: message.into(),
     }
 }
@@ -142,6 +201,15 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     {
         return;
     }
+    if responses
+        .send(configuration_snapshot(
+            &core,
+            "Channels and provider credentials loaded from canonical SQLite.",
+        ))
+        .is_err()
+    {
+        return;
+    }
     if responses.send(live_status(&core, &runtime, false)).is_err() {
         return;
     }
@@ -169,6 +237,46 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             Request::Pick(index, kind, initial) => match native_picker::pick(kind, &initial) {
                 Ok(path) => Response::Picked(index, path),
                 Err(error) => Response::Error(format!("Picker failed: {error}")),
+            },
+            Request::ConfigReload => configuration_snapshot(
+                &core,
+                "Saved channels and provider credentials reloaded; drafts discarded.",
+            ),
+            Request::ChannelsSave(channels) => {
+                match runtime.block_on(core.update_channels(&channels)) {
+                    Ok(_) => configuration_snapshot(
+                        &core,
+                        "Channel list saved. A running watcher will pick up the canonical list through its normal reload policy.",
+                    ),
+                    Err(error) => {
+                        Response::ConfigError(format!("Channel list was not saved: {error:#}"))
+                    }
+                }
+            }
+            Request::ProviderSave {
+                username,
+                worker_url,
+                secrets,
+            } => {
+                let settings = BTreeMap::from([
+                    ("SOOP_USERNAME".into(), username),
+                    ("CLOUDFLARE_WORKER_URL".into(), worker_url),
+                ]);
+                match runtime.block_on(core.update_provider_configuration(&settings, &secrets)) {
+                    Ok(_) => configuration_snapshot(
+                        &core,
+                        "Provider configuration saved. Secret values remain encrypted and are not read back into the UI.",
+                    ),
+                    Err(error) => Response::ConfigError(format!(
+                        "Provider configuration was not saved: {error:#}"
+                    )),
+                }
+            }
+            Request::ProviderTestSoop => match runtime.block_on(core.test_soop_auth()) {
+                Ok(message) => Response::ConfigMessage(message),
+                Err(error) => {
+                    Response::ConfigError(format!("SOOP / Worker test failed: {error:#}"))
+                }
             },
             Request::LiveStatus { poll } => live_status(&core, &runtime, poll),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
@@ -273,6 +381,23 @@ fn render_draft(ui: &MainWindow, draft: &SettingsDraft) {
     state.set_settings_dirty(!draft.patch().is_empty());
 }
 
+fn render_channels(ui: &MainWindow, draft: &ChannelsDraft) {
+    let rows: Vec<_> = draft
+        .rows
+        .iter()
+        .map(|channel| ChannelConfigRow {
+            platform: channel.platform.to_string().into(),
+            enabled: channel.enabled,
+            name: channel.name.clone().into(),
+            account: channel.account.clone().into(),
+            outdir: channel.outdir.clone().into(),
+        })
+        .collect();
+    let state = ui.global::<AppState>();
+    state.set_channel_config_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_channels_dirty(draft.dirty());
+}
+
 fn render_live(ui: &MainWindow, status: NativeWatcherStatus) {
     let view = live_adapter::view(status);
     let rows: Vec<_> = view
@@ -345,6 +470,20 @@ fn send_settings(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Reque
     }
 }
 
+fn send_config(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    let state = ui.global::<AppState>();
+    if state.get_config_busy() {
+        return;
+    }
+    match sender.send(request) {
+        Ok(()) => {
+            state.set_config_busy(true);
+            state.set_config_message("Working...".into());
+        }
+        Err(_) => state.set_config_message("Configuration worker is unavailable".into()),
+    }
+}
+
 fn send_live(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
     let state = ui.global::<AppState>();
     if state.get_live_busy() {
@@ -364,18 +503,22 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let (responses, receiver) = mpsc::channel();
     let state = ui.global::<AppState>();
     state.set_settings_busy(true);
+    state.set_config_busy(true);
     state.set_live_busy(true);
     if let Err(error) = std::thread::Builder::new()
         .name("native-runtime".into())
         .spawn(move || worker(requests, responses))
     {
         state.set_settings_busy(false);
+        state.set_config_busy(false);
         state.set_live_busy(false);
         state.set_settings_message(format!("Cannot start worker: {error}").into());
+        state.set_config_message(format!("Cannot start worker: {error}").into());
         state.set_live_message(format!("Cannot start worker: {error}").into());
     }
 
     let draft = Rc::new(RefCell::new(SettingsDraft::default()));
+    let channels_draft = Rc::new(RefCell::new(ChannelsDraft::default()));
     let live_poll_in_flight = Rc::new(Cell::new(false));
 
     let weak = ui.as_weak();
@@ -435,6 +578,147 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     Request::Pick(index as usize, field.kind, field.value),
                 );
             }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let add_draft = channels_draft.clone();
+    state.on_channel_add(move || {
+        if let Some(ui) = weak.upgrade() {
+            if ui.global::<AppState>().get_config_busy() {
+                return;
+            }
+            add_draft.borrow_mut().add();
+            render_channels(&ui, &add_draft.borrow());
+            ui.global::<AppState>()
+                .set_config_message("New channel draft added; Save validates it.".into());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let remove_draft = channels_draft.clone();
+    state.on_channel_remove(move |index| {
+        if let Some(ui) = weak.upgrade() {
+            if index < 0 || ui.global::<AppState>().get_config_busy() {
+                return;
+            }
+            remove_draft.borrow_mut().remove(index as usize);
+            render_channels(&ui, &remove_draft.borrow());
+            ui.global::<AppState>()
+                .set_config_message("Channel removed from draft; Save to persist.".into());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let edit_channels = channels_draft.clone();
+    state.on_channel_edited(move |index, field, value| {
+        if let Some(ui) = weak.upgrade() {
+            if index < 0 || ui.global::<AppState>().get_config_busy() {
+                return;
+            }
+            edit_channels
+                .borrow_mut()
+                .edit(index as usize, field.as_str(), value.to_string());
+            ui.global::<AppState>()
+                .set_channels_dirty(edit_channels.borrow().dirty());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let enabled_channels = channels_draft.clone();
+    state.on_channel_toggle_enabled(move |index| {
+        if let Some(ui) = weak.upgrade() {
+            if index < 0 || ui.global::<AppState>().get_config_busy() {
+                return;
+            }
+            let index = index as usize;
+            let enabled = enabled_channels
+                .borrow()
+                .rows
+                .get(index)
+                .map(|channel| !channel.enabled);
+            if let Some(enabled) = enabled {
+                enabled_channels.borrow_mut().set_enabled(index, enabled);
+                render_channels(&ui, &enabled_channels.borrow());
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let platform_channels = channels_draft.clone();
+    state.on_channel_toggle_platform(move |index| {
+        if let Some(ui) = weak.upgrade() {
+            if index < 0 || ui.global::<AppState>().get_config_busy() {
+                return;
+            }
+            platform_channels
+                .borrow_mut()
+                .toggle_platform(index as usize);
+            render_channels(&ui, &platform_channels.borrow());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let save_channels = channels_draft.clone();
+    let config_sender = sender.clone();
+    state.on_save_channels(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_config(
+                &ui,
+                &config_sender,
+                Request::ChannelsSave(save_channels.borrow().snapshot()),
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let config_sender = sender.clone();
+    state.on_reload_configuration(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_config(&ui, &config_sender, Request::ConfigReload);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let provider_sender = sender.clone();
+    state.on_save_provider(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<AppState>();
+            let secrets = BTreeMap::from([
+                (
+                    "SOOP_PASSWORD".into(),
+                    state.get_soop_password_draft().to_string(),
+                ),
+                (
+                    "CLOUDFLARE_API_KEY".into(),
+                    state.get_cloudflare_key_draft().to_string(),
+                ),
+                (
+                    "CHZZK_NID_AUT".into(),
+                    state.get_chzzk_nid_aut_draft().to_string(),
+                ),
+                (
+                    "CHZZK_NID_SES".into(),
+                    state.get_chzzk_nid_ses_draft().to_string(),
+                ),
+            ]);
+            send_config(
+                &ui,
+                &provider_sender,
+                Request::ProviderSave {
+                    username: state.get_soop_username().to_string(),
+                    worker_url: state.get_cloudflare_worker_url().to_string(),
+                    secrets,
+                },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let provider_sender = sender.clone();
+    state.on_test_soop_auth(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_config(&ui, &provider_sender, Request::ProviderTestSoop);
         }
     });
 
@@ -502,6 +786,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
 
     let weak = ui.as_weak();
     let response_poll_flag = live_poll_in_flight.clone();
+    let response_channels = channels_draft.clone();
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
@@ -531,9 +816,54 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_channel_count(channel_count.into());
                     state.set_settings_message(message.clone().into());
                     if startup_failed {
+                        state.set_config_busy(false);
+                        state.set_config_message(message.clone().into());
                         state.set_live_busy(false);
                         state.set_live_message(message.into());
                     }
+                }
+                Response::Configuration {
+                    channels,
+                    username,
+                    worker_url,
+                    secrets,
+                    message,
+                } => {
+                    state.set_config_busy(false);
+                    response_channels.borrow_mut().load(channels);
+                    render_channels(&ui, &response_channels.borrow());
+                    state.set_channel_count(response_channels.borrow().rows.len().to_string().into());
+                    state.set_soop_username(username.into());
+                    state.set_cloudflare_worker_url(worker_url.into());
+                    state.set_soop_password_configured(
+                        secrets.get("SOOP_PASSWORD").copied().unwrap_or(false),
+                    );
+                    state.set_cloudflare_key_configured(
+                        secrets
+                            .get("CLOUDFLARE_API_KEY")
+                            .copied()
+                            .unwrap_or(false),
+                    );
+                    state.set_chzzk_nid_aut_configured(
+                        secrets.get("CHZZK_NID_AUT").copied().unwrap_or(false),
+                    );
+                    state.set_chzzk_nid_ses_configured(
+                        secrets.get("CHZZK_NID_SES").copied().unwrap_or(false),
+                    );
+                    state.set_soop_password_draft("".into());
+                    state.set_cloudflare_key_draft("".into());
+                    state.set_chzzk_nid_aut_draft("".into());
+                    state.set_chzzk_nid_ses_draft("".into());
+                    state.set_config_loaded(true);
+                    state.set_config_message(message.into());
+                }
+                Response::ConfigMessage(message) => {
+                    state.set_config_busy(false);
+                    state.set_config_message(message.into());
+                }
+                Response::ConfigError(message) => {
+                    state.set_config_busy(false);
+                    state.set_config_message(message.into());
                 }
                 Response::Picked(index, path) => {
                     state.set_settings_busy(false);
@@ -573,6 +903,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 }
                 Response::Error(message) => {
                     state.set_settings_busy(false);
+                    if !state.get_config_loaded() {
+                        state.set_config_busy(false);
+                        state.set_config_message(message.clone().into());
+                    }
                     if !state.get_live_loaded() {
                         state.set_live_busy(false);
                         state.set_live_message(message.clone().into());
