@@ -14,33 +14,40 @@ pub(crate) fn configure_utf8_cli(command: &mut Command) {
 
 /// Durable process-tree owner retained for a runtime child.
 ///
-/// Windows LIVE callers should obtain this through [`spawn_owned`]. The child
-/// is created suspended, its exact process handle is assigned to a kill-on-close
-/// Job Object before the first user instruction can execute, and only then is
-/// the child resumed. This closes both the root-exit and descendant PID-reuse
-/// windows that exist when ownership is reconstructed after a normal spawn.
+/// Windows uses an exact child process handle assigned to a kill-on-close Job
+/// Object before execution. Unix uses a dedicated process group established in
+/// the child before exec so inherited descendants remain scoped to that owner.
 pub(crate) struct OwnedProcessTree {
     #[cfg(windows)]
     job: windows_tree::OwnedTreeJob,
+    #[cfg(unix)]
+    group: unix_group::OwnedProcessGroup,
 }
 
 impl OwnedProcessTree {
     /// Capture an already-running child for compatibility callers.
     ///
-    /// Retained LIVE ownership must use `spawn_owned` instead: only suspended
-    /// creation can guarantee that no descendant exists before the root enters
-    /// the Job. This path assigns the exact root handle before any process
-    /// snapshot and uses snapshot-time creation cutoffs for retroactive members.
+    /// New retained lifetimes must use `spawn_owned`. Windows compatibility
+    /// capture binds the exact process handle before snapshot traversal. Unix
+    /// compatibility capture is accepted only for an already-isolated process-
+    /// group leader and never adopts the server's own process group.
     pub(crate) fn capture(child: &Child) -> Result<Self> {
         #[cfg(windows)]
         {
             let pid = child.id().context("spawned child PID unavailable")?;
             let job = windows_tree::OwnedTreeJob::capture_running_child(child)
                 .with_context(|| format!("failed to retain Windows process tree pid={pid}"))?;
-            Ok(Self { job })
+            return Ok(Self { job });
         }
 
-        #[cfg(not(windows))]
+        #[cfg(unix)]
+        {
+            let group = unix_group::OwnedProcessGroup::capture_running_child(child)
+                .context("failed to retain Unix process group")?;
+            return Ok(Self { group });
+        }
+
+        #[cfg(not(any(windows, unix)))]
         {
             let _ = child;
             Ok(Self {})
@@ -63,10 +70,14 @@ impl OwnedProcessTree {
                 }
             }
         }
+
+        #[cfg(unix)]
+        self.group.terminate_now()?;
+
         Ok(())
     }
 
-    /// Terminates the retained owned tree and reaps the root child.
+    /// Terminates the retained owned tree/group and reaps the root child.
     pub(crate) async fn terminate(&mut self, child: &mut Child) -> Result<Option<i32>> {
         #[cfg(windows)]
         loop {
@@ -82,7 +93,10 @@ impl OwnedProcessTree {
             }
         }
 
-        #[cfg(not(windows))]
+        #[cfg(unix)]
+        self.group.terminate(child).await?;
+
+        #[cfg(not(any(windows, unix)))]
         if child.try_wait()?.is_none() {
             let _ = child.kill().await;
         }
@@ -91,13 +105,13 @@ impl OwnedProcessTree {
     }
 }
 
-/// Spawns a runtime child with durable tree ownership established before the
-/// child can execute user code.
+/// Spawns a runtime child with durable descendant ownership established before
+/// the child can execute user code.
 ///
-/// Windows uses `CREATE_SUSPENDED`, assigns the exact spawned process handle to
-/// a kill-on-close Job Object, and resumes the child only after assignment.
-/// Therefore the child cannot create an FFmpeg/player descendant outside the
-/// Job and no PID/tree snapshot is required for the retained LIVE path.
+/// Windows uses `CREATE_SUSPENDED` plus an exact Job Object assignment. Unix
+/// configures a new process group before exec; ordinary descendants inherit that
+/// group and cancellation targets only that owned group with TERM -> KILL
+/// escalation. Neither retained path uses process-name-wide termination.
 pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedProcessTree)> {
     #[cfg(windows)]
     {
@@ -137,20 +151,38 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
             return Err(err).with_context(|| format!("failed to resume owned child pid={pid}"));
         }
 
-        Ok((child, OwnedProcessTree { job }))
+        return Ok((child, OwnedProcessTree { job }));
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        unix_group::configure_process_group(command);
+        let mut child = command
+            .spawn()
+            .context("failed to spawn Unix process-group-owned child")?;
+        let group = match unix_group::OwnedProcessGroup::from_spawned_child(&child) {
+            Ok(group) => group,
+            Err(err) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(err).context("failed to retain spawned Unix process group");
+            }
+        };
+        return Ok((child, OwnedProcessTree { group }));
+    }
+
+    #[cfg(not(any(windows, unix)))]
     {
         let child = command.spawn().context("failed to spawn owned child")?;
         Ok((child, OwnedProcessTree {}))
     }
 }
 
-/// Terminates only the process tree rooted at a child spawned by this server.
+/// Terminates only a child spawned by this server when no retained owner exists.
 ///
-/// This compatibility boundary is used by callers that do not retain a tree
-/// owner from spawn. New retained Windows lifetimes should use `spawn_owned`.
+/// This is a compatibility boundary. New Windows and Unix lifetimes must use
+/// `spawn_owned`; without retained ownership Unix can safely terminate only the
+/// exact direct child rather than guessing at a process group or descendant set.
 pub(crate) async fn terminate_owned(child: &mut Child) {
     loop {
         if terminate_owned_checked(child).await.is_ok() {
@@ -218,6 +250,10 @@ async fn terminate_windows_tree(child: &Child) -> Result<()> {
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
+
+#[cfg(unix)]
+#[path = "platform_runtime_unix.rs"]
+mod unix_group;
 
 #[cfg(windows)]
 mod windows_tree {
@@ -794,6 +830,78 @@ mod tests {
         assert!(child.id().is_some());
         terminate_owned_checked(&mut child).await.unwrap();
         assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_owned_spawn_retains_descendant_after_root_exit() {
+        use std::{
+            env, fs,
+            time::{Duration, Instant},
+        };
+        use uuid::Uuid;
+
+        fn process_exists(pid: libc::pid_t) -> bool {
+            let rc = unsafe { libc::kill(pid, 0) };
+            if rc == 0 {
+                return true;
+            }
+            std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+        }
+
+        let pid_file = env::temp_dir().join(format!(
+            "stream-archive-pgroup-test-{}.pid",
+            Uuid::new_v4().simple()
+        ));
+        let script = "trap '' HUP TERM; sleep 30 & printf '%s' \"$!\" > \"$STREAM_ARCHIVE_TEST_PID_FILE\"";
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", script])
+            .env("STREAM_ARCHIVE_TEST_PID_FILE", &pid_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+
+        let (mut root, owner) = spawn_owned(&mut command).await.unwrap();
+        let root_pid = root.id().unwrap();
+        let started = Instant::now();
+        let descendant_pid = loop {
+            if let Ok(text) = fs::read_to_string(&pid_file)
+                && let Ok(pid) = text.trim().parse::<libc::pid_t>()
+            {
+                break pid;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "timed out waiting for Unix descendant pid"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+
+        let descendant_pgid = unsafe { libc::getpgid(descendant_pid) };
+        assert_eq!(
+            descendant_pgid,
+            libc::pid_t::try_from(root_pid).unwrap(),
+            "descendant must inherit the Stream Archive-owned process group"
+        );
+
+        root.wait().await.unwrap();
+        assert!(
+            process_exists(descendant_pid),
+            "descendant should remain alive after the short-lived root exits"
+        );
+
+        owner.terminate_now().unwrap();
+        let cleanup_started = Instant::now();
+        while process_exists(descendant_pid) && cleanup_started.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            !process_exists(descendant_pid),
+            "owned Unix descendant must be gone after process-group cleanup"
+        );
+        let _ = fs::remove_file(&pid_file);
     }
 
     #[cfg(windows)]
