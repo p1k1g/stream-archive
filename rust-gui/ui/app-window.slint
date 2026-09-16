@@ -52,6 +52,7 @@ export global AppState {
     callback channel-edited(int, string, string);
     callback channel-toggle-enabled(int);
     callback channel-toggle-platform(int);
+    callback channel-resolve(int);
     callback save-channels();
     callback reload-configuration();
 
@@ -103,6 +104,7 @@ component NavItem inherits Rectangle {
     in property <string> label;
     in property <string> page;
     height: 42px;
+    vertical-stretch: 0;
     border-radius: 8px;
     background: AppState.active-page == root.page ? #334155 : transparent;
 
@@ -116,9 +118,7 @@ component NavItem inherits Rectangle {
         font-size: 15px;
     }
 
-    TouchArea {
-        clicked => { AppState.active-page = root.page; }
-    }
+    TouchArea { clicked => { AppState.active-page = root.page; } }
 }
 
 component PlaceholderPage inherits Rectangle {
@@ -134,13 +134,15 @@ component PlaceholderPage inherits Rectangle {
         spacing: 12px;
         Text { text: root.title; color: #0f172a; font-size: 22px; font-weight: 700; }
         Text { text: root.description; color: #64748b; font-size: 14px; wrap: word-wrap; }
+        Rectangle { vertical-stretch: 1; background: transparent; }
     }
 }
 
 component LiveMetric inherits Rectangle {
     in property <string> label;
     in property <string> value;
-    height: 76px;
+    height: 74px;
+    vertical-stretch: 0;
     horizontal-stretch: 1;
     background: #ffffff;
     border-radius: 10px;
@@ -168,10 +170,10 @@ export component MainWindow inherits Window {
             background: #0f172a;
             VerticalLayout {
                 padding: 18px;
-                spacing: 10px;
+                spacing: 9px;
                 Text { text: "Stream Archive"; color: #f8fafc; font-size: 21px; font-weight: 700; }
                 Text { text: "Native Desktop"; color: #94a3b8; font-size: 12px; }
-                Rectangle { height: 10px; background: transparent; }
+                Rectangle { height: 10px; vertical-stretch: 0; background: transparent; }
                 NavItem { label: "Dashboard"; page: "Dashboard"; }
                 NavItem { label: "LIVE"; page: "LIVE"; }
                 NavItem { label: "Channels"; page: "Channels"; }
@@ -182,6 +184,7 @@ export component MainWindow inherits Window {
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 Rectangle {
                     height: 78px;
+                    vertical-stretch: 0;
                     border-radius: 8px;
                     background: AppState.runtime-ready ? #132a24 : #3a1f23;
                     VerticalLayout {
@@ -204,9 +207,11 @@ export component MainWindow inherits Window {
             horizontal-stretch: 1;
             VerticalLayout {
                 padding: 24px;
-                spacing: 16px;
+                spacing: 14px;
 
                 HorizontalLayout {
+                    height: 54px;
+                    vertical-stretch: 0;
                     spacing: 12px;
                     VerticalLayout {
                         spacing: 3px;
@@ -215,6 +220,8 @@ export component MainWindow inherits Window {
                         Text { text: "Phase 21 Slint native shell"; color: #64748b; font-size: 13px; }
                     }
                     Button {
+                        height: 36px;
+                        vertical-stretch: 0;
                         text: "Refresh runtime";
                         enabled: !AppState.settings-busy;
                         clicked => { AppState.refresh-requested(); }
@@ -228,6 +235,7 @@ export component MainWindow inherits Window {
                         spacing: 14px;
                         Rectangle {
                             height: 112px;
+                            vertical-stretch: 0;
                             background: #ffffff;
                             border-radius: 12px;
                             border-width: 1px;
@@ -241,6 +249,8 @@ export component MainWindow inherits Window {
                             }
                         }
                         HorizontalLayout {
+                            height: 188px;
+                            vertical-stretch: 0;
                             spacing: 14px;
                             Rectangle {
                                 background: #ffffff;
@@ -271,42 +281,44 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+                        Rectangle { vertical-stretch: 1; background: transparent; }
                     }
                 }
 
                 if AppState.active-page == "LIVE": VerticalLayout {
-                    spacing: 10px;
+                    spacing: 9px;
                     HorizontalLayout {
-                        spacing: 10px;
+                        height: 36px;
+                        vertical-stretch: 0;
+                        spacing: 8px;
                         Text {
                             text: "Watcher: " + AppState.live-state;
                             color: AppState.live-running ? #15803d : #475569;
                             font-size: 18px;
                             font-weight: 700;
                             horizontal-stretch: 1;
+                            vertical-alignment: center;
                         }
                         Button {
+                            height: 34px;
                             text: "Start watcher";
                             enabled: AppState.live-loaded && !AppState.live-busy && !AppState.live-running;
                             clicked => { AppState.live-start(); }
                         }
                         Button {
+                            height: 34px;
                             text: "Stop watcher";
                             enabled: AppState.live-loaded && !AppState.live-busy && AppState.live-running;
                             clicked => { AppState.live-stop(); }
                         }
                         Button {
+                            height: 34px;
                             text: "Refresh";
                             enabled: AppState.live-loaded && !AppState.live-busy;
                             clicked => { AppState.live-refresh(); }
                         }
                     }
-                    Text {
-                        text: AppState.live-message;
-                        color: #334155;
-                        wrap: word-wrap;
-                        font-size: 12px;
-                    }
+                    Text { text: AppState.live-message; color: #334155; wrap: word-wrap; font-size: 12px; }
                     Text {
                         text: "Engine: " + AppState.live-engine + "  ·  Started: " + AppState.live-started-at;
                         color: #64748b;
@@ -314,6 +326,8 @@ export component MainWindow inherits Window {
                         wrap: word-wrap;
                     }
                     HorizontalLayout {
+                        height: 74px;
+                        vertical-stretch: 0;
                         spacing: 8px;
                         LiveMetric { label: "Channels"; value: AppState.live-channel-count; }
                         LiveMetric { label: "Recording"; value: AppState.live-recording-count; }
@@ -322,7 +336,8 @@ export component MainWindow inherits Window {
                     }
 
                     if AppState.live-password-target != "": Rectangle {
-                        height: 112px;
+                        height: 108px;
+                        vertical-stretch: 0;
                         background: #fff7ed;
                         border-radius: 10px;
                         border-width: 1px;
@@ -330,26 +345,25 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 12px;
                             spacing: 6px;
-                            Text {
-                                text: "Protected broadcast · " + AppState.live-password-label;
-                                color: #9a3412;
-                                font-weight: 700;
-                            }
+                            Text { text: "Protected broadcast · " + AppState.live-password-label; color: #9a3412; font-weight: 700; }
                             HorizontalLayout {
+                                height: 34px;
+                                vertical-stretch: 0;
                                 spacing: 8px;
                                 LineEdit {
+                                    height: 34px;
                                     text <=> AppState.live-password-draft;
                                     input-type: password;
                                     enabled: !AppState.live-busy;
                                 }
                                 Button {
+                                    height: 34px;
                                     text: "Submit password";
                                     enabled: !AppState.live-busy && AppState.live-password-draft != "";
-                                    clicked => {
-                                        AppState.live-password-submit(AppState.live-password-target, AppState.live-password-draft);
-                                    }
+                                    clicked => { AppState.live-password-submit(AppState.live-password-target, AppState.live-password-draft); }
                                 }
                                 Button {
+                                    height: 34px;
                                     text: "Cancel";
                                     enabled: !AppState.live-busy;
                                     clicked => {
@@ -359,7 +373,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            Text { text: "The stream password is kept in memory only and is not stored in Settings or SQLite."; color: #9a3412; font-size: 11px; }
+                            Text { text: "Password is memory-only and is never stored in Settings or SQLite."; color: #9a3412; font-size: 11px; }
                         }
                     }
 
@@ -370,6 +384,7 @@ export component MainWindow inherits Window {
                             spacing: 10px;
                             if AppState.live-rows.length == 0: Rectangle {
                                 height: 82px;
+                                vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
                                 border-width: 1px;
@@ -380,7 +395,8 @@ export component MainWindow inherits Window {
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
-                                min-height: 154px;
+                                min-height: 156px;
+                                vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
                                 border-width: 1px;
@@ -389,6 +405,8 @@ export component MainWindow inherits Window {
                                     padding: 14px;
                                     spacing: 5px;
                                     HorizontalLayout {
+                                        height: 24px;
+                                        vertical-stretch: 0;
                                         spacing: 8px;
                                         Text {
                                             text: row.platform + " · " + (row.name != "" ? row.name : row.account);
@@ -396,11 +414,13 @@ export component MainWindow inherits Window {
                                             font-size: 16px;
                                             font-weight: 700;
                                             horizontal-stretch: 1;
+                                            vertical-alignment: center;
                                         }
                                         Text {
                                             text: row.status-label;
                                             color: row.status-tone == "error" ? #b91c1c : row.status-tone == "warn" ? #a16207 : row.status-tone == "ok" ? #15803d : #64748b;
                                             font-weight: 700;
+                                            vertical-alignment: center;
                                         }
                                     }
                                     Text { text: row.account; color: #64748b; font-size: 11px; }
@@ -415,23 +435,29 @@ export component MainWindow inherits Window {
                                     if row.suppressed: Text { text: "Current broadcast is suppressed until the broadcast changes or monitoring is resumed."; color: #a16207; font-size: 11px; wrap: word-wrap; }
                                     if row.detail != "": Text { text: row.detail; color: row.status-tone == "error" ? #b91c1c : #64748b; font-size: 11px; wrap: word-wrap; }
                                     HorizontalLayout {
+                                        height: 34px;
+                                        vertical-stretch: 0;
                                         spacing: 8px;
                                         if row.can-stop-once: Button {
+                                            height: 32px;
                                             text: "Stop current broadcast";
                                             enabled: !AppState.live-busy;
                                             clicked => { AppState.live-action(row.target, "stop"); }
                                         }
                                         if row.can-resume: Button {
+                                            height: 32px;
                                             text: "Resume monitoring";
                                             enabled: !AppState.live-busy;
                                             clicked => { AppState.live-action(row.target, "resume"); }
                                         }
                                         if row.can-recheck: Button {
+                                            height: 32px;
                                             text: "Recheck";
                                             enabled: !AppState.live-busy;
                                             clicked => { AppState.live-action(row.target, "recheck"); }
                                         }
                                         if row.password-required: Button {
+                                            height: 32px;
                                             text: "Enter stream password";
                                             enabled: !AppState.live-busy;
                                             clicked => {
@@ -449,8 +475,10 @@ export component MainWindow inherits Window {
                 }
 
                 if AppState.active-page == "Channels": VerticalLayout {
-                    spacing: 10px;
+                    spacing: 9px;
                     HorizontalLayout {
+                        height: 36px;
+                        vertical-stretch: 0;
                         spacing: 8px;
                         Text {
                             text: "LIVE channel configuration";
@@ -458,29 +486,45 @@ export component MainWindow inherits Window {
                             font-size: 18px;
                             font-weight: 700;
                             horizontal-stretch: 1;
+                            vertical-alignment: center;
                         }
                         Button {
+                            height: 34px;
                             text: "+ Add channel";
                             enabled: AppState.config-loaded && !AppState.config-busy;
                             clicked => { AppState.channel-add(); }
                         }
                         Button {
+                            height: 34px;
                             text: AppState.channels-dirty ? "Save channels *" : "Save channels";
                             enabled: AppState.config-loaded && !AppState.config-busy && AppState.channels-dirty;
                             clicked => { AppState.save-channels(); }
                         }
                         Button {
+                            height: 34px;
                             text: "Reload saved";
                             enabled: AppState.config-loaded && !AppState.config-busy;
                             clicked => { AppState.reload-configuration(); }
                         }
                     }
-                    Text { text: AppState.config-message; color: #334155; wrap: word-wrap; font-size: 12px; }
-                    Text {
-                        text: "SOOP uses its account id. CHZZK requires the canonical channel id. Save validates the same shared provider rules used by Web.";
-                        color: #64748b;
-                        wrap: word-wrap;
-                        font-size: 12px;
+                    Rectangle {
+                        min-height: 58px;
+                        vertical-stretch: 0;
+                        background: #ffffff;
+                        border-radius: 9px;
+                        border-width: 1px;
+                        border-color: #e2e8f0;
+                        VerticalLayout {
+                            padding: 11px;
+                            spacing: 3px;
+                            Text { text: AppState.config-message; color: #334155; wrap: word-wrap; font-size: 12px; }
+                            Text {
+                                text: "SOOP uses its account id. CHZZK uses the canonical channel id. Resolve fills the display name from the provider.";
+                                color: #64748b;
+                                wrap: word-wrap;
+                                font-size: 11px;
+                            }
+                        }
                     }
                     ScrollView {
                         vertical-stretch: 1;
@@ -489,6 +533,7 @@ export component MainWindow inherits Window {
                             spacing: 10px;
                             if AppState.channel-config-rows.length == 0: Rectangle {
                                 height: 88px;
+                                vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
                                 border-width: 1px;
@@ -499,63 +544,99 @@ export component MainWindow inherits Window {
                                 }
                             }
                             for row[index] in AppState.channel-config-rows: Rectangle {
-                                min-height: 172px;
+                                min-height: 188px;
+                                vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
                                 border-width: 1px;
                                 border-color: #e2e8f0;
                                 VerticalLayout {
                                     padding: 12px;
-                                    spacing: 7px;
+                                    spacing: 8px;
                                     HorizontalLayout {
+                                        height: 34px;
+                                        vertical-stretch: 0;
                                         spacing: 8px;
                                         Button {
+                                            width: 74px;
+                                            height: 32px;
                                             text: row.platform;
                                             enabled: !AppState.config-busy;
                                             clicked => { AppState.channel-toggle-platform(index); }
                                         }
                                         Button {
+                                            width: 84px;
+                                            height: 32px;
                                             text: row.enabled ? "Enabled" : "Disabled";
                                             enabled: !AppState.config-busy;
                                             clicked => { AppState.channel-toggle-enabled(index); }
                                         }
                                         Text {
-                                            text: row.name != "" ? row.name : "New channel";
+                                            text: row.name != "" ? row.name : (row.account != "" ? row.account : "New channel");
                                             color: #0f172a;
+                                            font-size: 15px;
                                             font-weight: 700;
+                                            vertical-alignment: center;
                                             horizontal-stretch: 1;
                                         }
                                         Button {
+                                            width: 74px;
+                                            height: 32px;
                                             text: "Remove";
                                             enabled: !AppState.config-busy;
                                             clicked => { AppState.channel-remove(index); }
                                         }
                                     }
                                     HorizontalLayout {
-                                        spacing: 8px;
+                                        height: 58px;
+                                        vertical-stretch: 0;
+                                        spacing: 10px;
                                         VerticalLayout {
-                                            spacing: 3px;
+                                            spacing: 4px;
+                                            horizontal-stretch: 1;
                                             Text { text: "Name"; color: #64748b; font-size: 11px; }
                                             LineEdit {
+                                                height: 34px;
+                                                vertical-stretch: 0;
                                                 text <=> row.name;
                                                 enabled: !AppState.config-busy;
                                                 edited(value) => { AppState.channel-edited(index, "name", value); }
                                             }
                                         }
                                         VerticalLayout {
-                                            spacing: 3px;
+                                            spacing: 4px;
+                                            horizontal-stretch: 1;
                                             Text { text: "Account / channel id"; color: #64748b; font-size: 11px; }
-                                            LineEdit {
-                                                text <=> row.account;
-                                                enabled: !AppState.config-busy;
-                                                edited(value) => { AppState.channel-edited(index, "account", value); }
+                                            HorizontalLayout {
+                                                height: 34px;
+                                                vertical-stretch: 0;
+                                                spacing: 6px;
+                                                LineEdit {
+                                                    height: 34px;
+                                                    vertical-stretch: 0;
+                                                    text <=> row.account;
+                                                    enabled: !AppState.config-busy;
+                                                    edited(value) => { AppState.channel-edited(index, "account", value); }
+                                                    accepted => { AppState.channel-resolve(index); }
+                                                }
+                                                Button {
+                                                    width: 76px;
+                                                    height: 32px;
+                                                    text: "Resolve";
+                                                    enabled: !AppState.config-busy && row.account != "";
+                                                    clicked => { AppState.channel-resolve(index); }
+                                                }
                                             }
                                         }
                                     }
                                     VerticalLayout {
-                                        spacing: 3px;
-                                        Text { text: "Output directory (blank = runtime default)"; color: #64748b; font-size: 11px; }
+                                        height: 56px;
+                                        vertical-stretch: 0;
+                                        spacing: 4px;
+                                        Text { text: "Output directory  ·  blank uses the runtime default"; color: #64748b; font-size: 11px; }
                                         LineEdit {
+                                            height: 34px;
+                                            vertical-stretch: 0;
                                             text <=> row.outdir;
                                             enabled: !AppState.config-busy;
                                             edited(value) => { AppState.channel-edited(index, "outdir", value); }
@@ -584,16 +665,17 @@ export component MainWindow inherits Window {
                 }
 
                 if AppState.active-page == "Settings": VerticalLayout {
-                    spacing: 10px;
+                    spacing: 9px;
                     Text { text: "Editable settings · shared SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
                     ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
-                            padding: 4px;
+                            padding: 3px;
                             spacing: 12px;
 
                             Rectangle {
-                                min-height: 344px;
+                                min-height: 330px;
+                                vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
                                 border-width: 1px;
@@ -604,13 +686,17 @@ export component MainWindow inherits Window {
                                     Text { text: "Provider credentials"; color: #0f172a; font-size: 18px; font-weight: 700; }
                                     Text { text: AppState.config-message; color: #334155; wrap: word-wrap; font-size: 12px; }
                                     HorizontalLayout {
+                                        height: 34px;
+                                        vertical-stretch: 0;
                                         spacing: 8px;
                                         Button {
+                                            height: 32px;
                                             text: "Save provider configuration";
                                             enabled: AppState.config-loaded && !AppState.config-busy;
                                             clicked => { AppState.save-provider(); }
                                         }
                                         Button {
+                                            height: 32px;
                                             text: "Test SOOP + Worker";
                                             enabled: AppState.config-loaded && !AppState.config-busy
                                                 && AppState.soop-username != ""
@@ -620,52 +706,60 @@ export component MainWindow inherits Window {
                                             clicked => { AppState.test-soop-auth(); }
                                         }
                                         Button {
+                                            height: 32px;
                                             text: "Reload saved";
                                             enabled: AppState.config-loaded && !AppState.config-busy;
                                             clicked => { AppState.reload-configuration(); }
                                         }
+                                        Rectangle { horizontal-stretch: 1; background: transparent; }
                                     }
                                     HorizontalLayout {
-                                        spacing: 8px;
+                                        height: 58px;
+                                        vertical-stretch: 0;
+                                        spacing: 10px;
                                         VerticalLayout {
-                                            spacing: 3px;
-                                            Text { text: "SOOP username"; color: #0f172a; font-weight: 600; }
-                                            LineEdit { text <=> AppState.soop-username; enabled: !AppState.config-busy; }
+                                            spacing: 4px;
+                                            Text { text: "SOOP username"; color: #0f172a; font-weight: 600; font-size: 12px; }
+                                            LineEdit { height: 34px; text <=> AppState.soop-username; enabled: !AppState.config-busy; }
                                         }
                                         VerticalLayout {
-                                            spacing: 3px;
-                                            Text { text: "Cloudflare Worker URL"; color: #0f172a; font-weight: 600; }
-                                            LineEdit { text <=> AppState.cloudflare-worker-url; enabled: !AppState.config-busy; }
-                                        }
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        VerticalLayout {
-                                            spacing: 3px;
-                                            Text { text: "SOOP password · " + (AppState.soop-password-configured ? "Configured" : "Not configured"); color: AppState.soop-password-configured ? #15803d : #a16207; font-size: 12px; }
-                                            LineEdit { text <=> AppState.soop-password-draft; input-type: password; enabled: !AppState.config-busy; }
-                                        }
-                                        VerticalLayout {
-                                            spacing: 3px;
-                                            Text { text: "Worker API key · " + (AppState.cloudflare-key-configured ? "Configured" : "Not configured"); color: AppState.cloudflare-key-configured ? #15803d : #a16207; font-size: 12px; }
-                                            LineEdit { text <=> AppState.cloudflare-key-draft; input-type: password; enabled: !AppState.config-busy; }
+                                            spacing: 4px;
+                                            Text { text: "Cloudflare Worker URL"; color: #0f172a; font-weight: 600; font-size: 12px; }
+                                            LineEdit { height: 34px; text <=> AppState.cloudflare-worker-url; enabled: !AppState.config-busy; }
                                         }
                                     }
                                     HorizontalLayout {
-                                        spacing: 8px;
+                                        height: 58px;
+                                        vertical-stretch: 0;
+                                        spacing: 10px;
                                         VerticalLayout {
-                                            spacing: 3px;
-                                            Text { text: "CHZZK NID_AUT · " + (AppState.chzzk-nid-aut-configured ? "Configured" : "Not configured"); color: AppState.chzzk-nid-aut-configured ? #15803d : #a16207; font-size: 12px; }
-                                            LineEdit { text <=> AppState.chzzk-nid-aut-draft; input-type: password; enabled: !AppState.config-busy; }
+                                            spacing: 4px;
+                                            Text { text: "SOOP password · " + (AppState.soop-password-configured ? "Configured" : "Not configured"); color: AppState.soop-password-configured ? #15803d : #a16207; font-size: 11px; }
+                                            LineEdit { height: 34px; text <=> AppState.soop-password-draft; input-type: password; enabled: !AppState.config-busy; }
                                         }
                                         VerticalLayout {
-                                            spacing: 3px;
-                                            Text { text: "CHZZK NID_SES · " + (AppState.chzzk-nid-ses-configured ? "Configured" : "Not configured"); color: AppState.chzzk-nid-ses-configured ? #15803d : #a16207; font-size: 12px; }
-                                            LineEdit { text <=> AppState.chzzk-nid-ses-draft; input-type: password; enabled: !AppState.config-busy; }
+                                            spacing: 4px;
+                                            Text { text: "Worker API key · " + (AppState.cloudflare-key-configured ? "Configured" : "Not configured"); color: AppState.cloudflare-key-configured ? #15803d : #a16207; font-size: 11px; }
+                                            LineEdit { height: 34px; text <=> AppState.cloudflare-key-draft; input-type: password; enabled: !AppState.config-busy; }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        height: 58px;
+                                        vertical-stretch: 0;
+                                        spacing: 10px;
+                                        VerticalLayout {
+                                            spacing: 4px;
+                                            Text { text: "CHZZK NID_AUT · " + (AppState.chzzk-nid-aut-configured ? "Configured" : "Not configured"); color: AppState.chzzk-nid-aut-configured ? #15803d : #a16207; font-size: 11px; }
+                                            LineEdit { height: 34px; text <=> AppState.chzzk-nid-aut-draft; input-type: password; enabled: !AppState.config-busy; }
+                                        }
+                                        VerticalLayout {
+                                            spacing: 4px;
+                                            Text { text: "CHZZK NID_SES · " + (AppState.chzzk-nid-ses-configured ? "Configured" : "Not configured"); color: AppState.chzzk-nid-ses-configured ? #15803d : #a16207; font-size: 11px; }
+                                            LineEdit { height: 34px; text <=> AppState.chzzk-nid-ses-draft; input-type: password; enabled: !AppState.config-busy; }
                                         }
                                     }
                                     Text {
-                                        text: "Blank secret fields keep the saved value. Saved secrets are protected by the existing platform secret store and are never read back into the UI. CHZZK cookies are consumed by restricted LIVE/VOD requests; the current runtime has no standalone CHZZK network test endpoint.";
+                                        text: "Blank secret fields keep the saved value. Secrets remain protected by the platform secret store and are never read back into the UI.";
                                         color: #64748b;
                                         wrap: word-wrap;
                                         font-size: 11px;
@@ -673,48 +767,91 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            Text { text: AppState.settings-message; wrap: word-wrap; color: #334155; }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Button {
-                                    text: AppState.settings-dirty ? "Save environment changes *" : "Save environment changes";
-                                    enabled: AppState.settings-loaded && !AppState.settings-busy && AppState.settings-dirty;
-                                    clicked => { AppState.save-settings(); }
-                                }
-                                Button {
-                                    text: "Discard environment edits / reload saved";
-                                    enabled: AppState.settings-loaded && !AppState.settings-busy;
-                                    clicked => { AppState.reload-settings(); }
+                            Rectangle {
+                                min-height: 72px;
+                                vertical-stretch: 0;
+                                background: #ffffff;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                VerticalLayout {
+                                    padding: 12px;
+                                    spacing: 6px;
+                                    HorizontalLayout {
+                                        height: 32px;
+                                        vertical-stretch: 0;
+                                        spacing: 8px;
+                                        Text { text: "Runtime environment"; color: #0f172a; font-size: 17px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+                                        Button {
+                                            height: 30px;
+                                            text: AppState.settings-dirty ? "Save changes *" : "Save changes";
+                                            enabled: AppState.settings-loaded && !AppState.settings-busy && AppState.settings-dirty;
+                                            clicked => { AppState.save-settings(); }
+                                        }
+                                        Button {
+                                            height: 30px;
+                                            text: "Reload saved";
+                                            enabled: AppState.settings-loaded && !AppState.settings-busy;
+                                            clicked => { AppState.reload-settings(); }
+                                        }
+                                    }
+                                    Text { text: AppState.settings-message; wrap: word-wrap; color: #64748b; font-size: 11px; }
                                 }
                             }
-                            for row[index] in AppState.settings-rows: VerticalLayout {
-                                spacing: 4px;
-                                Text { text: row.key; color: #0f172a; font-weight: 600; }
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    LineEdit {
-                                        text <=> row.value;
-                                        enabled: !AppState.settings-busy;
-                                        edited(value) => { AppState.setting-edited(index, value); }
+
+                            for row[index] in AppState.settings-rows: Rectangle {
+                                min-height: 82px;
+                                vertical-stretch: 0;
+                                background: #ffffff;
+                                border-radius: 9px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                VerticalLayout {
+                                    padding: 11px;
+                                    spacing: 5px;
+                                    Text { text: row.key; color: #0f172a; font-weight: 600; font-size: 12px; }
+                                    HorizontalLayout {
+                                        height: 34px;
+                                        vertical-stretch: 0;
+                                        spacing: 8px;
+                                        LineEdit {
+                                            height: 34px;
+                                            text <=> row.value;
+                                            enabled: !AppState.settings-busy;
+                                            edited(value) => { AppState.setting-edited(index, value); }
+                                        }
+                                        if row.pickable: Button {
+                                            width: 78px;
+                                            height: 32px;
+                                            text: "Browse...";
+                                            enabled: !AppState.settings-busy;
+                                            clicked => { AppState.pick-setting(index); }
+                                        }
                                     }
-                                    if row.pickable: Button {
-                                        text: "Browse...";
-                                        enabled: !AppState.settings-busy;
-                                        clicked => { AppState.pick-setting(index); }
-                                    }
+                                    Text { text: row.description; color: #64748b; wrap: word-wrap; font-size: 11px; }
                                 }
-                                Text { text: row.description; color: #64748b; wrap: word-wrap; font-size: 12px; }
                             }
+
                             Text { text: "Diagnostics · read-only"; color: #0f172a; font-size: 18px; font-weight: 700; }
-                            Text { text: "Backend and database locations are startup-managed. No separate config file is used."; color: #64748b; wrap: word-wrap; }
-                            for row in AppState.diagnostics-rows: VerticalLayout {
-                                spacing: 3px;
-                                Text {
-                                    text: row.status + " · " + row.name;
-                                    color: row.status == "OK" ? #15803d : row.status == "Warning" ? #a16207 : #b91c1c;
-                                    font-weight: 600;
+                            Text { text: "Backend and database locations are startup-managed. No separate config file is used."; color: #64748b; wrap: word-wrap; font-size: 11px; }
+                            for row in AppState.diagnostics-rows: Rectangle {
+                                min-height: 56px;
+                                vertical-stretch: 0;
+                                background: #ffffff;
+                                border-radius: 9px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 3px;
+                                    Text {
+                                        text: row.status + " · " + row.name;
+                                        color: row.status == "OK" ? #15803d : row.status == "Warning" ? #a16207 : #b91c1c;
+                                        font-weight: 600;
+                                        font-size: 12px;
+                                    }
+                                    Text { text: row.detail; color: #475569; wrap: word-wrap; font-size: 11px; }
                                 }
-                                Text { text: row.detail; color: #334155; wrap: word-wrap; font-size: 12px; }
                             }
                         }
                     }
