@@ -1,4 +1,4 @@
-use crate::platform_runtime::terminate_owned;
+use crate::platform_runtime::spawn_owned;
 use crate::{
     backend::LogBuffer,
     model::{
@@ -29,7 +29,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, BufReader},
-    process::{Child, Command},
+    process::Command,
     sync::{Mutex, RwLock},
     task::JoinHandle,
 };
@@ -1154,13 +1154,16 @@ async fn run_progress(
     cancel: &AtomicBool,
     logs: &LogBuffer,
 ) -> Result<()> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(false)
-        .spawn()?;
+        .kill_on_drop(true);
+    let (mut child, mut owned_tree) = spawn_owned(&mut command)
+        .await
+        .context("yt-dlp 실행 실패")?;
     let stdout = child
         .stdout
         .take()
@@ -1190,7 +1193,7 @@ async fn run_progress(
     let re = Regex::new(r"(?P<p>\d+(?:\.\d+)?)%").unwrap();
     loop {
         if cancel.load(Ordering::SeqCst) {
-            stop_child(&mut child).await;
+            owned_tree.terminate(&mut child).await?;
             return Ok(());
         }
         tokio::select! {
@@ -1210,6 +1213,7 @@ async fn run_progress(
             _ = tokio::time::sleep(Duration::from_millis(250)) => {}
         }
         if let Some(exit) = child.try_wait()? {
+            owned_tree.terminate_now()?;
             if exit.success() {
                 return Ok(());
             }
@@ -1237,13 +1241,15 @@ async fn run_capture(
     logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(false)
-        .spawn()
+        .kill_on_drop(true);
+    let (mut child, mut owned_tree) = spawn_owned(&mut command)
+        .await
         .with_context(|| format!("{label} 실행 실패"))?;
     let mut stdout = child
         .stdout
@@ -1263,7 +1269,7 @@ async fn run_capture(
     });
     let exit = loop {
         if cancel.load(Ordering::SeqCst) {
-            stop_child(&mut child).await;
+            owned_tree.terminate(&mut child).await?;
             let _ = stdout_task.await;
             let _ = stderr_task.await;
             bail!("cancelled");
@@ -1273,6 +1279,7 @@ async fn run_capture(
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     };
+    owned_tree.terminate_now()?;
     let stdout_bytes = stdout_task.await.context("stdout reader join failed")??;
     let stderr_bytes = stderr_task.await.context("stderr reader join failed")??;
     if !exit.success() {
@@ -1285,10 +1292,6 @@ async fn run_capture(
     let text = String::from_utf8(stdout_bytes).context("외부 도구 stdout UTF-8 오류")?;
     logs.push(format!("[VOD] {label} OK")).await;
     Ok(text)
-}
-
-async fn stop_child(child: &mut Child) {
-    terminate_owned(child).await;
 }
 
 fn collect_set_cookies(jar: &mut CookieJar, response: &Response, default_domain: &str) {
