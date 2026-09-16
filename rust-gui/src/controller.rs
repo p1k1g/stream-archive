@@ -915,10 +915,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         secrets.get("SOOP_PASSWORD").copied().unwrap_or(false),
                     );
                     state.set_cloudflare_key_configured(
-                        secrets
-                            .get("CLOUDFLARE_API_KEY")
-                            .copied()
-                            .unwrap_or(false),
+                        secrets.get("CLOUDFLARE_API_KEY").copied().unwrap_or(false),
                     );
                     state.set_chzzk_nid_aut_configured(
                         secrets.get("CHZZK_NID_AUT").copied().unwrap_or(false),
@@ -957,7 +954,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_config_message(format!("Resolved channel name: {name}").into());
                     } else {
                         state.set_config_message(
-                            "Channel changed while lookup was running; lookup result ignored.".into(),
+                            "Channel changed while lookup was running; lookup result ignored."
+                                .into(),
                         );
                     }
                 }
