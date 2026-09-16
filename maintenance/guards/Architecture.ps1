@@ -17,6 +17,9 @@ $store = Read-RepoFile 'rust-web\src\store.rs'
 $main = Read-RepoFile 'rust-web\src\main.rs'
 $lib = Read-RepoFile 'rust-web\src\lib.rs'
 $core = Read-RepoFile 'rust-web\src\app_core.rs'
+$guiManifest = Read-RepoFile 'rust-gui\Cargo.toml'
+$guiMain = Read-RepoFile 'rust-gui\src\main.rs'
+$guiUi = Read-RepoFile 'rust-gui\ui\app-window.slint'
 
 # Frontend state guarantees remain prerequisites for platform expansion.
 Assert-Match $app 'window\.StreamArchiveState\s*=\s*StreamArchiveState' 'app.js must expose the shared StreamArchiveState bus.'
@@ -67,6 +70,21 @@ Assert-Match $core 'pub\s+async\s+fn\s+shutdown' 'Shared core must expose owned-
 # Match actual Axum/type dependencies, not documentation comments that mention the migration from Axum/HTTP.
 Assert-NotMatch $core '(?m)^\s*use\s+axum(?:::|\s*\{)|\baxum::|\bHeaderMap\b|\bStatusCode\b|\bRouter\b' 'Shared core must stay independent from Axum/HTTP presentation concerns.'
 Assert-RustTest $core 'assembled_core_keeps_one_canonical_store_and_backend' 'Shared core canonical-store regression test is missing.'
+
+# Phase 21.2 Windows Slint shell. The desktop UI is a presentation adapter over
+# StreamArchiveCore, not another HTTP client, persistence authority, or process owner.
+Assert-Match $guiManifest 'name\s*=\s*"stream-archive-gui"' 'Slint desktop crate is missing.'
+Assert-Match $guiManifest 'slint\s*=\s*\{' 'Slint runtime dependency is missing.'
+Assert-Match $guiManifest 'stream-archive-server\s*=\s*\{\s*path\s*=\s*"\.\./rust-web"' 'Slint desktop must depend on the shared Rust library directly.'
+Assert-Match $guiMain 'StreamArchiveCore' 'Slint bootstrap must use the shared application core.'
+Assert-Match $guiMain 'resolve_backend_dir' 'Slint bootstrap must reuse canonical backend resolution.'
+Assert-Match $guiMain 'bind_core_snapshot' 'Slint shell must bind runtime state from the shared core.'
+Assert-NotMatch $guiMain '\breqwest::|\baxum::|https?://127\.0\.0\.1|https?://localhost|rusqlite::|Command::new|taskkill|pkill|killall' 'Slint shell must not bypass shared core through HTTP, SQLite, or direct process control.'
+Assert-Match $guiUi 'export\s+global\s+AppState' 'Slint shell state boundary is missing.'
+Assert-Match $guiUi 'callback\s+refresh-requested' 'Slint runtime refresh callback is missing.'
+foreach ($page in @('Dashboard', 'LIVE', 'VOD', 'Queue', 'History', 'Settings')) {
+    Assert-Match $guiUi ([regex]::Escape("page: `"$page`"")) "Slint navigation page missing: $page"
+}
 
 # Provider registry/facades.
 Assert-Match $platform 'pub\s+mod\s+live' 'Platform LIVE facade must be registered.'
