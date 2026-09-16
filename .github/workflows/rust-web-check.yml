@@ -35,9 +35,6 @@ on:
       - ".github/workflows/**"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: stream-archive-check-${{ github.ref }}
   cancel-in-progress: true
@@ -111,44 +108,15 @@ jobs:
         shell: bash
         run: cargo check --locked --manifest-path rust-web/Cargo.toml
 
-      - name: Slint shell lockfile bootstrap
+      - name: Slint shell Rust format check
         if: ${{ matrix.platform == 'windows' }}
         shell: bash
-        run: cargo generate-lockfile --manifest-path rust-gui/Cargo.toml
+        run: cargo fmt --manifest-path rust-gui/Cargo.toml -- --check
 
       - name: Slint shell compile check
         if: ${{ matrix.platform == 'windows' }}
         shell: bash
-        run: cargo check --manifest-path rust-gui/Cargo.toml
-
-      - name: Persist Slint shell lockfile
-        if: ${{ matrix.platform == 'windows' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'p1k1g' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          lock_copy="$RUNNER_TEMP/phase21-Cargo.lock"
-          cp rust-gui/Cargo.lock "$lock_copy"
-          git reset --hard
-          git clean -fd
-          git checkout -B "$GITHUB_HEAD_REF" "origin/$GITHUB_HEAD_REF"
-          cp "$lock_copy" rust-gui/Cargo.lock
-          git add rust-gui/Cargo.lock
-          if git diff --cached --quiet; then
-            echo "Slint lockfile already committed."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Lock Phase 21 Slint dependencies"
-          git push origin "HEAD:$GITHUB_HEAD_REF"
-
-      - name: Upload Slint shell lockfile
-        if: ${{ matrix.platform == 'windows' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase21-slint-cargo-lock
-          path: rust-gui/Cargo.lock
-          if-no-files-found: error
+        run: cargo check --locked --manifest-path rust-gui/Cargo.toml
 
       - name: Rust clippy advisory
         shell: bash
