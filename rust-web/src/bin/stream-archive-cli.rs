@@ -89,8 +89,7 @@ fn command_init() -> Result<()> {
     let data = data_dir(&backend)?;
     fs::create_dir_all(backend.join("vod"))
         .with_context(|| format!("failed to create {}", backend.join("vod").display()))?;
-    fs::create_dir_all(&data)
-        .with_context(|| format!("failed to create {}", data.display()))?;
+    fs::create_dir_all(&data).with_context(|| format!("failed to create {}", data.display()))?;
     let db = database_path(&backend)?;
     let conn = open_settings_db(&db)?;
     conn.execute_batch(SETTINGS_SCHEMA)?;
@@ -111,7 +110,11 @@ fn command_doctor() -> Result<()> {
 
     println!("Stream Archive doctor");
     println!("os       : {} / {}", env::consts::OS, env::consts::ARCH);
-    println!("backend  : {}{}", backend.display(), exists_marker(&backend));
+    println!(
+        "backend  : {}{}",
+        backend.display(),
+        exists_marker(&backend)
+    );
     println!("database : {}{}", db.display(), exists_marker(&db));
 
     #[cfg(target_os = "linux")]
@@ -212,11 +215,7 @@ fn command_serve(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn configure_tools(
-    backend: &Path,
-    db: &Path,
-    tools: Vec<ToolResolution>,
-) -> Result<()> {
+fn configure_tools(backend: &Path, db: &Path, tools: Vec<ToolResolution>) -> Result<()> {
     let missing = tools
         .iter()
         .filter(|tool| !tool.found())
@@ -415,11 +414,7 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
 }
 
 fn exists_marker(path: &Path) -> &'static str {
-    if path.exists() {
-        " [OK]"
-    } else {
-        " [missing]"
-    }
+    if path.exists() { " [OK]" } else { " [missing]" }
 }
 
 fn server_binary() -> Option<PathBuf> {
