@@ -158,8 +158,10 @@ component LiveMetric inherits Rectangle {
 
 export component MainWindow inherits Window {
     title: "Stream Archive";
-    width: 1120px;
-    height: 720px;
+    preferred-width: 1120px;
+    preferred-height: 720px;
+    min-width: 1000px;
+    min-height: 650px;
     background: #f1f5f9;
 
     HorizontalLayout {
@@ -167,6 +169,9 @@ export component MainWindow inherits Window {
 
         Rectangle {
             width: 224px;
+            min-width: 224px;
+            max-width: 224px;
+            horizontal-stretch: 0;
             background: #0f172a;
             VerticalLayout {
                 padding: 18px;
