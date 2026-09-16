@@ -267,7 +267,7 @@ fn resolve_all(backend: &Path, settings: &BTreeMap<String, String>) -> Vec<ToolR
             let configured = kind
                 .setting_keys()
                 .iter()
-                .map(|key| (**key, settings.get(*key).map(String::as_str).unwrap_or("")))
+                .map(|key| (*key, settings.get(*key).map(String::as_str).unwrap_or("")))
                 .collect::<Vec<_>>();
             resolve_tool(kind, backend, &configured)
         })
