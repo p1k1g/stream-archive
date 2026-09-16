@@ -75,8 +75,8 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 | 운영체제 | 상태 |
 |---|---|
 | Windows | ✅ 현재 지원 |
-| Linux | 🧪 Phase 20 진행 중 — CI 빌드/테스트 및 Unix process-group ownership 검증, 실제 제품 배포 검증 전 |
-| macOS | 🧪 Phase 20 진행 중 — CI 빌드/테스트 및 Unix process-group ownership 검증, 실제 제품 배포 검증 전 |
+| Linux | 🧪 Phase 20 — CI, process-group ownership, Secret Service 경계, CLI/tool discovery 구현. 실제 배포·통합 검증 진행 중 |
+| macOS | 🧪 Phase 20 — CI, process-group ownership, Keychain 경계, CLI/tool discovery 구현. 실제 배포·통합 검증 진행 중 |
 
 ## 빠른 시작
 
@@ -88,7 +88,7 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 - `yt-dlp`
 - `ffmpeg`
 
-Portable package에는 외부 미디어 도구가 포함되지 않습니다. Web 설정에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요.
+Windows portable package에는 외부 미디어 도구가 포함되지 않습니다. Web 설정에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요. Linux/macOS에서는 Phase 20의 `stream-archive-cli tools` / `tools configure`로 Unix 이름과 `PATH`를 기준으로 탐색하고 SQLite에 절대 경로를 저장할 수 있습니다.
 
 각 외부 도구는 각 프로젝트의 라이선스와 배포 조건을 따릅니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참고하세요.
 
@@ -159,6 +159,20 @@ Rust / Axum Web
 ```
 
 현재 제품 런타임은 Rust/SQLite 중심입니다. 이전 WinUI/PowerShell 런타임과 INI/TXT 설정 mirror는 저장소에서 제거했습니다.
+
+Phase 20부터 Unix/headless용 `stream-archive-cli`와 재사용 가능한 Rust library boundary를 추가합니다. CLI는 별도 설정 원본을 만들지 않고 같은 SQLite와 canonical 환경변수를 사용합니다. Phase 21에서는 Windows 화면을 Slint native GUI로 옮기되 Recorder/VOD/SQLite/process/security core는 그대로 공유하는 방향입니다.
+
+```text
+Phase 20
+Windows Web UI ───────┐
+Unix CLI/headless ────┼──> shared Rust runtime / SQLite
+                      └──> Streamlink / yt-dlp / FFmpeg
+
+Phase 21 target
+Windows Slint GUI ────┐
+Unix CLI/headless ────┼──> shared Rust core / SQLite
+                      └──> Streamlink / yt-dlp / FFmpeg
+```
 
 ## 데이터와 보안
 
@@ -251,6 +265,23 @@ cargo build --locked --release --manifest-path .\rust-web\Cargo.toml
 
 `rust-web\target\release`는 Cargo의 raw build output이며 배포 패키지 기준이 아닙니다. 실제 실행·배포 검증은 `dist\stream-archive`를 기준으로 합니다.
 
+### Linux / macOS CLI baseline
+
+Phase 20의 Unix 경로는 GUI launcher가 아니라 `stream-archive-cli`를 사용합니다.
+
+```bash
+cargo build --locked --release --manifest-path rust-web/Cargo.toml
+./rust-web/target/release/stream-archive-cli init
+./rust-web/target/release/stream-archive-cli tools
+./rust-web/target/release/stream-archive-cli tools configure
+./rust-web/target/release/stream-archive-cli doctor
+./rust-web/target/release/stream-archive-cli serve --watch
+```
+
+`tools configure`는 Streamlink/yt-dlp/FFmpeg를 기존 SQLite 설정 → backend layout → `PATH` → 일반적인 Unix 설치 경로 순서로 찾고, 발견된 절대 경로를 canonical SQLite 설정에 원자적으로 기록합니다. 별도 INI/TXT 설정 파일은 만들지 않습니다.
+
+현재 CLI는 Phase 20의 headless/tool-discovery baseline이며 전체 채널·VOD·secret 관리 명령은 Linux/macOS 통합 검증과 함께 확장할 예정입니다. 자세한 내용은 `docs/UNIX_CLI.md`를 참고하세요.
+
 ## 백업 / 복구
 
 SQLite primary 전환 이후 핵심 백업 대상은 `data/stream-archive.db`입니다.
@@ -336,13 +367,14 @@ Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 
 
 Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow_dispatch` 방식입니다.
 
-Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습니다. Linux/macOS는 현재 CI 빌드·단위 테스트와 Unix process-group ownership 경계까지 검증되었으며 실제 제품 배포 및 사용자 흐름 검증은 아직 진행 중입니다.
+Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습니다. Linux/macOS는 CI 빌드·단위 테스트, Unix process-group ownership, native secret-storage 경계와 cross-platform tool-discovery/CLI 코드까지 검증하고 있으며 실제 로그인 세션·미디어 도구를 이용한 end-to-end integration은 아직 진행 중입니다.
 
 ## 문서
 
 | 문서 | 내용 |
 |---|---|
 | `docs/LOCAL_LAUNCHER.md` | Windows local launcher 사용 방법 |
+| `docs/UNIX_CLI.md` | Linux/macOS headless CLI, tool discovery, first-run layout |
 | `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
 | `docs/REVERSE_PROXY.md` | Caddy/Nginx HTTPS reverse proxy 구성 |
 | `docs/PHASE19_AUDIT.md` | Runtime hardening, ownership, architecture audit 및 Phase 20 경계 |
@@ -368,17 +400,26 @@ Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습
 - INI/TXT compatibility path와 dead code 제거
 - portable/build/release 이름 정리
 
-### Phase 20 🚧 Cross-platform Readiness
-
-진행 상황 및 예정 작업:
+### Phase 20 🚧 Cross-platform Runtime Readiness
 
 - ✅ Windows/Linux/macOS GitHub-hosted CI matrix baseline
 - ✅ Unix process-group ownership / termination
-- 🚧 Linux/macOS secret storage
-- Native cross-platform picker
-- Cross-platform launcher / packaging / tool discovery
-- Linux/macOS integration coverage
+- ✅ Linux Secret Service / macOS Keychain native secret-storage boundary
+- ✅ Unix/headless CLI + cross-platform Streamlink/yt-dlp/FFmpeg discovery baseline
+- 🚧 Linux/macOS CLI runtime/configuration commands 확장
+- 🚧 Linux/macOS real-session / real-tool integration coverage
+- 🚧 Unix packaging / install guidance
+
+Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 추가하지 않습니다. Unix 계열은 CLI/headless 경로를 명확히 하고, Windows GUI 교체는 Phase 21로 분리합니다.
+
+### Phase 21 🔜 Slint Native GUI
+
+- Windows 제품 UI를 Slint 기반 native Rust GUI로 구현
+- LIVE / VOD / Queue / History / Channels / Settings / Backup 기능을 순차적으로 이전
+- Slint GUI에서 shared Rust core를 직접 호출할 수 있도록 library/service boundary 정리
+- 기능 parity와 regression 검증이 끝난 뒤 기존 browser/Web UI 및 launcher 의존성을 단계적으로 제거
+- Linux/macOS는 GUI를 복제하지 않고 Phase 20의 CLI/headless 인터페이스 유지
 
 ---
 
-**Stream Archive**는 현재 Windows에서 SOOP과 CHZZK의 LIVE/VOD를 안정적으로 관리하는 것을 우선 목표로 하며, 이후 Linux/macOS 지원을 위한 경계를 단계적으로 확장할 예정입니다.
+**Stream Archive**는 Phase 20에서 Windows 런타임의 안정성을 유지하면서 Linux/macOS headless 기반을 완성하고, Phase 21부터 Windows 사용자 경험을 Slint native GUI로 전환하는 것을 목표로 합니다.
