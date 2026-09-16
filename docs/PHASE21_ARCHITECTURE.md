@@ -39,6 +39,23 @@ Presentation layers do not call each other. In particular, the Slint application
 
 The current Axum/Web application remains available during migration. This is intentional: it remains the behavior/reference implementation until Slint reaches feature parity.
 
+## Phase 21.2 — Slint application shell
+
+The Windows desktop frontend lives in the independent `rust-gui/` crate. Keeping it separate from `rust-web/` prevents Slint build/runtime dependencies from becoming part of the existing server package and keeps the browser runtime available as a regression reference during migration.
+
+The shell establishes these boundaries before feature screens are implemented:
+
+- Slint `MainWindow` with Dashboard / LIVE / VOD / Queue / History / Settings navigation
+- one exported `AppState` global for presentation state
+- direct bootstrap through `backend::resolve_backend_dir()` + `StreamArchiveCore::open()`
+- dashboard binding for runtime readiness, canonical backend/database paths, channel count, and configured media-tool state
+- refresh callback that reads another snapshot from `StreamArchiveCore`
+- no localhost HTTP calls, direct SQLite access, or media-process spawning from the GUI crate
+
+The initial pages other than Dashboard are intentional placeholders. Feature-specific callbacks are added only when their shared service boundaries are ready in later Phase 21 slices.
+
+`rust-gui` targets the Windows desktop product. Linux/macOS continue using `stream-archive-cli`; they do not compile or ship a second GUI as part of the product support promise.
+
 ## Invariants
 
 ### One persistence authority
@@ -95,3 +112,14 @@ Phase 21.1 is complete when:
 - runtime-contract guards prevent Axum/HTTP concerns from leaking into the shared core;
 - current Web behavior remains intact;
 - the next Slint shell can depend on the shared core without introducing localhost HTTP or a second storage authority.
+
+## Completion criteria for Phase 21.2
+
+Phase 21.2 is complete when:
+
+- the Windows Slint crate and `.slint` shell compile in hosted Windows CI;
+- navigation between Dashboard / LIVE / VOD / Queue / History / Settings is owned by Slint state;
+- the Dashboard is populated from a live `StreamArchiveCore` snapshot rather than HTTP;
+- the GUI remains usable enough to display a runtime bootstrap failure instead of silently exiting;
+- architecture guards reject localhost HTTP, direct SQLite, or direct child-process control in the Slint bootstrap;
+- the current Web UI, launcher, and portable package remain unchanged until later parity/packaging phases.

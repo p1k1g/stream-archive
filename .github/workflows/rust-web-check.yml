@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "rust-web/**"
+      - "rust-gui/**"
       - "RUN_DEV.bat"
       - "BUILD_PORTABLE.bat"
       - "maintenance/**"
@@ -20,6 +21,7 @@ on:
       - main
     paths:
       - "rust-web/**"
+      - "rust-gui/**"
       - "RUN_DEV.bat"
       - "BUILD_PORTABLE.bat"
       - "maintenance/**"
@@ -105,6 +107,16 @@ jobs:
       - name: Native compile check
         shell: bash
         run: cargo check --locked --manifest-path rust-web/Cargo.toml
+
+      - name: Slint shell Rust format check
+        if: ${{ matrix.platform == 'windows' }}
+        shell: bash
+        run: cargo fmt --manifest-path rust-gui/Cargo.toml -- --check
+
+      - name: Slint shell compile check
+        if: ${{ matrix.platform == 'windows' }}
+        shell: bash
+        run: cargo check --locked --manifest-path rust-gui/Cargo.toml
 
       - name: Rust clippy advisory
         shell: bash
