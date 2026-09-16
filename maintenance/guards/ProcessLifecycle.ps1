@@ -105,8 +105,12 @@ Assert-NotMatch $allRuntime '(?i)taskkill(?:\.exe)?[^\r\n]*(?:/IM|\.arg\("/IM"\)
 Assert-NotMatch $allRuntime '(?i)(?:pkill|killall)[^\r\n]*' 'Process-name-wide Unix termination is forbidden.'
 Assert-NotMatch ($recorder + $soopVod + $chzzkVod) 'taskkill\.exe' 'Provider/runtime callers must use the common process boundary.'
 
-$stopCalls = [regex]::Matches($soopVod, 'stop_child\(&mut child\)\.await;').Count
-if ($stopCalls -lt 2) { throw "SOOP VOD cancellation must cover progress and capture children; found $stopCalls call(s)." }
+$soopOwnedSpawns = [regex]::Matches($soopVod, 'spawn_owned\(&mut command\)').Count
+if ($soopOwnedSpawns -lt 2) { throw "SOOP VOD progress/capture commands must use retained owned spawn; found $soopOwnedSpawns call(s)." }
+Assert-Match $soopVod 'owned_tree\.terminate\(&mut child\)\.await' 'SOOP VOD cancellation must terminate through retained ownership.'
+Assert-Match $soopVod 'owned_tree\.terminate_now\(\)' 'SOOP VOD root-exit handling must clean retained descendants.'
+Assert-NotMatch $soopVod 'terminate_owned\(&mut child\)' 'SOOP VOD must not use compatibility child-only termination.'
+Assert-NotMatch $soopVod '\.kill_on_drop\(false\)' 'SOOP VOD external tools must retain direct-child drop fallback.'
 Assert-Match $soopVod 'if !exit\.success\(\)' 'SOOP capture must reject non-zero exits.'
 Assert-Match $soopVod 'if exit\.success\(\)' 'SOOP progress must distinguish successful exits.'
 Write-Host 'Process lifecycle contracts passed.'
