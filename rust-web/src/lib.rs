@@ -1,1 +1,12 @@
+pub mod app_core;
+pub mod backend;
+pub mod model;
+pub mod native_watcher;
+pub mod platform_runtime;
+pub mod primary_config;
+pub mod recorder;
+pub mod security;
+pub mod store;
+pub mod support;
 pub mod tool_discovery;
+pub mod vod;
