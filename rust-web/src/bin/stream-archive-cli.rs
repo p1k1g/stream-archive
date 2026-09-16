@@ -249,7 +249,7 @@ fn configure_tools(
             params![
                 tool.kind.primary_setting_key(),
                 path.to_string_lossy().as_ref(),
-                now
+                now.as_str()
             ],
         )?;
     }
@@ -303,9 +303,9 @@ fn print_tools_json(tools: &[ToolResolution]) -> Result<()> {
             json!({
                 "tool": tool.kind.label(),
                 "found": tool.found(),
-                "source": tool.source,
+                "source": tool.source.as_str(),
                 "path": tool.path.as_ref().map(|path| path.display().to_string()),
-                "warnings": tool.warnings,
+                "warnings": &tool.warnings,
             })
         })
         .collect::<Vec<_>>();
@@ -319,12 +319,11 @@ fn load_tool_settings(db: &Path) -> Result<BTreeMap<String, String>> {
     }
     let conn = Connection::open(db)
         .with_context(|| format!("failed to open SQLite database {}", db.display()))?;
-    let table_exists: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings')",
-            [],
-            |row| row.get(0),
-        )?;
+    let table_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings')",
+        [],
+        |row| row.get(0),
+    )?;
     if !table_exists {
         return Ok(BTreeMap::new());
     }
@@ -365,7 +364,10 @@ fn backend_dir(require_existing: bool) -> Result<PathBuf> {
     if let Ok(value) = env::var("STREAM_ARCHIVE_BACKEND_DIR") {
         let path = absolute_path(PathBuf::from(value))?;
         if require_existing && !path.is_dir() {
-            bail!("STREAM_ARCHIVE_BACKEND_DIR is not a directory: {}", path.display());
+            bail!(
+                "STREAM_ARCHIVE_BACKEND_DIR is not a directory: {}",
+                path.display()
+            );
         }
         return Ok(path);
     }
@@ -395,10 +397,7 @@ fn data_dir(backend: &Path) -> Result<PathBuf> {
             return absolute_path(PathBuf::from(value));
         }
     }
-    Ok(backend
-        .parent()
-        .unwrap_or(backend)
-        .join("data"))
+    Ok(backend.parent().unwrap_or(backend).join("data"))
 }
 
 fn database_path(backend: &Path) -> Result<PathBuf> {
@@ -416,7 +415,11 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
 }
 
 fn exists_marker(path: &Path) -> &'static str {
-    if path.exists() { " [OK]" } else { " [missing]" }
+    if path.exists() {
+        " [OK]"
+    } else {
+        " [missing]"
+    }
 }
 
 fn server_binary() -> Option<PathBuf> {
@@ -449,7 +452,10 @@ mod tests {
 
     #[test]
     fn tool_setting_mapping_stays_stable() {
-        assert_eq!(ToolKind::Streamlink.primary_setting_key(), "STREAMLINK_PATH");
+        assert_eq!(
+            ToolKind::Streamlink.primary_setting_key(),
+            "STREAMLINK_PATH"
+        );
         assert_eq!(ToolKind::YtDlp.primary_setting_key(), "YT_DLP_PATH");
         assert_eq!(ToolKind::Ffmpeg.primary_setting_key(), "FFMPEG_PATH");
     }
