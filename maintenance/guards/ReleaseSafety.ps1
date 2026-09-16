@@ -73,7 +73,6 @@ try {
     foreach ($trigger in @(
         'rust-web/\*\*',
         'RUN_DEV\.bat',
-        'BUILD_RELEASE\.bat',
         'BUILD_PORTABLE\.bat',
         'maintenance/\*\*',
         'docs/\*\*',
@@ -81,8 +80,13 @@ try {
     )) {
         Assert-Match $workflow $trigger "Runtime workflow path coverage is missing: $trigger"
     }
+    Assert-NotMatch $workflow 'BUILD_RELEASE\.bat' 'Runtime workflow must not reference the retired BUILD_RELEASE.bat wrapper.'
+    if (Test-Path -LiteralPath (Join-Path $root 'BUILD_RELEASE.bat') -PathType Leaf) {
+        throw 'Retired BUILD_RELEASE.bat wrapper must not exist; use BUILD_PORTABLE.bat or Cargo directly.'
+    }
     Assert-Match $workflow 'BUILD_PORTABLE\.bat' 'Portable package smoke step is missing.'
     Assert-Match $workflow 'Verify portable package' 'Portable package verification step is missing.'
+    Assert-Match $package 'cargo build --locked --release' 'Portable package must perform the locked Rust release build directly.'
     Assert-Match $package 'stream-archive-server\.exe' 'Portable package must include the Stream Archive server.'
     Assert-Match $package 'stream-archive-launcher\.exe' 'Portable package must include the native Stream Archive launcher.'
     Assert-Match $package 'dist\\stream-archive' 'Portable package output must use the Stream Archive namespace.'

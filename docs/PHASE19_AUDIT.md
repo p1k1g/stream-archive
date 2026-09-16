@@ -77,7 +77,7 @@ Before public release, product-wide names were moved from historical SOOP Downlo
 - runtime token directory: `backend/.stream-archive`;
 - managed backup prefix/folder: `stream_archive_*` / `stream-archive-backups`;
 - product-wide environment variables: `STREAM_ARCHIVE_*`;
-- developer/release/package entry points: `RUN_DEV.bat`, `BUILD_RELEASE.bat`, and `BUILD_PORTABLE.bat`.
+- Phase 19.5 developer/release/package entry points were `RUN_DEV.bat`, `BUILD_RELEASE.bat`, and `BUILD_PORTABLE.bat`; Phase 20 later retired the redundant `BUILD_RELEASE.bat` wrapper and consolidated Windows release/package creation on `BUILD_PORTABLE.bat`.
 
 Provider-specific identifiers such as `SOOP_USERNAME`, `SOOP_PASSWORD`, SOOP URLs, CHZZK cookie names, and provider module names intentionally remain provider-scoped. They are not product branding and should not be renamed into generic application keys.
 

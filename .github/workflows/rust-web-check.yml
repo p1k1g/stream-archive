@@ -5,7 +5,6 @@ on:
     paths:
       - "rust-web/**"
       - "RUN_DEV.bat"
-      - "BUILD_RELEASE.bat"
       - "BUILD_PORTABLE.bat"
       - "maintenance/**"
       - "docs/**"
@@ -22,7 +21,6 @@ on:
     paths:
       - "rust-web/**"
       - "RUN_DEV.bat"
-      - "BUILD_RELEASE.bat"
       - "BUILD_PORTABLE.bat"
       - "maintenance/**"
       - "docs/**"

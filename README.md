@@ -75,8 +75,8 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 | 운영체제 | 상태 |
 |---|---|
 | Windows | ✅ 현재 지원 |
-| Linux | 🚧 Phase 20 준비 |
-| macOS | 🚧 Phase 20 준비 |
+| Linux | 🧪 Phase 20 진행 중 — CI 빌드/테스트 통과, 실제 런타임·패키징 검증 전 |
+| macOS | 🧪 Phase 20 진행 중 — CI 빌드/테스트 통과, 실제 런타임·패키징 검증 전 |
 
 ## 빠른 시작
 
@@ -204,22 +204,20 @@ backend/.stream-archive/web-token.txt
 .\RUN_DEV.bat
 ```
 
-### Release build
+### Windows portable package
 
-```powershell
-.\BUILD_RELEASE.bat
-```
-
-Release build는 tracked `Cargo.lock`을 사용하여 locked dependency 정책으로 빌드합니다.
-
-```text
-cargo build --locked --release
-```
-
-### Portable package
+Windows에서 실제 실행·테스트·배포에 사용하는 단일 빌드 진입점은 다음입니다.
 
 ```powershell
 .\BUILD_PORTABLE.bat
+```
+
+`BUILD_PORTABLE.bat`은 tracked `Cargo.lock`을 사용하는 release build를 내부에서 수행한 뒤 실행 가능한 portable 디렉터리를 조립합니다.
+
+```text
+cargo build --locked --release
+        ↓
+dist\stream-archive
 ```
 
 기본 출력 위치:
@@ -244,6 +242,14 @@ maintenance\Restore-StreamArchiveData.ps1
 docs\...
 data\
 ```
+
+별도의 `BUILD_RELEASE.bat` wrapper는 사용하지 않습니다. 컴파일 결과만 확인해야 하는 개발 작업에서는 Cargo를 직접 실행할 수 있습니다.
+
+```powershell
+cargo build --locked --release --manifest-path .\rust-web\Cargo.toml
+```
+
+`rust-web\target\release`는 Cargo의 raw build output이며 배포 패키지 기준이 아닙니다. 실제 실행·배포 검증은 `dist\stream-archive`를 기준으로 합니다.
 
 ## 백업 / 복구
 
@@ -277,7 +283,6 @@ Web UI의 설정 → 백업에서 온라인 백업을 관리할 수 있습니다
 | `STREAM_ARCHIVE_BACKEND_DIR` | backend 디렉터리 override |
 | `STREAM_ARCHIVE_DATA_DIR` | SQLite 데이터 디렉터리 |
 | `STREAM_ARCHIVE_BACKUP_DIR` | Web 백업 디렉터리 override |
-| `STREAM_ARCHIVE_NO_PAUSE` | Windows build script의 대기 프롬프트 비활성화 |
 
 SOOP/CHZZK 계정 정보처럼 특정 provider에 속하는 설정 키는 provider namespace를 유지합니다.
 
@@ -319,18 +324,19 @@ Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 
 
 주요 검증 항목:
 
-- Runtime contract guard
-- JavaScript syntax check
-- Whole-crate `cargo fmt --check`
-- Rust unit tests
-- Windows native compile check
-- Clippy advisory
+- Windows / Linux / macOS JavaScript syntax check
+- Windows / Linux / macOS whole-crate `cargo fmt --check`
+- Windows / Linux / macOS Rust unit tests
+- Windows / Linux / macOS native compile check
+- Windows / Linux / macOS Clippy advisory
+- Windows Runtime contract guard
+- Source archive release-metadata smoke test
 - Windows portable package smoke test
-- Portable package verification
+- Windows portable package verification
 
 Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow_dispatch` 방식입니다.
 
-Phase 20에서는 Windows/Linux/macOS 3개 운영체제의 GitHub-hosted CI와 cross-platform runtime 검증을 확대할 예정입니다.
+Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습니다. Linux/macOS는 현재 CI 빌드·단위 테스트 단계까지 검증되었으며 실제 제품 런타임과 패키징 지원은 아직 진행 중입니다.
 
 ## 문서
 
@@ -364,9 +370,9 @@ Phase 20에서는 Windows/Linux/macOS 3개 운영체제의 GitHub-hosted CI와 c
 
 ### Phase 20 🚧 Cross-platform Readiness
 
-예정 작업:
+진행 상황 및 예정 작업:
 
-- Windows/Linux/macOS CI matrix
+- ✅ Windows/Linux/macOS GitHub-hosted CI matrix baseline
 - Unix process-group ownership / termination
 - Linux/macOS secret storage
 - Native cross-platform picker
