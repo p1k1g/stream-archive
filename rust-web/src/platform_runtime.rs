@@ -853,7 +853,8 @@ mod tests {
             "stream-archive-pgroup-test-{}.pid",
             Uuid::new_v4().simple()
         ));
-        let script = "trap '' HUP TERM; sleep 30 & printf '%s' \"$!\" > \"$STREAM_ARCHIVE_TEST_PID_FILE\"";
+        let script =
+            "trap '' HUP TERM; sleep 30 & printf '%s' \"$!\" > \"$STREAM_ARCHIVE_TEST_PID_FILE\"";
         let mut command = Command::new("sh");
         command
             .args(["-c", script])
