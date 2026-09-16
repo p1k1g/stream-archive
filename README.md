@@ -75,8 +75,8 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 | 운영체제 | 상태 |
 |---|---|
 | Windows | ✅ 현재 지원 |
-| Linux | 🧪 Phase 20 진행 중 — CI 빌드/테스트 통과, 실제 런타임·패키징 검증 전 |
-| macOS | 🧪 Phase 20 진행 중 — CI 빌드/테스트 통과, 실제 런타임·패키징 검증 전 |
+| Linux | 🧪 Phase 20 진행 중 — CI 빌드/테스트 및 Unix process-group ownership 검증, 실제 제품 배포 검증 전 |
+| macOS | 🧪 Phase 20 진행 중 — CI 빌드/테스트 및 Unix process-group ownership 검증, 실제 제품 배포 검증 전 |
 
 ## 빠른 시작
 
@@ -174,7 +174,7 @@ data/stream-archive.db
 
 이전 개발 버전의 `data/soop.db`만 존재하고 `stream-archive.db`가 없는 경우에는 시작 시 새 파일명으로 한 번 이전합니다. INI/TXT 설정 파일을 런타임 원본이나 mirror로 사용하지 않습니다.
 
-Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_SES` 같은 민감 정보가 CurrentUser DPAPI로 암호화된 형태로 SQLite에 저장됩니다. Web API는 평문 secret을 반환하지 않습니다.
+Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_SES` 같은 민감 정보가 CurrentUser DPAPI로 암호화된 형태로 SQLite에 저장됩니다. Linux/macOS에서는 SQLite에 평문 secret 대신 불투명한 `native-secret:v1:` 참조만 저장하고, 실제 secret은 각각 Linux Secret Service 또는 macOS Keychain에 저장합니다. Linux에서는 `secret-tool`과 사용 가능한 Secret Service 세션이 필요하며, native store를 사용할 수 없을 때 평문 저장으로 자동 fallback하지 않습니다. Web API는 평문 secret을 반환하지 않습니다.
 
 기본 수신 주소는 로컬 loopback입니다.
 
@@ -336,7 +336,7 @@ Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 
 
 Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow_dispatch` 방식입니다.
 
-Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습니다. Linux/macOS는 현재 CI 빌드·단위 테스트 단계까지 검증되었으며 실제 제품 런타임과 패키징 지원은 아직 진행 중입니다.
+Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습니다. Linux/macOS는 현재 CI 빌드·단위 테스트와 Unix process-group ownership 경계까지 검증되었으며 실제 제품 배포 및 사용자 흐름 검증은 아직 진행 중입니다.
 
 ## 문서
 
@@ -373,8 +373,8 @@ Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습
 진행 상황 및 예정 작업:
 
 - ✅ Windows/Linux/macOS GitHub-hosted CI matrix baseline
-- Unix process-group ownership / termination
-- Linux/macOS secret storage
+- ✅ Unix process-group ownership / termination
+- 🚧 Linux/macOS secret storage
 - Native cross-platform picker
 - Cross-platform launcher / packaging / tool discovery
 - Linux/macOS integration coverage

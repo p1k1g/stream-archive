@@ -2,8 +2,10 @@ use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 #[cfg(test)]
 use std::{fs, path::Path};
+use uuid::Uuid;
 
 pub const DPAPI_PREFIX: &str = "dpapi:v1:";
+pub const NATIVE_SECRET_PREFIX: &str = "native-secret:v1:";
 #[cfg(windows)]
 const DPAPI_ENTROPY: &[u8] = b"SOOPLiveDownloader:v1";
 #[cfg(test)]
@@ -15,7 +17,8 @@ const SECRET_KEYS: &[&str] = &[
 ];
 
 pub fn is_protected(value: &str) -> bool {
-    value.trim().to_ascii_lowercase().starts_with(DPAPI_PREFIX)
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.starts_with(DPAPI_PREFIX) || normalized.starts_with(NATIVE_SECRET_PREFIX)
 }
 
 pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
@@ -23,17 +26,28 @@ pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
     if value.is_empty() {
         return Ok(String::new());
     }
-    if !is_protected(value) {
-        return Ok(value.to_string());
+
+    let normalized = value.to_ascii_lowercase();
+    if normalized.starts_with(DPAPI_PREFIX) {
+        let encoded = &value[DPAPI_PREFIX.len()..];
+        let cipher = BASE64
+            .decode(encoded)
+            .with_context(|| format!("{name} DPAPI payload is not valid base64"))?;
+        let plain =
+            dpapi_unprotect(&cipher).with_context(|| format!("{name} DPAPI decrypt failed"))?;
+        return String::from_utf8(plain)
+            .with_context(|| format!("{name} DPAPI plaintext is not UTF-8"));
     }
 
-    let encoded = &value[DPAPI_PREFIX.len()..];
-    let cipher = BASE64
-        .decode(encoded)
-        .with_context(|| format!("{name} DPAPI payload is not valid base64"))?;
-    let plain =
-        platform_unprotect(&cipher).with_context(|| format!("{name} DPAPI decrypt failed"))?;
-    String::from_utf8(plain).with_context(|| format!("{name} DPAPI plaintext is not UTF-8"))
+    if normalized.starts_with(NATIVE_SECRET_PREFIX) {
+        let reference = parse_native_reference(&value[NATIVE_SECRET_PREFIX.len()..], name)?;
+        return native_secret_load(reference)
+            .with_context(|| format!("{name} native secret lookup failed"));
+    }
+
+    // Compatibility for databases created before protected secret storage.
+    // New writes never intentionally fall back to plaintext.
+    Ok(value.to_string())
 }
 
 pub fn protect_secret(value: &str) -> Result<String> {
@@ -43,8 +57,30 @@ pub fn protect_secret(value: &str) -> Result<String> {
     if value.is_empty() {
         return Ok(String::new());
     }
-    let cipher = platform_protect(value.as_bytes()).context("DPAPI encrypt failed")?;
-    Ok(format!("{DPAPI_PREFIX}{}", BASE64.encode(cipher)))
+
+    #[cfg(windows)]
+    {
+        let cipher = dpapi::protect(value.as_bytes()).context("DPAPI encrypt failed")?;
+        return Ok(format!("{DPAPI_PREFIX}{}", BASE64.encode(cipher)));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        // Keep only an opaque reference in SQLite. The secret itself lives in
+        // the current user's native credential store.
+        let reference = Uuid::new_v4().hyphenated().to_string();
+        native_secret_store(&reference, value).context("native secret store failed")?;
+        return Ok(format!("{NATIVE_SECRET_PREFIX}{reference}"));
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    bail!("native protected secret storage is unsupported on this operating system")
+}
+
+fn parse_native_reference<'a>(value: &'a str, name: &str) -> Result<&'a str> {
+    let value = value.trim();
+    Uuid::parse_str(value).with_context(|| format!("{name} native secret reference is invalid"))?;
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -72,23 +108,255 @@ pub fn configured_secrets(path: &Path) -> Result<std::collections::BTreeMap<Stri
 }
 
 #[cfg(windows)]
-fn platform_protect(plaintext: &[u8]) -> Result<Vec<u8>> {
-    dpapi::protect(plaintext)
-}
-
-#[cfg(windows)]
-fn platform_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>> {
+fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>> {
     dpapi::unprotect(ciphertext)
 }
 
 #[cfg(not(windows))]
-fn platform_protect(_plaintext: &[u8]) -> Result<Vec<u8>> {
-    bail!("native protected secret storage is currently available on Windows only")
+fn dpapi_unprotect(_ciphertext: &[u8]) -> Result<Vec<u8>> {
+    bail!("DPAPI-protected secrets can only be decrypted by the Windows user that created them")
 }
 
-#[cfg(not(windows))]
-fn platform_unprotect(_ciphertext: &[u8]) -> Result<Vec<u8>> {
-    bail!("DPAPI-protected secrets can only be decrypted on Windows")
+#[cfg(target_os = "linux")]
+fn native_secret_store(reference: &str, value: &str) -> Result<()> {
+    linux_secret_service::store(reference, value)
+}
+
+#[cfg(target_os = "linux")]
+fn native_secret_load(reference: &str) -> Result<String> {
+    linux_secret_service::load(reference)
+}
+
+#[cfg(target_os = "macos")]
+fn native_secret_store(reference: &str, value: &str) -> Result<()> {
+    macos_keychain::store(reference, value)
+}
+
+#[cfg(target_os = "macos")]
+fn native_secret_load(reference: &str) -> Result<String> {
+    macos_keychain::load(reference)
+}
+
+#[cfg(windows)]
+fn native_secret_load(_reference: &str) -> Result<String> {
+    bail!("Unix native-secret references are not readable on Windows")
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn native_secret_load(_reference: &str) -> Result<String> {
+    bail!("native protected secret storage is unsupported on this operating system")
+}
+
+#[cfg(target_os = "linux")]
+mod linux_secret_service {
+    use anyhow::{Context, Result, bail};
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
+
+    const APPLICATION_ATTRIBUTE: &str = "stream-archive";
+
+    fn command() -> Command {
+        Command::new("secret-tool")
+    }
+
+    fn helper_context(action: &str) -> String {
+        format!(
+            "Linux Secret Service {action} requires `secret-tool` (libsecret-tools) and an available Secret Service session"
+        )
+    }
+
+    pub(super) fn store(reference: &str, value: &str) -> Result<()> {
+        let mut child = command()
+            .args([
+                "store",
+                "--label=Stream Archive",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "reference",
+                reference,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| helper_context("store"))?;
+
+        {
+            let stdin = child
+                .stdin
+                .as_mut()
+                .context("Linux Secret Service helper stdin is unavailable")?;
+            stdin
+                .write_all(value.as_bytes())
+                .context("failed to send secret to Linux Secret Service helper")?;
+        }
+        drop(child.stdin.take());
+
+        let output = child
+            .wait_with_output()
+            .context("failed to wait for Linux Secret Service helper")?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            bail!(
+                "{}{}",
+                helper_context("store failed"),
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {detail}")
+                }
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn load(reference: &str) -> Result<String> {
+        let output = command()
+            .args([
+                "lookup",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "reference",
+                reference,
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| helper_context("lookup"))?;
+
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            bail!(
+                "{}{}",
+                helper_context("lookup failed"),
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {detail}")
+                }
+            );
+        }
+
+        let mut value = String::from_utf8(output.stdout)
+            .context("Linux Secret Service returned non-UTF-8 secret data")?;
+        if value.ends_with('\n') {
+            value.pop();
+            if value.ends_with('\r') {
+                value.pop();
+            }
+        }
+        Ok(value)
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos_keychain {
+    use anyhow::{Context, Result, bail};
+    use std::{ffi::c_void, ptr::null_mut};
+
+    const SERVICE: &[u8] = b"io.github.p1k1g.stream-archive";
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+    #[link(name = "Security", kind = "framework")]
+    unsafe extern "C" {
+        fn SecKeychainAddGenericPassword(
+            keychain: *mut c_void,
+            service_name_length: u32,
+            service_name: *const u8,
+            account_name_length: u32,
+            account_name: *const u8,
+            password_length: u32,
+            password_data: *const c_void,
+            item_ref: *mut *mut c_void,
+        ) -> i32;
+
+        fn SecKeychainFindGenericPassword(
+            keychain_or_array: *mut c_void,
+            service_name_length: u32,
+            service_name: *const u8,
+            account_name_length: u32,
+            account_name: *const u8,
+            password_length: *mut u32,
+            password_data: *mut *mut c_void,
+            item_ref: *mut *mut c_void,
+        ) -> i32;
+
+        fn SecKeychainItemFreeContent(attr_list: *mut c_void, data: *mut c_void) -> i32;
+    }
+
+    fn len_u32(value: usize, field: &str) -> Result<u32> {
+        u32::try_from(value).with_context(|| format!("macOS Keychain {field} is too long"))
+    }
+
+    pub(super) fn store(reference: &str, value: &str) -> Result<()> {
+        let account = reference.as_bytes();
+        let secret = value.as_bytes();
+        let status = unsafe {
+            SecKeychainAddGenericPassword(
+                null_mut(),
+                len_u32(SERVICE.len(), "service")?,
+                SERVICE.as_ptr(),
+                len_u32(account.len(), "account")?,
+                account.as_ptr(),
+                len_u32(secret.len(), "secret")?,
+                secret.as_ptr().cast::<c_void>(),
+                null_mut(),
+            )
+        };
+        if status != 0 {
+            bail!("macOS Keychain store failed with OSStatus {status}");
+        }
+        Ok(())
+    }
+
+    pub(super) fn load(reference: &str) -> Result<String> {
+        let account = reference.as_bytes();
+        let mut secret_len = 0u32;
+        let mut secret_ptr: *mut c_void = null_mut();
+        let status = unsafe {
+            SecKeychainFindGenericPassword(
+                null_mut(),
+                len_u32(SERVICE.len(), "service")?,
+                SERVICE.as_ptr(),
+                len_u32(account.len(), "account")?,
+                account.as_ptr(),
+                &mut secret_len,
+                &mut secret_ptr,
+                null_mut(),
+            )
+        };
+        if status == ERR_SEC_ITEM_NOT_FOUND {
+            bail!("macOS Keychain item is missing for native secret reference")
+        }
+        if status != 0 {
+            bail!("macOS Keychain lookup failed with OSStatus {status}");
+        }
+        if secret_ptr.is_null() && secret_len != 0 {
+            bail!("macOS Keychain returned an invalid secret buffer");
+        }
+
+        struct KeychainContent(*mut c_void);
+        impl Drop for KeychainContent {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    unsafe {
+                        let _ = SecKeychainItemFreeContent(null_mut(), self.0);
+                    }
+                }
+            }
+        }
+
+        let content = KeychainContent(secret_ptr);
+        let bytes = if secret_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(content.0.cast::<u8>(), secret_len as usize) }
+                .to_vec()
+        };
+        String::from_utf8(bytes).context("macOS Keychain returned non-UTF-8 secret data")
+    }
 }
 
 #[cfg(windows)]
@@ -200,9 +468,24 @@ mod tests {
     }
 
     #[test]
-    fn protected_prefix_is_detected_case_insensitively() {
+    fn protected_prefixes_are_detected_case_insensitively() {
         assert!(is_protected("dpapi:v1:abc"));
         assert!(is_protected("DPAPI:V1:abc"));
+        assert!(is_protected(
+            "native-secret:v1:123e4567-e89b-12d3-a456-426614174000"
+        ));
+        assert!(is_protected(
+            "NATIVE-SECRET:V1:123e4567-e89b-12d3-a456-426614174000"
+        ));
+    }
+
+    #[test]
+    fn native_reference_requires_uuid() {
+        assert!(parse_native_reference("not-a-uuid", "TEST").is_err());
+        assert_eq!(
+            parse_native_reference("123e4567-e89b-12d3-a456-426614174000", "TEST").unwrap(),
+            "123e4567-e89b-12d3-a456-426614174000"
+        );
     }
 
     #[test]
