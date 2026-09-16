@@ -69,14 +69,21 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             return;
         }
     };
-    let core = match resolve_backend_dir().and_then(StreamArchiveCore::open) {
+    let backend = resolve_backend_dir();
+    let backend_path = backend.as_ref().ok().cloned();
+    let core = match backend.and_then(StreamArchiveCore::open) {
         Ok(opened) => opened.core,
         Err(error) => {
             let message = format!("Runtime initialization failed: {error:#}");
             let _ = responses.send(Response::Snapshot {
                 fields: None,
-                diagnostics: DiagnosticsSnapshot::unavailable(None, None, &message),
-                backend: "Unavailable".into(),
+                diagnostics: DiagnosticsSnapshot::startup_failure(
+                    backend_path.as_deref(),
+                    &message,
+                ),
+                backend: backend_path
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "Unavailable".into()),
                 database: "Unavailable".into(),
                 channel_count: "Unavailable".into(),
                 message,
@@ -264,8 +271,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_settings_message(message.into());
                 }
                 Response::Picked(index, path) => {
-                    if let Some(path) = path {
-                        draft.borrow_mut().edit(index, path);
+                    if draft.borrow_mut().accept_selection(index, path) {
                         render_draft(&ui, &draft.borrow());
                         state.set_settings_message(
                             "Selection added to draft; Save validates and persists it".into(),

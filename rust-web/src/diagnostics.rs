@@ -36,6 +36,11 @@ pub struct DiagnosticsSnapshot {
 }
 
 impl DiagnosticsSnapshot {
+    pub fn startup_failure(backend: Option<&Path>, error: &str) -> Self {
+        let database = backend.map(crate::store::Store::default_path);
+        Self::unavailable(backend, database.as_deref(), error)
+    }
+
     pub fn unavailable(backend: Option<&Path>, database: Option<&Path>, error: &str) -> Self {
         let mut items = vec![item("Settings load", DiagnosticStatus::Error, error)];
         if let Some(path) = backend {

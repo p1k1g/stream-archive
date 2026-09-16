@@ -23,6 +23,16 @@ impl SettingsDraft {
         }
     }
 
+    pub fn accept_selection(&mut self, index: usize, selection: Option<String>) -> bool {
+        match (self.fields.get_mut(index), selection) {
+            (Some(field), Some(path)) => {
+                field.value = path;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn patch(&self) -> BTreeMap<String, String> {
         self.fields
             .iter()
@@ -59,5 +69,18 @@ mod tests {
         assert_eq!(draft.fields[0].kind, SettingKind::Executable);
         draft.load(fields);
         assert!(draft.patch().is_empty());
+    }
+
+    #[test]
+    fn cancelled_or_stale_picker_does_not_change_the_draft() {
+        let mut draft = SettingsDraft::default();
+        draft.load(snapshot(&BTreeMap::new()));
+        assert!(!draft.accept_selection(0, None));
+        assert!(!draft.accept_selection(usize::MAX, Some("ignored".into())));
+        assert!(draft.patch().is_empty());
+        assert!(draft.accept_selection(0, Some("selected.exe".into())));
+        assert_eq!(draft.patch()["STREAMLINK_PATH"], "selected.exe");
+        assert!(!draft.accept_selection(0, None));
+        assert_eq!(draft.patch()["STREAMLINK_PATH"], "selected.exe");
     }
 }
