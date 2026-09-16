@@ -1,0 +1,14 @@
+[package]
+name = "stream-archive-gui"
+version = "0.5.2"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/p1k1g/stream-archive"
+build = "build.rs"
+
+[dependencies]
+slint = { version = "=1.17.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-2"] }
+stream-archive-server = { path = "../rust-web" }
+
+[build-dependencies]
+slint-build = "=1.17.1"
