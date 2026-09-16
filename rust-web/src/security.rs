@@ -33,8 +33,8 @@ pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
         let cipher = BASE64
             .decode(encoded)
             .with_context(|| format!("{name} DPAPI payload is not valid base64"))?;
-        let plain = dpapi_unprotect(&cipher)
-            .with_context(|| format!("{name} DPAPI decrypt failed"))?;
+        let plain =
+            dpapi_unprotect(&cipher).with_context(|| format!("{name} DPAPI decrypt failed"))?;
         return String::from_utf8(plain)
             .with_context(|| format!("{name} DPAPI plaintext is not UTF-8"));
     }
