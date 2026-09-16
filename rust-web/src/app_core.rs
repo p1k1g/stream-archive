@@ -14,11 +14,12 @@ use crate::{
         apply_vod_tool_defaults, validate_channels, validate_secret_updates,
         validate_setting_updates, validate_vod_tool_updates,
     },
-    security::protect_secret,
+    security::{protect_secret, unprotect_secret},
     store::{self, Store},
+    support::platform::{PlatformId, live::LiveSession},
     vod::VodManager,
 };
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -26,6 +27,14 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Mutex;
+
+const NATIVE_PROVIDER_SETTING_KEYS: &[&str] = &["SOOP_USERNAME", "CLOUDFLARE_WORKER_URL"];
+const NATIVE_PROVIDER_SECRET_KEYS: &[&str] = &[
+    "SOOP_PASSWORD",
+    "CLOUDFLARE_API_KEY",
+    "CHZZK_NID_AUT",
+    "CHZZK_NID_SES",
+];
 
 #[derive(Clone)]
 pub struct StreamArchiveCore {
@@ -194,6 +203,121 @@ impl StreamArchiveCore {
         self.store.configured_secrets()
     }
 
+    /// Save the provider-facing native configuration through the same
+    /// validators and protected-secret boundary used by the Web UI. Empty
+    /// secret drafts intentionally preserve the previously stored secret.
+    pub async fn update_provider_configuration(
+        &self,
+        settings: &BTreeMap<String, String>,
+        secrets: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, bool>> {
+        for key in settings.keys() {
+            if !NATIVE_PROVIDER_SETTING_KEYS.contains(&key.as_str()) {
+                bail!("unsupported native provider setting: {key}");
+            }
+        }
+        for key in secrets.keys() {
+            if !NATIVE_PROVIDER_SECRET_KEYS.contains(&key.as_str()) {
+                bail!("unsupported native provider secret: {key}");
+            }
+        }
+        validate_setting_updates(settings)?;
+        validate_secret_updates(secrets)?;
+
+        let mut updates = settings.clone();
+        for (key, value) in secrets {
+            if !value.is_empty() {
+                updates.insert(key.clone(), protect_secret(value)?);
+            }
+        }
+
+        let _guard = self.config_write_lock.lock().await;
+        if !updates.is_empty() {
+            self.store.sync_settings(&updates, "native-provider")?;
+            self.logs
+                .push(format!(
+                    "[CORE] native provider configuration updated: {}",
+                    updates.keys().cloned().collect::<Vec<_>>().join(", ")
+                ))
+                .await;
+        }
+        self.store.configured_secrets()
+    }
+
+    /// Verify the currently saved SOOP login and Cloudflare Worker credentials.
+    /// Secret values are decrypted only inside the shared service boundary and
+    /// are never returned to the native frontend or written to logs.
+    pub async fn test_soop_auth(&self) -> Result<String> {
+        let settings = self.store.live_settings_with_secrets()?;
+        let username = settings.get("SOOP_USERNAME").cloned().unwrap_or_default();
+        let password = unprotect_secret(
+            settings
+                .get("SOOP_PASSWORD")
+                .map(String::as_str)
+                .unwrap_or(""),
+            "SOOP_PASSWORD",
+        )?;
+        let worker_url = settings
+            .get("CLOUDFLARE_WORKER_URL")
+            .cloned()
+            .unwrap_or_default();
+        let worker_key = unprotect_secret(
+            settings
+                .get("CLOUDFLARE_API_KEY")
+                .map(String::as_str)
+                .unwrap_or(""),
+            "CLOUDFLARE_API_KEY",
+        )?;
+
+        for (label, value) in [
+            ("SOOP username", username.as_str()),
+            ("SOOP password", password.as_str()),
+            ("Worker URL", worker_url.as_str()),
+            ("Worker API key", worker_key.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                bail!("{label} is not configured");
+            }
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .no_proxy()
+            .http1_only()
+            .build()?;
+        let mut session = LiveSession::new(PlatformId::Soop, client.clone())?;
+        let login_id = session
+            .login(&username, &password)
+            .await
+            .map_err(|error| anyhow::anyhow!("SOOP login test failed: {error:#}"))?;
+
+        let response = client
+            .post(&worker_url)
+            .header("X-API-Key", &worker_key)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|error| anyhow::anyhow!("Worker test failed: {error:#}"))?;
+        let worker_status = response.status();
+        if worker_status == reqwest::StatusCode::UNAUTHORIZED
+            || worker_status == reqwest::StatusCode::FORBIDDEN
+        {
+            bail!("Worker API key authentication failed");
+        }
+        if worker_status != reqwest::StatusCode::BAD_REQUEST && !worker_status.is_success() {
+            bail!("Worker endpoint test failed: HTTP {worker_status}");
+        }
+
+        self.logs
+            .push(format!(
+                "[AUTH] SOOP credential test passed login_id={login_id}"
+            ))
+            .await;
+        Ok(format!(
+            "SOOP login and Worker authentication passed (login_id={login_id})"
+        ))
+    }
+
     pub fn channels(&self) -> Result<Vec<Channel>> {
         self.store.channels()
     }
@@ -324,6 +448,7 @@ mod tests {
         assert_eq!(core.store().path(), db.as_path());
         assert!(core.settings().unwrap().contains_key("STREAMLINK_PATH"));
     }
+
     #[tokio::test]
     async fn environment_patch_is_atomic_and_uses_existing_web_keys() {
         let dir = tempfile::tempdir().unwrap();
@@ -350,5 +475,36 @@ mod tests {
         drop(core);
         let reopened = Store::open(db).unwrap();
         assert_eq!(reopened.safe_settings().unwrap()["CHECK_INTERVAL"], "42");
+    }
+
+    #[tokio::test]
+    async fn native_provider_update_reuses_safe_setting_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("stream-archive.db");
+        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db).unwrap());
+
+        let valid = BTreeMap::from([
+            ("SOOP_USERNAME".into(), "tester".into()),
+            (
+                "CLOUDFLARE_WORKER_URL".into(),
+                "https://worker.example.test".into(),
+            ),
+        ]);
+        core.update_provider_configuration(&valid, &BTreeMap::new())
+            .await
+            .unwrap();
+        let settings = core.settings().unwrap();
+        assert_eq!(settings["SOOP_USERNAME"], "tester");
+        assert_eq!(
+            settings["CLOUDFLARE_WORKER_URL"],
+            "https://worker.example.test"
+        );
+
+        let invalid = BTreeMap::from([("CHECK_INTERVAL".into(), "1".into())]);
+        assert!(
+            core.update_provider_configuration(&invalid, &BTreeMap::new())
+                .await
+                .is_err()
+        );
     }
 }
