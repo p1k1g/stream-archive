@@ -1,7 +1,6 @@
 use crate::{
     AppState, ChannelConfigRow, DiagnosticRow, LiveChannelRow, MainWindow, SettingRow,
-    channels_adapter::ChannelsDraft, live_adapter, native_picker,
-    settings_adapter::SettingsDraft,
+    channels_adapter::ChannelsDraft, live_adapter, native_picker, settings_adapter::SettingsDraft,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -109,9 +108,7 @@ fn configuration_snapshot(core: &StreamArchiveCore, message: &str) -> Response {
     let settings = match core.settings() {
         Ok(settings) => settings,
         Err(error) => {
-            return Response::ConfigError(format!(
-                "Provider settings load failed: {error:#}"
-            ));
+            return Response::ConfigError(format!("Provider settings load failed: {error:#}"));
         }
     };
     let channels = match core.channels() {
@@ -657,7 +654,6 @@ pub fn bind(ui: &MainWindow) -> Controller {
             render_channels(&ui, &platform_channels.borrow());
         }
     });
-
     let weak = ui.as_weak();
     let save_channels = channels_draft.clone();
     let config_sender = sender.clone();
@@ -832,17 +828,16 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_config_busy(false);
                     response_channels.borrow_mut().load(channels);
                     render_channels(&ui, &response_channels.borrow());
-                    state.set_channel_count(response_channels.borrow().rows.len().to_string().into());
+                    state.set_channel_count(
+                        response_channels.borrow().rows.len().to_string().into(),
+                    );
                     state.set_soop_username(username.into());
                     state.set_cloudflare_worker_url(worker_url.into());
                     state.set_soop_password_configured(
                         secrets.get("SOOP_PASSWORD").copied().unwrap_or(false),
                     );
                     state.set_cloudflare_key_configured(
-                        secrets
-                            .get("CLOUDFLARE_API_KEY")
-                            .copied()
-                            .unwrap_or(false),
+                        secrets.get("CLOUDFLARE_API_KEY").copied().unwrap_or(false),
                     );
                     state.set_chzzk_nid_aut_configured(
                         secrets.get("CHZZK_NID_AUT").copied().unwrap_or(false),
