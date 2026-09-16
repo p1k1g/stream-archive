@@ -1,13 +1,21 @@
 use crate::{
-    AppState, DiagnosticRow, MainWindow, SettingRow, native_picker, settings_adapter::SettingsDraft,
+    AppState, DiagnosticRow, LiveChannelRow, MainWindow, SettingRow, live_adapter, native_picker,
+    settings_adapter::SettingsDraft,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::mpsc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    rc::Rc,
+    sync::mpsc,
+    time::Duration,
+};
 use stream_archive_server::{
     app_core::StreamArchiveCore,
     backend::resolve_backend_dir,
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
+    model::NativeWatcherStatus,
 };
 
 enum Request {
@@ -15,6 +23,11 @@ enum Request {
     Reload,
     Save(BTreeMap<String, String>),
     Pick(usize, SettingKind, String),
+    LiveStatus { poll: bool },
+    LiveStart,
+    LiveStop,
+    LiveAction { target: String, action: String },
+    LivePassword { target: String, password: String },
 }
 
 enum Response {
@@ -27,11 +40,21 @@ enum Response {
         message: String,
     },
     Picked(usize, Option<String>),
+    Live {
+        status: NativeWatcherStatus,
+        message: Option<String>,
+        poll: bool,
+    },
+    LiveError {
+        message: String,
+        poll: bool,
+    },
     Error(String),
 }
 
 pub struct Controller {
-    _timer: Timer,
+    _response_timer: Timer,
+    _live_poll_timer: Timer,
 }
 
 fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str) -> Response {
@@ -53,6 +76,20 @@ fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str
             .map(|c| c.len().to_string())
             .unwrap_or_else(|_| "Unavailable".into()),
         message: message.into(),
+    }
+}
+
+fn live_status(core: &StreamArchiveCore, runtime: &tokio::runtime::Runtime, poll: bool) -> Response {
+    match runtime.block_on(core.watcher_status()) {
+        Ok(status) => Response::Live {
+            status,
+            message: None,
+            poll,
+        },
+        Err(error) => Response::LiveError {
+            message: format!("LIVE status refresh failed: {error:#}"),
+            poll,
+        },
     }
 }
 
@@ -91,9 +128,20 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             return;
         }
     };
-    if responses.send(read_snapshot(&core, true, "Settings loaded from canonical SQLite. Save applies changes to future runtime operations.")).is_err() {
+    if responses
+        .send(read_snapshot(
+            &core,
+            true,
+            "Settings loaded from canonical SQLite. Save applies changes to future runtime operations.",
+        ))
+        .is_err()
+    {
         return;
     }
+    if responses.send(live_status(&core, &runtime, false)).is_err() {
+        return;
+    }
+
     for request in requests {
         let response = match request {
             Request::Refresh => read_snapshot(
@@ -118,11 +166,85 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 Ok(path) => Response::Picked(index, path),
                 Err(error) => Response::Error(format!("Picker failed: {error}")),
             },
+            Request::LiveStatus { poll } => live_status(&core, &runtime, poll),
+            Request::LiveStart => match runtime.block_on(core.start_watcher()) {
+                Ok(status) => Response::Live {
+                    status,
+                    message: Some("LIVE watcher started".into()),
+                    poll: false,
+                },
+                Err(error) => Response::LiveError {
+                    message: format!("Watcher start failed: {error:#}"),
+                    poll: false,
+                },
+            },
+            Request::LiveStop => match runtime.block_on(core.stop_watcher()) {
+                Ok(status) => Response::Live {
+                    status,
+                    message: Some("LIVE watcher stopped".into()),
+                    poll: false,
+                },
+                Err(error) => Response::LiveError {
+                    message: format!("Watcher stop failed: {error:#}"),
+                    poll: false,
+                },
+            },
+            Request::LiveAction { target, action } => {
+                let Some(action) = live_adapter::validated_action(&action) else {
+                    let _ = responses.send(Response::LiveError {
+                        message: "Unsupported LIVE channel action".into(),
+                        poll: false,
+                    });
+                    continue;
+                };
+                match runtime.block_on(core.channel_action(target, action)) {
+                    Ok(()) => match runtime.block_on(core.watcher_status()) {
+                        Ok(status) => Response::Live {
+                            status,
+                            message: Some(match action {
+                                "stop" => "Current broadcast suppressed until it changes".into(),
+                                "resume" => "Channel monitoring resumed".into(),
+                                _ => "Channel recheck requested".into(),
+                            }),
+                            poll: false,
+                        },
+                        Err(error) => Response::LiveError {
+                            message: format!("Action succeeded but status refresh failed: {error:#}"),
+                            poll: false,
+                        },
+                    },
+                    Err(error) => Response::LiveError {
+                        message: format!("Channel action failed: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::LivePassword { target, password } => {
+                match runtime.block_on(core.channel_password(target, password)) {
+                    Ok(()) => match runtime.block_on(core.watcher_status()) {
+                        Ok(status) => Response::Live {
+                            status,
+                            message: Some("Password supplied in memory and channel recheck requested".into()),
+                            poll: false,
+                        },
+                        Err(error) => Response::LiveError {
+                            message: format!("Password accepted but status refresh failed: {error:#}"),
+                            poll: false,
+                        },
+                    },
+                    Err(error) => Response::LiveError {
+                        message: format!("Password was not accepted: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
         };
         if responses.send(response).is_err() {
             break;
         }
     }
+
+    runtime.block_on(core.shutdown());
 }
 
 fn render_draft(ui: &MainWindow, draft: &SettingsDraft) {
@@ -139,6 +261,45 @@ fn render_draft(ui: &MainWindow, draft: &SettingsDraft) {
     let state = ui.global::<AppState>();
     state.set_settings_rows(ModelRc::new(VecModel::from(rows)));
     state.set_settings_dirty(!draft.patch().is_empty());
+}
+
+fn render_live(ui: &MainWindow, status: NativeWatcherStatus) {
+    let view = live_adapter::view(status);
+    let rows: Vec<_> = view
+        .channels
+        .into_iter()
+        .map(|row| LiveChannelRow {
+            target: row.target.into(),
+            platform: row.platform.into(),
+            name: row.name.into(),
+            account: row.account.into(),
+            status: row.status.into(),
+            status_label: row.status_label.into(),
+            status_tone: row.status_tone.into(),
+            title: row.title.into(),
+            bno: row.bno.into(),
+            file: row.file.into(),
+            size: row.size.into(),
+            started_at: row.started_at.into(),
+            suppressed: row.suppressed,
+            detail: row.detail.into(),
+            can_stop_once: row.can_stop_once,
+            can_resume: row.can_resume,
+            can_recheck: row.can_recheck,
+            password_required: row.password_required,
+        })
+        .collect();
+    let state = ui.global::<AppState>();
+    state.set_live_running(view.running);
+    state.set_live_state(view.state_label.into());
+    state.set_live_engine(view.engine.into());
+    state.set_live_started_at(view.started_at.into());
+    state.set_live_channel_count(view.channel_count.into());
+    state.set_live_recording_count(view.recording_count.into());
+    state.set_live_offline_count(view.offline_count.into());
+    state.set_live_error_count(view.error_count.into());
+    state.set_live_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_live_loaded(true);
 }
 
 pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
@@ -158,7 +319,7 @@ pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     state.set_diagnostics_rows(ModelRc::new(VecModel::from(rows)));
 }
 
-fn send(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+fn send_settings(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
     let state = ui.global::<AppState>();
     if state.get_settings_busy() {
         return;
@@ -174,19 +335,39 @@ fn send(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
     }
 }
 
+fn send_live(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    let state = ui.global::<AppState>();
+    if state.get_live_busy() {
+        return;
+    }
+    match sender.send(request) {
+        Ok(()) => {
+            state.set_live_busy(true);
+            state.set_live_message("Working...".into());
+        }
+        Err(_) => state.set_live_message("LIVE runtime worker is unavailable".into()),
+    }
+}
+
 pub fn bind(ui: &MainWindow) -> Controller {
     let (sender, requests) = mpsc::channel();
     let (responses, receiver) = mpsc::channel();
     let state = ui.global::<AppState>();
     state.set_settings_busy(true);
+    state.set_live_busy(true);
     if let Err(error) = std::thread::Builder::new()
-        .name("native-settings".into())
+        .name("native-runtime".into())
         .spawn(move || worker(requests, responses))
     {
         state.set_settings_busy(false);
+        state.set_live_busy(false);
         state.set_settings_message(format!("Cannot start worker: {error}").into());
+        state.set_live_message(format!("Cannot start worker: {error}").into());
     }
+
     let draft = Rc::new(RefCell::new(SettingsDraft::default()));
+    let live_poll_in_flight = Rc::new(Cell::new(false));
+
     let weak = ui.as_weak();
     let edit_draft = draft.clone();
     state.on_setting_edited(move |index, value| {
@@ -199,57 +380,123 @@ pub fn bind(ui: &MainWindow) -> Controller {
             }
         }
     });
+
     let weak = ui.as_weak();
     let save_draft = draft.clone();
     let save_sender = sender.clone();
     state.on_save_settings(move || {
         if let Some(ui) = weak.upgrade() {
-            send(
+            send_settings(
                 &ui,
                 &save_sender,
                 Request::Save(save_draft.borrow().patch()),
             );
         }
     });
+
     let weak = ui.as_weak();
     let reload_sender = sender.clone();
     state.on_reload_settings(move || {
         if let Some(ui) = weak.upgrade() {
-            send(&ui, &reload_sender, Request::Reload);
+            send_settings(&ui, &reload_sender, Request::Reload);
         }
     });
+
     let weak = ui.as_weak();
     let refresh_sender = sender.clone();
     state.on_refresh_requested(move || {
         if let Some(ui) = weak.upgrade() {
-            send(&ui, &refresh_sender, Request::Refresh);
+            send_settings(&ui, &refresh_sender, Request::Refresh);
         }
     });
+
     let weak = ui.as_weak();
     let pick_draft = draft.clone();
+    let pick_sender = sender.clone();
     state.on_pick_setting(move |index| {
         if let Some(ui) = weak.upgrade() {
             if let Some(field) = usize::try_from(index)
                 .ok()
                 .and_then(|index| pick_draft.borrow().fields.get(index).cloned())
             {
-                send(
+                send_settings(
                     &ui,
-                    &sender,
+                    &pick_sender,
                     Request::Pick(index as usize, field.kind, field.value),
                 );
             }
         }
     });
+
     let weak = ui.as_weak();
-    let timer = Timer::default();
-    timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
+    let live_sender = sender.clone();
+    state.on_live_start(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_live(&ui, &live_sender, Request::LiveStart);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let live_sender = sender.clone();
+    state.on_live_stop(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_live(&ui, &live_sender, Request::LiveStop);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let live_sender = sender.clone();
+    state.on_live_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_live(&ui, &live_sender, Request::LiveStatus { poll: false });
+        }
+    });
+
+    let weak = ui.as_weak();
+    let live_sender = sender.clone();
+    state.on_live_action(move |target, action| {
+        if let Some(ui) = weak.upgrade() {
+            send_live(
+                &ui,
+                &live_sender,
+                Request::LiveAction {
+                    target: target.to_string(),
+                    action: action.to_string(),
+                },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let live_sender = sender.clone();
+    state.on_live_password_submit(move |target, password| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<AppState>();
+            state.set_live_password_draft("".into());
+            if password.is_empty() {
+                state.set_live_message("Password is empty".into());
+                return;
+            }
+            send_live(
+                &ui,
+                &live_sender,
+                Request::LivePassword {
+                    target: target.to_string(),
+                    password: password.to_string(),
+                },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let response_poll_flag = live_poll_in_flight.clone();
+    let response_timer = Timer::default();
+    response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
             return;
         };
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
-            state.set_settings_busy(false);
             match response {
                 Response::Snapshot {
                     fields,
@@ -259,6 +506,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     channel_count,
                     message,
                 } => {
+                    state.set_settings_busy(false);
                     if let Some(fields) = fields {
                         draft.borrow_mut().load(fields);
                         render_draft(&ui, &draft.borrow());
@@ -268,9 +516,13 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_backend_path(backend.into());
                     state.set_database_path(database.into());
                     state.set_channel_count(channel_count.into());
-                    state.set_settings_message(message.into());
+                    state.set_settings_message(message.clone().into());
+                    if !state.get_live_loaded() {
+                        state.set_live_message(message.into());
+                    }
                 }
                 Response::Picked(index, path) => {
+                    state.set_settings_busy(false);
                     if draft.borrow_mut().accept_selection(index, path) {
                         render_draft(&ui, &draft.borrow());
                         state.set_settings_message(
@@ -280,9 +532,58 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_settings_message("Selection cancelled; draft unchanged".into());
                     }
                 }
-                Response::Error(message) => state.set_settings_message(message.into()),
+                Response::Live {
+                    status,
+                    message,
+                    poll,
+                } => {
+                    if poll {
+                        response_poll_flag.set(false);
+                    } else {
+                        state.set_live_busy(false);
+                    }
+                    render_live(&ui, status);
+                    if let Some(message) = message {
+                        state.set_live_message(message.into());
+                    } else if !poll {
+                        state.set_live_message("LIVE status refreshed".into());
+                    }
+                }
+                Response::LiveError { message, poll } => {
+                    if poll {
+                        response_poll_flag.set(false);
+                    } else {
+                        state.set_live_busy(false);
+                    }
+                    state.set_live_message(message.into());
+                }
+                Response::Error(message) => {
+                    state.set_settings_busy(false);
+                    state.set_settings_message(message.into());
+                }
             }
         }
     });
-    Controller { _timer: timer }
+
+    let weak = ui.as_weak();
+    let poll_sender = sender;
+    let poll_flag = live_poll_in_flight;
+    let live_poll_timer = Timer::default();
+    live_poll_timer.start(TimerMode::Repeated, Duration::from_millis(1500), move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let state = ui.global::<AppState>();
+        if state.get_active_page().as_str() != "LIVE" || state.get_live_busy() || poll_flag.get() {
+            return;
+        }
+        if poll_sender.send(Request::LiveStatus { poll: true }).is_ok() {
+            poll_flag.set(true);
+        }
+    });
+
+    Controller {
+        _response_timer: response_timer,
+        _live_poll_timer: live_poll_timer,
+    }
 }
