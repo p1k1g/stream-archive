@@ -92,7 +92,9 @@ pub fn resolve_tool(
                 warnings,
             };
         }
-        warnings.push(format!("{key} points to a missing/non-executable file: {value}"));
+        warnings.push(format!(
+            "{key} points to a missing/non-executable file: {value}"
+        ));
     }
 
     let bundled_root = match kind {
