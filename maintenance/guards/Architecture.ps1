@@ -20,6 +20,7 @@ $core = Read-RepoFile 'rust-web\src\app_core.rs'
 $guiManifest = Read-RepoFile 'rust-gui\Cargo.toml'
 $guiMain = Read-RepoFile 'rust-gui\src\main.rs'
 $guiUi = Read-RepoFile 'rust-gui\ui\app-window.slint'
+$guiSources = (Get-ChildItem (Join-Path $script:RuntimeContractsRoot 'rust-gui/src') -Filter '*.rs' -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 
 # Frontend state guarantees remain prerequisites for platform expansion.
 Assert-Match $app 'window\.StreamArchiveState\s*=\s*StreamArchiveState' 'app.js must expose the shared StreamArchiveState bus.'
@@ -76,10 +77,10 @@ Assert-RustTest $core 'assembled_core_keeps_one_canonical_store_and_backend' 'Sh
 Assert-Match $guiManifest 'name\s*=\s*"stream-archive-gui"' 'Slint desktop crate is missing.'
 Assert-Match $guiManifest 'slint\s*=\s*\{' 'Slint runtime dependency is missing.'
 Assert-Match $guiManifest 'stream-archive-server\s*=\s*\{\s*path\s*=\s*"\.\./rust-web"' 'Slint desktop must depend on the shared Rust library directly.'
-Assert-Match $guiMain 'StreamArchiveCore' 'Slint bootstrap must use the shared application core.'
-Assert-Match $guiMain 'resolve_backend_dir' 'Slint bootstrap must reuse canonical backend resolution.'
-Assert-Match $guiMain 'bind_core_snapshot' 'Slint shell must bind runtime state from the shared core.'
-Assert-NotMatch $guiMain '\breqwest::|\baxum::|https?://127\.0\.0\.1|https?://localhost|rusqlite::|Command::new|taskkill|pkill|killall' 'Slint shell must not bypass shared core through HTTP, SQLite, or direct process control.'
+Assert-Match $guiSources 'StreamArchiveCore' 'Slint bootstrap must use the shared application core.'
+Assert-Match $guiSources 'resolve_backend_dir' 'Slint bootstrap must reuse canonical backend resolution.'
+Assert-Match $guiSources 'bind_core_snapshot' 'Slint shell must bind runtime state from the shared core.'
+Assert-NotMatch $guiSources '\breqwest::|\baxum::|https?://127\.0\.0\.1|https?://localhost|rusqlite::|Command::new|taskkill|pkill|killall' 'Slint shell must not bypass shared core through HTTP, SQLite, or direct process control.'
 Assert-Match $guiUi 'export\s+global\s+AppState' 'Slint shell state boundary is missing.'
 Assert-Match $guiUi 'callback\s+refresh-requested' 'Slint runtime refresh callback is missing.'
 foreach ($page in @('Dashboard', 'LIVE', 'VOD', 'Queue', 'History', 'Settings')) {
@@ -113,3 +114,11 @@ Assert-Match $queue 'detect_vod_platform' 'VOD queue must persist detected platf
 Assert-NotMatch $queue 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'VOD queue must remain provider-neutral.'
 
 Write-Host 'Architecture contracts passed.'
+
+# Phase 21.3: inspect every GUI module, not only the small bootstrap.
+Assert-Match $core 'pub\s+async\s+fn\s+update_environment_settings' 'Native settings must persist through shared core.'
+Assert-Match $core 'pub\s+fn\s+diagnostics' 'Structured diagnostics service is missing.'
+Assert-Match $guiSources 'core\.update_environment_settings' 'GUI settings bypass shared service.'
+Assert-Match $guiSources 'core\.diagnostics\(' 'GUI diagnostics must consume shared diagnostics.'
+Assert-NotMatch $guiSources 'std::fs::write|fs::write|Connection::open|std::process|tokio::process' 'GUI must not write runtime files or own child processes.'
+Assert-Match $guiUi 'Diagnostics.*read-only' 'Read-only diagnostics must be distinguished from editable settings.'
