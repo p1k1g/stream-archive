@@ -1,3 +1,4 @@
+mod channels_adapter;
 mod controller;
 mod live_adapter;
 mod native_picker;
