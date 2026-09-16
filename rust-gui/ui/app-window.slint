@@ -2,6 +2,13 @@ import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct SettingRow { key: string, value: string, description: string, pickable: bool }
 export struct DiagnosticRow { name: string, status: string, detail: string }
+export struct ChannelConfigRow {
+    platform: string,
+    enabled: bool,
+    name: string,
+    account: string,
+    outdir: string,
+}
 export struct LiveChannelRow {
     target: string,
     platform: string,
@@ -34,6 +41,32 @@ export global AppState {
     callback save-settings();
     callback reload-settings();
     callback pick-setting(int);
+
+    in-out property <[ChannelConfigRow]> channel-config-rows;
+    in-out property <bool> config-busy: true;
+    in-out property <bool> config-loaded: false;
+    in-out property <bool> channels-dirty: false;
+    in-out property <string> config-message: "Loading channels and provider configuration...";
+    callback channel-add();
+    callback channel-remove(int);
+    callback channel-edited(int, string, string);
+    callback channel-toggle-enabled(int);
+    callback channel-toggle-platform(int);
+    callback save-channels();
+    callback reload-configuration();
+
+    in-out property <string> soop-username: "";
+    in-out property <string> cloudflare-worker-url: "";
+    in-out property <bool> soop-password-configured: false;
+    in-out property <bool> cloudflare-key-configured: false;
+    in-out property <bool> chzzk-nid-aut-configured: false;
+    in-out property <bool> chzzk-nid-ses-configured: false;
+    in-out property <string> soop-password-draft: "";
+    in-out property <string> cloudflare-key-draft: "";
+    in-out property <string> chzzk-nid-aut-draft: "";
+    in-out property <string> chzzk-nid-ses-draft: "";
+    callback save-provider();
+    callback test-soop-auth();
 
     in-out property <[LiveChannelRow]> live-rows;
     in-out property <bool> live-busy: true;
@@ -141,6 +174,7 @@ export component MainWindow inherits Window {
                 Rectangle { height: 10px; background: transparent; }
                 NavItem { label: "Dashboard"; page: "Dashboard"; }
                 NavItem { label: "LIVE"; page: "LIVE"; }
+                NavItem { label: "Channels"; page: "Channels"; }
                 NavItem { label: "VOD"; page: "VOD"; }
                 NavItem { label: "Queue"; page: "Queue"; }
                 NavItem { label: "History"; page: "History"; }
@@ -342,7 +376,7 @@ export component MainWindow inherits Window {
                                 border-color: #e2e8f0;
                                 VerticalLayout {
                                     padding: 16px;
-                                    Text { text: "No LIVE channels in the current runtime snapshot."; color: #64748b; }
+                                    Text { text: "No LIVE channels in the current runtime snapshot. Add channels on the Channels page."; color: #64748b; }
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
@@ -414,6 +448,125 @@ export component MainWindow inherits Window {
                     }
                 }
 
+                if AppState.active-page == "Channels": VerticalLayout {
+                    spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "LIVE channel configuration";
+                            color: #0f172a;
+                            font-size: 18px;
+                            font-weight: 700;
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: "+ Add channel";
+                            enabled: AppState.config-loaded && !AppState.config-busy;
+                            clicked => { AppState.channel-add(); }
+                        }
+                        Button {
+                            text: AppState.channels-dirty ? "Save channels *" : "Save channels";
+                            enabled: AppState.config-loaded && !AppState.config-busy && AppState.channels-dirty;
+                            clicked => { AppState.save-channels(); }
+                        }
+                        Button {
+                            text: "Reload saved";
+                            enabled: AppState.config-loaded && !AppState.config-busy;
+                            clicked => { AppState.reload-configuration(); }
+                        }
+                    }
+                    Text { text: AppState.config-message; color: #334155; wrap: word-wrap; font-size: 12px; }
+                    Text {
+                        text: "SOOP uses its account id. CHZZK requires the canonical channel id. Save validates the same shared provider rules used by Web.";
+                        color: #64748b;
+                        wrap: word-wrap;
+                        font-size: 12px;
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            padding: 2px;
+                            spacing: 10px;
+                            if AppState.channel-config-rows.length == 0: Rectangle {
+                                height: 88px;
+                                background: #ffffff;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                VerticalLayout {
+                                    padding: 16px;
+                                    Text { text: "No channels configured. Add a channel to create the first canonical SQLite entry."; color: #64748b; wrap: word-wrap; }
+                                }
+                            }
+                            for row[index] in AppState.channel-config-rows: Rectangle {
+                                min-height: 172px;
+                                background: #ffffff;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                VerticalLayout {
+                                    padding: 12px;
+                                    spacing: 7px;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Button {
+                                            text: row.platform;
+                                            enabled: !AppState.config-busy;
+                                            clicked => { AppState.channel-toggle-platform(index); }
+                                        }
+                                        Button {
+                                            text: row.enabled ? "Enabled" : "Disabled";
+                                            enabled: !AppState.config-busy;
+                                            clicked => { AppState.channel-toggle-enabled(index); }
+                                        }
+                                        Text {
+                                            text: row.name != "" ? row.name : "New channel";
+                                            color: #0f172a;
+                                            font-weight: 700;
+                                            horizontal-stretch: 1;
+                                        }
+                                        Button {
+                                            text: "Remove";
+                                            enabled: !AppState.config-busy;
+                                            clicked => { AppState.channel-remove(index); }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "Name"; color: #64748b; font-size: 11px; }
+                                            LineEdit {
+                                                text <=> row.name;
+                                                enabled: !AppState.config-busy;
+                                                edited(value) => { AppState.channel-edited(index, "name", value); }
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "Account / channel id"; color: #64748b; font-size: 11px; }
+                                            LineEdit {
+                                                text <=> row.account;
+                                                enabled: !AppState.config-busy;
+                                                edited(value) => { AppState.channel-edited(index, "account", value); }
+                                            }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        spacing: 3px;
+                                        Text { text: "Output directory (blank = runtime default)"; color: #64748b; font-size: 11px; }
+                                        LineEdit {
+                                            text <=> row.outdir;
+                                            enabled: !AppState.config-busy;
+                                            edited(value) => { AppState.channel-edited(index, "outdir", value); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if AppState.active-page == "VOD": PlaceholderPage {
                     title: "VOD";
                     description: "VOD analysis, quality selection, download progress, retry, and cancellation move here in Phase 21.5.";
@@ -433,25 +586,107 @@ export component MainWindow inherits Window {
                 if AppState.active-page == "Settings": VerticalLayout {
                     spacing: 10px;
                     Text { text: "Editable settings · shared SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
-                    Text { text: AppState.settings-message; wrap: word-wrap; color: #334155; }
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Button {
-                            text: AppState.settings-dirty ? "Save changes *" : "Save changes";
-                            enabled: AppState.settings-loaded && !AppState.settings-busy && AppState.settings-dirty;
-                            clicked => { AppState.save-settings(); }
-                        }
-                        Button {
-                            text: "Discard edits / reload saved";
-                            enabled: AppState.settings-loaded && !AppState.settings-busy;
-                            clicked => { AppState.reload-settings(); }
-                        }
-                    }
                     ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
                             padding: 4px;
                             spacing: 12px;
+
+                            Rectangle {
+                                min-height: 344px;
+                                background: #ffffff;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                VerticalLayout {
+                                    padding: 14px;
+                                    spacing: 8px;
+                                    Text { text: "Provider credentials"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                                    Text { text: AppState.config-message; color: #334155; wrap: word-wrap; font-size: 12px; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Button {
+                                            text: "Save provider configuration";
+                                            enabled: AppState.config-loaded && !AppState.config-busy;
+                                            clicked => { AppState.save-provider(); }
+                                        }
+                                        Button {
+                                            text: "Test SOOP + Worker";
+                                            enabled: AppState.config-loaded && !AppState.config-busy
+                                                && AppState.soop-username != ""
+                                                && AppState.cloudflare-worker-url != ""
+                                                && AppState.soop-password-configured
+                                                && AppState.cloudflare-key-configured;
+                                            clicked => { AppState.test-soop-auth(); }
+                                        }
+                                        Button {
+                                            text: "Reload saved";
+                                            enabled: AppState.config-loaded && !AppState.config-busy;
+                                            clicked => { AppState.reload-configuration(); }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "SOOP username"; color: #0f172a; font-weight: 600; }
+                                            LineEdit { text <=> AppState.soop-username; enabled: !AppState.config-busy; }
+                                        }
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "Cloudflare Worker URL"; color: #0f172a; font-weight: 600; }
+                                            LineEdit { text <=> AppState.cloudflare-worker-url; enabled: !AppState.config-busy; }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "SOOP password · " + (AppState.soop-password-configured ? "Configured" : "Not configured"); color: AppState.soop-password-configured ? #15803d : #a16207; font-size: 12px; }
+                                            LineEdit { text <=> AppState.soop-password-draft; input-type: password; enabled: !AppState.config-busy; }
+                                        }
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "Worker API key · " + (AppState.cloudflare-key-configured ? "Configured" : "Not configured"); color: AppState.cloudflare-key-configured ? #15803d : #a16207; font-size: 12px; }
+                                            LineEdit { text <=> AppState.cloudflare-key-draft; input-type: password; enabled: !AppState.config-busy; }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "CHZZK NID_AUT · " + (AppState.chzzk-nid-aut-configured ? "Configured" : "Not configured"); color: AppState.chzzk-nid-aut-configured ? #15803d : #a16207; font-size: 12px; }
+                                            LineEdit { text <=> AppState.chzzk-nid-aut-draft; input-type: password; enabled: !AppState.config-busy; }
+                                        }
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "CHZZK NID_SES · " + (AppState.chzzk-nid-ses-configured ? "Configured" : "Not configured"); color: AppState.chzzk-nid-ses-configured ? #15803d : #a16207; font-size: 12px; }
+                                            LineEdit { text <=> AppState.chzzk-nid-ses-draft; input-type: password; enabled: !AppState.config-busy; }
+                                        }
+                                    }
+                                    Text {
+                                        text: "Blank secret fields keep the saved value. Saved secrets are protected by the existing platform secret store and are never read back into the UI. CHZZK cookies are consumed by restricted LIVE/VOD requests; the current runtime has no standalone CHZZK network test endpoint.";
+                                        color: #64748b;
+                                        wrap: word-wrap;
+                                        font-size: 11px;
+                                    }
+                                }
+                            }
+
+                            Text { text: AppState.settings-message; wrap: word-wrap; color: #334155; }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Button {
+                                    text: AppState.settings-dirty ? "Save environment changes *" : "Save environment changes";
+                                    enabled: AppState.settings-loaded && !AppState.settings-busy && AppState.settings-dirty;
+                                    clicked => { AppState.save-settings(); }
+                                }
+                                Button {
+                                    text: "Discard environment edits / reload saved";
+                                    enabled: AppState.settings-loaded && !AppState.settings-busy;
+                                    clicked => { AppState.reload-settings(); }
+                                }
+                            }
                             for row[index] in AppState.settings-rows: VerticalLayout {
                                 spacing: 4px;
                                 Text { text: row.key; color: #0f172a; font-weight: 600; }
