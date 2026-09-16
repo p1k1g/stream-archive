@@ -16,6 +16,7 @@ use stream_archive_server::{
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
     model::{Channel, NativeWatcherStatus},
+    support::platform::PlatformId,
 };
 
 enum Request {
@@ -25,6 +26,11 @@ enum Request {
     Pick(usize, SettingKind, String),
     ConfigReload,
     ChannelsSave(Vec<Channel>),
+    ChannelResolve {
+        index: usize,
+        platform: PlatformId,
+        account: String,
+    },
     ProviderSave {
         username: String,
         worker_url: String,
@@ -61,6 +67,11 @@ enum Response {
         worker_url: String,
         secrets: BTreeMap<String, bool>,
         message: String,
+    },
+    ChannelResolved {
+        index: usize,
+        account: String,
+        name: String,
     },
     ConfigMessage(String),
     ConfigError(String),
@@ -153,8 +164,40 @@ fn live_status(
     }
 }
 
+fn save_channels(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    mut channels: Vec<Channel>,
+) -> Response {
+    for channel in &mut channels {
+        if channel.name.trim().is_empty() && !channel.account.trim().is_empty() {
+            match runtime.block_on(core.resolve_channel_name(channel.platform, &channel.account)) {
+                Ok(name) => channel.name = name,
+                Err(error) => {
+                    return Response::ConfigError(format!(
+                        "Channel name lookup failed for {}/{}: {error:#}",
+                        channel.platform, channel.account
+                    ));
+                }
+            }
+        }
+    }
+
+    match runtime.block_on(core.update_channels(&channels)) {
+        Ok(_) => configuration_snapshot(
+            core,
+            "Channel list saved. A running watcher will pick up the canonical list through its normal reload policy.",
+        ),
+        Err(error) => Response::ConfigError(format!("Channel list was not saved: {error:#}")),
+    }
+}
+
 fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
+    // Watcher/VOD operations spawn long-lived Tokio tasks. A single-worker
+    // multi-thread runtime keeps those tasks moving between GUI requests while
+    // retaining one dedicated native-runtime worker for controller requests.
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()
     {
@@ -239,17 +282,21 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 &core,
                 "Saved channels and provider credentials reloaded; drafts discarded.",
             ),
-            Request::ChannelsSave(channels) => {
-                match runtime.block_on(core.update_channels(&channels)) {
-                    Ok(_) => configuration_snapshot(
-                        &core,
-                        "Channel list saved. A running watcher will pick up the canonical list through its normal reload policy.",
-                    ),
-                    Err(error) => {
-                        Response::ConfigError(format!("Channel list was not saved: {error:#}"))
-                    }
-                }
-            }
+            Request::ChannelsSave(channels) => save_channels(&core, &runtime, channels),
+            Request::ChannelResolve {
+                index,
+                platform,
+                account,
+            } => match runtime.block_on(core.resolve_channel_name(platform, &account)) {
+                Ok(name) => Response::ChannelResolved {
+                    index,
+                    account,
+                    name,
+                },
+                Err(error) => Response::ConfigError(format!(
+                    "Channel name lookup failed for {platform}/{account}: {error:#}"
+                )),
+            },
             Request::ProviderSave {
                 username,
                 worker_url,
@@ -654,6 +701,37 @@ pub fn bind(ui: &MainWindow) -> Controller {
             render_channels(&ui, &platform_channels.borrow());
         }
     });
+
+    let weak = ui.as_weak();
+    let resolve_channels = channels_draft.clone();
+    let resolve_sender = sender.clone();
+    state.on_channel_resolve(move |index| {
+        if let Some(ui) = weak.upgrade() {
+            if index < 0 || ui.global::<AppState>().get_config_busy() {
+                return;
+            }
+            let index = index as usize;
+            let channel = resolve_channels.borrow().rows.get(index).cloned();
+            let Some(channel) = channel else {
+                return;
+            };
+            if channel.account.trim().is_empty() {
+                ui.global::<AppState>()
+                    .set_config_message("Enter an account / channel id before resolving.".into());
+                return;
+            }
+            send_config(
+                &ui,
+                &resolve_sender,
+                Request::ChannelResolve {
+                    index,
+                    platform: channel.platform,
+                    account: channel.account,
+                },
+            );
+        }
+    });
+
     let weak = ui.as_weak();
     let save_channels = channels_draft.clone();
     let config_sender = sender.clone();
@@ -837,7 +915,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         secrets.get("SOOP_PASSWORD").copied().unwrap_or(false),
                     );
                     state.set_cloudflare_key_configured(
-                        secrets.get("CLOUDFLARE_API_KEY").copied().unwrap_or(false),
+                        secrets
+                            .get("CLOUDFLARE_API_KEY")
+                            .copied()
+                            .unwrap_or(false),
                     );
                     state.set_chzzk_nid_aut_configured(
                         secrets.get("CHZZK_NID_AUT").copied().unwrap_or(false),
@@ -851,6 +932,34 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_chzzk_nid_ses_draft("".into());
                     state.set_config_loaded(true);
                     state.set_config_message(message.into());
+                }
+                Response::ChannelResolved {
+                    index,
+                    account,
+                    name,
+                } => {
+                    state.set_config_busy(false);
+                    let applied = {
+                        let mut channels = response_channels.borrow_mut();
+                        if channels
+                            .rows
+                            .get(index)
+                            .is_some_and(|channel| channel.account == account)
+                        {
+                            channels.edit(index, "name", name.clone());
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if applied {
+                        render_channels(&ui, &response_channels.borrow());
+                        state.set_config_message(format!("Resolved channel name: {name}").into());
+                    } else {
+                        state.set_config_message(
+                            "Channel changed while lookup was running; lookup result ignored.".into(),
+                        );
+                    }
                 }
                 Response::ConfigMessage(message) => {
                     state.set_config_busy(false);
