@@ -68,8 +68,8 @@ Assert-Match $core 'validate_channels\(channels\)' 'Shared core channel writes m
 Assert-Match $core 'apply_vod_tool_defaults' 'Shared core VOD operations must preserve canonical media-tool defaults.'
 Assert-Match $core 'lifecycle_lock: Arc<Mutex<\(\)>>' 'Shared core must serialize VOD lifecycle operations.'
 Assert-Match $core 'pub\s+async\s+fn\s+shutdown' 'Shared core must expose owned-runtime shutdown.'
-# Match actual Axum/type dependencies, not documentation comments that mention the migration from Axum/HTTP.
-Assert-NotMatch $core '(?m)^\s*use\s+axum(?:::|\s*\{)|\baxum::|\bHeaderMap\b|\bStatusCode\b|\bRouter\b' 'Shared core must stay independent from Axum/HTTP presentation concerns.'
+# Match actual Axum/direct http crate dependencies, not similarly named transport types such as reqwest::StatusCode.
+Assert-NotMatch $core '(?m)^\s*use\s+(?:axum|http)(?:::|\s*\{)|\baxum::|\bhttp::(?:HeaderMap|StatusCode)\b' 'Shared core must stay independent from Axum/HTTP presentation concerns.'
 Assert-RustTest $core 'assembled_core_keeps_one_canonical_store_and_backend' 'Shared core canonical-store regression test is missing.'
 
 # Phase 21.2 Windows Slint shell. The desktop UI is a presentation adapter over
