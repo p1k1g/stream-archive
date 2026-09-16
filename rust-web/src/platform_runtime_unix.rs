@@ -36,7 +36,8 @@ impl OwnedProcessGroup {
     /// process group or an unrelated group discovered from a numeric PID.
     pub(super) fn capture_running_child(child: &Child) -> Result<Self> {
         let pid = child.id().context("running Unix child PID unavailable")?;
-        let expected = libc::pid_t::try_from(pid).context("running Unix child PID exceeds pid_t")?;
+        let expected =
+            libc::pid_t::try_from(pid).context("running Unix child PID exceeds pid_t")?;
         let actual = unsafe { libc::getpgid(expected) };
         if actual == -1 {
             return Err(io::Error::last_os_error())
@@ -77,7 +78,10 @@ impl OwnedProcessGroup {
             Some(code) if code == libc::ESRCH => Ok(false),
             Some(code) if code == libc::EPERM => Ok(true),
             _ => Err(err).with_context(|| {
-                format!("failed to query owned Unix process group pgid={}", self.pgid)
+                format!(
+                    "failed to query owned Unix process group pgid={}",
+                    self.pgid
+                )
             }),
         }
     }
