@@ -1,0 +1,264 @@
+import { Button } from "std-widgets.slint";
+
+export global AppState {
+    in-out property <string> active-page: "Dashboard";
+    in-out property <bool> runtime-ready: false;
+    in-out property <string> runtime-status: "Initializing runtime...";
+    in-out property <string> backend-path: "-";
+    in-out property <string> database-path: "-";
+    in-out property <string> channel-count: "0";
+    in-out property <string> tool-summary: "Streamlink -  |  yt-dlp -  |  FFmpeg -";
+    callback refresh-requested();
+}
+
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <string> page;
+    height: 42px;
+    border-radius: 8px;
+    background: AppState.active-page == root.page ? #334155 : transparent;
+
+    Text {
+        x: 14px;
+        width: parent.width - 28px;
+        height: parent.height;
+        text: root.label;
+        color: AppState.active-page == root.page ? #f8fafc : #cbd5e1;
+        vertical-alignment: center;
+        font-size: 15px;
+    }
+
+    TouchArea {
+        clicked => {
+            AppState.active-page = root.page;
+        }
+    }
+}
+
+component PlaceholderPage inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    background: #ffffff;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: #e2e8f0;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 12px;
+
+        Text {
+            text: root.title;
+            color: #0f172a;
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        Text {
+            text: root.description;
+            color: #64748b;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Stream Archive";
+    width: 1120px;
+    height: 720px;
+    min-width: 920px;
+    min-height: 600px;
+    background: #f1f5f9;
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            width: 224px;
+            background: #0f172a;
+
+            VerticalLayout {
+                padding: 18px;
+                spacing: 10px;
+
+                Text {
+                    text: "Stream Archive";
+                    color: #f8fafc;
+                    font-size: 21px;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Native Desktop";
+                    color: #94a3b8;
+                    font-size: 12px;
+                }
+
+                Rectangle { height: 10px; background: transparent; }
+
+                NavItem { label: "Dashboard"; page: "Dashboard"; }
+                NavItem { label: "LIVE"; page: "LIVE"; }
+                NavItem { label: "VOD"; page: "VOD"; }
+                NavItem { label: "Queue"; page: "Queue"; }
+                NavItem { label: "History"; page: "History"; }
+                NavItem { label: "Settings"; page: "Settings"; }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+
+                Rectangle {
+                    height: 78px;
+                    border-radius: 8px;
+                    background: AppState.runtime-ready ? #132a24 : #3a1f23;
+
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 4px;
+
+                        Text {
+                            text: AppState.runtime-ready ? "● Runtime ready" : "● Runtime unavailable";
+                            color: AppState.runtime-ready ? #86efac : #fda4af;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        Text {
+                            text: AppState.runtime-status;
+                            color: #cbd5e1;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            background: #f1f5f9;
+            horizontal-stretch: 1;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    VerticalLayout {
+                        spacing: 3px;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: AppState.active-page;
+                            color: #0f172a;
+                            font-size: 27px;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: "Phase 21 Slint native shell";
+                            color: #64748b;
+                            font-size: 13px;
+                        }
+                    }
+
+                    Button {
+                        text: "Refresh runtime";
+                        clicked => { AppState.refresh-requested(); }
+                    }
+                }
+
+                if AppState.active-page == "Dashboard": Rectangle {
+                    background: transparent;
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: 14px;
+
+                        Rectangle {
+                            height: 112px;
+                            background: #ffffff;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: #e2e8f0;
+
+                            VerticalLayout {
+                                padding: 20px;
+                                spacing: 7px;
+                                Text { text: "Runtime"; color: #475569; font-size: 12px; font-weight: 600; }
+                                Text { text: AppState.runtime-status; color: #0f172a; font-size: 19px; font-weight: 700; }
+                                Text { text: AppState.tool-summary; color: #64748b; font-size: 13px; }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 14px;
+
+                            Rectangle {
+                                background: #ffffff;
+                                border-radius: 12px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                horizontal-stretch: 1;
+
+                                VerticalLayout {
+                                    padding: 20px;
+                                    spacing: 7px;
+                                    Text { text: "Channels"; color: #64748b; font-size: 12px; }
+                                    Text { text: AppState.channel-count; color: #0f172a; font-size: 28px; font-weight: 700; }
+                                    Text { text: "Canonical SQLite channel entries"; color: #94a3b8; font-size: 12px; }
+                                }
+                            }
+
+                            Rectangle {
+                                background: #ffffff;
+                                border-radius: 12px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                horizontal-stretch: 2;
+
+                                VerticalLayout {
+                                    padding: 20px;
+                                    spacing: 7px;
+                                    Text { text: "Database"; color: #64748b; font-size: 12px; }
+                                    Text { text: AppState.database-path; color: #0f172a; font-size: 13px; wrap: word-wrap; }
+                                    Text { text: "Backend: " + AppState.backend-path; color: #94a3b8; font-size: 12px; wrap: word-wrap; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if AppState.active-page == "LIVE": PlaceholderPage {
+                    title: "LIVE";
+                    description: "Channel cards, watcher controls, recording state, and password-broadcast handling move here in Phase 21.4.";
+                    vertical-stretch: 1;
+                }
+
+                if AppState.active-page == "VOD": PlaceholderPage {
+                    title: "VOD";
+                    description: "VOD analysis, quality selection, download progress, retry, and cancellation move here in Phase 21.5.";
+                    vertical-stretch: 1;
+                }
+
+                if AppState.active-page == "Queue": PlaceholderPage {
+                    title: "Queue";
+                    description: "Queue state and lifecycle controls move here after reusable queue services are separated from the Axum adapter.";
+                    vertical-stretch: 1;
+                }
+
+                if AppState.active-page == "History": PlaceholderPage {
+                    title: "History";
+                    description: "LIVE/VOD history browsing and filtering move here in Phase 21.6.";
+                    vertical-stretch: 1;
+                }
+
+                if AppState.active-page == "Settings": PlaceholderPage {
+                    title: "Settings";
+                    description: "Native settings, media-tool diagnostics, secrets, and folder picking move here in Phase 21.3.";
+                    vertical-stretch: 1;
+                }
+            }
+        }
+    }
+}
