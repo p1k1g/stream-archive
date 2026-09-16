@@ -16,7 +16,10 @@ use crate::{
     },
     security::{protect_secret, unprotect_secret},
     store::{self, Store},
-    support::platform::{PlatformId, live::LiveSession},
+    support::{
+        platform::{PlatformId, live::LiveSession},
+        resolve_channel_name_for,
+    },
     vod::VodManager,
 };
 use anyhow::{Result, bail};
@@ -320,6 +323,10 @@ impl StreamArchiveCore {
 
     pub fn channels(&self) -> Result<Vec<Channel>> {
         self.store.channels()
+    }
+
+    pub async fn resolve_channel_name(&self, platform: PlatformId, account: &str) -> Result<String> {
+        resolve_channel_name_for(platform, account).await
     }
 
     pub async fn update_channels(&self, channels: &[Channel]) -> Result<Vec<Channel>> {
