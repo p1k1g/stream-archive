@@ -128,6 +128,43 @@ impl StreamArchiveCore {
         self.store.safe_settings()
     }
 
+    pub fn environment_settings(
+        &self,
+    ) -> Result<Vec<crate::environment_settings::EnvironmentSetting>> {
+        let mut values = self.settings()?;
+        values.extend(self.vod_tool_settings()?);
+        Ok(crate::environment_settings::snapshot(&values))
+    }
+
+    /// Validate the whole changed patch before one canonical transaction. This
+    /// avoids partially saving LIVE settings when a VOD path is invalid.
+    pub async fn update_environment_settings(
+        &self,
+        updates: &BTreeMap<String, String>,
+    ) -> Result<Vec<crate::environment_settings::EnvironmentSetting>> {
+        crate::environment_settings::validate_updates(updates)?;
+        let _guard = self.config_write_lock.lock().await;
+        self.store.sync_settings(updates, "native-environment")?;
+        self.environment_settings()
+    }
+
+    pub fn diagnostics(&self) -> crate::diagnostics::DiagnosticsSnapshot {
+        let values = self.settings().and_then(|mut values| {
+            values.extend(self.vod_tool_settings()?);
+            Ok(values)
+        });
+        match values {
+            Ok(values) => {
+                crate::diagnostics::collect(self.backend_dir(), self.store.path(), &values)
+            }
+            Err(error) => crate::diagnostics::DiagnosticsSnapshot::unavailable(
+                Some(self.backend_dir()),
+                Some(self.store.path()),
+                &format!("{error:#}"),
+            ),
+        }
+    }
+
     pub fn configured_secrets(&self) -> Result<BTreeMap<String, bool>> {
         self.store.configured_secrets()
     }
@@ -286,5 +323,32 @@ mod tests {
         assert_eq!(core.backend_dir(), backend.as_path());
         assert_eq!(core.store().path(), db.as_path());
         assert!(core.settings().unwrap().contains_key("STREAMLINK_PATH"));
+    }
+    #[tokio::test]
+    async fn environment_patch_is_atomic_and_uses_existing_web_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("stream-archive.db");
+        let core =
+            StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db.clone()).unwrap());
+        let before = core.settings().unwrap();
+        let invalid = BTreeMap::from([
+            ("CHECK_INTERVAL".into(), "42".into()),
+            (
+                "FFMPEG_PATH".into(),
+                dir.path().join("missing.exe").display().to_string(),
+            ),
+        ]);
+        assert!(core.update_environment_settings(&invalid).await.is_err());
+        assert_eq!(core.settings().unwrap(), before);
+        let valid = BTreeMap::from([
+            ("CHECK_INTERVAL".into(), "42".into()),
+            ("FFMPEG_PATH".into(), String::new()),
+        ]);
+        core.update_environment_settings(&valid).await.unwrap();
+        assert_eq!(core.settings().unwrap()["CHECK_INTERVAL"], "42");
+        assert_eq!(core.vod_tool_settings().unwrap()["FFMPEG_PATH"], "");
+        drop(core);
+        let reopened = Store::open(db).unwrap();
+        assert_eq!(reopened.safe_settings().unwrap()["CHECK_INTERVAL"], "42");
     }
 }

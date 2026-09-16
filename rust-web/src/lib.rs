@@ -1,5 +1,7 @@
 pub mod app_core;
 pub mod backend;
+pub mod diagnostics;
+pub mod environment_settings;
 pub mod model;
 pub mod native_watcher;
 pub mod platform_runtime;

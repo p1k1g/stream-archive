@@ -109,7 +109,7 @@ jobs:
         run: cargo check --locked --manifest-path rust-web/Cargo.toml
 
       - name: Slint shell Rust format check
-        if: ${{ matrix.platform == 'windows' }}
+        if: ${{ always() && matrix.platform == 'windows' }}
         shell: bash
         run: cargo fmt --manifest-path rust-gui/Cargo.toml -- --check
 
@@ -117,6 +117,11 @@ jobs:
         if: ${{ matrix.platform == 'windows' }}
         shell: bash
         run: cargo check --locked --manifest-path rust-gui/Cargo.toml
+
+      - name: Native settings adapter tests
+        if: ${{ matrix.platform == 'windows' }}
+        shell: bash
+        run: cargo test --locked --manifest-path rust-gui/Cargo.toml
 
       - name: Rust clippy advisory
         shell: bash

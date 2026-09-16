@@ -1,6 +1,19 @@
-import { Button } from "std-widgets.slint";
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct SettingRow { key: string, value: string, description: string, pickable: bool }
+export struct DiagnosticRow { name: string, status: string, detail: string }
 
 export global AppState {
+    in-out property <[SettingRow]> settings-rows;
+    in-out property <[DiagnosticRow]> diagnostics-rows;
+    in-out property <bool> settings-busy: true;
+    in-out property <bool> settings-loaded: false;
+    in-out property <bool> settings-dirty: false;
+    in-out property <string> settings-message: "Loading settings...";
+    callback setting-edited(int, string);
+    callback save-settings();
+    callback reload-settings();
+    callback pick-setting(int);
     in-out property <string> active-page: "Dashboard";
     in-out property <bool> runtime-ready: false;
     in-out property <string> runtime-status: "Initializing runtime...";
@@ -114,7 +127,7 @@ export component MainWindow inherits Window {
                         spacing: 4px;
 
                         Text {
-                            text: AppState.runtime-ready ? "● Runtime ready" : "● Runtime unavailable";
+                            text: AppState.runtime-ready ? "● Environment OK" : "● Environment needs attention";
                             color: AppState.runtime-ready ? #86efac : #fda4af;
                             font-size: 13px;
                             font-weight: 600;
@@ -162,6 +175,7 @@ export component MainWindow inherits Window {
 
                     Button {
                         text: "Refresh runtime";
+                        enabled: !AppState.settings-busy;
                         clicked => { AppState.refresh-requested(); }
                     }
                 }
@@ -251,10 +265,59 @@ export component MainWindow inherits Window {
                     vertical-stretch: 1;
                 }
 
-                if AppState.active-page == "Settings": PlaceholderPage {
-                    title: "Settings";
-                    description: "Native settings, media-tool diagnostics, secrets, and folder picking move here in Phase 21.3.";
-                    vertical-stretch: 1;
+                if AppState.active-page == "Settings": VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "Editable settings · shared SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                    Text { text: AppState.settings-message; wrap: word-wrap; color: #334155; }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Button {
+                            text: AppState.settings-dirty ? "Save changes *" : "Save changes";
+                            enabled: AppState.settings-loaded && !AppState.settings-busy && AppState.settings-dirty;
+                            clicked => { AppState.save-settings(); }
+                        }
+                        Button {
+                            text: "Discard edits / reload saved";
+                            enabled: AppState.settings-loaded && !AppState.settings-busy;
+                            clicked => { AppState.reload-settings(); }
+                        }
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            padding: 4px;
+                            spacing: 12px;
+                            for row[index] in AppState.settings-rows: VerticalLayout {
+                                spacing: 4px;
+                                Text { text: row.key; color: #0f172a; font-weight: 600; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    LineEdit {
+                                        text <=> row.value;
+                                        enabled: !AppState.settings-busy;
+                                        edited(value) => { AppState.setting-edited(index, value); }
+                                    }
+                                    if row.pickable: Button {
+                                        text: "Browse...";
+                                        enabled: !AppState.settings-busy;
+                                        clicked => { AppState.pick-setting(index); }
+                                    }
+                                }
+                                Text { text: row.description; color: #64748b; wrap: word-wrap; font-size: 12px; }
+                            }
+                            Text { text: "Diagnostics · read-only"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                            Text { text: "Backend and database locations are startup-managed. No separate config file is used."; color: #64748b; wrap: word-wrap; }
+                            for row in AppState.diagnostics-rows: VerticalLayout {
+                                spacing: 3px;
+                                Text {
+                                    text: row.status + " · " + row.name;
+                                    color: row.status == "OK" ? #15803d : row.status == "Warning" ? #a16207 : #b91c1c;
+                                    font-weight: 600;
+                                }
+                                Text { text: row.detail; color: #334155; wrap: word-wrap; font-size: 12px; }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -4908,6 +4908,8 @@ dependencies = [
  "slint",
  "slint-build",
  "stream-archive-server",
+ "tokio",
+ "windows",
 ]
 
 [[package]]
