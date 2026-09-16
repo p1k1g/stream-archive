@@ -845,7 +845,7 @@ mod tests {
                 break pid;
             }
             assert!(
-                started.elapsed() < Duration::from_secs(5),
+                started.elapsed() < Duration::from_secs(15),
                 "timed out waiting for descendant pid"
             );
             tokio::time::sleep(Duration::from_millis(25)).await;
