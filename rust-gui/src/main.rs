@@ -65,7 +65,10 @@ fn main() -> Result<(), slint::PlatformError> {
         if let Some(core) = core.as_ref() {
             bind_core_snapshot(&ui, core);
         } else {
-            bind_bootstrap_error(&ui, "Runtime unavailable; restart after fixing backend configuration");
+            bind_bootstrap_error(
+                &ui,
+                "Runtime unavailable; restart after fixing backend configuration",
+            );
         }
     });
 
