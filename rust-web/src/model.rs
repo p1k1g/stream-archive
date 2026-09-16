@@ -2,7 +2,7 @@ use crate::support::platform::PlatformId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channel {
     #[serde(default)]
     pub platform: PlatformId,
@@ -137,18 +137,19 @@ pub struct VodAnalyzeRequest {
     pub ffmpeg_path: String,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VodDownloadRequest {
-    pub vod_url: String,
-    pub output_directory: String,
-    #[serde(default)]
-    pub parts: Vec<usize>,
     #[serde(default = "default_quality")]
     pub quality: String,
-    #[serde(default = "default_true")]
-    pub merge: bool,
+    #[serde(default)]
+    pub part_numbers: Vec<u32>,
+    #[serde(default = "default_merge")]
+    pub merge_parts: bool,
+    #[serde(default)]
+    pub output_dir: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VodDownloadRequest {
+    pub vod_url: String,
     #[serde(default = "default_cookie_mode")]
     pub cookie_mode: String,
     #[serde(default)]
@@ -161,106 +162,57 @@ pub struct VodDownloadRequest {
     pub ffmpeg_path: String,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    #[serde(default = "default_quality")]
+    pub quality: String,
+    #[serde(default)]
+    pub part_numbers: Vec<u32>,
+    #[serde(default = "default_merge")]
+    pub merge_parts: bool,
+    #[serde(default)]
+    pub output_dir: String,
 }
 
 fn default_cookie_mode() -> String {
-    "SOOP_LOGIN".to_string()
+    "SOOP_LOGIN".into()
 }
+
 fn default_browser() -> String {
-    "firefox".to_string()
+    "firefox".into()
 }
-fn default_quality() -> String {
-    "best".to_string()
-}
+
 fn default_max_retries() -> u32 {
     5
 }
-fn default_true() -> bool {
+
+fn default_quality() -> String {
+    "best".into()
+}
+
+fn default_merge() -> bool {
     true
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
-pub struct VodQualityOption {
-    pub value: String,
-    pub label: String,
+pub struct VodPartStatus {
+    pub part: u32,
+    pub state: String,
+    pub percent: f64,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
-pub struct VodPartInfo {
-    pub part: usize,
-    pub duration_seconds: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct VodAnalysisView {
-    pub vod_url: String,
-    pub title: String,
-    pub streamer: String,
-    pub streamer_id: String,
-    pub part_count: usize,
-    pub qualities: Vec<VodQualityOption>,
-    pub parts: Vec<VodPartInfo>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct VodJobStatus {
-    pub platform: PlatformId,
-    pub state: String,
-    pub running: bool,
-    pub job_id: Option<String>,
-    pub message: String,
-    pub current_part: usize,
-    pub part_count: usize,
-    pub percent: f64,
-    pub output_file: Option<String>,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    pub analysis: Option<VodAnalysisView>,
-}
-
-impl Default for VodJobStatus {
-    fn default() -> Self {
-        Self {
-            platform: PlatformId::default(),
-            state: "IDLE".to_string(),
-            running: false,
-            job_id: None,
-            message: String::new(),
-            current_part: 0,
-            part_count: 0,
-            percent: 0.0,
-            output_file: None,
-            started_at: None,
-            finished_at: None,
-            analysis: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct VodQueueItem {
-    pub platform: PlatformId,
     pub id: String,
-    pub vod_url: String,
-    pub output_directory: String,
     pub state: String,
-    pub attempts: u32,
-    pub message: String,
+    pub vod_url: String,
     pub title: String,
     pub streamer: String,
-    pub current_part: usize,
     pub part_count: usize,
+    pub current_part: usize,
     pub percent: f64,
+    pub message: String,
     pub output_file: Option<String>,
-    pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct VodQueueSnapshot {
-    pub active_id: Option<String>,
-    pub queued_count: usize,
-    pub items: Vec<VodQueueItem>,
+    pub parts: Vec<VodPartStatus>,
 }
