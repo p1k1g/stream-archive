@@ -325,7 +325,11 @@ impl StreamArchiveCore {
         self.store.channels()
     }
 
-    pub async fn resolve_channel_name(&self, platform: PlatformId, account: &str) -> Result<String> {
+    pub async fn resolve_channel_name(
+        &self,
+        platform: PlatformId,
+        account: &str,
+    ) -> Result<String> {
         resolve_channel_name_for(platform, account).await
     }
 
