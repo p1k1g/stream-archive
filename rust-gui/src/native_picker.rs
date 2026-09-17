@@ -19,6 +19,10 @@ pub fn pick(kind: SettingKind, initial: &str) -> Result<Option<String>, String> 
     }
 }
 
+pub fn pick_directory(initial: &str) -> Result<Option<String>, String> {
+    pick(SettingKind::Directory, initial)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

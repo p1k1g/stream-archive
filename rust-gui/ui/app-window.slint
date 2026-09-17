@@ -29,6 +29,16 @@ export struct LiveChannelRow {
     can-recheck: bool,
     password-required: bool,
 }
+export struct VodQualityRow {
+    value: string,
+    label: string,
+    selected: bool,
+}
+export struct VodPartRow {
+    part: string,
+    duration: string,
+    selected: bool,
+}
 
 export global AppState {
     in-out property <[SettingRow]> settings-rows;
@@ -89,6 +99,44 @@ export global AppState {
     callback live-refresh();
     callback live-action(string, string);
     callback live-password-submit(string, string);
+
+    in-out property <[VodQualityRow]> vod-quality-rows;
+    in-out property <[VodPartRow]> vod-part-rows;
+    in-out property <bool> vod-busy: true;
+    in-out property <bool> vod-loaded: false;
+    in-out property <bool> vod-running: false;
+    in-out property <bool> vod-can-analyze: false;
+    in-out property <bool> vod-can-download: false;
+    in-out property <bool> vod-merge: true;
+    in-out property <string> vod-url: "";
+    in-out property <string> vod-output-directory: "";
+    in-out property <string> vod-platform: "-";
+    in-out property <string> vod-state: "IDLE";
+    in-out property <string> vod-state-tone: "neutral";
+    in-out property <string> vod-message: "Loading VOD runtime...";
+    in-out property <string> vod-runtime-message: "";
+    in-out property <string> vod-title: "";
+    in-out property <string> vod-streamer: "";
+    in-out property <string> vod-streamer-id: "";
+    in-out property <string> vod-current-part: "0";
+    in-out property <string> vod-part-count: "0";
+    in-out property <float> vod-percent: 0;
+    in-out property <string> vod-percent-label: "0.0%";
+    in-out property <string> vod-output-file: "";
+    in-out property <string> vod-started-at: "-";
+    in-out property <string> vod-finished-at: "-";
+    callback vod-url-edited(string);
+    callback vod-output-edited(string);
+    callback vod-analyze();
+    callback vod-pick-output();
+    callback vod-select-quality(int);
+    callback vod-toggle-part(int);
+    callback vod-select-all-parts();
+    callback vod-clear-parts();
+    callback vod-toggle-merge();
+    callback vod-download();
+    callback vod-cancel();
+    callback vod-refresh();
 
     in-out property <string> active-page: "Dashboard";
     in-out property <bool> runtime-ready: false;
@@ -651,10 +699,241 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if AppState.active-page == "VOD": PlaceholderPage {
-                    title: "VOD";
-                    description: "VOD analysis, quality selection, download progress, retry, and cancellation move here in Phase 21.5.";
+                if AppState.active-page == "VOD": ScrollView {
                     vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 2px;
+                        spacing: 10px;
+
+                        Rectangle {
+                            min-height: 116px;
+                            vertical-stretch: 0;
+                            background: #ffffff;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #e2e8f0;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 7px;
+                                Text { text: "Analyze a SOOP or CHZZK VOD"; color: #0f172a; font-size: 17px; font-weight: 700; }
+                                HorizontalLayout {
+                                    height: 34px;
+                                    vertical-stretch: 0;
+                                    spacing: 8px;
+                                    LineEdit {
+                                        height: 34px;
+                                        text <=> AppState.vod-url;
+                                        enabled: !AppState.vod-busy && !AppState.vod-running;
+                                        placeholder-text: "https://vod.sooplive.com/player/...  or  https://chzzk.naver.com/video/...";
+                                        edited(value) => { AppState.vod-url-edited(value); }
+                                        accepted => { AppState.vod-analyze(); }
+                                    }
+                                    Button {
+                                        height: 32px;
+                                        text: "Analyze";
+                                        enabled: AppState.vod-loaded && AppState.vod-can-analyze && !AppState.vod-busy && !AppState.vod-running;
+                                        clicked => { AppState.vod-analyze(); }
+                                    }
+                                    Button {
+                                        height: 32px;
+                                        text: "Refresh";
+                                        enabled: AppState.vod-loaded && !AppState.vod-busy;
+                                        clicked => { AppState.vod-refresh(); }
+                                    }
+                                    Button {
+                                        height: 32px;
+                                        text: "Cancel";
+                                        enabled: AppState.vod-loaded && AppState.vod-running && !AppState.vod-busy;
+                                        clicked => { AppState.vod-cancel(); }
+                                    }
+                                }
+                                Text { text: AppState.vod-message; color: #334155; font-size: 12px; wrap: word-wrap; }
+                            }
+                        }
+
+                        Rectangle {
+                            min-height: 128px;
+                            vertical-stretch: 0;
+                            background: #ffffff;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: AppState.vod-state-tone == "error" ? #fecaca : AppState.vod-state-tone == "warn" ? #fde68a : AppState.vod-state-tone == "ok" ? #bbf7d0 : #e2e8f0;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 6px;
+                                HorizontalLayout {
+                                    height: 26px;
+                                    vertical-stretch: 0;
+                                    spacing: 8px;
+                                    Text {
+                                        text: AppState.vod-platform + " · " + AppState.vod-state;
+                                        color: AppState.vod-state-tone == "error" ? #b91c1c : AppState.vod-state-tone == "warn" ? #a16207 : AppState.vod-state-tone == "ok" ? #15803d : #334155;
+                                        font-size: 16px;
+                                        font-weight: 700;
+                                        horizontal-stretch: 1;
+                                    }
+                                    Text { text: AppState.vod-current-part + " / " + AppState.vod-part-count + " parts"; color: #64748b; font-size: 12px; }
+                                    Text { text: AppState.vod-percent-label; color: #0f172a; font-weight: 700; }
+                                }
+                                Rectangle {
+                                    height: 10px;
+                                    vertical-stretch: 0;
+                                    background: #e2e8f0;
+                                    border-radius: 5px;
+                                    Rectangle {
+                                        x: 0px;
+                                        y: 0px;
+                                        height: parent.height;
+                                        width: parent.width * AppState.vod-percent / 100;
+                                        background: #334155;
+                                        border-radius: 5px;
+                                    }
+                                }
+                                Text { text: AppState.vod-runtime-message; color: #475569; font-size: 12px; wrap: word-wrap; }
+                                Text {
+                                    text: "Started: " + AppState.vod-started-at + "  ·  Finished: " + AppState.vod-finished-at;
+                                    color: #94a3b8;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                                if AppState.vod-output-file != "": Text { text: "Output: " + AppState.vod-output-file; color: #475569; font-size: 11px; wrap: word-wrap; }
+                            }
+                        }
+
+                        if AppState.vod-title != "" || AppState.vod-streamer != "": Rectangle {
+                            min-height: 96px;
+                            vertical-stretch: 0;
+                            background: #ffffff;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #e2e8f0;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 5px;
+                                Text { text: AppState.vod-title != "" ? AppState.vod-title : "VOD metadata"; color: #0f172a; font-size: 16px; font-weight: 700; wrap: word-wrap; }
+                                Text { text: "Streamer: " + AppState.vod-streamer + (AppState.vod-streamer-id != "" ? "  ·  " + AppState.vod-streamer-id : ""); color: #64748b; font-size: 12px; wrap: word-wrap; }
+                                Text { text: "Parts: " + AppState.vod-part-count; color: #64748b; font-size: 12px; }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            min-height: 174px;
+                            vertical-stretch: 0;
+                            spacing: 10px;
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: #ffffff;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 6px;
+                                    Text { text: "Quality"; color: #0f172a; font-size: 14px; font-weight: 700; }
+                                    ScrollView {
+                                        vertical-stretch: 1;
+                                        VerticalLayout {
+                                            spacing: 5px;
+                                            if AppState.vod-quality-rows.length == 0: Text { text: "Analyze a VOD to load qualities."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
+                                            for row[index] in AppState.vod-quality-rows: Button {
+                                                height: 30px;
+                                                text: (row.selected ? "✓ " : "") + row.label;
+                                                enabled: !AppState.vod-busy && !AppState.vod-running;
+                                                clicked => { AppState.vod-select-quality(index); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: #ffffff;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: #e2e8f0;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 6px;
+                                    HorizontalLayout {
+                                        height: 30px;
+                                        vertical-stretch: 0;
+                                        spacing: 6px;
+                                        Text { text: "Parts"; color: #0f172a; font-size: 14px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+                                        Button {
+                                            height: 28px;
+                                            text: "All";
+                                            enabled: AppState.vod-part-rows.length > 0 && !AppState.vod-busy && !AppState.vod-running;
+                                            clicked => { AppState.vod-select-all-parts(); }
+                                        }
+                                        Button {
+                                            height: 28px;
+                                            text: "Clear";
+                                            enabled: AppState.vod-part-rows.length > 0 && !AppState.vod-busy && !AppState.vod-running;
+                                            clicked => { AppState.vod-clear-parts(); }
+                                        }
+                                    }
+                                    ScrollView {
+                                        vertical-stretch: 1;
+                                        VerticalLayout {
+                                            spacing: 5px;
+                                            if AppState.vod-part-rows.length == 0: Text { text: "Analyze a VOD to load parts."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
+                                            for row[index] in AppState.vod-part-rows: Button {
+                                                height: 30px;
+                                                text: (row.selected ? "✓ " : "") + "Part " + row.part + "  ·  " + row.duration;
+                                                enabled: !AppState.vod-busy && !AppState.vod-running;
+                                                clicked => { AppState.vod-toggle-part(index); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            min-height: 112px;
+                            vertical-stretch: 0;
+                            background: #ffffff;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #e2e8f0;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 7px;
+                                Text { text: "Download"; color: #0f172a; font-size: 16px; font-weight: 700; }
+                                HorizontalLayout {
+                                    height: 34px;
+                                    vertical-stretch: 0;
+                                    spacing: 8px;
+                                    LineEdit {
+                                        height: 34px;
+                                        text <=> AppState.vod-output-directory;
+                                        enabled: !AppState.vod-busy && !AppState.vod-running;
+                                        placeholder-text: "Output directory";
+                                        edited(value) => { AppState.vod-output-edited(value); }
+                                    }
+                                    Button {
+                                        height: 32px;
+                                        text: "Browse...";
+                                        enabled: !AppState.vod-busy && !AppState.vod-running;
+                                        clicked => { AppState.vod-pick-output(); }
+                                    }
+                                    Button {
+                                        height: 32px;
+                                        text: AppState.vod-merge ? "Merge: On" : "Merge: Off";
+                                        enabled: !AppState.vod-busy && !AppState.vod-running;
+                                        clicked => { AppState.vod-toggle-merge(); }
+                                    }
+                                    Button {
+                                        height: 32px;
+                                        text: "Download";
+                                        enabled: AppState.vod-loaded && AppState.vod-can-download && !AppState.vod-busy && !AppState.vod-running;
+                                        clicked => { AppState.vod-download(); }
+                                    }
+                                }
+                                Text { text: "Tool paths and provider authentication come from canonical Settings; the Native UI does not spawn media tools directly."; color: #64748b; font-size: 11px; wrap: word-wrap; }
+                            }
+                        }
+                    }
                 }
                 if AppState.active-page == "Queue": PlaceholderPage {
                     title: "Queue";

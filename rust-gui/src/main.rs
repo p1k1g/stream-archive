@@ -3,6 +3,7 @@ mod controller;
 mod live_adapter;
 mod native_picker;
 mod settings_adapter;
+mod vod_adapter;
 
 use slint::ComponentHandle;
 
