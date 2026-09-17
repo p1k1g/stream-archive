@@ -1,2 +1,2 @@
-Phase 21.6 robust finalizer trigger.
-Temporary marker; remove after the finalize workflow completes.
+Phase 21.6 robust wiring trigger.
+Run the corrected whitespace-tolerant wiring workflow.
