@@ -1,2 +1,2 @@
 Phase 21.6 robust wiring trigger.
-Run the corrected whitespace-tolerant wiring workflow.
+Retry after aligning the temporary runner with platform CI behavior.
