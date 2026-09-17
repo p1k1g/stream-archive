@@ -1,6 +1,7 @@
 use crate::{
     AppState, ChannelConfigRow, DiagnosticRow, LiveChannelRow, MainWindow, SettingRow,
-    channels_adapter::ChannelsDraft, live_adapter, native_picker, settings_adapter::SettingsDraft,
+    VodPartRow, VodQualityRow, channels_adapter::ChannelsDraft, live_adapter, native_picker,
+    settings_adapter::SettingsDraft, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -15,9 +16,13 @@ use stream_archive_server::{
     backend::resolve_backend_dir,
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
-    model::{Channel, NativeWatcherStatus},
+    model::{
+        Channel, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus,
+    },
     support::platform::PlatformId,
 };
+
+use vod_adapter::{AnalysisSync, VodDraft};
 
 enum Request {
     Refresh,
@@ -50,6 +55,17 @@ enum Request {
         target: String,
         password: String,
     },
+    VodStatus {
+        poll: bool,
+    },
+    VodAnalyze {
+        url: String,
+    },
+    VodPickOutput {
+        initial: String,
+    },
+    VodDownload(VodDownloadRequest),
+    VodCancel,
 }
 
 enum Response {
@@ -85,12 +101,23 @@ enum Response {
         message: String,
         poll: bool,
     },
+    Vod {
+        status: VodJobStatus,
+        message: Option<String>,
+        poll: bool,
+    },
+    VodPicked(Option<String>),
+    VodError {
+        message: String,
+        poll: bool,
+    },
     Error(String),
 }
 
 pub struct Controller {
     _response_timer: Timer,
     _live_poll_timer: Timer,
+    _vod_poll_timer: Timer,
 }
 
 fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str) -> Response {
@@ -164,6 +191,36 @@ fn live_status(
     }
 }
 
+fn vod_status(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    poll: bool,
+) -> Response {
+    match runtime.block_on(core.vod_status()) {
+        Ok(status) => Response::Vod {
+            status,
+            message: None,
+            poll,
+        },
+        Err(error) => Response::VodError {
+            message: format!("VOD status refresh failed: {error:#}"),
+            poll,
+        },
+    }
+}
+
+fn vod_analyze_request(url: String) -> VodAnalyzeRequest {
+    VodAnalyzeRequest {
+        vod_url: url,
+        cookie_mode: "SOOP_LOGIN".into(),
+        cookie_file: String::new(),
+        browser_name: "firefox".into(),
+        yt_dlp_path: String::new(),
+        ffmpeg_path: String::new(),
+        max_retries: 5,
+    }
+}
+
 fn save_channels(
     core: &StreamArchiveCore,
     runtime: &tokio::runtime::Runtime,
@@ -231,6 +288,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             return;
         }
     };
+    core.spawn_vod_history_sync();
     if responses
         .send(read_snapshot(
             &core,
@@ -251,6 +309,9 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
         return;
     }
     if responses.send(live_status(&core, &runtime, false)).is_err() {
+        return;
+    }
+    if responses.send(vod_status(&core, &runtime, false)).is_err() {
         return;
     }
 
@@ -400,6 +461,49 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     },
                 }
             }
+            Request::VodStatus { poll } => vod_status(&core, &runtime, poll),
+            Request::VodAnalyze { url } => {
+                match runtime.block_on(core.analyze_vod(vod_analyze_request(url))) {
+                    Ok(status) => Response::Vod {
+                        status,
+                        message: Some("VOD analysis started".into()),
+                        poll: false,
+                    },
+                    Err(error) => Response::VodError {
+                        message: format!("VOD analysis failed to start: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::VodPickOutput { initial } => match native_picker::pick_directory(&initial) {
+                Ok(path) => Response::VodPicked(path),
+                Err(error) => Response::VodError {
+                    message: format!("VOD output picker failed: {error}"),
+                    poll: false,
+                },
+            },
+            Request::VodDownload(req) => match runtime.block_on(core.download_vod(req)) {
+                Ok(status) => Response::Vod {
+                    status,
+                    message: Some("VOD download started".into()),
+                    poll: false,
+                },
+                Err(error) => Response::VodError {
+                    message: format!("VOD download failed to start: {error:#}"),
+                    poll: false,
+                },
+            },
+            Request::VodCancel => match runtime.block_on(core.cancel_vod()) {
+                Ok(status) => Response::Vod {
+                    status,
+                    message: Some("VOD cancellation completed".into()),
+                    poll: false,
+                },
+                Err(error) => Response::VodError {
+                    message: format!("VOD cancellation failed: {error:#}"),
+                    poll: false,
+                },
+            },
         };
         if responses.send(response).is_err() {
             break;
@@ -481,6 +585,74 @@ fn render_live(ui: &MainWindow, status: NativeWatcherStatus) {
     state.set_live_loaded(true);
 }
 
+fn render_vod_draft(ui: &MainWindow, draft: &VodDraft) {
+    let qualities = draft
+        .qualities
+        .iter()
+        .map(|quality| VodQualityRow {
+            value: quality.value.clone().into(),
+            label: quality.label.clone().into(),
+            selected: quality.selected,
+        })
+        .collect::<Vec<_>>();
+    let parts = draft
+        .parts
+        .iter()
+        .map(|part| VodPartRow {
+            part: part.part.to_string().into(),
+            duration: vod_adapter::format_duration(part.duration_seconds).into(),
+            selected: part.selected,
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<AppState>();
+    state.set_vod_url(draft.url.clone().into());
+    state.set_vod_output_directory(draft.output_directory.clone().into());
+    state.set_vod_merge(draft.merge);
+    state.set_vod_quality_rows(ModelRc::new(VecModel::from(qualities)));
+    state.set_vod_part_rows(ModelRc::new(VecModel::from(parts)));
+    state.set_vod_can_analyze(draft.can_analyze());
+    state.set_vod_can_download(draft.can_download());
+}
+
+fn render_vod_status(ui: &MainWindow, draft: &mut VodDraft, status: VodJobStatus) -> AnalysisSync {
+    let sync = status
+        .analysis
+        .as_ref()
+        .map(|analysis| draft.sync_analysis(analysis))
+        .unwrap_or(AnalysisSync::AlreadyCurrent);
+    if sync == AnalysisSync::Applied {
+        render_vod_draft(ui, draft);
+    }
+
+    let view = vod_adapter::view(&status);
+    let state = ui.global::<AppState>();
+    state.set_vod_platform(view.platform.into());
+    state.set_vod_state(view.state.into());
+    state.set_vod_state_tone(view.state_tone.into());
+    state.set_vod_running(view.running);
+    state.set_vod_current_part(view.current_part.into());
+    state.set_vod_part_count(view.part_count.into());
+    state.set_vod_percent(view.percent);
+    state.set_vod_percent_label(view.percent_label.into());
+    state.set_vod_output_file(view.output_file.into());
+    state.set_vod_started_at(view.started_at.into());
+    state.set_vod_finished_at(view.finished_at.into());
+    if sync == AnalysisSync::Stale {
+        state.set_vod_title("".into());
+        state.set_vod_streamer("".into());
+        state.set_vod_streamer_id("".into());
+    } else {
+        state.set_vod_title(view.title.into());
+        state.set_vod_streamer(view.streamer.into());
+        state.set_vod_streamer_id(view.streamer_id.into());
+    }
+    state.set_vod_loaded(true);
+    if !view.message.is_empty() {
+        state.set_vod_runtime_message(view.message.into());
+    }
+    sync
+}
+
 pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     let state = ui.global::<AppState>();
     state.set_runtime_ready(diagnostics.runtime_ready);
@@ -542,6 +714,20 @@ fn send_live(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) 
     }
 }
 
+fn send_vod(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    let state = ui.global::<AppState>();
+    if state.get_vod_busy() {
+        return;
+    }
+    match sender.send(request) {
+        Ok(()) => {
+            state.set_vod_busy(true);
+            state.set_vod_message("Working...".into());
+        }
+        Err(_) => state.set_vod_message("VOD runtime worker is unavailable".into()),
+    }
+}
+
 pub fn bind(ui: &MainWindow) -> Controller {
     let (sender, requests) = mpsc::channel();
     let (responses, receiver) = mpsc::channel();
@@ -549,6 +735,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     state.set_settings_busy(true);
     state.set_config_busy(true);
     state.set_live_busy(true);
+    state.set_vod_busy(true);
     if let Err(error) = std::thread::Builder::new()
         .name("native-runtime".into())
         .spawn(move || worker(requests, responses))
@@ -556,14 +743,19 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_settings_busy(false);
         state.set_config_busy(false);
         state.set_live_busy(false);
+        state.set_vod_busy(false);
         state.set_settings_message(format!("Cannot start worker: {error}").into());
         state.set_config_message(format!("Cannot start worker: {error}").into());
         state.set_live_message(format!("Cannot start worker: {error}").into());
+        state.set_vod_message(format!("Cannot start worker: {error}").into());
     }
 
     let draft = Rc::new(RefCell::new(SettingsDraft::default()));
     let channels_draft = Rc::new(RefCell::new(ChannelsDraft::default()));
+    let vod_draft = Rc::new(RefCell::new(VodDraft::default()));
+    render_vod_draft(ui, &vod_draft.borrow());
     let live_poll_in_flight = Rc::new(Cell::new(false));
+    let vod_poll_in_flight = Rc::new(Cell::new(false));
 
     let weak = ui.as_weak();
     let edit_draft = draft.clone();
@@ -859,8 +1051,155 @@ pub fn bind(ui: &MainWindow) -> Controller {
     });
 
     let weak = ui.as_weak();
-    let response_poll_flag = live_poll_in_flight.clone();
+    let edit_vod = vod_draft.clone();
+    state.on_vod_url_edited(move |value| {
+        if let Some(ui) = weak.upgrade() {
+            if ui.global::<AppState>().get_vod_busy() {
+                return;
+            }
+            edit_vod.borrow_mut().edit_url(value.to_string());
+            render_vod_draft(&ui, &edit_vod.borrow());
+            ui.global::<AppState>()
+                .set_vod_message("URL changed; Analyze to load metadata and formats.".into());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let edit_vod = vod_draft.clone();
+    state.on_vod_output_edited(move |value| {
+        if let Some(ui) = weak.upgrade() {
+            if ui.global::<AppState>().get_vod_busy() {
+                return;
+            }
+            edit_vod
+                .borrow_mut()
+                .edit_output_directory(value.to_string());
+            render_vod_draft(&ui, &edit_vod.borrow());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let analyze_draft = vod_draft.clone();
+    let vod_sender = sender.clone();
+    state.on_vod_analyze(move || {
+        if let Some(ui) = weak.upgrade() {
+            let url = analyze_draft.borrow().url.trim().to_string();
+            if url.is_empty() {
+                ui.global::<AppState>()
+                    .set_vod_message("Enter a SOOP or CHZZK VOD URL first.".into());
+                return;
+            }
+            send_vod(&ui, &vod_sender, Request::VodAnalyze { url });
+        }
+    });
+
+    let weak = ui.as_weak();
+    let output_draft = vod_draft.clone();
+    let vod_sender = sender.clone();
+    state.on_vod_pick_output(move || {
+        if let Some(ui) = weak.upgrade() {
+            let initial = output_draft.borrow().output_directory.clone();
+            send_vod(&ui, &vod_sender, Request::VodPickOutput { initial });
+        }
+    });
+
+    let weak = ui.as_weak();
+    let quality_draft = vod_draft.clone();
+    state.on_vod_select_quality(move |index| {
+        if let Some(ui) = weak.upgrade() {
+            if index < 0 || ui.global::<AppState>().get_vod_busy() {
+                return;
+            }
+            quality_draft.borrow_mut().select_quality(index as usize);
+            render_vod_draft(&ui, &quality_draft.borrow());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let part_draft = vod_draft.clone();
+    state.on_vod_toggle_part(move |index| {
+        if let Some(ui) = weak.upgrade() {
+            if index < 0 || ui.global::<AppState>().get_vod_busy() {
+                return;
+            }
+            part_draft.borrow_mut().toggle_part(index as usize);
+            render_vod_draft(&ui, &part_draft.borrow());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let part_draft = vod_draft.clone();
+    state.on_vod_select_all_parts(move || {
+        if let Some(ui) = weak.upgrade() {
+            if ui.global::<AppState>().get_vod_busy() {
+                return;
+            }
+            part_draft.borrow_mut().select_all_parts();
+            render_vod_draft(&ui, &part_draft.borrow());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let part_draft = vod_draft.clone();
+    state.on_vod_clear_parts(move || {
+        if let Some(ui) = weak.upgrade() {
+            if ui.global::<AppState>().get_vod_busy() {
+                return;
+            }
+            part_draft.borrow_mut().clear_parts();
+            render_vod_draft(&ui, &part_draft.borrow());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let merge_draft = vod_draft.clone();
+    state.on_vod_toggle_merge(move || {
+        if let Some(ui) = weak.upgrade() {
+            if ui.global::<AppState>().get_vod_busy() {
+                return;
+            }
+            merge_draft.borrow_mut().toggle_merge();
+            render_vod_draft(&ui, &merge_draft.borrow());
+        }
+    });
+
+    let weak = ui.as_weak();
+    let download_draft = vod_draft.clone();
+    let vod_sender = sender.clone();
+    state.on_vod_download(move || {
+        if let Some(ui) = weak.upgrade() {
+            let Some(request) = download_draft.borrow().download_request() else {
+                ui.global::<AppState>().set_vod_message(
+                    "Analyze the URL, select quality/parts, and choose an output folder first."
+                        .into(),
+                );
+                return;
+            };
+            send_vod(&ui, &vod_sender, Request::VodDownload(request));
+        }
+    });
+
+    let weak = ui.as_weak();
+    let vod_sender = sender.clone();
+    state.on_vod_cancel(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_vod(&ui, &vod_sender, Request::VodCancel);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let vod_sender = sender.clone();
+    state.on_vod_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_vod(&ui, &vod_sender, Request::VodStatus { poll: false });
+        }
+    });
+
+    let weak = ui.as_weak();
+    let response_live_poll_flag = live_poll_in_flight.clone();
+    let response_vod_poll_flag = vod_poll_in_flight.clone();
     let response_channels = channels_draft.clone();
+    let response_vod_draft = vod_draft.clone();
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
@@ -893,7 +1232,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_config_busy(false);
                         state.set_config_message(message.clone().into());
                         state.set_live_busy(false);
-                        state.set_live_message(message.into());
+                        state.set_live_message(message.clone().into());
+                        state.set_vod_busy(false);
+                        state.set_vod_message(message.into());
                     }
                 }
                 Response::Configuration {
@@ -984,7 +1325,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     poll,
                 } => {
                     if poll {
-                        response_poll_flag.set(false);
+                        response_live_poll_flag.set(false);
                     } else {
                         state.set_live_busy(false);
                     }
@@ -997,11 +1338,57 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 }
                 Response::LiveError { message, poll } => {
                     if poll {
-                        response_poll_flag.set(false);
+                        response_live_poll_flag.set(false);
                     } else {
                         state.set_live_busy(false);
                     }
                     state.set_live_message(message.into());
+                }
+                Response::Vod {
+                    status,
+                    message,
+                    poll,
+                } => {
+                    if poll {
+                        response_vod_poll_flag.set(false);
+                    } else {
+                        state.set_vod_busy(false);
+                    }
+                    let sync = render_vod_status(
+                        &ui,
+                        &mut response_vod_draft.borrow_mut(),
+                        status,
+                    );
+                    if sync == AnalysisSync::Stale {
+                        state.set_vod_message(
+                            "A result for an older URL was ignored; Analyze the current URL."
+                                .into(),
+                        );
+                    } else if let Some(message) = message {
+                        state.set_vod_message(message.into());
+                    } else if !poll {
+                        state.set_vod_message("VOD status refreshed".into());
+                    }
+                }
+                Response::VodPicked(path) => {
+                    state.set_vod_busy(false);
+                    if response_vod_draft
+                        .borrow_mut()
+                        .accept_output_selection(path)
+                    {
+                        render_vod_draft(&ui, &response_vod_draft.borrow());
+                        state.set_vod_message("Output folder selected.".into());
+                    } else {
+                        state.set_vod_message("Output folder selection cancelled.".into());
+                    }
+                }
+                Response::VodError { message, poll } => {
+                    if poll {
+                        response_vod_poll_flag.set(false);
+                    } else {
+                        state.set_vod_busy(false);
+                    }
+                    state.set_vod_message(message.into());
                 }
                 Response::Error(message) => {
                     state.set_settings_busy(false);
@@ -1013,6 +1400,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_live_busy(false);
                         state.set_live_message(message.clone().into());
                     }
+                    if !state.get_vod_loaded() {
+                        state.set_vod_busy(false);
+                        state.set_vod_message(message.clone().into());
+                    }
                     state.set_settings_message(message.into());
                 }
             }
@@ -1020,8 +1411,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     });
 
     let weak = ui.as_weak();
-    let poll_sender = sender;
-    let poll_flag = live_poll_in_flight;
+    let live_poll_sender = sender.clone();
+    let live_poll_flag = live_poll_in_flight;
     let live_poll_timer = Timer::default();
     live_poll_timer.start(
         TimerMode::Repeated,
@@ -1033,12 +1424,42 @@ pub fn bind(ui: &MainWindow) -> Controller {
             let state = ui.global::<AppState>();
             if state.get_active_page().as_str() != "LIVE"
                 || state.get_live_busy()
-                || poll_flag.get()
+                || live_poll_flag.get()
             {
                 return;
             }
-            if poll_sender.send(Request::LiveStatus { poll: true }).is_ok() {
-                poll_flag.set(true);
+            if live_poll_sender
+                .send(Request::LiveStatus { poll: true })
+                .is_ok()
+            {
+                live_poll_flag.set(true);
+            }
+        },
+    );
+
+    let weak = ui.as_weak();
+    let vod_poll_sender = sender;
+    let vod_poll_flag = vod_poll_in_flight;
+    let vod_poll_timer = Timer::default();
+    vod_poll_timer.start(
+        TimerMode::Repeated,
+        Duration::from_millis(1000),
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<AppState>();
+            if state.get_active_page().as_str() != "VOD"
+                || state.get_vod_busy()
+                || vod_poll_flag.get()
+            {
+                return;
+            }
+            if vod_poll_sender
+                .send(Request::VodStatus { poll: true })
+                .is_ok()
+            {
+                vod_poll_flag.set(true);
             }
         },
     );
@@ -1046,5 +1467,6 @@ pub fn bind(ui: &MainWindow) -> Controller {
     Controller {
         _response_timer: response_timer,
         _live_poll_timer: live_poll_timer,
+        _vod_poll_timer: vod_poll_timer,
     }
 }
