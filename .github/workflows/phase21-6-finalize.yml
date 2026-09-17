@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: phase21-6-finalize
+  cancel-in-progress: true
+
 jobs:
   finalize:
     if: ${{ !contains(github.event.head_commit.message, '[phase21-finalize]') }}
@@ -23,10 +27,8 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          workflow_path = Path('.github/workflows/phase21-6-wire.yml')
-          workflow = workflow_path.read_text()
+          workflow = Path('.github/workflows/phase21-6-wire.yml').read_text()
           start_marker = '          from pathlib import Path\n'
           end_marker = '\n          PY\n\n      - name: Format Rust'
           start = workflow.index(start_marker)
@@ -37,34 +39,47 @@ jobs:
               for line in block.splitlines()
           )
 
-          # The original patch used byte-for-byte whitespace anchors. 21.5 formatting
-          # changed indentation around the VOD Download button, so make replace_once
-          # fall back to a whitespace-insensitive token match without weakening any
-          # semantic anchor.
-          func_pattern = re.compile(
-              r"def replace_once\(text, old, new, label\):\n"
-              r"    if old not in text:\n"
-              r"        raise SystemExit\(f\"missing patch anchor: \{label\}\"\)\n"
-              r"    return text\.replace\(old, new, 1\)\n"
-          )
-          replacement = '''def replace_once(text, old, new, label):
+          # YAML block scalars strip their own indentation before the embedded
+          # Python runs. The stored patch therefore contains anchors whose leading
+          # spaces are 10 columns narrower when re-executed from this workflow.
+          # Replace the helper with an indentation-aware fallback so semantic
+          # anchors remain strict while harmless whitespace changes do not fail.
+          helper_start = code.index('def replace_once(text, old, new, label):')
+          helper_end = code.index('\n\n# ---- Slint shell', helper_start)
+          helper = r'''def replace_once(text, old, new, label):
     if old in text:
         return text.replace(old, new, 1)
 
-    tokens = [token for token in re.split(r"\\s+", old.strip()) if token]
+    tokens = [token for token in re.split(r"\s+", old.strip()) if token]
     if not tokens:
         raise SystemExit(f"empty patch anchor: {label}")
-    pattern = re.compile(r"\\s+".join(re.escape(token) for token in tokens), re.DOTALL)
+    pattern = re.compile(r"\s+".join(re.escape(token) for token in tokens), re.DOTALL)
     match = pattern.search(text)
     if match is None:
         raise SystemExit(f"missing patch anchor: {label}")
+
+    def leading_spaces(line):
+        return len(line) - len(line.lstrip(' '))
+
+    old_line = next((line for line in old.splitlines() if line.strip()), '')
+    actual_line = next((line for line in match.group(0).splitlines() if line.strip()), '')
+    delta = leading_spaces(actual_line) - leading_spaces(old_line)
+
+    if delta:
+        shifted = []
+        for line in new.splitlines(keepends=True):
+            if not line.strip():
+                shifted.append(line)
+            elif delta > 0:
+                shifted.append((' ' * delta) + line)
+            else:
+                remove = min(-delta, leading_spaces(line))
+                shifted.append(line[remove:])
+        new = ''.join(shifted)
+
     return text[:match.start()] + new + text[match.end():]
 '''
-          code, count = func_pattern.subn(replacement, code, count=1)
-          if count != 1:
-              raise SystemExit('could not patch replace_once helper')
-
-          # The stored code imports pathlib only; the fallback helper also needs re.
+          code = code[:helper_start] + helper + code[helper_end:]
           code = code.replace('from pathlib import Path\n', 'from pathlib import Path\nimport re\n', 1)
           exec(compile(code, 'phase21-6-wire.py', 'exec'))
           PY
