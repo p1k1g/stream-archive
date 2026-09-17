@@ -1,0 +1,106 @@
+name: Phase 21.6 final wiring
+
+on:
+  push:
+    branches:
+      - phase21-queue-history
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: ${{ !contains(github.event.head_commit.message, '[phase21-finalize]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase21-queue-history
+          fetch-depth: 0
+
+      - name: Apply stored Queue and History wiring patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          workflow_path = Path('.github/workflows/phase21-6-wire.yml')
+          workflow = workflow_path.read_text()
+          start_marker = '          from pathlib import Path\n'
+          end_marker = '\n          PY\n\n      - name: Format Rust'
+          start = workflow.index(start_marker)
+          end = workflow.index(end_marker, start)
+          block = workflow[start:end]
+          code = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in block.splitlines()
+          )
+
+          # The original patch used byte-for-byte whitespace anchors. 21.5 formatting
+          # changed indentation around the VOD Download button, so make replace_once
+          # fall back to a whitespace-insensitive token match without weakening any
+          # semantic anchor.
+          func_pattern = re.compile(
+              r"def replace_once\(text, old, new, label\):\n"
+              r"    if old not in text:\n"
+              r"        raise SystemExit\(f\"missing patch anchor: \{label\}\"\)\n"
+              r"    return text\.replace\(old, new, 1\)\n"
+          )
+          replacement = '''def replace_once(text, old, new, label):
+    if old in text:
+        return text.replace(old, new, 1)
+
+    tokens = [token for token in re.split(r"\\s+", old.strip()) if token]
+    if not tokens:
+        raise SystemExit(f"empty patch anchor: {label}")
+    pattern = re.compile(r"\\s+".join(re.escape(token) for token in tokens), re.DOTALL)
+    match = pattern.search(text)
+    if match is None:
+        raise SystemExit(f"missing patch anchor: {label}")
+    return text[:match.start()] + new + text[match.end():]
+'''
+          code, count = func_pattern.subn(replacement, code, count=1)
+          if count != 1:
+              raise SystemExit('could not patch replace_once helper')
+
+          # The stored code imports pathlib only; the fallback helper also needs re.
+          code = code.replace('from pathlib import Path\n', 'from pathlib import Path\nimport re\n', 1)
+          exec(compile(code, 'phase21-6-wire.py', 'exec'))
+          PY
+
+      - name: Format Rust
+        run: |
+          cargo fmt --manifest-path rust-web/Cargo.toml --all
+          cargo fmt --manifest-path rust-gui/Cargo.toml --all
+
+      - name: Check shared core and native GUI
+        run: |
+          cargo check --locked --manifest-path rust-web/Cargo.toml
+          cargo check --locked --manifest-path rust-gui/Cargo.toml
+
+      - name: Test shared core and native adapters
+        run: |
+          cargo test --locked --manifest-path rust-web/Cargo.toml
+          cargo test --locked --manifest-path rust-gui/Cargo.toml
+
+      - name: Remove temporary wiring workflows
+        run: |
+          git rm -f \
+            .github/workflows/phase21-6-wire.yml \
+            .github/workflows/phase21-6-wire-runner.yml \
+            .github/workflows/phase21-6-wire-runner2.yml \
+            .github/workflows/phase21-6-wire-runner3.yml \
+            .github/workflows/phase21-6-finalize.yml
+
+      - name: Commit Phase 21.6 wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rust-gui rust-web docs .github/workflows || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "[phase21-finalize] Wire native Queue and History"
+          git push origin HEAD:phase21-queue-history
