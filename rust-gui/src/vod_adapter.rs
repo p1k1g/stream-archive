@@ -255,7 +255,9 @@ pub fn view(status: &VodJobStatus) -> VodView {
         output_file: status.output_file.clone().unwrap_or_default(),
         started_at: status.started_at.clone().unwrap_or_else(|| "-".into()),
         finished_at: status.finished_at.clone().unwrap_or_else(|| "-".into()),
-        title: analysis.map(|value| value.title.clone()).unwrap_or_default(),
+        title: analysis
+            .map(|value| value.title.clone())
+            .unwrap_or_default(),
         streamer: analysis
             .map(|value| value.streamer.clone())
             .unwrap_or_default(),
