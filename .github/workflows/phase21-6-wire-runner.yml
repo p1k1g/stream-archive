@@ -81,11 +81,42 @@ jobs:
           exec(compile(code, 'phase21-6-wire.py', 'exec'))
           PY
 
-      - name: Format native Rust
+      - name: Fix async queue facade test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('rust-web/src/app_core.rs')
+          text = path.read_text()
+          old_head = '''    #[test]
+              fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
+          '''
+          # cargo fmt may normalize the generated source, so tolerate either indentation.
+          if old_head not in text:
+              old_head = '''    #[test]
+    fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
+'''
+          if old_head not in text:
+              raise SystemExit('missing queue facade test anchor')
+          new_head = '''    #[tokio::test]
+    async fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
+'''
+          text = text.replace(old_head, new_head, 1)
+          old_call = 'core.queue_snapshot().now_or_never().unwrap().unwrap().queued_count,'
+          if old_call not in text:
+              raise SystemExit('missing queue snapshot test anchor')
+          text = text.replace(old_call, 'core.queue_snapshot().await.unwrap().queued_count,', 1)
+          path.write_text(text)
+          PY
+
+      - name: Format Rust
         shell: bash
         run: |
           cargo fmt --manifest-path rust-gui/Cargo.toml
           cargo fmt --manifest-path rust-gui/Cargo.toml -- --check
+          cargo fmt --manifest-path rust-web/Cargo.toml
+          cargo fmt --manifest-path rust-web/Cargo.toml -- --check
 
       - name: Test shared core
         shell: bash
