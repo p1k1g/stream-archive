@@ -1,6 +1,6 @@
 use crate::{
-    AppState, ChannelConfigRow, DiagnosticRow, LiveChannelRow, MainWindow, SettingRow,
-    VodPartRow, VodQualityRow, channels_adapter::ChannelsDraft, live_adapter, native_picker,
+    AppState, ChannelConfigRow, DiagnosticRow, LiveChannelRow, MainWindow, SettingRow, VodPartRow,
+    VodQualityRow, channels_adapter::ChannelsDraft, live_adapter, native_picker,
     settings_adapter::SettingsDraft, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
@@ -16,9 +16,7 @@ use stream_archive_server::{
     backend::resolve_backend_dir,
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
-    model::{
-        Channel, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus,
-    },
+    model::{Channel, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus},
     support::platform::PlatformId,
 };
 
@@ -191,11 +189,7 @@ fn live_status(
     }
 }
 
-fn vod_status(
-    core: &StreamArchiveCore,
-    runtime: &tokio::runtime::Runtime,
-    poll: bool,
-) -> Response {
+fn vod_status(core: &StreamArchiveCore, runtime: &tokio::runtime::Runtime, poll: bool) -> Response {
     match runtime.block_on(core.vod_status()) {
         Ok(status) => Response::Vod {
             status,
@@ -288,7 +282,12 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             return;
         }
     };
-    core.spawn_vod_history_sync();
+    // spawn_vod_history_sync uses tokio::spawn internally, so enter the runtime
+    // while creating that long-lived task. The multi-thread runtime then keeps
+    // driving it between GUI requests.
+    runtime.block_on(async {
+        core.spawn_vod_history_sync();
+    });
     if responses
         .send(read_snapshot(
             &core,
@@ -1354,11 +1353,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     } else {
                         state.set_vod_busy(false);
                     }
-                    let sync = render_vod_status(
-                        &ui,
-                        &mut response_vod_draft.borrow_mut(),
-                        status,
-                    );
+                    let sync = render_vod_status(&ui, &mut response_vod_draft.borrow_mut(), status);
                     if sync == AnalysisSync::Stale {
                         state.set_vod_message(
                             "A result for an older URL was ignored; Analyze the current URL."
