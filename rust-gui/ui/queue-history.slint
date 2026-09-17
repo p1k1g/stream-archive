@@ -37,6 +37,32 @@ export struct HistoryDisplayRow {
     meta: string,
 }
 
+export global QueueHistoryState {
+    in-out property <[QueueDisplayRow]> queue-rows;
+    in-out property <bool> queue-busy: true;
+    in-out property <bool> queue-loaded: false;
+    in-out property <string> queue-message: "Loading VOD queue...";
+    in-out property <string> queue-active-count: "0";
+    in-out property <string> queue-queued-count: "0";
+    in-out property <string> queue-completed-count: "0";
+    in-out property <string> queue-failed-count: "0";
+    callback queue-refresh();
+    callback queue-action(string, string);
+    callback enqueue-current();
+
+    in-out property <[HistoryDisplayRow]> history-rows;
+    in-out property <bool> history-busy: true;
+    in-out property <bool> history-loaded: false;
+    in-out property <string> history-message: "Loading history...";
+    in-out property <string> history-view: "ALL";
+    in-out property <string> history-search: "";
+    in-out property <string> history-status: "";
+    in-out property <string> history-from-date: "";
+    in-out property <string> history-to-date: "";
+    in-out property <string> history-limit: "100";
+    callback history-refresh();
+}
+
 component MetricCard inherits Rectangle {
     in property <string> label;
     in property <string> value;
@@ -56,17 +82,6 @@ component MetricCard inherits Rectangle {
 }
 
 export component QueuePage inherits VerticalLayout {
-    in property <[QueueDisplayRow]> rows;
-    in property <bool> busy;
-    in property <bool> loaded;
-    in property <string> message;
-    in property <string> active-count;
-    in property <string> queued-count;
-    in property <string> completed-count;
-    in property <string> failed-count;
-    callback refresh();
-    callback action(string, string);
-
     spacing: 9px;
 
     HorizontalLayout {
@@ -84,21 +99,21 @@ export component QueuePage inherits VerticalLayout {
         Button {
             height: 34px;
             text: "Refresh";
-            enabled: root.loaded && !root.busy;
-            clicked => { root.refresh(); }
+            enabled: QueueHistoryState.queue-loaded && !QueueHistoryState.queue-busy;
+            clicked => { QueueHistoryState.queue-refresh(); }
         }
     }
 
-    Text { text: root.message; color: #334155; wrap: word-wrap; font-size: 12px; }
+    Text { text: QueueHistoryState.queue-message; color: #334155; wrap: word-wrap; font-size: 12px; }
 
     HorizontalLayout {
         height: 62px;
         vertical-stretch: 0;
         spacing: 8px;
-        MetricCard { label: "Active"; value: root.active-count; }
-        MetricCard { label: "Queued"; value: root.queued-count; }
-        MetricCard { label: "Completed"; value: root.completed-count; }
-        MetricCard { label: "Failed / Interrupted"; value: root.failed-count; }
+        MetricCard { label: "Active"; value: QueueHistoryState.queue-active-count; }
+        MetricCard { label: "Queued"; value: QueueHistoryState.queue-queued-count; }
+        MetricCard { label: "Completed"; value: QueueHistoryState.queue-completed-count; }
+        MetricCard { label: "Failed / Interrupted"; value: QueueHistoryState.queue-failed-count; }
     }
 
     ScrollView {
@@ -107,7 +122,7 @@ export component QueuePage inherits VerticalLayout {
             padding: 2px;
             spacing: 9px;
 
-            if root.rows.length == 0: Rectangle {
+            if QueueHistoryState.queue-rows.length == 0: Rectangle {
                 height: 82px;
                 vertical-stretch: 0;
                 background: #ffffff;
@@ -122,7 +137,7 @@ export component QueuePage inherits VerticalLayout {
                 }
             }
 
-            for row in root.rows: Rectangle {
+            for row in QueueHistoryState.queue-rows: Rectangle {
                 min-height: 174px;
                 vertical-stretch: 0;
                 background: #ffffff;
@@ -187,20 +202,20 @@ export component QueuePage inherits VerticalLayout {
                         if row.can-cancel: Button {
                             height: 30px;
                             text: "Cancel";
-                            enabled: !root.busy;
-                            clicked => { root.action(row.id, "cancel"); }
+                            enabled: !QueueHistoryState.queue-busy;
+                            clicked => { QueueHistoryState.queue-action(row.id, "cancel"); }
                         }
                         if row.can-retry: Button {
                             height: 30px;
                             text: "Retry";
-                            enabled: !root.busy;
-                            clicked => { root.action(row.id, "retry"); }
+                            enabled: !QueueHistoryState.queue-busy;
+                            clicked => { QueueHistoryState.queue-action(row.id, "retry"); }
                         }
                         if row.can-remove: Button {
                             height: 30px;
                             text: "Remove";
-                            enabled: !root.busy;
-                            clicked => { root.action(row.id, "remove"); }
+                            enabled: !QueueHistoryState.queue-busy;
+                            clicked => { QueueHistoryState.queue-action(row.id, "remove"); }
                         }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                     }
@@ -211,18 +226,6 @@ export component QueuePage inherits VerticalLayout {
 }
 
 export component HistoryPage inherits VerticalLayout {
-    in property <[HistoryDisplayRow]> rows;
-    in property <bool> busy;
-    in property <bool> loaded;
-    in-out property <string> view;
-    in-out property <string> search;
-    in-out property <string> status;
-    in-out property <string> from-date;
-    in-out property <string> to-date;
-    in-out property <string> limit;
-    in property <string> message;
-    callback refresh();
-
     spacing: 9px;
 
     HorizontalLayout {
@@ -237,10 +240,10 @@ export component HistoryPage inherits VerticalLayout {
             horizontal-stretch: 1;
             vertical-alignment: center;
         }
-        Button { height: 32px; text: root.view == "ALL" ? "✓ All" : "All"; enabled: !root.busy; clicked => { root.view = "ALL"; root.refresh(); } }
-        Button { height: 32px; text: root.view == "LIVE" ? "✓ LIVE" : "LIVE"; enabled: !root.busy; clicked => { root.view = "LIVE"; root.refresh(); } }
-        Button { height: 32px; text: root.view == "VOD" ? "✓ VOD" : "VOD"; enabled: !root.busy; clicked => { root.view = "VOD"; root.refresh(); } }
-        Button { height: 32px; text: "Refresh"; enabled: root.loaded && !root.busy; clicked => { root.refresh(); } }
+        Button { height: 32px; text: QueueHistoryState.history-view == "ALL" ? "✓ All" : "All"; enabled: !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-view = "ALL"; QueueHistoryState.history-refresh(); } }
+        Button { height: 32px; text: QueueHistoryState.history-view == "LIVE" ? "✓ LIVE" : "LIVE"; enabled: !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-view = "LIVE"; QueueHistoryState.history-refresh(); } }
+        Button { height: 32px; text: QueueHistoryState.history-view == "VOD" ? "✓ VOD" : "VOD"; enabled: !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-view = "VOD"; QueueHistoryState.history-refresh(); } }
+        Button { height: 32px; text: "Refresh"; enabled: QueueHistoryState.history-loaded && !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-refresh(); } }
     }
 
     Rectangle {
@@ -260,18 +263,18 @@ export component HistoryPage inherits VerticalLayout {
                 LineEdit {
                     height: 34px;
                     horizontal-stretch: 2;
-                    text <=> root.search;
+                    text <=> QueueHistoryState.history-search;
                     placeholder-text: "Search title, channel, URL, file, message...";
-                    enabled: !root.busy;
-                    accepted => { root.refresh(); }
+                    enabled: !QueueHistoryState.history-busy;
+                    accepted => { QueueHistoryState.history-refresh(); }
                 }
                 LineEdit {
                     height: 34px;
                     horizontal-stretch: 1;
-                    text <=> root.status;
+                    text <=> QueueHistoryState.history-status;
                     placeholder-text: "Status (optional)";
-                    enabled: !root.busy;
-                    accepted => { root.refresh(); }
+                    enabled: !QueueHistoryState.history-busy;
+                    accepted => { QueueHistoryState.history-refresh(); }
                 }
             }
             HorizontalLayout {
@@ -280,30 +283,30 @@ export component HistoryPage inherits VerticalLayout {
                 spacing: 7px;
                 LineEdit {
                     height: 34px;
-                    text <=> root.from-date;
+                    text <=> QueueHistoryState.history-from-date;
                     placeholder-text: "From YYYY-MM-DD";
-                    enabled: !root.busy;
-                    accepted => { root.refresh(); }
+                    enabled: !QueueHistoryState.history-busy;
+                    accepted => { QueueHistoryState.history-refresh(); }
                 }
                 LineEdit {
                     height: 34px;
-                    text <=> root.to-date;
+                    text <=> QueueHistoryState.history-to-date;
                     placeholder-text: "To YYYY-MM-DD";
-                    enabled: !root.busy;
-                    accepted => { root.refresh(); }
+                    enabled: !QueueHistoryState.history-busy;
+                    accepted => { QueueHistoryState.history-refresh(); }
                 }
                 LineEdit {
                     width: 110px;
                     height: 34px;
                     horizontal-stretch: 0;
-                    text <=> root.limit;
+                    text <=> QueueHistoryState.history-limit;
                     placeholder-text: "Limit";
-                    enabled: !root.busy;
-                    accepted => { root.refresh(); }
+                    enabled: !QueueHistoryState.history-busy;
+                    accepted => { QueueHistoryState.history-refresh(); }
                 }
-                Button { height: 32px; text: "Apply filters"; enabled: !root.busy; clicked => { root.refresh(); } }
+                Button { height: 32px; text: "Apply filters"; enabled: !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-refresh(); } }
             }
-            Text { text: root.message; color: #475569; font-size: 11px; wrap: word-wrap; }
+            Text { text: QueueHistoryState.history-message; color: #475569; font-size: 11px; wrap: word-wrap; }
         }
     }
 
@@ -313,7 +316,7 @@ export component HistoryPage inherits VerticalLayout {
             padding: 2px;
             spacing: 9px;
 
-            if root.rows.length == 0: Rectangle {
+            if QueueHistoryState.history-rows.length == 0: Rectangle {
                 height: 82px;
                 vertical-stretch: 0;
                 background: #ffffff;
@@ -328,7 +331,7 @@ export component HistoryPage inherits VerticalLayout {
                 }
             }
 
-            for row in root.rows: Rectangle {
+            for row in QueueHistoryState.history-rows: Rectangle {
                 min-height: 128px;
                 vertical-stretch: 0;
                 background: #ffffff;
