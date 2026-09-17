@@ -2,8 +2,8 @@ use crate::{
     model::{HistoryResponse, LiveHistoryItem, VodHistoryItem},
     support::platform::PlatformId,
 };
-use anyhow::{bail, Result};
-use rusqlite::{params, Connection};
+use anyhow::{Result, bail};
+use rusqlite::{Connection, params};
 use std::path::Path;
 
 pub const HISTORY_DEFAULT_LIMIT: usize = 100;
@@ -237,12 +237,14 @@ mod tests {
         assert_eq!(normalized.needle.as_deref(), Some("hello"));
         assert_eq!(normalized.status.as_deref(), Some("COMPLETED"));
         assert_eq!(normalized.limit, HISTORY_MAX_LIMIT);
-        assert!(HistoryFilter {
-            from: Some("2026/09/01".into()),
-            ..Default::default()
-        }
-        .normalized()
-        .is_err());
+        assert!(
+            HistoryFilter {
+                from: Some("2026/09/01".into()),
+                ..Default::default()
+            }
+            .normalized()
+            .is_err()
+        );
     }
 
     #[test]

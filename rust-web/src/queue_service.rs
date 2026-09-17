@@ -2,16 +2,16 @@ use crate::{
     backend::LogBuffer,
     model::{VodDownloadRequest, VodJobStatus, VodQueueItem, VodQueueSnapshot},
     store::Store,
-    support::platform::{detect_vod_platform, PlatformId},
-    vod::{validate_download_request, VodManager},
+    support::platform::{PlatformId, detect_vod_platform},
+    vod::{VodManager, validate_download_request},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -80,7 +80,9 @@ impl VodQueueManager {
         if let Some(id) = active {
             if let Err(error) = self.cancel(&id).await {
                 self.logs
-                    .push(format!("[VOD_QUEUE:WARN] shutdown cancel failed id={id}: {error:#}"))
+                    .push(format!(
+                        "[VOD_QUEUE:WARN] shutdown cancel failed id={id}: {error:#}"
+                    ))
                     .await;
             }
         }

@@ -8,7 +8,7 @@
 
 use crate::{
     backend::LogBuffer,
-    history_service::{load_history, HistoryFilter},
+    history_service::{HistoryFilter, load_history},
     model::{
         Channel, HistoryResponse, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest,
         VodJobStatus, VodQueueItem, VodQueueSnapshot,
@@ -22,12 +22,12 @@ use crate::{
     security::{protect_secret, unprotect_secret},
     store::{self, Store},
     support::{
-        platform::{live::LiveSession, PlatformId},
+        platform::{PlatformId, live::LiveSession},
         resolve_channel_name_for,
     },
     vod::VodManager,
 };
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -499,8 +499,8 @@ impl StreamArchiveCore {
 mod tests {
     use super::*;
 
-    #[test]
-    fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
+    #[tokio::test]
+    async fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
         let dir = tempfile::tempdir().unwrap();
         let backend = dir.path().join("app").join("backend");
         std::fs::create_dir_all(&backend).unwrap();
@@ -515,21 +515,16 @@ mod tests {
         assert_eq!(core.backend_dir(), backend.as_path());
         assert_eq!(core.store().path(), db.as_path());
         assert!(core.settings().unwrap().contains_key("STREAMLINK_PATH"));
-        assert_eq!(
-            core.queue_snapshot().now_or_never().unwrap().unwrap().queued_count,
-            0
-        );
+        assert_eq!(core.queue_snapshot().await.unwrap().queued_count, 0);
     }
 
     #[tokio::test]
     async fn environment_patch_is_atomic_and_uses_existing_web_keys() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("stream-archive.db");
-        let core = StreamArchiveCore::assemble(
-            dir.path().to_path_buf(),
-            Store::open(db.clone()).unwrap(),
-        )
-        .unwrap();
+        let core =
+            StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db.clone()).unwrap())
+                .unwrap();
         let before = core.settings().unwrap();
         let invalid = BTreeMap::from([
             ("CHECK_INTERVAL".into(), "42".into()),
@@ -556,11 +551,8 @@ mod tests {
     async fn native_provider_update_reuses_safe_setting_validation() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("stream-archive.db");
-        let core = StreamArchiveCore::assemble(
-            dir.path().to_path_buf(),
-            Store::open(db).unwrap(),
-        )
-        .unwrap();
+        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db).unwrap())
+            .unwrap();
 
         let valid = BTreeMap::from([
             ("SOOP_USERNAME".into(), "tester".into()),
@@ -591,11 +583,8 @@ mod tests {
     async fn queue_facade_applies_existing_tool_defaults_and_history_filter_validates() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("stream-archive.db");
-        let core = StreamArchiveCore::assemble(
-            dir.path().to_path_buf(),
-            Store::open(db).unwrap(),
-        )
-        .unwrap();
+        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db).unwrap())
+            .unwrap();
         let req = VodDownloadRequest {
             vod_url: "https://vod.sooplive.com/player/123456789".into(),
             output_directory: dir.path().display().to_string(),
@@ -611,11 +600,12 @@ mod tests {
         };
         let queued = core.enqueue_vod(req).await.unwrap();
         assert_eq!(queued.state, "QUEUED");
-        assert!(core
-            .history(&HistoryFilter {
+        assert!(
+            core.history(&HistoryFilter {
                 from: Some("bad-date".into()),
                 ..Default::default()
             })
-            .is_err());
+            .is_err()
+        );
     }
 }

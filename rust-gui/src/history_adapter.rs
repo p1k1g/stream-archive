@@ -43,7 +43,11 @@ fn live_row(item: LiveHistoryItem) -> HistoryRowView {
         format_duration(item.duration_seconds.max(0) as u64),
         format_bytes(item.size_bytes)
     );
-    if let Some(reason) = item.reason.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(reason) = item
+        .reason
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         detail.push_str("  ·  ");
         detail.push_str(reason);
     }
@@ -83,7 +87,10 @@ fn vod_row(item: VodHistoryItem) -> HistoryRowView {
     let detail = if item.message.trim().is_empty() {
         format!("{} · {} parts", item.kind, item.part_count)
     } else {
-        format!("{} · {} parts · {}", item.kind, item.part_count, item.message)
+        format!(
+            "{} · {} parts · {}",
+            item.kind, item.part_count, item.message
+        )
     };
     HistoryRowView {
         kind: "VOD".into(),
