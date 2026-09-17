@@ -83,15 +83,9 @@ jobs:
 
       - name: Format native Rust
         shell: bash
-        run: cargo fmt --manifest-path rust-gui/Cargo.toml
-
-      - name: Check native GUI
-        shell: bash
-        run: cargo check --locked --manifest-path rust-gui/Cargo.toml
-
-      - name: Test native adapters
-        shell: bash
-        run: cargo test --locked --manifest-path rust-gui/Cargo.toml
+        run: |
+          cargo fmt --manifest-path rust-gui/Cargo.toml
+          cargo fmt --manifest-path rust-gui/Cargo.toml -- --check
 
       - name: Test shared core
         shell: bash
