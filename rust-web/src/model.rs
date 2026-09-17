@@ -2,7 +2,7 @@ use crate::support::platform::PlatformId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channel {
     #[serde(default)]
     pub platform: PlatformId,
