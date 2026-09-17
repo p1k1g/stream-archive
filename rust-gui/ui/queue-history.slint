@@ -1,0 +1,369 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct QueueDisplayRow {
+    id: string,
+    platform: string,
+    title: string,
+    streamer: string,
+    url: string,
+    state: string,
+    state-label: string,
+    state-tone: string,
+    attempts: string,
+    message: string,
+    percent: float,
+    percent-label: string,
+    part-progress: string,
+    output-directory: string,
+    output-file: string,
+    created-at: string,
+    started-at: string,
+    finished-at: string,
+    can-cancel: bool,
+    can-retry: bool,
+    can-remove: bool,
+}
+
+export struct HistoryDisplayRow {
+    kind: string,
+    platform: string,
+    title: string,
+    subject: string,
+    state: string,
+    state-tone: string,
+    detail: string,
+    timing: string,
+    file: string,
+    meta: string,
+}
+
+component MetricCard inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    height: 62px;
+    vertical-stretch: 0;
+    horizontal-stretch: 1;
+    background: #ffffff;
+    border-radius: 9px;
+    border-width: 1px;
+    border-color: #e2e8f0;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 2px;
+        Text { text: root.label; color: #64748b; font-size: 10px; }
+        Text { text: root.value; color: #0f172a; font-size: 19px; font-weight: 700; }
+    }
+}
+
+export component QueuePage inherits VerticalLayout {
+    in property <[QueueDisplayRow]> rows;
+    in property <bool> busy;
+    in property <bool> loaded;
+    in property <string> message;
+    in property <string> active-count;
+    in property <string> queued-count;
+    in property <string> completed-count;
+    in property <string> failed-count;
+    callback refresh();
+    callback action(string, string);
+
+    spacing: 9px;
+
+    HorizontalLayout {
+        height: 36px;
+        vertical-stretch: 0;
+        spacing: 8px;
+        Text {
+            text: "VOD download queue";
+            color: #0f172a;
+            font-size: 18px;
+            font-weight: 700;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+        Button {
+            height: 34px;
+            text: "Refresh";
+            enabled: root.loaded && !root.busy;
+            clicked => { root.refresh(); }
+        }
+    }
+
+    Text { text: root.message; color: #334155; wrap: word-wrap; font-size: 12px; }
+
+    HorizontalLayout {
+        height: 62px;
+        vertical-stretch: 0;
+        spacing: 8px;
+        MetricCard { label: "Active"; value: root.active-count; }
+        MetricCard { label: "Queued"; value: root.queued-count; }
+        MetricCard { label: "Completed"; value: root.completed-count; }
+        MetricCard { label: "Failed / Interrupted"; value: root.failed-count; }
+    }
+
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding: 2px;
+            spacing: 9px;
+
+            if root.rows.length == 0: Rectangle {
+                height: 82px;
+                vertical-stretch: 0;
+                background: #ffffff;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #e2e8f0;
+                VerticalLayout {
+                    padding: 15px;
+                    spacing: 4px;
+                    Text { text: "Queue is empty."; color: #0f172a; font-size: 14px; font-weight: 700; }
+                    Text { text: "Analyze a VOD and use Add to Queue to create a persisted job."; color: #64748b; font-size: 11px; wrap: word-wrap; }
+                }
+            }
+
+            for row in root.rows: Rectangle {
+                min-height: 174px;
+                vertical-stretch: 0;
+                background: #ffffff;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: row.state-tone == "error" ? #fecaca : row.state-tone == "warn" ? #fde68a : row.state-tone == "ok" ? #bbf7d0 : #e2e8f0;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 5px;
+                    HorizontalLayout {
+                        height: 24px;
+                        vertical-stretch: 0;
+                        spacing: 8px;
+                        Text {
+                            text: row.platform + " · " + row.title;
+                            color: #0f172a;
+                            font-size: 15px;
+                            font-weight: 700;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: row.state-label;
+                            color: row.state-tone == "error" ? #b91c1c : row.state-tone == "warn" ? #a16207 : row.state-tone == "ok" ? #15803d : #64748b;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if row.streamer != "": Text { text: row.streamer; color: #64748b; font-size: 11px; }
+                    Text { text: row.url; color: #475569; font-size: 11px; wrap: word-wrap; }
+                    Rectangle {
+                        height: 8px;
+                        vertical-stretch: 0;
+                        background: #e2e8f0;
+                        border-radius: 4px;
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            height: parent.height;
+                            width: parent.width * row.percent / 100;
+                            background: #334155;
+                            border-radius: 4px;
+                        }
+                    }
+                    Text {
+                        text: row.percent-label + "  ·  " + row.part-progress + "  ·  Attempt " + row.attempts;
+                        color: #64748b;
+                        font-size: 11px;
+                    }
+                    if row.message != "": Text { text: row.message; color: #475569; font-size: 11px; wrap: word-wrap; }
+                    if row.output-file != "": Text { text: "Output: " + row.output-file; color: #475569; font-size: 11px; wrap: word-wrap; }
+                    Text {
+                        text: "Created: " + row.created-at + "  ·  Started: " + row.started-at + "  ·  Finished: " + row.finished-at;
+                        color: #94a3b8;
+                        font-size: 10px;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        height: 32px;
+                        vertical-stretch: 0;
+                        spacing: 7px;
+                        if row.can-cancel: Button {
+                            height: 30px;
+                            text: "Cancel";
+                            enabled: !root.busy;
+                            clicked => { root.action(row.id, "cancel"); }
+                        }
+                        if row.can-retry: Button {
+                            height: 30px;
+                            text: "Retry";
+                            enabled: !root.busy;
+                            clicked => { root.action(row.id, "retry"); }
+                        }
+                        if row.can-remove: Button {
+                            height: 30px;
+                            text: "Remove";
+                            enabled: !root.busy;
+                            clicked => { root.action(row.id, "remove"); }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component HistoryPage inherits VerticalLayout {
+    in property <[HistoryDisplayRow]> rows;
+    in property <bool> busy;
+    in property <bool> loaded;
+    in-out property <string> view;
+    in-out property <string> search;
+    in-out property <string> status;
+    in-out property <string> from-date;
+    in-out property <string> to-date;
+    in-out property <string> limit;
+    in property <string> message;
+    callback refresh();
+
+    spacing: 9px;
+
+    HorizontalLayout {
+        height: 36px;
+        vertical-stretch: 0;
+        spacing: 7px;
+        Text {
+            text: "LIVE / VOD history";
+            color: #0f172a;
+            font-size: 18px;
+            font-weight: 700;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+        Button { height: 32px; text: root.view == "ALL" ? "✓ All" : "All"; enabled: !root.busy; clicked => { root.view = "ALL"; root.refresh(); } }
+        Button { height: 32px; text: root.view == "LIVE" ? "✓ LIVE" : "LIVE"; enabled: !root.busy; clicked => { root.view = "LIVE"; root.refresh(); } }
+        Button { height: 32px; text: root.view == "VOD" ? "✓ VOD" : "VOD"; enabled: !root.busy; clicked => { root.view = "VOD"; root.refresh(); } }
+        Button { height: 32px; text: "Refresh"; enabled: root.loaded && !root.busy; clicked => { root.refresh(); } }
+    }
+
+    Rectangle {
+        min-height: 116px;
+        vertical-stretch: 0;
+        background: #ffffff;
+        border-radius: 9px;
+        border-width: 1px;
+        border-color: #e2e8f0;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 7px;
+            HorizontalLayout {
+                height: 34px;
+                vertical-stretch: 0;
+                spacing: 7px;
+                LineEdit {
+                    height: 34px;
+                    horizontal-stretch: 2;
+                    text <=> root.search;
+                    placeholder-text: "Search title, channel, URL, file, message...";
+                    enabled: !root.busy;
+                    accepted => { root.refresh(); }
+                }
+                LineEdit {
+                    height: 34px;
+                    horizontal-stretch: 1;
+                    text <=> root.status;
+                    placeholder-text: "Status (optional)";
+                    enabled: !root.busy;
+                    accepted => { root.refresh(); }
+                }
+            }
+            HorizontalLayout {
+                height: 34px;
+                vertical-stretch: 0;
+                spacing: 7px;
+                LineEdit {
+                    height: 34px;
+                    text <=> root.from-date;
+                    placeholder-text: "From YYYY-MM-DD";
+                    enabled: !root.busy;
+                    accepted => { root.refresh(); }
+                }
+                LineEdit {
+                    height: 34px;
+                    text <=> root.to-date;
+                    placeholder-text: "To YYYY-MM-DD";
+                    enabled: !root.busy;
+                    accepted => { root.refresh(); }
+                }
+                LineEdit {
+                    width: 110px;
+                    height: 34px;
+                    horizontal-stretch: 0;
+                    text <=> root.limit;
+                    placeholder-text: "Limit";
+                    enabled: !root.busy;
+                    accepted => { root.refresh(); }
+                }
+                Button { height: 32px; text: "Apply filters"; enabled: !root.busy; clicked => { root.refresh(); } }
+            }
+            Text { text: root.message; color: #475569; font-size: 11px; wrap: word-wrap; }
+        }
+    }
+
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding: 2px;
+            spacing: 9px;
+
+            if root.rows.length == 0: Rectangle {
+                height: 82px;
+                vertical-stretch: 0;
+                background: #ffffff;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #e2e8f0;
+                VerticalLayout {
+                    padding: 15px;
+                    spacing: 4px;
+                    Text { text: "No history matches the current filters."; color: #0f172a; font-size: 14px; font-weight: 700; }
+                    Text { text: "History comes from the canonical live_recordings and vod_jobs tables."; color: #64748b; font-size: 11px; wrap: word-wrap; }
+                }
+            }
+
+            for row in root.rows: Rectangle {
+                min-height: 128px;
+                vertical-stretch: 0;
+                background: #ffffff;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: row.state-tone == "error" ? #fecaca : row.state-tone == "warn" ? #fde68a : row.state-tone == "ok" ? #bbf7d0 : #e2e8f0;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        height: 23px;
+                        vertical-stretch: 0;
+                        spacing: 8px;
+                        Text {
+                            text: row.kind + " · " + row.platform + " · " + row.title;
+                            color: #0f172a;
+                            font-size: 14px;
+                            font-weight: 700;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: row.state;
+                            color: row.state-tone == "error" ? #b91c1c : row.state-tone == "warn" ? #a16207 : row.state-tone == "ok" ? #15803d : #64748b;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text { text: row.subject; color: #475569; font-size: 11px; wrap: word-wrap; }
+                    if row.detail != "": Text { text: row.detail; color: #64748b; font-size: 11px; wrap: word-wrap; }
+                    Text { text: row.timing; color: #94a3b8; font-size: 10px; wrap: word-wrap; }
+                    if row.file != "": Text { text: "File: " + row.file; color: #475569; font-size: 10px; wrap: word-wrap; }
+                    if row.meta != "": Text { text: row.meta; color: #94a3b8; font-size: 10px; }
+                }
+            }
+        }
+    }
+}
