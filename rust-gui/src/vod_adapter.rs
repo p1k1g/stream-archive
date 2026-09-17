@@ -1,5 +1,7 @@
+#[cfg(test)]
+use stream_archive_server::model::VodPartInfo;
 use stream_archive_server::model::{
-    VodAnalysisView, VodDownloadRequest, VodJobStatus, VodPartInfo, VodQualityOption,
+    VodAnalysisView, VodDownloadRequest, VodJobStatus, VodQualityOption,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

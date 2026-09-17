@@ -1,5 +1,6 @@
 import { Button, LineEdit, ScrollView } from "std-widgets.slint";
-import { QueuePage, HistoryPage, QueueHistoryState } from "queue-history.slint";
+import { QueuePage, HistoryPage, QueueHistoryState as QueueHistoryLocal } from "queue-history.slint";
+export { QueueHistoryState } from "queue-history.slint";
 
 export struct SettingRow { key: string, value: string, description: string, pickable: bool }
 export struct DiagnosticRow { name: string, status: string, detail: string }
@@ -945,7 +946,7 @@ export component MainWindow inherits Window {
                                             height: 32px;
                                             text: "Add to Queue";
                                             enabled: AppState.vod-loaded && AppState.vod-can-download && !AppState.vod-busy && !AppState.vod-running;
-                                            clicked => { QueueHistoryState.enqueue-current(); }
+                                            clicked => { QueueHistoryLocal.enqueue-current(); }
                                         }
 
                                     }

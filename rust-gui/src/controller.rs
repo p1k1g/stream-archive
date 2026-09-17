@@ -608,7 +608,11 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     "cancel" => runtime.block_on(core.cancel_queue_item(&id)),
                     "retry" => runtime.block_on(core.retry_queue_item(&id)),
                     "remove" => runtime.block_on(core.remove_queue_item(&id)),
-                    _ => Err(anyhow::anyhow!("unsupported queue action: {action}")),
+                    _ => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("unsupported queue action: {action}"),
+                    )
+                    .into()),
                 };
                 match result {
                     Ok(snapshot) => Response::Queue {

@@ -79,7 +79,7 @@ fn row(item: VodQueueItem) -> QueueRowView {
         streamer: item.streamer,
         url: item.vod_url,
         state: state.clone(),
-        state_label: state_label.into(),
+        state_label,
         state_tone: state_tone.into(),
         attempts: item.attempts.to_string(),
         message: item.message,
@@ -104,17 +104,17 @@ fn row(item: VodQueueItem) -> QueueRowView {
     }
 }
 
-fn state_meta(state: &str) -> (&'static str, &'static str) {
+fn state_meta(state: &str) -> (String, &'static str) {
     match state {
-        "QUEUED" => ("Queued", "neutral"),
-        "STARTING" => ("Starting", "warn"),
-        "RUNNING" => ("Running", "ok"),
-        "CANCELLING" => ("Cancelling", "warn"),
-        "COMPLETED" => ("Completed", "ok"),
-        "FAILED" => ("Failed", "error"),
-        "CANCELLED" => ("Cancelled", "neutral"),
-        "INTERRUPTED" => ("Interrupted", "warn"),
-        other => (other, "neutral"),
+        "QUEUED" => ("Queued".into(), "neutral"),
+        "STARTING" => ("Starting".into(), "warn"),
+        "RUNNING" => ("Running".into(), "ok"),
+        "CANCELLING" => ("Cancelling".into(), "warn"),
+        "COMPLETED" => ("Completed".into(), "ok"),
+        "FAILED" => ("Failed".into(), "error"),
+        "CANCELLED" => ("Cancelled".into(), "neutral"),
+        "INTERRUPTED" => ("Interrupted".into(), "warn"),
+        other => (other.to_owned(), "neutral"),
     }
 }
 
