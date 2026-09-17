@@ -89,19 +89,10 @@ jobs:
 
           path = Path('rust-web/src/app_core.rs')
           text = path.read_text()
-          old_head = '''    #[test]
-              fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
-          '''
-          # cargo fmt may normalize the generated source, so tolerate either indentation.
-          if old_head not in text:
-              old_head = '''    #[test]
-    fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
-'''
+          old_head = "    #[test]\n    fn assembled_core_keeps_one_canonical_store_backend_and_queue() {"
+          new_head = "    #[tokio::test]\n    async fn assembled_core_keeps_one_canonical_store_backend_and_queue() {"
           if old_head not in text:
               raise SystemExit('missing queue facade test anchor')
-          new_head = '''    #[tokio::test]
-    async fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
-'''
           text = text.replace(old_head, new_head, 1)
           old_call = 'core.queue_snapshot().now_or_never().unwrap().unwrap().queued_count,'
           if old_call not in text:
