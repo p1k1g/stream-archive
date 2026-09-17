@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: phase21-6-wiring-runner
+  cancel-in-progress: true
+
 jobs:
   wire:
     if: "${{ !contains(github.event.head_commit.message, '[phase21-wire]') }}"
@@ -18,7 +22,7 @@ jobs:
           ref: phase21-queue-history
           fetch-depth: 0
 
-      - name: Execute stored wiring patch
+      - name: Execute robust Phase 21.6 wiring patch
         shell: bash
         run: |
           python3 - <<'PY'
@@ -34,21 +38,84 @@ jobs:
               line[10:] if line.startswith('          ') else line
               for line in block.splitlines()
           )
+
+          helper_start = code.index('def replace_once(text, old, new, label):')
+          helper_end = code.index('\n\n# ---- Slint shell', helper_start)
+          helper = r'''def replace_once(text, old, new, label):
+              if old in text:
+                  if text.count(old) != 1:
+                      raise SystemExit(f"ambiguous patch anchor: {label}")
+                  return text.replace(old, new, 1)
+
+              tokens = [token for token in re.split(r"\s+", old.strip()) if token]
+              if not tokens:
+                  raise SystemExit(f"empty patch anchor: {label}")
+              pattern = re.compile(r"\s+".join(re.escape(token) for token in tokens), re.DOTALL)
+              matches = list(pattern.finditer(text))
+              if len(matches) != 1:
+                  if not matches:
+                      raise SystemExit(f"missing patch anchor: {label}")
+                  raise SystemExit(f"ambiguous whitespace-normalized patch anchor: {label} ({len(matches)} matches)")
+
+              match = matches[0]
+              line_start = text.rfind("\n", 0, match.start()) + 1
+              leading = text[line_start:match.start()]
+              if leading.strip():
+                  replace_start = match.start()
+                  indent = ""
+              else:
+                  replace_start = line_start
+                  indent = leading
+
+              replacement = textwrap.dedent(new)
+              if indent:
+                  replacement = textwrap.indent(replacement, indent)
+              return text[:replace_start] + replacement + text[match.end():]
+          '''
+          code = code[:helper_start] + helper + code[helper_end:]
+          code = code.replace(
+              'from pathlib import Path\n',
+              'from pathlib import Path\nimport re\nimport textwrap\n',
+              1,
+          )
           exec(compile(code, 'phase21-6-wire.py', 'exec'))
           PY
 
-      - name: Format Rust
+      - name: Format native Rust
+        shell: bash
         run: cargo fmt --manifest-path rust-gui/Cargo.toml
 
-      - name: Commit wiring
+      - name: Check native GUI
+        shell: bash
+        run: cargo check --locked --manifest-path rust-gui/Cargo.toml
+
+      - name: Test native adapters
+        shell: bash
+        run: cargo test --locked --manifest-path rust-gui/Cargo.toml
+
+      - name: Test shared core
+        shell: bash
+        run: cargo test --locked --manifest-path rust-web/Cargo.toml
+
+      - name: Remove temporary Phase 21.6 wiring workflows
         shell: bash
         run: |
-          if git diff --quiet; then
-            echo "No wiring changes needed"
+          rm -f .github/workflows/phase21-6-wire.yml
+          rm -f .github/workflows/phase21-6-wire-runner.yml
+          rm -f .github/workflows/phase21-6-wire-runner2.yml
+          rm -f .github/workflows/phase21-6-wire-runner3.yml
+          rm -f .github/workflows/phase21-6-finalize.yml
+          rm -f .phase21-6-finalize-trigger
+
+      - name: Commit final Phase 21.6 wiring
+        shell: bash
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No wiring changes to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add rust-gui/ui/app-window.slint rust-gui/src/controller.rs
-          git commit -m "[phase21-wire] Wire native Queue and History screens"
+          git add -A
+          git commit -m "[phase21-wire] Wire native Queue and History"
           git push origin HEAD:phase21-queue-history
