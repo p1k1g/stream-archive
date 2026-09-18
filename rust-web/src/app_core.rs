@@ -1,19 +1,24 @@
 //! Shared application/service boundary for non-HTTP frontends.
 //!
 //! Phase 21 introduces this facade so the current Axum server, the Unix CLI,
-//! and the upcoming Slint desktop UI can converge on the same Rust runtime
-//! instead of duplicating SQLite, watcher, VOD, security, and lifecycle logic.
-//! Browser authentication and HTTP concerns deliberately stay outside this
-//! module.
+//! and the Slint desktop UI can converge on the same Rust runtime instead of
+//! duplicating SQLite, watcher, VOD, Queue, History, security, and lifecycle
+//! logic. Browser authentication and HTTP concerns deliberately stay outside
+//! this module.
 
 use crate::{
     backend::LogBuffer,
-    model::{Channel, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus},
+    history_service::{HistoryFilter, load_history},
+    model::{
+        Channel, HistoryResponse, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest,
+        VodJobStatus, VodQueueItem, VodQueueSnapshot,
+    },
     native_watcher::NativeWatcherManager,
     primary_config::{
         apply_vod_tool_defaults, validate_channels, validate_secret_updates,
         validate_setting_updates, validate_vod_tool_updates,
     },
+    queue_service::VodQueueManager,
     security::{protect_secret, unprotect_secret},
     store::{self, Store},
     support::{
@@ -46,6 +51,7 @@ pub struct StreamArchiveCore {
     logs: LogBuffer,
     watcher: Arc<NativeWatcherManager>,
     vod: Arc<VodManager>,
+    queue: Arc<VodQueueManager>,
     config_write_lock: Arc<Mutex<()>>,
     lifecycle_lock: Arc<Mutex<()>>,
 }
@@ -68,24 +74,33 @@ impl StreamArchiveCore {
         let store = Store::open(db_path)?;
         store::init_global(store.clone())?;
         Ok(CoreOpenResult {
-            core: Self::assemble(backend_dir, store),
+            core: Self::assemble(backend_dir, store)?,
             migrated_legacy_db,
         })
     }
 
-    fn assemble(backend_dir: PathBuf, store: Store) -> Self {
+    fn assemble(backend_dir: PathBuf, store: Store) -> Result<Self> {
         let logs = LogBuffer::new();
         let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
         let vod = Arc::new(VodManager::new(backend_dir.clone(), logs.clone()));
-        Self {
+        let config_write_lock = Arc::new(Mutex::new(()));
+        let lifecycle_lock = Arc::new(Mutex::new(()));
+        let queue = Arc::new(VodQueueManager::new(
+            store.clone(),
+            vod.clone(),
+            logs.clone(),
+            lifecycle_lock.clone(),
+        )?);
+        Ok(Self {
             backend_dir: Arc::new(backend_dir),
             store,
             logs,
             watcher,
             vod,
-            config_write_lock: Arc::new(Mutex::new(())),
-            lifecycle_lock: Arc::new(Mutex::new(())),
-        }
+            queue,
+            config_write_lock,
+            lifecycle_lock,
+        })
     }
 
     pub fn backend_dir(&self) -> &Path {
@@ -108,8 +123,12 @@ impl StreamArchiveCore {
         self.vod.clone()
     }
 
-    /// Compatibility hook for queue/backup adapters while they are moved
-    /// behind this service boundary in later Phase 21 slices.
+    pub fn queue(&self) -> Arc<VodQueueManager> {
+        self.queue.clone()
+    }
+
+    /// Compatibility hook for backup/Web adapters while they are moved behind
+    /// the shared service boundary in later Phase 21 slices.
     pub fn config_write_lock(&self) -> Arc<Mutex<()>> {
         self.config_write_lock.clone()
     }
@@ -414,6 +433,43 @@ impl StreamArchiveCore {
         Ok(status)
     }
 
+    pub fn spawn_queue_worker(&self) -> bool {
+        self.queue.clone().spawn()
+    }
+
+    pub async fn queue_snapshot(&self) -> Result<VodQueueSnapshot> {
+        self.queue.snapshot().await
+    }
+
+    pub async fn enqueue_vod(&self, mut req: VodDownloadRequest) -> Result<VodQueueItem> {
+        let _config_guard = self.config_write_lock.lock().await;
+        let tools = self.store.vod_tool_settings()?;
+        apply_vod_tool_defaults(&tools, &mut req.yt_dlp_path, &mut req.ffmpeg_path);
+        self.queue.enqueue(req).await
+    }
+
+    pub async fn cancel_queue_item(&self, id: &str) -> Result<VodQueueSnapshot> {
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
+        self.queue.cancel(id).await?;
+        self.queue.snapshot().await
+    }
+
+    pub async fn retry_queue_item(&self, id: &str) -> Result<VodQueueSnapshot> {
+        let _config_guard = self.config_write_lock.lock().await;
+        self.queue.retry(id).await?;
+        self.queue.snapshot().await
+    }
+
+    pub async fn remove_queue_item(&self, id: &str) -> Result<VodQueueSnapshot> {
+        let _config_guard = self.config_write_lock.lock().await;
+        self.queue.remove(id).await?;
+        self.queue.snapshot().await
+    }
+
+    pub fn history(&self, filter: &HistoryFilter) -> Result<HistoryResponse> {
+        load_history(self.store.path(), filter)
+    }
+
     /// Keep VOD history synchronized even when the caller is not the Web UI.
     pub fn spawn_vod_history_sync(&self) {
         let store = self.store.clone();
@@ -431,8 +487,9 @@ impl StreamArchiveCore {
         });
     }
 
-    /// Stop only runtime children owned by Stream Archive.
+    /// Stop new Queue claims first, then only runtime children owned by Stream Archive.
     pub async fn shutdown(&self) {
+        self.queue.shutdown().await;
         let _ = self.vod.cancel().await;
         let _ = self.watcher.stop().await;
     }
@@ -442,8 +499,8 @@ impl StreamArchiveCore {
 mod tests {
     use super::*;
 
-    #[test]
-    fn assembled_core_keeps_one_canonical_store_and_backend() {
+    #[tokio::test]
+    async fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
         let dir = tempfile::tempdir().unwrap();
         let backend = dir.path().join("app").join("backend");
         std::fs::create_dir_all(&backend).unwrap();
@@ -453,11 +510,12 @@ mod tests {
             .join("data")
             .join("stream-archive.db");
         let store = Store::open(db.clone()).unwrap();
-        let core = StreamArchiveCore::assemble(backend.clone(), store);
+        let core = StreamArchiveCore::assemble(backend.clone(), store).unwrap();
 
         assert_eq!(core.backend_dir(), backend.as_path());
         assert_eq!(core.store().path(), db.as_path());
         assert!(core.settings().unwrap().contains_key("STREAMLINK_PATH"));
+        assert_eq!(core.queue_snapshot().await.unwrap().queued_count, 0);
     }
 
     #[tokio::test]
@@ -465,7 +523,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("stream-archive.db");
         let core =
-            StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db.clone()).unwrap());
+            StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db.clone()).unwrap())
+                .unwrap();
         let before = core.settings().unwrap();
         let invalid = BTreeMap::from([
             ("CHECK_INTERVAL".into(), "42".into()),
@@ -492,7 +551,8 @@ mod tests {
     async fn native_provider_update_reuses_safe_setting_validation() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("stream-archive.db");
-        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db).unwrap());
+        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db).unwrap())
+            .unwrap();
 
         let valid = BTreeMap::from([
             ("SOOP_USERNAME".into(), "tester".into()),
@@ -516,6 +576,36 @@ mod tests {
             core.update_provider_configuration(&invalid, &BTreeMap::new())
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_facade_applies_existing_tool_defaults_and_history_filter_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("stream-archive.db");
+        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db).unwrap())
+            .unwrap();
+        let req = VodDownloadRequest {
+            vod_url: "https://vod.sooplive.com/player/123456789".into(),
+            output_directory: dir.path().display().to_string(),
+            parts: vec![],
+            quality: "best".into(),
+            merge: true,
+            cookie_mode: "SOOP_LOGIN".into(),
+            cookie_file: String::new(),
+            browser_name: "firefox".into(),
+            yt_dlp_path: String::new(),
+            ffmpeg_path: String::new(),
+            max_retries: 5,
+        };
+        let queued = core.enqueue_vod(req).await.unwrap();
+        assert_eq!(queued.state, "QUEUED");
+        assert!(
+            core.history(&HistoryFilter {
+                from: Some("bad-date".into()),
+                ..Default::default()
+            })
+            .is_err()
         );
     }
 }

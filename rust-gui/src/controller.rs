@@ -1,6 +1,7 @@
 use crate::{
-    AppState, ChannelConfigRow, DiagnosticRow, LiveChannelRow, MainWindow, SettingRow, VodPartRow,
-    VodQualityRow, channels_adapter::ChannelsDraft, live_adapter, native_picker,
+    AppState, ChannelConfigRow, DiagnosticRow, HistoryDisplayRow, LiveChannelRow, MainWindow,
+    QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
+    channels_adapter::ChannelsDraft, history_adapter, live_adapter, native_picker, queue_adapter,
     settings_adapter::SettingsDraft, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
@@ -16,7 +17,11 @@ use stream_archive_server::{
     backend::resolve_backend_dir,
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
-    model::{Channel, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus},
+    history_service::HistoryFilter,
+    model::{
+        Channel, HistoryResponse, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest,
+        VodJobStatus, VodQueueSnapshot,
+    },
     support::platform::PlatformId,
 };
 
@@ -64,6 +69,18 @@ enum Request {
     },
     VodDownload(VodDownloadRequest),
     VodCancel,
+    QueueStatus {
+        poll: bool,
+    },
+    QueueEnqueue(VodDownloadRequest),
+    QueueAction {
+        id: String,
+        action: String,
+    },
+    HistoryLoad {
+        filter: HistoryFilter,
+        view: String,
+    },
 }
 
 enum Response {
@@ -109,6 +126,21 @@ enum Response {
         message: String,
         poll: bool,
     },
+    Queue {
+        snapshot: VodQueueSnapshot,
+        message: Option<String>,
+        poll: bool,
+    },
+    QueueError {
+        message: String,
+        poll: bool,
+    },
+    History {
+        history: HistoryResponse,
+        view: String,
+        message: Option<String>,
+    },
+    HistoryError(String),
     Error(String),
 }
 
@@ -116,6 +148,7 @@ pub struct Controller {
     _response_timer: Timer,
     _live_poll_timer: Timer,
     _vod_poll_timer: Timer,
+    _queue_poll_timer: Timer,
 }
 
 fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str) -> Response {
@@ -203,6 +236,35 @@ fn vod_status(core: &StreamArchiveCore, runtime: &tokio::runtime::Runtime, poll:
     }
 }
 
+fn queue_status(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    poll: bool,
+) -> Response {
+    match runtime.block_on(core.queue_snapshot()) {
+        Ok(snapshot) => Response::Queue {
+            snapshot,
+            message: None,
+            poll,
+        },
+        Err(error) => Response::QueueError {
+            message: format!("Queue refresh failed: {error:#}"),
+            poll,
+        },
+    }
+}
+
+fn selected_parts_label(parts: &[usize]) -> String {
+    if parts.is_empty() {
+        return "all".into();
+    }
+    parts
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn vod_analyze_request(url: String) -> VodAnalyzeRequest {
     VodAnalyzeRequest {
         vod_url: url,
@@ -287,6 +349,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     // driving it between GUI requests.
     runtime.block_on(async {
         core.spawn_vod_history_sync();
+        core.spawn_queue_worker();
     });
     if responses
         .send(read_snapshot(
@@ -312,6 +375,36 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     }
     if responses.send(vod_status(&core, &runtime, false)).is_err() {
         return;
+    }
+    if responses
+        .send(queue_status(&core, &runtime, false))
+        .is_err()
+    {
+        return;
+    }
+    match core.history(&HistoryFilter::default()) {
+        Ok(history) => {
+            if responses
+                .send(Response::History {
+                    history,
+                    view: "ALL".into(),
+                    message: Some("History loaded from canonical SQLite".into()),
+                })
+                .is_err()
+            {
+                return;
+            }
+        }
+        Err(error) => {
+            if responses
+                .send(Response::HistoryError(format!(
+                    "History load failed: {error:#}"
+                )))
+                .is_err()
+            {
+                return;
+            }
+        }
     }
 
     for request in requests {
@@ -481,17 +574,22 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     poll: false,
                 },
             },
-            Request::VodDownload(req) => match runtime.block_on(core.download_vod(req)) {
-                Ok(status) => Response::Vod {
-                    status,
-                    message: Some("VOD download started".into()),
-                    poll: false,
-                },
-                Err(error) => Response::VodError {
-                    message: format!("VOD download failed to start: {error:#}"),
-                    poll: false,
-                },
-            },
+            Request::VodDownload(req) => {
+                let selected_parts = selected_parts_label(&req.parts);
+                match runtime.block_on(core.download_vod(req)) {
+                    Ok(status) => Response::Vod {
+                        status,
+                        message: Some(format!(
+                            "VOD download started · selected PARTs: {selected_parts}"
+                        )),
+                        poll: false,
+                    },
+                    Err(error) => Response::VodError {
+                        message: format!("VOD download failed to start: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
             Request::VodCancel => match runtime.block_on(core.cancel_vod()) {
                 Ok(status) => Response::Vod {
                     status,
@@ -502,6 +600,61 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     message: format!("VOD cancellation failed: {error:#}"),
                     poll: false,
                 },
+            },
+            Request::QueueStatus { poll } => queue_status(&core, &runtime, poll),
+            Request::QueueEnqueue(req) => {
+                let selected_parts = selected_parts_label(&req.parts);
+                match runtime.block_on(core.enqueue_vod(req)) {
+                    Ok(item) => match runtime.block_on(core.queue_snapshot()) {
+                        Ok(snapshot) => Response::Queue {
+                            snapshot,
+                            message: Some(format!(
+                                "Queued VOD job {} · selected PARTs: {selected_parts}",
+                                item.id
+                            )),
+                            poll: false,
+                        },
+                        Err(error) => Response::QueueError {
+                            message: format!("Queued job but refresh failed: {error:#}"),
+                            poll: false,
+                        },
+                    },
+                    Err(error) => Response::QueueError {
+                        message: format!("Queue add failed: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::QueueAction { id, action } => {
+                let result = match action.as_str() {
+                    "cancel" => runtime.block_on(core.cancel_queue_item(&id)),
+                    "retry" => runtime.block_on(core.retry_queue_item(&id)),
+                    "remove" => runtime.block_on(core.remove_queue_item(&id)),
+                    _ => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("unsupported queue action: {action}"),
+                    )
+                    .into()),
+                };
+                match result {
+                    Ok(snapshot) => Response::Queue {
+                        snapshot,
+                        message: Some(format!("Queue action completed: {action}")),
+                        poll: false,
+                    },
+                    Err(error) => Response::QueueError {
+                        message: format!("Queue action failed: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::HistoryLoad { filter, view } => match core.history(&filter) {
+                Ok(history) => Response::History {
+                    history,
+                    view,
+                    message: Some("History refreshed".into()),
+                },
+                Err(error) => Response::HistoryError(format!("History refresh failed: {error:#}")),
             },
         };
         if responses.send(response).is_err() {
@@ -652,6 +805,65 @@ fn render_vod_status(ui: &MainWindow, draft: &mut VodDraft, status: VodJobStatus
     sync
 }
 
+fn render_queue(ui: &MainWindow, snapshot: VodQueueSnapshot) {
+    let view = queue_adapter::view(snapshot);
+    let rows = view
+        .rows
+        .into_iter()
+        .map(|row| QueueDisplayRow {
+            id: row.id.into(),
+            platform: row.platform.into(),
+            title: row.title.into(),
+            streamer: row.streamer.into(),
+            url: row.url.into(),
+            state: row.state.into(),
+            state_label: row.state_label.into(),
+            state_tone: row.state_tone.into(),
+            attempts: row.attempts.into(),
+            message: row.message.into(),
+            percent: row.percent,
+            percent_label: row.percent_label.into(),
+            part_progress: row.part_progress.into(),
+            output_directory: row.output_directory.into(),
+            output_file: row.output_file.into(),
+            created_at: row.created_at.into(),
+            started_at: row.started_at.into(),
+            finished_at: row.finished_at.into(),
+            can_cancel: row.can_cancel,
+            can_retry: row.can_retry,
+            can_remove: row.can_remove,
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<QueueHistoryState>();
+    state.set_queue_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_queue_active_count(view.active.into());
+    state.set_queue_queued_count(view.queued.into());
+    state.set_queue_completed_count(view.completed.into());
+    state.set_queue_failed_count(view.failed.into());
+    state.set_queue_loaded(true);
+}
+
+fn render_history(ui: &MainWindow, history: HistoryResponse, view: &str) {
+    let rows = history_adapter::rows(history, view)
+        .into_iter()
+        .map(|row| HistoryDisplayRow {
+            kind: row.kind.into(),
+            platform: row.platform.into(),
+            title: row.title.into(),
+            subject: row.subject.into(),
+            state: row.state.into(),
+            state_tone: row.state_tone.into(),
+            detail: row.detail.into(),
+            timing: row.timing.into(),
+            file: row.file.into(),
+            meta: row.meta.into(),
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<QueueHistoryState>();
+    state.set_history_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_history_loaded(true);
+}
+
 pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     let state = ui.global::<AppState>();
     state.set_runtime_ready(diagnostics.runtime_ready);
@@ -727,6 +939,34 @@ fn send_vod(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
     }
 }
 
+fn send_queue(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    let state = ui.global::<QueueHistoryState>();
+    if state.get_queue_busy() {
+        return;
+    }
+    match sender.send(request) {
+        Ok(()) => {
+            state.set_queue_busy(true);
+            state.set_queue_message("Working...".into());
+        }
+        Err(_) => state.set_queue_message("Queue runtime worker is unavailable".into()),
+    }
+}
+
+fn send_history(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    let state = ui.global::<QueueHistoryState>();
+    if state.get_history_busy() {
+        return;
+    }
+    match sender.send(request) {
+        Ok(()) => {
+            state.set_history_busy(true);
+            state.set_history_message("Loading history...".into());
+        }
+        Err(_) => state.set_history_message("History runtime worker is unavailable".into()),
+    }
+}
+
 pub fn bind(ui: &MainWindow) -> Controller {
     let (sender, requests) = mpsc::channel();
     let (responses, receiver) = mpsc::channel();
@@ -735,6 +975,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
     state.set_config_busy(true);
     state.set_live_busy(true);
     state.set_vod_busy(true);
+    let queue_history = ui.global::<QueueHistoryState>();
+    queue_history.set_queue_busy(true);
+    queue_history.set_history_busy(true);
     if let Err(error) = std::thread::Builder::new()
         .name("native-runtime".into())
         .spawn(move || worker(requests, responses))
@@ -743,6 +986,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_config_busy(false);
         state.set_live_busy(false);
         state.set_vod_busy(false);
+        queue_history.set_queue_busy(false);
+        queue_history.set_history_busy(false);
+        queue_history.set_queue_message(format!("Cannot start worker: {error}").into());
+        queue_history.set_history_message(format!("Cannot start worker: {error}").into());
         state.set_settings_message(format!("Cannot start worker: {error}").into());
         state.set_config_message(format!("Cannot start worker: {error}").into());
         state.set_live_message(format!("Cannot start worker: {error}").into());
@@ -755,6 +1002,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     render_vod_draft(ui, &vod_draft.borrow());
     let live_poll_in_flight = Rc::new(Cell::new(false));
     let vod_poll_in_flight = Rc::new(Cell::new(false));
+    let queue_poll_in_flight = Rc::new(Cell::new(false));
 
     let weak = ui.as_weak();
     let edit_draft = draft.clone();
@@ -1194,9 +1442,87 @@ pub fn bind(ui: &MainWindow) -> Controller {
         }
     });
 
+    let queue_state = ui.global::<QueueHistoryState>();
+
+    let weak = ui.as_weak();
+    let queue_sender = sender.clone();
+    queue_state.on_queue_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_queue(&ui, &queue_sender, Request::QueueStatus { poll: false });
+        }
+    });
+
+    let weak = ui.as_weak();
+    let queue_sender = sender.clone();
+    queue_state.on_queue_action(move |id, action| {
+        if let Some(ui) = weak.upgrade() {
+            send_queue(
+                &ui,
+                &queue_sender,
+                Request::QueueAction {
+                    id: id.to_string(),
+                    action: action.to_string(),
+                },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let queue_sender = sender.clone();
+    let enqueue_draft = vod_draft.clone();
+    queue_state.on_enqueue_current(move || {
+          if let Some(ui) = weak.upgrade() {
+    let Some(request) = enqueue_draft.borrow().download_request() else {
+        ui.global::<QueueHistoryState>().set_queue_message(
+            "Analyze the VOD, select quality/parts, and choose an output folder before adding it to the Queue."
+                .into(),
+        );
+        return;
+    };
+    send_queue(&ui, &queue_sender, Request::QueueEnqueue(request));
+          }
+      });
+
+    let weak = ui.as_weak();
+    let history_sender = sender.clone();
+    queue_state.on_history_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            let limit_text = state.get_history_limit().to_string();
+            let limit = if limit_text.trim().is_empty() {
+                None
+            } else {
+                match limit_text.trim().parse::<usize>() {
+                    Ok(limit) => Some(limit),
+                    Err(_) => {
+                        state.set_history_message(
+                            "History limit must be a positive integer.".into(),
+                        );
+                        return;
+                    }
+                }
+            };
+            let optional = |value: slint::SharedString| {
+                let value = value.to_string();
+                (!value.trim().is_empty()).then_some(value)
+            };
+            let filter = HistoryFilter {
+                q: optional(state.get_history_search()),
+                status: optional(state.get_history_status()),
+                from: optional(state.get_history_from_date()),
+                to: optional(state.get_history_to_date()),
+                limit,
+            };
+            let view = state.get_history_view().to_string();
+            drop(state);
+            send_history(&ui, &history_sender, Request::HistoryLoad { filter, view });
+        }
+    });
+
     let weak = ui.as_weak();
     let response_live_poll_flag = live_poll_in_flight.clone();
     let response_vod_poll_flag = vod_poll_in_flight.clone();
+    let response_queue_poll_flag = queue_poll_in_flight.clone();
     let response_channels = channels_draft.clone();
     let response_vod_draft = vod_draft.clone();
     let response_timer = Timer::default();
@@ -1385,6 +1711,52 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     }
                     state.set_vod_message(message.into());
                 }
+                Response::Queue {
+                    snapshot,
+                    message,
+                    poll,
+                } => {
+                    let queue_state = ui.global::<QueueHistoryState>();
+                    if poll {
+                        response_queue_poll_flag.set(false);
+                    } else {
+                        queue_state.set_queue_busy(false);
+                    }
+                    render_queue(&ui, snapshot);
+                    if let Some(message) = message {
+                        queue_state.set_queue_message(message.into());
+                    } else if !poll {
+                        queue_state.set_queue_message("Queue refreshed".into());
+                    }
+                }
+                Response::QueueError { message, poll } => {
+                    let queue_state = ui.global::<QueueHistoryState>();
+                    if poll {
+                        response_queue_poll_flag.set(false);
+                    } else {
+                        queue_state.set_queue_busy(false);
+                    }
+                    queue_state.set_queue_message(message.into());
+                }
+                Response::History {
+                    history,
+                    view,
+                    message,
+                } => {
+                    let history_state = ui.global::<QueueHistoryState>();
+                    history_state.set_history_busy(false);
+                    history_state.set_history_view(view.clone().into());
+                    render_history(&ui, history, &view);
+                    history_state.set_history_message(
+                        message.unwrap_or_else(|| "History refreshed".into()).into(),
+                    );
+                }
+                Response::HistoryError(message) => {
+                    let history_state = ui.global::<QueueHistoryState>();
+                    history_state.set_history_busy(false);
+                    history_state.set_history_message(message.into());
+                }
+
                 Response::Error(message) => {
                     state.set_settings_busy(false);
                     if !state.get_config_loaded() {
@@ -1398,6 +1770,15 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     if !state.get_vod_loaded() {
                         state.set_vod_busy(false);
                         state.set_vod_message(message.clone().into());
+                    }
+                    let queue_state = ui.global::<QueueHistoryState>();
+                    if !queue_state.get_queue_loaded() {
+                        queue_state.set_queue_busy(false);
+                        queue_state.set_queue_message(message.clone().into());
+                    }
+                    if !queue_state.get_history_loaded() {
+                        queue_state.set_history_busy(false);
+                        queue_state.set_history_message(message.clone().into());
                     }
                     state.set_settings_message(message.into());
                 }
@@ -1433,7 +1814,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     );
 
     let weak = ui.as_weak();
-    let vod_poll_sender = sender;
+    let vod_poll_sender = sender.clone();
     let vod_poll_flag = vod_poll_in_flight;
     let vod_poll_timer = Timer::default();
     vod_poll_timer.start(
@@ -1459,9 +1840,38 @@ pub fn bind(ui: &MainWindow) -> Controller {
         },
     );
 
+    let weak = ui.as_weak();
+    let queue_poll_sender = sender;
+    let queue_poll_flag = queue_poll_in_flight;
+    let queue_poll_timer = Timer::default();
+    queue_poll_timer.start(
+        TimerMode::Repeated,
+        Duration::from_millis(1000),
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let app_state = ui.global::<AppState>();
+            let queue_state = ui.global::<QueueHistoryState>();
+            if app_state.get_active_page().as_str() != "Queue"
+                || queue_state.get_queue_busy()
+                || queue_poll_flag.get()
+            {
+                return;
+            }
+            if queue_poll_sender
+                .send(Request::QueueStatus { poll: true })
+                .is_ok()
+            {
+                queue_poll_flag.set(true);
+            }
+        },
+    );
+
     Controller {
         _response_timer: response_timer,
         _live_poll_timer: live_poll_timer,
         _vod_poll_timer: vod_poll_timer,
+        _queue_poll_timer: queue_poll_timer,
     }
 }

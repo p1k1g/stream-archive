@@ -1,20 +1,19 @@
-use crate::{
-    ApiResult, AppState, authorize, internal_error,
-    model::{HistoryResponse, LiveHistoryItem, VodHistoryItem},
-    support::platform::PlatformId,
-};
+use crate::{ApiResult, AppState, authorize, internal_error};
 use axum::{
     Json,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
 };
-use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
 };
+
+#[path = "history_service.rs"]
+mod shared_history;
+use shared_history::HistoryFilter;
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct HistoryQuery {
@@ -54,103 +53,18 @@ pub(crate) async fn api_history(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<HistoryQuery>,
-) -> ApiResult<Json<HistoryResponse>> {
+) -> ApiResult<Json<crate::model::HistoryResponse>> {
     authorize(&headers, &state)?;
-    let mut history = load_history_compat(state.store.path(), 500).map_err(internal_error)?;
-    let needle = query
-        .q
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase);
-    let status = query
-        .status
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_uppercase);
-    let from = normalized_date(query.from.as_deref());
-    let to = normalized_date(query.to.as_deref());
-    let limit = query.limit.unwrap_or(100).clamp(1, 500);
-
-    history.live.retain(|item| {
-        text_matches_live(item, needle.as_deref())
-            && status
-                .as_deref()
-                .is_none_or(|wanted| item.status.eq_ignore_ascii_case(wanted))
-            && date_matches(&item.started_at, from.as_deref(), to.as_deref())
-    });
-    history.vod.retain(|item| {
-        text_matches_vod(item, needle.as_deref())
-            && status
-                .as_deref()
-                .is_none_or(|wanted| item.state.eq_ignore_ascii_case(wanted))
-            && item
-                .started_at
-                .as_deref()
-                .is_none_or(|started| date_matches(started, from.as_deref(), to.as_deref()))
-    });
-    history.live.truncate(limit);
-    history.vod.truncate(limit);
-    Ok(Json(history))
-}
-
-fn stored_platform(value: String) -> PlatformId {
-    value.parse().unwrap_or_default()
-}
-
-fn load_history_compat(path: &Path, limit: usize) -> rusqlite::Result<HistoryResponse> {
-    let limit = limit.clamp(1, 500) as i64;
-    let conn = Connection::open(path)?;
-
-    let mut live_stmt = conn.prepare(
-        "SELECT COALESCE(platform,'SOOP'),id,account,channel_name,bno,title,file_path,started_at,ended_at,duration_seconds,size_bytes,reason,status FROM live_recordings ORDER BY started_at DESC LIMIT ?1",
-    )?;
-    let live = live_stmt
-        .query_map(params![limit], |row| {
-            Ok(LiveHistoryItem {
-                platform: stored_platform(row.get(0)?),
-                id: row.get(1)?,
-                account: row.get(2)?,
-                channel_name: row.get(3)?,
-                bno: row.get(4)?,
-                title: row.get(5)?,
-                file_path: row.get(6)?,
-                started_at: row.get(7)?,
-                ended_at: row.get(8)?,
-                duration_seconds: row.get::<_, Option<i64>>(9)?.unwrap_or(0),
-                size_bytes: row.get::<_, Option<i64>>(10)?.unwrap_or(0).max(0) as u64,
-                reason: row.get(11)?,
-                status: row
-                    .get::<_, Option<String>>(12)?
-                    .unwrap_or_else(|| "UNKNOWN".to_string()),
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    let mut vod_stmt = conn.prepare(
-        "SELECT COALESCE(platform,'SOOP'),id,COALESCE(kind,'JOB'),COALESCE(vod_url,''),COALESCE(title,''),COALESCE(streamer,''),COALESCE(part_count,0),COALESCE(state,'UNKNOWN'),output_file,COALESCE(message,''),started_at,finished_at FROM vod_jobs ORDER BY COALESCE(started_at,updated_at) DESC LIMIT ?1",
-    )?;
-    let vod = vod_stmt
-        .query_map(params![limit], |row| {
-            Ok(VodHistoryItem {
-                platform: stored_platform(row.get(0)?),
-                id: row.get(1)?,
-                kind: row.get(2)?,
-                vod_url: row.get(3)?,
-                title: row.get(4)?,
-                streamer: row.get(5)?,
-                part_count: row.get::<_, i64>(6)?.max(0) as usize,
-                state: row.get(7)?,
-                output_file: row.get(8)?,
-                message: row.get(9)?,
-                started_at: row.get(10)?,
-                finished_at: row.get(11)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    Ok(HistoryResponse { live, vod })
+    let filter = HistoryFilter {
+        q: query.q,
+        status: query.status,
+        from: query.from,
+        to: query.to,
+        limit: query.limit,
+    };
+    shared_history::load_history(state.store.path(), &filter)
+        .map(Json)
+        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))
 }
 
 pub(crate) async fn api_storage(
@@ -215,55 +129,6 @@ pub(crate) async fn api_storage_check(
     )
     .map(Json)
     .map_err(|error| (StatusCode::BAD_REQUEST, error))
-}
-
-fn text_matches_live(item: &LiveHistoryItem, needle: Option<&str>) -> bool {
-    let Some(needle) = needle else {
-        return true;
-    };
-    [
-        Some(item.platform.as_str()),
-        Some(item.account.as_str()),
-        Some(item.channel_name.as_str()),
-        item.title.as_deref(),
-        item.file_path.as_deref(),
-        item.reason.as_deref(),
-        Some(item.status.as_str()),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|value| value.to_ascii_lowercase().contains(needle))
-}
-
-fn text_matches_vod(item: &VodHistoryItem, needle: Option<&str>) -> bool {
-    let Some(needle) = needle else {
-        return true;
-    };
-    [
-        Some(item.platform.as_str()),
-        Some(item.kind.as_str()),
-        Some(item.vod_url.as_str()),
-        Some(item.title.as_str()),
-        Some(item.streamer.as_str()),
-        item.output_file.as_deref(),
-        Some(item.message.as_str()),
-        Some(item.state.as_str()),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|value| value.to_ascii_lowercase().contains(needle))
-}
-
-fn normalized_date(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| value.len() >= 10)
-        .map(|value| value[..10].to_string())
-}
-
-fn date_matches(timestamp: &str, from: Option<&str>, to: Option<&str>) -> bool {
-    let date = timestamp.get(..10).unwrap_or(timestamp);
-    from.is_none_or(|min| date >= min) && to.is_none_or(|max| date <= max)
 }
 
 fn collapse_volumes(targets: Vec<(String, String)>, threshold_gb: f64) -> Vec<StorageVolume> {
@@ -398,19 +263,5 @@ mod tests {
         let base = env::current_dir().unwrap();
         let probe = existing_probe_path(&base.join("phase8-does-not-exist").join("child")).unwrap();
         assert!(probe.exists());
-    }
-
-    #[test]
-    fn history_date_filter_uses_calendar_date() {
-        assert!(date_matches(
-            "2026-09-08T03:00:00Z",
-            Some("2026-09-08"),
-            Some("2026-09-08")
-        ));
-        assert!(!date_matches(
-            "2026-09-07T23:59:59Z",
-            Some("2026-09-08"),
-            None
-        ));
     }
 }

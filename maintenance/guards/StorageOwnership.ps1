@@ -5,6 +5,7 @@ $chzzk = Read-RepoFile 'rust-web/src/platform/chzzk/mod.rs'
 $vodFacade = Read-RepoFile 'rust-web/src/platform/vod.rs'
 $chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
 $queue = Read-RepoFile 'rust-web/src/vod_queue.rs'
+$queueService = Read-RepoFile 'rust-web/src/queue_service.rs'
 $auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
 $recorder = Read-RepoFile 'rust-web/src/recorder.rs'
 $main = Read-RepoFile 'rust-web/src/main.rs'
@@ -26,7 +27,7 @@ Assert-Match $vodFacade 'PlatformId::Chzzk\s*=>\s*chzzk::vod::validate_download_
 Assert-Match $vodFacade 'lifecycle:\s*Mutex<\(\)>' 'Common VOD facade does not serialize provider starts.'
 Assert-Match $vodFacade 'ensure_idle\(\)\.await\?' 'Cross-provider VOD start guard is missing.'
 Assert-Match $vodFacade 'running_provider\(\)' 'VOD status/cancel cannot recover the actually running provider.'
-Assert-NotMatch $queue 'api\.chzzk\.naver\.com|NID_AUT|NID_SES' 'Provider-specific CHZZK network/auth logic leaked into vod_queue.rs.'
+Assert-NotMatch ($queue + "`n" + $queueService) 'api\.chzzk\.naver\.com|NID_AUT|NID_SES' 'Provider-specific CHZZK network/auth logic leaked into Queue orchestration.'
 
 # Existing CHZZK auth encrypted CHZZK auth must be reused; plaintext temp data is private and scavenged.
 Assert-Match $chzzkVod 'ChzzkAuth::load\(\)' 'CHZZK VOD does not reuse the encrypted CHZZK auth authentication store.'
