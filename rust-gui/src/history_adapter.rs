@@ -1,4 +1,7 @@
-use stream_archive_server::model::{HistoryResponse, LiveHistoryItem, VodHistoryItem};
+use stream_archive_server::{
+    history_service::{format_history_timestamp_local, history_timestamp_sort_key},
+    model::{HistoryResponse, LiveHistoryItem, VodHistoryItem},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoryRowView {
@@ -18,12 +21,24 @@ pub fn rows(history: HistoryResponse, view: &str) -> Vec<HistoryRowView> {
     let view = view.to_ascii_uppercase();
     let mut rows = Vec::new();
     if view != "VOD" {
-        rows.extend(history.live.into_iter().map(live_row));
+        rows.extend(history.live.into_iter().map(|item| {
+            let sort_key = history_timestamp_sort_key(&item.started_at);
+            (sort_key, live_row(item))
+        }));
     }
     if view != "LIVE" {
-        rows.extend(history.vod.into_iter().map(vod_row));
+        rows.extend(history.vod.into_iter().map(|item| {
+            let sort_key = item
+                .started_at
+                .as_deref()
+                .or(item.finished_at.as_deref())
+                .map(history_timestamp_sort_key)
+                .unwrap_or(i64::MIN);
+            (sort_key, vod_row(item))
+        }));
     }
-    rows
+    rows.sort_by(|left, right| right.0.cmp(&left.0));
+    rows.into_iter().map(|(_, row)| row).collect()
 }
 
 fn live_row(item: LiveHistoryItem) -> HistoryRowView {
@@ -35,8 +50,11 @@ fn live_row(item: LiveHistoryItem) -> HistoryRowView {
     let subject = format!("{} · {}", item.channel_name, item.account);
     let timing = format!(
         "Started: {}  ·  Ended: {}",
-        item.started_at,
-        item.ended_at.clone().unwrap_or_else(|| "-".into())
+        format_history_timestamp_local(&item.started_at),
+        item.ended_at
+            .as_deref()
+            .map(format_history_timestamp_local)
+            .unwrap_or_else(|| "-".into())
     );
     let mut detail = format!(
         "Duration: {}  ·  Size: {}",
@@ -81,8 +99,14 @@ fn vod_row(item: VodHistoryItem) -> HistoryRowView {
     };
     let timing = format!(
         "Started: {}  ·  Finished: {}",
-        item.started_at.clone().unwrap_or_else(|| "-".into()),
-        item.finished_at.clone().unwrap_or_else(|| "-".into())
+        item.started_at
+            .as_deref()
+            .map(format_history_timestamp_local)
+            .unwrap_or_else(|| "-".into()),
+        item.finished_at
+            .as_deref()
+            .map(format_history_timestamp_local)
+            .unwrap_or_else(|| "-".into())
     );
     let detail = if item.message.trim().is_empty() {
         format!("{} · {} parts", item.kind, item.part_count)
@@ -193,5 +217,45 @@ mod tests {
         let vod = rows(history, "VOD");
         assert_eq!(vod.len(), 1);
         assert_eq!(vod[0].kind, "VOD");
+    }
+
+    #[test]
+    fn all_view_interleaves_live_and_vod_by_timestamp() {
+        let history = HistoryResponse {
+            live: vec![LiveHistoryItem {
+                platform: PlatformId::Soop,
+                id: "live-old".into(),
+                account: "account".into(),
+                channel_name: "channel".into(),
+                bno: None,
+                title: Some("older live".into()),
+                file_path: None,
+                started_at: "2026-09-18T10:00:00Z".into(),
+                ended_at: None,
+                duration_seconds: 0,
+                size_bytes: 0,
+                reason: None,
+                status: "STOPPED".into(),
+            }],
+            vod: vec![VodHistoryItem {
+                platform: PlatformId::Soop,
+                id: "vod-new".into(),
+                kind: "DOWNLOAD".into(),
+                vod_url: "url".into(),
+                title: "newer vod".into(),
+                streamer: "streamer".into(),
+                part_count: 1,
+                state: "COMPLETED".into(),
+                output_file: None,
+                message: String::new(),
+                started_at: Some("2026-09-18T11:00:00Z".into()),
+                finished_at: Some("2026-09-18T11:10:00Z".into()),
+            }],
+        };
+
+        let all = rows(history, "ALL");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].kind, "VOD");
+        assert_eq!(all[1].kind, "LIVE");
     }
 }
