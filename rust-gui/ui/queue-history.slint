@@ -323,7 +323,7 @@ export component HistoryPage inherits VerticalLayout {
 
                     for day[index] in QueueHistoryState.history-calendar-days: Button {
                         row: index / 7 + 1;
-                        col: index % 7;
+                        col: Math.mod(index, 7);
                         height: 28px;
                         text: day.selected ? "✓ " + day.day : day.day;
                         opacity: day.in-month ? 1 : 0.55;
