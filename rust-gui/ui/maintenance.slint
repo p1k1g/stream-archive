@@ -296,14 +296,14 @@ export component MaintenancePage inherits VerticalLayout {
                 }
 
                 for row in MaintenanceState.backup-rows: Rectangle {
-                    min-height: 78px;
+                    height: 68px;
                     vertical-stretch: 0;
                     background: #ffffff;
                     border-radius: 10px;
                     border-width: 1px;
                     border-color: row.integrity-tone == "ok" ? #bbf7d0 : row.integrity-tone == "error" ? #fecaca : #fde68a;
                     VerticalLayout {
-                        padding: 8px;
+                        padding: 6px;
                         spacing: 2px;
                         HorizontalLayout {
                             height: 24px;
@@ -324,19 +324,23 @@ export component MaintenancePage inherits VerticalLayout {
                                 vertical-alignment: center;
                             }
                             Button {
-                                height: 28px;
+                                height: 24px;
                                 text: "Restore";
                                 enabled: !MaintenanceState.busy && row.can-restore;
                                 clicked => { MaintenanceState.request-restore(row.file-name); }
                             }
                         }
                         SummaryLabel {
-                            text: row.kind + "  ·  " + row.created-at + "  ·  " + row.size;
+                            height: 14px;
                             vertical-stretch: 0;
+                            vertical-alignment: center;
+                            text: row.kind + "  ·  " + row.created-at + "  ·  " + row.size;
                         }
                         SummaryLabel {
-                            text: "SHA256: " + row.sha256;
+                            height: 14px;
                             vertical-stretch: 0;
+                            vertical-alignment: center;
+                            text: "SHA256: " + row.sha256;
                         }
                     }
                 }
