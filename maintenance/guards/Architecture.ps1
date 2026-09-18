@@ -71,7 +71,7 @@ Assert-Match $core 'lifecycle_lock: Arc<Mutex<\(\)>>' 'Shared core must serializ
 Assert-Match $core 'pub\s+async\s+fn\s+shutdown' 'Shared core must expose owned-runtime shutdown.'
 # Match actual Axum/direct http crate dependencies, not similarly named transport types such as reqwest::StatusCode.
 Assert-NotMatch $core '(?m)^\s*use\s+(?:axum|http)(?:::|\s*\{)|\baxum::|\bhttp::(?:HeaderMap|StatusCode)\b' 'Shared core must stay independent from Axum/HTTP presentation concerns.'
-Assert-RustTest $core 'assembled_core_keeps_one_canonical_store_and_backend' 'Shared core canonical-store regression test is missing.'
+Assert-RustTest $core 'assembled_core_keeps_one_canonical_store_backend_and_queue' 'Shared core canonical-store/queue regression test is missing.'
 
 # Phase 21.2 Windows Slint shell. The desktop UI is a presentation adapter over
 # StreamArchiveCore, not another HTTP client, persistence authority, or process owner.
