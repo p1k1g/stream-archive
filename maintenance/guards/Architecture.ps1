@@ -94,9 +94,11 @@ Assert-Match $guiSources 'bind_core_snapshot' 'Slint shell must bind runtime sta
 Assert-NotMatch $guiSources '\breqwest::|\baxum::|https?://127\.0\.0\.1|https?://localhost|rusqlite::|Command::new|taskkill|pkill|killall' 'Slint shell must not bypass shared core through HTTP, SQLite, or direct process control.'
 Assert-Match $guiUi 'export\s+global\s+AppState' 'Slint shell state boundary is missing.'
 Assert-Match $guiUi 'callback\s+refresh-requested' 'Slint runtime refresh callback is missing.'
-foreach ($page in @('Dashboard', 'LIVE', 'VOD', 'Queue', 'History', 'Maintenance', 'Settings')) {
+foreach ($page in @('LIVE', 'VOD', 'Queue', 'History', 'Maintenance', 'Settings')) {
     Assert-Match $guiUi ([regex]::Escape("page: `"$page`"")) "Slint navigation page missing: $page"
 }
+Assert-NotMatch $guiUi 'page:\s*"Dashboard"' 'Dashboard must stay removed; its information is available through Settings diagnostics.'
+Assert-Match $guiUi 'active-page:\s*"LIVE"' 'Configured native startup must default to the LIVE page.'
 
 # Provider registry/facades.
 Assert-Match $platform 'pub\s+mod\s+live' 'Platform LIVE facade must be registered.'
@@ -129,6 +131,8 @@ Write-Host 'Architecture contracts passed.'
 # Phase 21.3: inspect every GUI module, not only the small bootstrap.
 Assert-Match $core 'pub\s+async\s+fn\s+update_environment_settings' 'Native settings must persist through shared core.'
 Assert-Match $core 'pub\s+fn\s+diagnostics' 'Structured diagnostics service is missing.'
+Assert-Match $core 'pub\s+fn\s+is_first_run_unconfigured' 'Shared core must expose first-run routing state.'
+Assert-Match $guiSources 'core\.is_first_run_unconfigured\(' 'Native startup must determine first-run routing through the shared core.'
 Assert-Match $guiSources 'core\.update_environment_settings' 'GUI settings bypass shared service.'
 Assert-Match $guiSources 'core\.diagnostics\(' 'GUI diagnostics must consume shared diagnostics.'
 Assert-NotMatch $guiSources 'std::fs::write|fs::write|Connection::open|std::process|tokio::process' 'GUI must not write runtime files or own child processes.'
