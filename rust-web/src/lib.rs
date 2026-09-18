@@ -1,5 +1,6 @@
 pub mod app_core;
 pub mod backend;
+pub mod backup_service;
 pub mod diagnostics;
 pub mod environment_settings;
 pub mod history_service;
