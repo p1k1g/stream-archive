@@ -104,9 +104,7 @@ enum Response {
     Snapshot {
         fields: Option<Vec<EnvironmentSetting>>,
         diagnostics: DiagnosticsSnapshot,
-        backend: String,
-        database: String,
-        channel_count: String,
+        first_run: bool,
         message: String,
     },
     Configuration {
@@ -196,12 +194,7 @@ fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str
     Response::Snapshot {
         fields,
         diagnostics: core.diagnostics(),
-        backend: core.backend_dir().display().to_string(),
-        database: core.store().path().display().to_string(),
-        channel_count: core
-            .channels()
-            .map(|c| c.len().to_string())
-            .unwrap_or_else(|_| "Unavailable".into()),
+        first_run: core.is_first_run_unconfigured().unwrap_or(false),
         message: message.into(),
     }
 }
@@ -386,11 +379,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     backend_path.as_deref(),
                     &message,
                 ),
-                backend: backend_path
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "Unavailable".into()),
-                database: "Unavailable".into(),
-                channel_count: "Unavailable".into(),
+                first_run: false,
                 message,
             });
             return;
@@ -1065,7 +1054,6 @@ pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     let state = ui.global::<AppState>();
     state.set_runtime_ready(diagnostics.runtime_ready);
     state.set_runtime_status(format!("Environment: {}", diagnostics.status.label()).into());
-    state.set_tool_summary("See Settings diagnostics for media-tool availability".into());
     let rows: Vec<_> = diagnostics
         .items
         .into_iter()
@@ -1925,12 +1913,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 Response::Snapshot {
                     fields,
                     diagnostics,
-                    backend,
-                    database,
-                    channel_count,
+                    first_run,
                     message,
                 } => {
                     state.set_settings_busy(false);
+                    let has_settings_snapshot = fields.is_some();
                     let startup_failed = !state.get_live_loaded() && fields.is_none();
                     if let Some(fields) = fields {
                         draft.borrow_mut().load(fields);
@@ -1938,9 +1925,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_settings_loaded(true);
                     }
                     bind_core_snapshot(&ui, diagnostics);
-                    state.set_backend_path(backend.into());
-                    state.set_database_path(database.into());
-                    state.set_channel_count(channel_count.into());
+                    if first_run && has_settings_snapshot && state.get_active_page() == "LIVE" {
+                        state.set_active_page("Settings".into());
+                    }
                     state.set_settings_message(message.clone().into());
                     if startup_failed {
                         state.set_config_busy(false);
@@ -1964,9 +1951,6 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_config_busy(false);
                     response_channels.borrow_mut().load(channels);
                     render_channels(&ui, &response_channels.borrow());
-                    state.set_channel_count(
-                        response_channels.borrow().rows.len().to_string().into(),
-                    );
                     state.set_soop_username(username.into());
                     state.set_cloudflare_worker_url(worker_url.into());
                     state.set_soop_password_configured(
