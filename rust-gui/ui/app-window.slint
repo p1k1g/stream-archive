@@ -169,23 +169,6 @@ component NavItem inherits Rectangle {
     TouchArea { clicked => { AppState.active-page = root.page; } }
 }
 
-component PlaceholderPage inherits Rectangle {
-    in property <string> title;
-    in property <string> description;
-    background: #ffffff;
-    border-radius: 12px;
-    border-width: 1px;
-    border-color: #e2e8f0;
-
-    VerticalLayout {
-        padding: 24px;
-        spacing: 12px;
-        Text { text: root.title; color: #0f172a; font-size: 22px; font-weight: 700; }
-        Text { text: root.description; color: #64748b; font-size: 14px; wrap: word-wrap; }
-        Rectangle { vertical-stretch: 1; background: transparent; }
-    }
-}
-
 component LiveMetric inherits Rectangle {
     in property <string> label;
     in property <string> value;
