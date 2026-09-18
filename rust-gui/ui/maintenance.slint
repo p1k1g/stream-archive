@@ -143,33 +143,73 @@ export component MaintenancePage inherits VerticalLayout {
                 }
 
                 HorizontalLayout {
-                    height: 34px;
+                    height: 46px;
                     vertical-stretch: 0;
-                    spacing: 8px;
-                    Button {
+                    spacing: 12px;
+                    VerticalLayout {
                         width: 132px;
-                        height: 34px;
-                        text: MaintenanceState.backup-enabled ? "Auto backup: ON" : "Auto backup: OFF";
-                        enabled: !MaintenanceState.busy;
-                        clicked => { MaintenanceState.toggle-backup-enabled(); }
+                        horizontal-stretch: 0;
+                        spacing: 2px;
+                        Text {
+                            text: "Auto backup";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        Button {
+                            height: 30px;
+                            text: MaintenanceState.backup-enabled ? "ON" : "OFF";
+                            enabled: !MaintenanceState.busy;
+                            clicked => { MaintenanceState.toggle-backup-enabled(); }
+                        }
                     }
-                    LineEdit {
-                        height: 34px;
-                        text <=> MaintenanceState.backup-interval-hours;
-                        placeholder-text: "Interval hours";
-                        enabled: !MaintenanceState.busy;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "Interval hours";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-interval-hours;
+                            placeholder-text: "24";
+                            enabled: !MaintenanceState.busy;
+                        }
                     }
-                    LineEdit {
-                        height: 34px;
-                        text <=> MaintenanceState.backup-keep-count;
-                        placeholder-text: "Keep count";
-                        enabled: !MaintenanceState.busy;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "Keep count";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-keep-count;
+                            placeholder-text: "10";
+                            enabled: !MaintenanceState.busy;
+                        }
                     }
-                    LineEdit {
-                        height: 34px;
-                        text <=> MaintenanceState.backup-retention-days;
-                        placeholder-text: "Retention days";
-                        enabled: !MaintenanceState.busy;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "Retention days";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-retention-days;
+                            placeholder-text: "3";
+                            enabled: !MaintenanceState.busy;
+                        }
                     }
                 }
 
@@ -240,7 +280,7 @@ export component MaintenancePage inherits VerticalLayout {
             vertical-stretch: 1;
             VerticalLayout {
                 padding: 2px;
-                spacing: 9px;
+                spacing: 6px;
 
                 if MaintenanceState.backup-rows.length == 0: Rectangle {
                     height: 78px;
@@ -256,15 +296,15 @@ export component MaintenancePage inherits VerticalLayout {
                 }
 
                 for row in MaintenanceState.backup-rows: Rectangle {
-                    min-height: 112px;
+                    min-height: 78px;
                     vertical-stretch: 0;
                     background: #ffffff;
                     border-radius: 10px;
                     border-width: 1px;
                     border-color: row.integrity-tone == "ok" ? #bbf7d0 : row.integrity-tone == "error" ? #fecaca : #fde68a;
                     VerticalLayout {
-                        padding: 11px;
-                        spacing: 4px;
+                        padding: 8px;
+                        spacing: 2px;
                         HorizontalLayout {
                             height: 24px;
                             vertical-stretch: 0;
@@ -290,8 +330,14 @@ export component MaintenancePage inherits VerticalLayout {
                                 clicked => { MaintenanceState.request-restore(row.file-name); }
                             }
                         }
-                        SummaryLabel { text: row.kind + "  ·  " + row.created-at + "  ·  " + row.size; }
-                        SummaryLabel { text: "SHA256: " + row.sha256; }
+                        SummaryLabel {
+                            text: row.kind + "  ·  " + row.created-at + "  ·  " + row.size;
+                            vertical-stretch: 0;
+                        }
+                        SummaryLabel {
+                            text: "SHA256: " + row.sha256;
+                            vertical-stretch: 0;
+                        }
                     }
                 }
             }
