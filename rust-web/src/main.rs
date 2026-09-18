@@ -1,6 +1,7 @@
 mod auth;
 mod backend;
 mod backup;
+mod backup_service;
 mod history_storage;
 mod local_picker;
 mod model;
@@ -29,7 +30,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use backend::{HIDDEN_SETTING_KEYS, LogBuffer, resolve_backend_dir};
-use backup::BackupManager;
+use backup_service::BackupManager;
 use model::{
     Channel, ChannelLookupResponse, LogsResponse, NativeWatcherStatus as WatcherStatus,
     SettingsResponse, StatusResponse, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus,
@@ -146,7 +147,7 @@ async fn main() -> Result<()> {
     }
 
     spawn_vod_history_sync(store.clone(), vod.clone(), logs.clone());
-    backup::spawn_auto_backup(backups.clone(), logs.clone());
+    backup_service::spawn_auto_backup(backups.clone(), logs.clone());
     vod_queue.clone().spawn();
 
     let app = Router::new()
