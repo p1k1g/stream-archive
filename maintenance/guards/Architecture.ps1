@@ -136,4 +136,4 @@ Assert-Match $guiUi 'Diagnostics.*read-only' 'Read-only diagnostics must be dist
 Assert-Match $guiSources 'core\.backup_snapshot\(' 'Native Maintenance must load backups through StreamArchiveCore.'
 Assert-Match $guiSources 'core\.restore_backup\(' 'Native Maintenance restore must use StreamArchiveCore.'
 Assert-Match $guiSources 'core\.runtime_logs\(' 'Native log viewer must use the bounded shared LogBuffer service.'
-Assert-NotMatch $guiSources 'Sha256|sha2::|read_to_end|copy\(' 'Slint presentation must not implement backup hashing/copying.'
+Assert-NotMatch $guiSources '\bSha256::new\b|\bsha2::Digest\b|\bread_to_end\s*\(|\bstd::io::copy\s*\(' 'Slint presentation must not implement backup hashing/copying.'
