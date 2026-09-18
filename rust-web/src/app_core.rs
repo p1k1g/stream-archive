@@ -149,6 +149,10 @@ impl StreamArchiveCore {
         self.lifecycle_lock.clone()
     }
 
+    pub fn is_first_run_unconfigured(&self) -> Result<bool> {
+        self.store.is_first_run_unconfigured()
+    }
+
     pub fn settings(&self) -> Result<BTreeMap<String, String>> {
         self.store.safe_settings()
     }
