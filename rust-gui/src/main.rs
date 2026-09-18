@@ -2,6 +2,7 @@ mod channels_adapter;
 mod controller;
 mod history_adapter;
 mod live_adapter;
+mod maintenance_adapter;
 mod native_picker;
 mod queue_adapter;
 mod settings_adapter;
