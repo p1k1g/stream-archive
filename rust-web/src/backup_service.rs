@@ -183,7 +183,10 @@ impl BackupManager {
                 "BACKUP_INTERVAL_HOURS".to_string(),
                 policy.interval_hours.to_string(),
             ),
-            ("BACKUP_KEEP_COUNT".to_string(), policy.keep_count.to_string()),
+            (
+                "BACKUP_KEEP_COUNT".to_string(),
+                policy.keep_count.to_string(),
+            ),
             (
                 "BACKUP_RETENTION_DAYS".to_string(),
                 policy.retention_days.to_string(),
@@ -197,8 +200,9 @@ impl BackupManager {
             let directory = directory.trim();
             if !directory.is_empty() {
                 let path = PathBuf::from(directory);
-                fs::create_dir_all(&path)
-                    .with_context(|| format!("failed to create backup directory {}", path.display()))?;
+                fs::create_dir_all(&path).with_context(|| {
+                    format!("failed to create backup directory {}", path.display())
+                })?;
                 if !path.is_dir() {
                     bail!("backup directory is not a directory: {}", path.display());
                 }
@@ -353,9 +357,7 @@ impl BackupManager {
                     .and_then(|metadata| metadata.modified())
                     .ok()
                     .and_then(|modified| now.duration_since(modified).ok())
-                    .is_some_and(|age| {
-                        age.as_secs() > policy.retention_days as u64 * 86_400
-                    })
+                    .is_some_and(|age| age.as_secs() > policy.retention_days as u64 * 86_400)
             } else {
                 false
             };
@@ -373,7 +375,10 @@ impl BackupManager {
         if trimmed.is_empty()
             || !trimmed.starts_with(BACKUP_PREFIX)
             || !trimmed.ends_with(".db")
-            || Path::new(trimmed).file_name().and_then(|value| value.to_str()) != Some(trimmed)
+            || Path::new(trimmed)
+                .file_name()
+                .and_then(|value| value.to_str())
+                != Some(trimmed)
         {
             bail!("invalid backup file name");
         }
@@ -510,11 +515,15 @@ fn sha256_file(path: &Path) -> Result<String> {
 }
 
 fn parse_u64(value: Option<String>, default: u64) -> u64 {
-    value.and_then(|value| value.parse().ok()).unwrap_or(default)
+    value
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 fn parse_i64(value: Option<String>, default: i64) -> i64 {
-    value.and_then(|value| value.parse().ok()).unwrap_or(default)
+    value
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 #[cfg(test)]
@@ -571,10 +580,7 @@ mod tests {
     fn online_backup_round_trip_restores_database_and_creates_safety_copy() {
         let (_dir, _app, backend, store) = setup();
         store
-            .sync_settings(
-                &BTreeMap::from([("TEST".into(), "before".into())]),
-                "test",
-            )
+            .sync_settings(&BTreeMap::from([("TEST".into(), "before".into())]), "test")
             .unwrap();
         let manager = BackupManager::open(store.clone(), &backend).unwrap();
         store
@@ -586,12 +592,11 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let backup = runtime.block_on(manager.create_manual()).unwrap();
         store
-            .sync_settings(
-                &BTreeMap::from([("TEST".into(), "after".into())]),
-                "test",
-            )
+            .sync_settings(&BTreeMap::from([("TEST".into(), "after".into())]), "test")
             .unwrap();
-        let outcome = runtime.block_on(manager.restore(&backup.file_name)).unwrap();
+        let outcome = runtime
+            .block_on(manager.restore(&backup.file_name))
+            .unwrap();
         assert_eq!(
             store.setting_value("TEST").unwrap().as_deref(),
             Some("before")
@@ -629,6 +634,10 @@ mod tests {
             keep_count: 10,
             retention_days: 3,
         };
-        assert!(runtime.block_on(manager.update_policy(&policy, None)).is_err());
+        assert!(
+            runtime
+                .block_on(manager.update_policy(&policy, None))
+                .is_err()
+        );
     }
 }
