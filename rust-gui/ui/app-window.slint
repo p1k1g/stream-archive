@@ -1,6 +1,8 @@
 import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 import { QueuePage, HistoryPage, QueueHistoryState as QueueHistoryLocal } from "queue-history.slint";
+import { MaintenancePage, MaintenanceState as MaintenanceLocal } from "maintenance.slint";
 export { QueueHistoryState } from "queue-history.slint";
+export { MaintenanceState, MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow } from "maintenance.slint";
 
 export struct SettingRow { key: string, value: string, description: string, pickable: bool }
 export struct DiagnosticRow { name: string, status: string, detail: string }
@@ -233,6 +235,7 @@ export component MainWindow inherits Window {
                 NavItem { label: "VOD"; page: "VOD"; }
                 NavItem { label: "Queue"; page: "Queue"; }
                 NavItem { label: "History"; page: "History"; }
+                NavItem { label: "Maintenance"; page: "Maintenance"; }
                 NavItem { label: "Settings"; page: "Settings"; }
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 Rectangle {
@@ -958,6 +961,7 @@ export component MainWindow inherits Window {
                 }
                           if AppState.active-page == "Queue": QueuePage { vertical-stretch: 1; }
                 if AppState.active-page == "History": HistoryPage { vertical-stretch: 1; }
+                if AppState.active-page == "Maintenance": MaintenancePage { vertical-stretch: 1; }
 
 
                 if AppState.active-page == "Settings": VerticalLayout {
