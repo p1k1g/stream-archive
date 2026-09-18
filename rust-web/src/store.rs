@@ -350,6 +350,21 @@ impl Store {
         Ok(())
     }
 
+    pub fn is_first_run_unconfigured(&self) -> Result<bool> {
+        let conn = self.conn()?;
+        let has_user_state: i64 = conn.query_row(
+            r#"SELECT
+                EXISTS(SELECT 1 FROM settings WHERE source <> 'runtime-default')
+                OR EXISTS(SELECT 1 FROM channels)
+                OR EXISTS(SELECT 1 FROM live_recordings)
+                OR EXISTS(SELECT 1 FROM vod_jobs)
+                OR EXISTS(SELECT 1 FROM vod_queue)"#,
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(has_user_state == 0)
+    }
+
     pub fn safe_settings(&self) -> Result<BTreeMap<String, String>> {
         self.settings_for_keys(SAFE_SETTING_KEYS)
     }
@@ -709,6 +724,21 @@ mod tests {
             account: account.into(),
             outdir: String::new(),
         }
+    }
+
+    #[test]
+    fn fresh_store_is_first_run_until_user_configuration_is_written() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();
+        assert!(store.is_first_run_unconfigured().unwrap());
+
+        store
+            .sync_settings(
+                &BTreeMap::from([("CHECK_INTERVAL".into(), "30".into())]),
+                "native-environment",
+            )
+            .unwrap();
+        assert!(!store.is_first_run_unconfigured().unwrap());
     }
 
     #[test]
