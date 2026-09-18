@@ -13,6 +13,7 @@ $support = Read-RepoFile 'rust-web\src\support.rs'
 $watcher = Read-RepoFile 'rust-web\src\native_watcher.rs'
 $vodFacade = Read-RepoFile 'rust-web\src\vod.rs'
 $queue = Read-RepoFile 'rust-web\src\vod_queue.rs'
+$queueService = Read-RepoFile 'rust-web\src\queue_service.rs'
 $store = Read-RepoFile 'rust-web\src\store.rs'
 $main = Read-RepoFile 'rust-web\src\main.rs'
 $lib = Read-RepoFile 'rust-web\src\lib.rs'
@@ -50,7 +51,7 @@ Assert-NotMatch $store 'legacy-import-live|legacy-import-vod|read_safe_settings|
 Assert-Match $store 'settings_cache: Arc<RwLock<BTreeMap<String, String>>>' 'Committed runtime settings cache is missing.'
 Assert-RustTest $store 'runtime_config_cache_tracks_committed_writes' 'Committed settings-cache behavior test is missing.'
 Assert-Match $store 'platform TEXT NOT NULL' 'Persistent history and queue schemas must retain platform identity.'
-Assert-Match $queue 'lifecycle_lock: Arc<Mutex<\(\)>>' 'Queue must share the global serialized VOD lifecycle lock.'
+Assert-Match $queueService 'lifecycle_lock: Arc<Mutex<\(\)>>' 'Queue must share the global serialized VOD lifecycle lock.'
 
 # Phase 21 shared service boundary. Presentation/authentication concerns must stay
 # outside this facade so Slint and CLI callers can use Rust services directly.
@@ -110,8 +111,8 @@ Assert-Match $platformSoopVod 'vod\.sooplive\.com' 'SOOP VOD provider must own S
 
 # Queue/orchestration may identify a provider and include routing fixtures in tests,
 # but must not contain provider authentication/network implementation.
-Assert-Match $queue 'detect_vod_platform' 'VOD queue must persist detected platform identity.'
-Assert-NotMatch $queue 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'VOD queue must remain provider-neutral.'
+Assert-Match $queueService 'detect_vod_platform' 'VOD queue must persist detected platform identity.'
+Assert-NotMatch ($queue + "`n" + $queueService) 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'VOD queue must remain provider-neutral.'
 
 Write-Host 'Architecture contracts passed.'
 
