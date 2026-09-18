@@ -17,6 +17,140 @@ pub struct HistoryRowView {
     pub meta: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CalendarDayView {
+    pub day: String,
+    pub date: String,
+    pub in_month: bool,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CalendarMonthView {
+    pub year: i32,
+    pub month: u32,
+    pub label: String,
+    pub days: Vec<CalendarDayView>,
+}
+
+pub fn calendar_initial(selected: &str) -> CalendarMonthView {
+    let (year, month, _) = parse_date(selected).unwrap_or_else(today_utc);
+    calendar_month(year, month, selected)
+}
+
+pub fn calendar_shift(
+    year: i32,
+    month: u32,
+    delta: i32,
+    selected: &str,
+) -> CalendarMonthView {
+    let month_index = year * 12 + month as i32 - 1 + delta;
+    let shifted_year = month_index.div_euclid(12);
+    let shifted_month = month_index.rem_euclid(12) as u32 + 1;
+    calendar_month(shifted_year, shifted_month, selected)
+}
+
+pub fn calendar_month(year: i32, month: u32, selected: &str) -> CalendarMonthView {
+    let month = month.clamp(1, 12);
+    let first_day = days_from_civil(year, month, 1);
+    let first_weekday = (first_day + 4).rem_euclid(7);
+    let mut days = Vec::with_capacity(42);
+    for index in 0..42_i64 {
+        let day_offset = index - first_weekday;
+        let (cell_year, cell_month, cell_day) = civil_from_days(first_day + day_offset);
+        let date = format!("{cell_year:04}-{cell_month:02}-{cell_day:02}");
+        days.push(CalendarDayView {
+            day: cell_day.to_string(),
+            in_month: cell_year == year && cell_month == month,
+            selected: date == selected.trim(),
+            date,
+        });
+    }
+    CalendarMonthView {
+        year,
+        month,
+        label: format!("{} {year}", month_name(month)),
+        days,
+    }
+}
+
+fn parse_date(value: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = value.trim().split('-');
+    let year = parts.next()?.parse::<i32>().ok()?;
+    let month = parts.next()?.parse::<u32>().ok()?;
+    let day = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+fn today_utc() -> (i32, u32, u32) {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| (duration.as_secs() / 86_400) as i64)
+        .unwrap_or(0);
+    civil_from_days(days)
+}
+
+fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "",
+    }
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = year as i64 - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let month = month as i64;
+    let day = day as i64;
+    let mp = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let doe = days - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year as i32, month as u32, day as u32)
+}
+
 pub fn rows(history: HistoryResponse, view: &str) -> Vec<HistoryRowView> {
     let view = view.to_ascii_uppercase();
     let mut rows = Vec::new();
@@ -170,6 +304,23 @@ pub fn format_bytes(bytes: u64) -> String {
 mod tests {
     use super::*;
     use stream_archive_server::support::platform::PlatformId;
+
+    #[test]
+    fn calendar_builds_six_weeks_and_tracks_selected_date() {
+        let month = calendar_month(2026, 9, "2026-09-18");
+        assert_eq!(month.label, "September 2026");
+        assert_eq!(month.days.len(), 42);
+        assert!(month.days.iter().any(|day| day.date == "2026-09-18" && day.selected));
+        assert!(month.days.iter().any(|day| !day.in_month));
+    }
+
+    #[test]
+    fn calendar_shift_crosses_year_boundaries() {
+        let next = calendar_shift(2026, 12, 1, "");
+        assert_eq!((next.year, next.month), (2027, 1));
+        let previous = calendar_shift(2026, 1, -1, "");
+        assert_eq!((previous.year, previous.month), (2025, 12));
+    }
 
     #[test]
     fn duration_and_size_are_compact() {
