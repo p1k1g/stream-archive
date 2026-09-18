@@ -1733,10 +1733,185 @@ pub fn bind(ui: &MainWindow) -> Controller {
         }
     });
 
+    let maintenance_state = ui.global::<MaintenanceState>();
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::MaintenanceLoad);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_pick_backup_directory(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            let initial = state.get_backup_directory().to_string();
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupPickDirectory { initial },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_toggle_backup_enabled(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_backup_enabled(!state.get_backup_enabled());
+                state.set_message("Backup policy draft changed; Save policy to persist.".into());
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_save_backup_policy(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if state.get_busy() {
+                return;
+            }
+
+            let interval = match state
+                .get_backup_interval_hours()
+                .to_string()
+                .trim()
+                .parse::<u64>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message("Backup interval must be an integer number of hours.".into());
+                    return;
+                }
+            };
+            let keep_count = match state
+                .get_backup_keep_count()
+                .to_string()
+                .trim()
+                .parse::<usize>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message("Backup keep count must be a non-negative integer.".into());
+                    return;
+                }
+            };
+            let retention_days = match state
+                .get_backup_retention_days()
+                .to_string()
+                .trim()
+                .parse::<i64>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message("Backup retention days must be a non-negative integer.".into());
+                    return;
+                }
+            };
+
+            let directory = state
+                .get_backup_directory_editable()
+                .then(|| state.get_backup_directory().to_string());
+            let policy = BackupPolicy {
+                enabled: state.get_backup_enabled(),
+                interval_hours: interval,
+                keep_count,
+                retention_days,
+            };
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupSave { policy, directory },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_create_backup(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::BackupCreate);
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_request_restore(move |file_name| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_restore_pending_file(file_name);
+                state.set_message(
+                    "Confirm restore to continue. A pre_restore safety backup will be created first."
+                        .into(),
+                );
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_cancel_restore(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_restore_pending_file("".into());
+                state.set_message("Restore cancelled; no data changed.".into());
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_confirm_restore(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            let file_name = state.get_restore_pending_file().to_string();
+            if file_name.trim().is_empty() {
+                state.set_message("Select a valid backup before restore.".into());
+                return;
+            }
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupRestore { file_name },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_refresh_logs(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::LogsLoad { poll: false },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_toggle_log_auto_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_log_auto_refresh(!state.get_log_auto_refresh());
+            }
+        }
+    });
+
     let weak = ui.as_weak();
     let response_live_poll_flag = live_poll_in_flight.clone();
     let response_vod_poll_flag = vod_poll_in_flight.clone();
     let response_queue_poll_flag = queue_poll_in_flight.clone();
+    let response_maintenance_log_poll_flag = maintenance_log_poll_in_flight.clone();
     let response_channels = channels_draft.clone();
     let response_vod_draft = vod_draft.clone();
     let response_timer = Timer::default();
