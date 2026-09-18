@@ -1003,6 +1003,62 @@ fn render_history(ui: &MainWindow, history: HistoryResponse, view: &str) {
     state.set_history_loaded(true);
 }
 
+fn render_logs(ui: &MainWindow, lines: Vec<String>) {
+    let rows = maintenance_adapter::log_rows(lines, 200)
+        .into_iter()
+        .map(|row| MaintenanceLogRow {
+            text: row.text.into(),
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<MaintenanceState>();
+    state.set_log_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_log_message("Showing the latest bounded runtime log tail (max 200 lines).".into());
+}
+
+fn render_maintenance(
+    ui: &MainWindow,
+    snapshot: BackupSnapshot,
+    diagnostics: DiagnosticsSnapshot,
+    logs: Vec<String>,
+) {
+    let backup_rows = maintenance_adapter::backup_rows(&snapshot)
+        .into_iter()
+        .map(|row| MaintenanceBackupRow {
+            file_name: row.file_name.into(),
+            kind: row.kind.into(),
+            created_at: row.created_at.into(),
+            size: row.size.into(),
+            sha256: row.sha256.into(),
+            integrity: row.integrity.into(),
+            integrity_tone: row.integrity_tone.into(),
+            can_restore: row.can_restore,
+        })
+        .collect::<Vec<_>>();
+
+    let diagnostic_rows = maintenance_adapter::diagnostic_rows(&diagnostics)
+        .into_iter()
+        .map(|row| MaintenanceDiagnosticRow {
+            name: row.name.into(),
+            status: row.status.into(),
+            detail: row.detail.into(),
+            status_tone: row.status_tone.into(),
+        })
+        .collect::<Vec<_>>();
+
+    let state = ui.global::<MaintenanceState>();
+    state.set_backup_directory(snapshot.directory.into());
+    state.set_backup_directory_editable(snapshot.directory_editable);
+    state.set_backup_enabled(snapshot.policy.enabled);
+    state.set_backup_interval_hours(snapshot.policy.interval_hours.to_string().into());
+    state.set_backup_keep_count(snapshot.policy.keep_count.to_string().into());
+    state.set_backup_retention_days(snapshot.policy.retention_days.to_string().into());
+    state.set_backup_rows(ModelRc::new(VecModel::from(backup_rows)));
+    state.set_diagnostic_rows(ModelRc::new(VecModel::from(diagnostic_rows)));
+    state.set_loaded(true);
+    drop(state);
+    render_logs(ui, logs);
+}
+
 pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     let state = ui.global::<AppState>();
     state.set_runtime_ready(diagnostics.runtime_ready);
@@ -1106,6 +1162,20 @@ fn send_history(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Reques
     }
 }
 
+fn send_maintenance(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    let state = ui.global::<MaintenanceState>();
+    if state.get_busy() {
+        return;
+    }
+    match sender.send(request) {
+        Ok(()) => {
+            state.set_busy(true);
+            state.set_message("Working...".into());
+        }
+        Err(_) => state.set_message("Maintenance runtime worker is unavailable".into()),
+    }
+}
+
 pub fn bind(ui: &MainWindow) -> Controller {
     let (sender, requests) = mpsc::channel();
     let (responses, receiver) = mpsc::channel();
@@ -1117,6 +1187,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let queue_history = ui.global::<QueueHistoryState>();
     queue_history.set_queue_busy(true);
     queue_history.set_history_busy(true);
+    let maintenance = ui.global::<MaintenanceState>();
+    maintenance.set_busy(true);
     if let Err(error) = std::thread::Builder::new()
         .name("native-runtime".into())
         .spawn(move || worker(requests, responses))
@@ -1127,8 +1199,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_vod_busy(false);
         queue_history.set_queue_busy(false);
         queue_history.set_history_busy(false);
+        maintenance.set_busy(false);
         queue_history.set_queue_message(format!("Cannot start worker: {error}").into());
         queue_history.set_history_message(format!("Cannot start worker: {error}").into());
+        maintenance.set_message(format!("Cannot start worker: {error}").into());
         state.set_settings_message(format!("Cannot start worker: {error}").into());
         state.set_config_message(format!("Cannot start worker: {error}").into());
         state.set_live_message(format!("Cannot start worker: {error}").into());
@@ -1142,6 +1216,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let live_poll_in_flight = Rc::new(Cell::new(false));
     let vod_poll_in_flight = Rc::new(Cell::new(false));
     let queue_poll_in_flight = Rc::new(Cell::new(false));
+    let maintenance_log_poll_in_flight = Rc::new(Cell::new(false));
 
     let weak = ui.as_weak();
     let edit_draft = draft.clone();
