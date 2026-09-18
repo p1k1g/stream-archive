@@ -1948,7 +1948,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_live_busy(false);
                         state.set_live_message(message.clone().into());
                         state.set_vod_busy(false);
-                        state.set_vod_message(message.into());
+                        state.set_vod_message(message.clone().into());
+                        let maintenance_state = ui.global::<MaintenanceState>();
+                        maintenance_state.set_busy(false);
+                        maintenance_state.set_message(message.into());
                     }
                 }
                 Response::Configuration {
@@ -2179,6 +2182,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         response_maintenance_log_poll_flag.set(false);
                     } else {
                         maintenance_state.set_busy(false);
+                        maintenance_state.set_message("Runtime logs refreshed.".into());
                     }
                     render_logs(&ui, lines);
                 }
