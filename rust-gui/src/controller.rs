@@ -2281,7 +2281,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     );
 
     let weak = ui.as_weak();
-    let queue_poll_sender = sender;
+    let queue_poll_sender = sender.clone();
     let queue_poll_flag = queue_poll_in_flight;
     let queue_poll_timer = Timer::default();
     queue_poll_timer.start(
@@ -2308,10 +2308,41 @@ pub fn bind(ui: &MainWindow) -> Controller {
         },
     );
 
+    let weak = ui.as_weak();
+    let maintenance_log_poll_sender = sender;
+    let maintenance_log_poll_flag = maintenance_log_poll_in_flight;
+    let maintenance_log_poll_timer = Timer::default();
+    maintenance_log_poll_timer.start(
+        TimerMode::Repeated,
+        Duration::from_millis(1500),
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let app_state = ui.global::<AppState>();
+            let maintenance_state = ui.global::<MaintenanceState>();
+            if app_state.get_active_page().as_str() != "Maintenance"
+                || maintenance_state.get_section().as_str() != "Logs"
+                || !maintenance_state.get_log_auto_refresh()
+                || maintenance_state.get_busy()
+                || maintenance_log_poll_flag.get()
+            {
+                return;
+            }
+            if maintenance_log_poll_sender
+                .send(Request::LogsLoad { poll: true })
+                .is_ok()
+            {
+                maintenance_log_poll_flag.set(true);
+            }
+        },
+    );
+
     Controller {
         _response_timer: response_timer,
         _live_poll_timer: live_poll_timer,
         _vod_poll_timer: vod_poll_timer,
         _queue_poll_timer: queue_poll_timer,
+        _maintenance_log_poll_timer: maintenance_log_poll_timer,
     }
 }
