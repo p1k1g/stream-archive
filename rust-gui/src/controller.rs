@@ -2145,6 +2145,52 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     history_state.set_history_busy(false);
                     history_state.set_history_message(message.into());
                 }
+                Response::Maintenance {
+                    snapshot,
+                    diagnostics,
+                    logs,
+                    message,
+                } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    maintenance_state.set_busy(false);
+                    if message.starts_with("Restored ") {
+                        maintenance_state.set_restore_pending_file("".into());
+                    }
+                    render_maintenance(&ui, snapshot, diagnostics, logs);
+                    maintenance_state.set_message(message.into());
+                }
+                Response::MaintenancePicked(path) => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    maintenance_state.set_busy(false);
+                    if let Some(path) = path {
+                        maintenance_state.set_backup_directory(path.into());
+                        maintenance_state.set_message(
+                            "Backup directory draft updated; Save policy to persist it.".into(),
+                        );
+                    } else {
+                        maintenance_state.set_message(
+                            "Backup directory picker cancelled; previous value retained.".into(),
+                        );
+                    }
+                }
+                Response::Logs { lines, poll } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if poll {
+                        response_maintenance_log_poll_flag.set(false);
+                    } else {
+                        maintenance_state.set_busy(false);
+                    }
+                    render_logs(&ui, lines);
+                }
+                Response::MaintenanceError { message, poll } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if poll {
+                        response_maintenance_log_poll_flag.set(false);
+                    } else {
+                        maintenance_state.set_busy(false);
+                    }
+                    maintenance_state.set_message(message.into());
+                }
 
                 Response::Error(message) => {
                     state.set_settings_busy(false);
@@ -2168,6 +2214,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     if !queue_state.get_history_loaded() {
                         queue_state.set_history_busy(false);
                         queue_state.set_history_message(message.clone().into());
+                    }
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if !maintenance_state.get_loaded() {
+                        maintenance_state.set_busy(false);
+                        maintenance_state.set_message(message.clone().into());
                     }
                     state.set_settings_message(message.into());
                 }
