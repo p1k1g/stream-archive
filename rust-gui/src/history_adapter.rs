@@ -38,12 +38,7 @@ pub fn calendar_initial(selected: &str) -> CalendarMonthView {
     calendar_month(year, month, selected)
 }
 
-pub fn calendar_shift(
-    year: i32,
-    month: u32,
-    delta: i32,
-    selected: &str,
-) -> CalendarMonthView {
+pub fn calendar_shift(year: i32, month: u32, delta: i32, selected: &str) -> CalendarMonthView {
     let month_index = year * 12 + month as i32 - 1 + delta;
     let shifted_year = month_index.div_euclid(12);
     let shifted_month = month_index.rem_euclid(12) as u32 + 1;
@@ -79,7 +74,11 @@ fn parse_date(value: &str) -> Option<(i32, u32, u32)> {
     let year = parts.next()?.parse::<i32>().ok()?;
     let month = parts.next()?.parse::<u32>().ok()?;
     let day = parts.next()?.parse::<u32>().ok()?;
-    if parts.next().is_some() || !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+    if parts.next().is_some()
+        || !(1..=12).contains(&month)
+        || day == 0
+        || day > days_in_month(year, month)
+    {
         return None;
     }
     Some((year, month, day))
@@ -310,7 +309,12 @@ mod tests {
         let month = calendar_month(2026, 9, "2026-09-18");
         assert_eq!(month.label, "September 2026");
         assert_eq!(month.days.len(), 42);
-        assert!(month.days.iter().any(|day| day.date == "2026-09-18" && day.selected));
+        assert!(
+            month
+                .days
+                .iter()
+                .any(|day| day.date == "2026-09-18" && day.selected)
+        );
         assert!(month.days.iter().any(|day| !day.in_month));
     }
 
