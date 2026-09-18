@@ -1,7 +1,7 @@
 use crate::{
-    AppState, ChannelConfigRow, DiagnosticRow, HistoryDisplayRow, LiveChannelRow,
+    AppState, ChannelConfigRow, DiagnosticRow, HistoryDisplayRow, LiveChannelRow, MainWindow,
     MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow, MaintenanceState,
-    MainWindow, QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
+    QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
     channels_adapter::ChannelsDraft, history_adapter, live_adapter, maintenance_adapter,
     native_picker, queue_adapter, settings_adapter::SettingsDraft, vod_adapter,
 };
@@ -723,13 +723,15 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             Request::MaintenanceLoad => {
                 maintenance_snapshot(&core, &runtime, "Maintenance state refreshed")
             }
-            Request::BackupPickDirectory { initial } => match native_picker::pick_directory(&initial) {
-                Ok(path) => Response::MaintenancePicked(path),
-                Err(error) => Response::MaintenanceError {
-                    message: format!("Backup directory picker failed: {error}"),
-                    poll: false,
-                },
-            },
+            Request::BackupPickDirectory { initial } => {
+                match native_picker::pick_directory(&initial) {
+                    Ok(path) => Response::MaintenancePicked(path),
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("Backup directory picker failed: {error}"),
+                        poll: false,
+                    },
+                }
+            }
             Request::BackupSave { policy, directory } => {
                 match runtime.block_on(core.update_backup_policy(&policy, directory.as_deref())) {
                     Ok(snapshot) => Response::Maintenance {
@@ -1810,7 +1812,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
             {
                 Ok(value) => value,
                 Err(_) => {
-                    state.set_message("Backup retention days must be a non-negative integer.".into());
+                    state.set_message(
+                        "Backup retention days must be a non-negative integer.".into(),
+                    );
                     return;
                 }
             };
@@ -1889,11 +1893,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let maintenance_sender = sender.clone();
     maintenance_state.on_refresh_logs(move || {
         if let Some(ui) = weak.upgrade() {
-            send_maintenance(
-                &ui,
-                &maintenance_sender,
-                Request::LogsLoad { poll: false },
-            );
+            send_maintenance(&ui, &maintenance_sender, Request::LogsLoad { poll: false });
         }
     });
 
