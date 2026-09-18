@@ -1,8 +1,4 @@
-use crate::{
-    ApiResult, AppState, authorize,
-    backup_service::BackupInfo,
-    internal_error,
-};
+use crate::{ApiResult, AppState, authorize, backup_service::BackupInfo, internal_error};
 use axum::{
     Json,
     extract::{Path as AxumPath, State},
