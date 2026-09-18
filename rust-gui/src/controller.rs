@@ -589,7 +589,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                         poll: false,
                     },
                 }
-            },
+            }
             Request::VodCancel => match runtime.block_on(core.cancel_vod()) {
                 Ok(status) => Response::Vod {
                     status,
@@ -624,7 +624,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                         poll: false,
                     },
                 }
-            },
+            }
             Request::QueueAction { id, action } => {
                 let result = match action.as_str() {
                     "cancel" => runtime.block_on(core.cancel_queue_item(&id)),
