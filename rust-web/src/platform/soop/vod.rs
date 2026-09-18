@@ -1795,6 +1795,8 @@ mod tests {
     #[test]
     fn part_selection_validates() {
         assert_eq!(resolve_parts(&[], 3).unwrap(), vec![1, 2, 3]);
+        assert_eq!(resolve_parts(&[2], 3).unwrap(), vec![2]);
+        assert_eq!(resolve_parts(&[3, 1, 3], 3).unwrap(), vec![1, 3]);
         assert!(resolve_parts(&[4], 3).is_err());
     }
 
