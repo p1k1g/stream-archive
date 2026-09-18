@@ -1,8 +1,7 @@
 use crate::{
     AppState, ChannelConfigRow, DiagnosticRow, HistoryCalendarDay, HistoryDisplayRow,
-    LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow,
-    MaintenanceLogRow, MaintenanceState,
-    QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
+    LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow,
+    MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
     channels_adapter::ChannelsDraft, history_adapter, live_adapter, maintenance_adapter,
     native_picker, queue_adapter, settings_adapter::SettingsDraft, vod_adapter,
 };
