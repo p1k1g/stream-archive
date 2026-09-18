@@ -196,9 +196,20 @@ impl StreamArchiveCore {
             Ok(values)
         });
         match values {
-            Ok(values) => {
-                crate::diagnostics::collect(self.backend_dir(), self.store.path(), &values)
-            }
+            Ok(values) => match self.backups.policy() {
+                Ok(policy) => crate::diagnostics::collect_with_backup(
+                    self.backend_dir(),
+                    self.store.path(),
+                    &values,
+                    &self.backups.backup_dir(),
+                    &policy,
+                ),
+                Err(error) => crate::diagnostics::DiagnosticsSnapshot::unavailable(
+                    Some(self.backend_dir()),
+                    Some(self.store.path()),
+                    &format!("backup policy load failed: {error:#}"),
+                ),
+            },
             Err(error) => crate::diagnostics::DiagnosticsSnapshot::unavailable(
                 Some(self.backend_dir()),
                 Some(self.store.path()),
