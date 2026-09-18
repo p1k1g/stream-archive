@@ -81,10 +81,6 @@ impl BackupManager {
             operation: Arc::new(Mutex::new(())),
         };
         manager.ensure_policy_defaults()?;
-        let backup_dir = manager.backup_dir();
-        fs::create_dir_all(&backup_dir).with_context(|| {
-            format!("failed to create backup directory {}", backup_dir.display())
-        })?;
         Ok(manager)
     }
 
