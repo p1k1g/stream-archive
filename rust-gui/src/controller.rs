@@ -1,8 +1,9 @@
 use crate::{
-    AppState, ChannelConfigRow, DiagnosticRow, HistoryDisplayRow, LiveChannelRow, MainWindow,
-    QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
-    channels_adapter::ChannelsDraft, history_adapter, live_adapter, native_picker, queue_adapter,
-    settings_adapter::SettingsDraft, vod_adapter,
+    AppState, ChannelConfigRow, DiagnosticRow, HistoryDisplayRow, LiveChannelRow,
+    MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow, MaintenanceState,
+    MainWindow, QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
+    channels_adapter::ChannelsDraft, history_adapter, live_adapter, maintenance_adapter,
+    native_picker, queue_adapter, settings_adapter::SettingsDraft, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -15,6 +16,7 @@ use std::{
 use stream_archive_server::{
     app_core::StreamArchiveCore,
     backend::resolve_backend_dir,
+    backup_service::{BackupPolicy, BackupSnapshot},
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
     history_service::HistoryFilter,
@@ -81,6 +83,21 @@ enum Request {
         filter: HistoryFilter,
         view: String,
     },
+    MaintenanceLoad,
+    BackupPickDirectory {
+        initial: String,
+    },
+    BackupSave {
+        policy: BackupPolicy,
+        directory: Option<String>,
+    },
+    BackupCreate,
+    BackupRestore {
+        file_name: String,
+    },
+    LogsLoad {
+        poll: bool,
+    },
 }
 
 enum Response {
@@ -141,6 +158,21 @@ enum Response {
         message: Option<String>,
     },
     HistoryError(String),
+    Maintenance {
+        snapshot: BackupSnapshot,
+        diagnostics: DiagnosticsSnapshot,
+        logs: Vec<String>,
+        message: String,
+    },
+    MaintenancePicked(Option<String>),
+    Logs {
+        lines: Vec<String>,
+        poll: bool,
+    },
+    MaintenanceError {
+        message: String,
+        poll: bool,
+    },
     Error(String),
 }
 
@@ -149,6 +181,7 @@ pub struct Controller {
     _live_poll_timer: Timer,
     _vod_poll_timer: Timer,
     _queue_poll_timer: Timer,
+    _maintenance_log_poll_timer: Timer,
 }
 
 fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str) -> Response {
@@ -254,6 +287,25 @@ fn queue_status(
     }
 }
 
+fn maintenance_snapshot(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    message: impl Into<String>,
+) -> Response {
+    match runtime.block_on(core.backup_snapshot()) {
+        Ok(snapshot) => Response::Maintenance {
+            snapshot,
+            diagnostics: core.diagnostics(),
+            logs: runtime.block_on(core.runtime_logs(200)),
+            message: message.into(),
+        },
+        Err(error) => Response::MaintenanceError {
+            message: format!("Maintenance refresh failed: {error:#}"),
+            poll: false,
+        },
+    }
+}
+
 fn selected_parts_label(parts: &[usize]) -> String {
     if parts.is_empty() {
         return "all".into();
@@ -350,6 +402,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     runtime.block_on(async {
         core.spawn_vod_history_sync();
         core.spawn_queue_worker();
+        core.spawn_auto_backup();
     });
     if responses
         .send(read_snapshot(
@@ -405,6 +458,17 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 return;
             }
         }
+    }
+
+    if responses
+        .send(maintenance_snapshot(
+            &core,
+            &runtime,
+            "Maintenance state loaded from shared runtime services.",
+        ))
+        .is_err()
+    {
+        return;
     }
 
     for request in requests {
@@ -655,6 +719,81 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     message: Some("History refreshed".into()),
                 },
                 Err(error) => Response::HistoryError(format!("History refresh failed: {error:#}")),
+            },
+            Request::MaintenanceLoad => {
+                maintenance_snapshot(&core, &runtime, "Maintenance state refreshed")
+            }
+            Request::BackupPickDirectory { initial } => match native_picker::pick_directory(&initial) {
+                Ok(path) => Response::MaintenancePicked(path),
+                Err(error) => Response::MaintenanceError {
+                    message: format!("Backup directory picker failed: {error}"),
+                    poll: false,
+                },
+            },
+            Request::BackupSave { policy, directory } => {
+                match runtime.block_on(core.update_backup_policy(&policy, directory.as_deref())) {
+                    Ok(snapshot) => Response::Maintenance {
+                        snapshot,
+                        diagnostics: core.diagnostics(),
+                        logs: runtime.block_on(core.runtime_logs(200)),
+                        message: "Backup policy saved to canonical SQLite.".into(),
+                    },
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("Backup policy was not saved: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::BackupCreate => match runtime.block_on(core.create_manual_backup()) {
+                Ok(snapshot) => Response::Maintenance {
+                    snapshot,
+                    diagnostics: core.diagnostics(),
+                    logs: runtime.block_on(core.runtime_logs(200)),
+                    message: "Manual backup created and verified.".into(),
+                },
+                Err(error) => Response::MaintenanceError {
+                    message: format!("Manual backup failed: {error:#}"),
+                    poll: false,
+                },
+            },
+            Request::BackupRestore { file_name } => {
+                match runtime.block_on(core.restore_backup(&file_name)) {
+                    Ok(outcome) => {
+                        let _ = responses.send(read_snapshot(
+                            &core,
+                            true,
+                            "Database restored; Settings reloaded from canonical SQLite.",
+                        ));
+                        let _ = responses.send(configuration_snapshot(
+                            &core,
+                            "Database restored; Channels and provider configuration reloaded.",
+                        ));
+                        let _ = responses.send(queue_status(&core, &runtime, false));
+                        if let Ok(history) = core.history(&HistoryFilter::default()) {
+                            let _ = responses.send(Response::History {
+                                history,
+                                view: "ALL".into(),
+                                message: Some("History reloaded after restore".into()),
+                            });
+                        }
+                        maintenance_snapshot(
+                            &core,
+                            &runtime,
+                            format!(
+                                "Restored {}. Safety backup: {}. Watcher remains stopped.",
+                                outcome.restored.file_name, outcome.safety_backup.file_name
+                            ),
+                        )
+                    }
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("Restore blocked or failed: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::LogsLoad { poll } => Response::Logs {
+                lines: runtime.block_on(core.runtime_logs(200)),
+                poll,
             },
         };
         if responses.send(response).is_err() {
