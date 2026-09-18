@@ -1,4 +1,4 @@
-use crate::{backend::LogBuffer, store::Store};
+use crate::{backend::LogBuffer, primary_config::validate_setting_updates, store::Store};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
@@ -193,19 +193,12 @@ impl BackupManager {
             if !self.backup_dir_editable() {
                 bail!("backup directory is controlled by STREAM_ARCHIVE_BACKUP_DIR");
             }
-            let directory = directory.trim();
-            if !directory.is_empty() {
-                let path = PathBuf::from(directory);
-                fs::create_dir_all(&path).with_context(|| {
-                    format!("failed to create backup directory {}", path.display())
-                })?;
-                if !path.is_dir() {
-                    bail!("backup directory is not a directory: {}", path.display());
-                }
-            }
-            updates.insert("BACKUP_DIR".into(), directory.to_string());
+            updates.insert("BACKUP_DIR".into(), directory.trim().to_string());
         }
 
+        // Reuse the same canonical settings validation as the existing Web
+        // settings path, including numeric ranges and writable-directory checks.
+        validate_setting_updates(&updates)?;
         self.store.sync_settings(&updates, "native-backup")?;
         self.ensure_policy_defaults()?;
         Ok(BackupSnapshot {
