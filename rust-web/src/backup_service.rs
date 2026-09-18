@@ -598,6 +598,7 @@ mod tests {
     fn retention_does_not_delete_unowned_databases() {
         let (_dir, _app, backend, store) = setup();
         let manager = BackupManager::open(store, &backend).unwrap();
+        std::fs::create_dir_all(manager.backup_dir()).unwrap();
         let unrelated = manager.backup_dir().join("other-application.db");
         rusqlite::Connection::open(&unrelated).unwrap();
         let runtime = tokio::runtime::Runtime::new().unwrap();
