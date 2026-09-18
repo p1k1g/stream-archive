@@ -85,9 +85,23 @@ impl VodDraft {
     }
 
     pub fn toggle_part(&mut self, index: usize) {
-        if let Some(part) = self.parts.get_mut(index) {
-            part.selected = !part.selected;
+        if index >= self.parts.len() {
+            return;
         }
+
+        // Analysis starts with every PART selected. A first click in that
+        // state is most naturally interpreted as "download this PART", not
+        // "download every PART except this one". After an explicit subset is
+        // established, subsequent clicks toggle individual PARTs normally.
+        if !self.parts.is_empty() && self.parts.iter().all(|part| part.selected) {
+            for part in &mut self.parts {
+                part.selected = false;
+            }
+            self.parts[index].selected = true;
+            return;
+        }
+
+        self.parts[index].selected = !self.parts[index].selected;
     }
 
     pub fn select_all_parts(&mut self) {
@@ -357,7 +371,7 @@ mod tests {
         draft.toggle_part(1);
         let req = draft.download_request().unwrap();
         assert_eq!(req.quality, "720p");
-        assert_eq!(req.parts, vec![1]);
+        assert_eq!(req.parts, vec![2]);
         assert!(req.merge);
         assert_eq!(req.cookie_mode, "SOOP_LOGIN");
         assert!(req.yt_dlp_path.is_empty());
