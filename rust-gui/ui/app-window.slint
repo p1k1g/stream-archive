@@ -142,13 +142,9 @@ export global AppState {
     callback vod-cancel();
     callback vod-refresh();
 
-    in-out property <string> active-page: "Dashboard";
+    in-out property <string> active-page: "LIVE";
     in-out property <bool> runtime-ready: false;
     in-out property <string> runtime-status: "Initializing runtime...";
-    in-out property <string> backend-path: "-";
-    in-out property <string> database-path: "-";
-    in-out property <string> channel-count: "0";
-    in-out property <string> tool-summary: "Streamlink -  |  yt-dlp -  |  FFmpeg -";
     callback refresh-requested();
 }
 
@@ -229,7 +225,6 @@ export component MainWindow inherits Window {
                 Text { text: "Stream Archive"; color: #f8fafc; font-size: 21px; font-weight: 700; }
                 Text { text: "Native Desktop"; color: #94a3b8; font-size: 12px; }
                 Rectangle { height: 10px; vertical-stretch: 0; background: transparent; }
-                NavItem { label: "Dashboard"; page: "Dashboard"; }
                 NavItem { label: "LIVE"; page: "LIVE"; }
                 NavItem { label: "Channels"; page: "Channels"; }
                 NavItem { label: "VOD"; page: "VOD"; }
@@ -281,63 +276,6 @@ export component MainWindow inherits Window {
                         text: "Refresh runtime";
                         enabled: !AppState.settings-busy;
                         clicked => { AppState.refresh-requested(); }
-                    }
-                }
-
-                if AppState.active-page == "Dashboard": Rectangle {
-                    background: transparent;
-                    vertical-stretch: 1;
-                    VerticalLayout {
-                        spacing: 14px;
-                        Rectangle {
-                            height: 112px;
-                            vertical-stretch: 0;
-                            background: #ffffff;
-                            border-radius: 12px;
-                            border-width: 1px;
-                            border-color: #e2e8f0;
-                            VerticalLayout {
-                                padding: 20px;
-                                spacing: 7px;
-                                Text { text: "Runtime"; color: #475569; font-size: 12px; font-weight: 600; }
-                                Text { text: AppState.runtime-status; color: #0f172a; font-size: 19px; font-weight: 700; }
-                                Text { text: AppState.tool-summary; color: #64748b; font-size: 13px; }
-                            }
-                        }
-                        HorizontalLayout {
-                            height: 188px;
-                            vertical-stretch: 0;
-                            spacing: 14px;
-                            Rectangle {
-                                background: #ffffff;
-                                border-radius: 12px;
-                                border-width: 1px;
-                                border-color: #e2e8f0;
-                                horizontal-stretch: 1;
-                                VerticalLayout {
-                                    padding: 20px;
-                                    spacing: 7px;
-                                    Text { text: "Channels"; color: #64748b; font-size: 12px; }
-                                    Text { text: AppState.channel-count; color: #0f172a; font-size: 28px; font-weight: 700; }
-                                    Text { text: "Canonical SQLite channel entries"; color: #94a3b8; font-size: 12px; }
-                                }
-                            }
-                            Rectangle {
-                                background: #ffffff;
-                                border-radius: 12px;
-                                border-width: 1px;
-                                border-color: #e2e8f0;
-                                horizontal-stretch: 2;
-                                VerticalLayout {
-                                    padding: 20px;
-                                    spacing: 7px;
-                                    Text { text: "Database"; color: #64748b; font-size: 12px; }
-                                    Text { text: AppState.database-path; color: #0f172a; font-size: 13px; wrap: word-wrap; }
-                                    Text { text: "Backend: " + AppState.backend-path; color: #94a3b8; font-size: 12px; wrap: word-wrap; }
-                                }
-                            }
-                        }
-                        Rectangle { vertical-stretch: 1; background: transparent; }
                     }
                 }
 
