@@ -1,6 +1,7 @@
 use crate::{
-    AppState, ChannelConfigRow, DiagnosticRow, HistoryDisplayRow, LiveChannelRow, MainWindow,
-    MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow, MaintenanceState,
+    AppState, ChannelConfigRow, DiagnosticRow, HistoryCalendarDay, HistoryDisplayRow,
+    LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow,
+    MaintenanceLogRow, MaintenanceState,
     QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
     channels_adapter::ChannelsDraft, history_adapter, live_adapter, maintenance_adapter,
     native_picker, queue_adapter, settings_adapter::SettingsDraft, vod_adapter,
@@ -994,6 +995,29 @@ fn render_history(ui: &MainWindow, history: HistoryResponse, view: &str) {
     state.set_history_loaded(true);
 }
 
+fn render_history_calendar(
+    ui: &MainWindow,
+    target: &str,
+    calendar: history_adapter::CalendarMonthView,
+) {
+    let rows = calendar
+        .days
+        .into_iter()
+        .map(|day| HistoryCalendarDay {
+            day: day.day.into(),
+            date: day.date.into(),
+            in_month: day.in_month,
+            selected: day.selected,
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<QueueHistoryState>();
+    state.set_history_calendar_target(target.into());
+    state.set_history_calendar_year(calendar.year);
+    state.set_history_calendar_month(calendar.month as i32);
+    state.set_history_calendar_label(calendar.label.into());
+    state.set_history_calendar_days(ModelRc::new(VecModel::from(rows)));
+}
+
 fn render_logs(ui: &MainWindow, lines: Vec<String>) {
     let rows = maintenance_adapter::log_rows(lines, 200)
         .into_iter()
@@ -1686,6 +1710,70 @@ pub fn bind(ui: &MainWindow) -> Controller {
     send_queue(&ui, &queue_sender, Request::QueueEnqueue(request));
           }
       });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_open(move |target| {
+        if let Some(ui) = weak.upgrade() {
+            let target = target.to_string();
+            let state = ui.global::<QueueHistoryState>();
+            let selected = if target == "to" {
+                state.get_history_to_date().to_string()
+            } else {
+                state.get_history_from_date().to_string()
+            };
+            drop(state);
+            render_history_calendar(
+                &ui,
+                if target == "to" { "to" } else { "from" },
+                history_adapter::calendar_initial(&selected),
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_shift(move |delta| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            let target = state.get_history_calendar_target().to_string();
+            let year = state.get_history_calendar_year();
+            let month = state.get_history_calendar_month().max(1) as u32;
+            let selected = if target == "to" {
+                state.get_history_to_date().to_string()
+            } else {
+                state.get_history_from_date().to_string()
+            };
+            drop(state);
+            render_history_calendar(
+                &ui,
+                &target,
+                history_adapter::calendar_shift(year, month, delta, &selected),
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_select(move |date| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            if state.get_history_calendar_target().as_str() == "to" {
+                state.set_history_to_date(date);
+            } else {
+                state.set_history_from_date(date);
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_clear(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            if state.get_history_calendar_target().as_str() == "to" {
+                state.set_history_to_date("".into());
+            } else {
+                state.set_history_from_date("".into());
+            }
+        }
+    });
 
     let weak = ui.as_weak();
     let history_sender = sender.clone();
