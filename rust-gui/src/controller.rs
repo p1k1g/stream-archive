@@ -254,6 +254,17 @@ fn queue_status(
     }
 }
 
+fn selected_parts_label(parts: &[usize]) -> String {
+    if parts.is_empty() {
+        return "all".into();
+    }
+    parts
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn vod_analyze_request(url: String) -> VodAnalyzeRequest {
     VodAnalyzeRequest {
         vod_url: url,
@@ -563,16 +574,21 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     poll: false,
                 },
             },
-            Request::VodDownload(req) => match runtime.block_on(core.download_vod(req)) {
-                Ok(status) => Response::Vod {
-                    status,
-                    message: Some("VOD download started".into()),
-                    poll: false,
-                },
-                Err(error) => Response::VodError {
-                    message: format!("VOD download failed to start: {error:#}"),
-                    poll: false,
-                },
+            Request::VodDownload(req) => {
+                let selected_parts = selected_parts_label(&req.parts);
+                match runtime.block_on(core.download_vod(req)) {
+                    Ok(status) => Response::Vod {
+                        status,
+                        message: Some(format!(
+                            "VOD download started · selected PARTs: {selected_parts}"
+                        )),
+                        poll: false,
+                    },
+                    Err(error) => Response::VodError {
+                        message: format!("VOD download failed to start: {error:#}"),
+                        poll: false,
+                    },
+                }
             },
             Request::VodCancel => match runtime.block_on(core.cancel_vod()) {
                 Ok(status) => Response::Vod {
@@ -586,22 +602,28 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 },
             },
             Request::QueueStatus { poll } => queue_status(&core, &runtime, poll),
-            Request::QueueEnqueue(req) => match runtime.block_on(core.enqueue_vod(req)) {
-                Ok(item) => match runtime.block_on(core.queue_snapshot()) {
-                    Ok(snapshot) => Response::Queue {
-                        snapshot,
-                        message: Some(format!("Queued VOD job {}", item.id)),
-                        poll: false,
+            Request::QueueEnqueue(req) => {
+                let selected_parts = selected_parts_label(&req.parts);
+                match runtime.block_on(core.enqueue_vod(req)) {
+                    Ok(item) => match runtime.block_on(core.queue_snapshot()) {
+                        Ok(snapshot) => Response::Queue {
+                            snapshot,
+                            message: Some(format!(
+                                "Queued VOD job {} · selected PARTs: {selected_parts}",
+                                item.id
+                            )),
+                            poll: false,
+                        },
+                        Err(error) => Response::QueueError {
+                            message: format!("Queued job but refresh failed: {error:#}"),
+                            poll: false,
+                        },
                     },
                     Err(error) => Response::QueueError {
-                        message: format!("Queued job but refresh failed: {error:#}"),
+                        message: format!("Queue add failed: {error:#}"),
                         poll: false,
                     },
-                },
-                Err(error) => Response::QueueError {
-                    message: format!("Queue add failed: {error:#}"),
-                    poll: false,
-                },
+                }
             },
             Request::QueueAction { id, action } => {
                 let result = match action.as_str() {
