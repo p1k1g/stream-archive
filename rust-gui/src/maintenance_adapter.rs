@@ -107,10 +107,7 @@ pub fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stream_archive_server::{
-        backup_service::BackupPolicy,
-        diagnostics::DiagnosticStatus,
-    };
+    use stream_archive_server::{backup_service::BackupPolicy, diagnostics::DiagnosticStatus};
 
     #[test]
     fn backup_rows_format_local_time_size_and_integrity() {
