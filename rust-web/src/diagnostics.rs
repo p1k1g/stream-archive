@@ -1,6 +1,9 @@
 //! Read-only environment diagnostics. No network requests, subprocess probes,
 //! directory creation or settings writes are performed by this service.
-use crate::tool_discovery::{ToolKind, ToolResolution, resolve_tool};
+use crate::{
+    backup_service::BackupPolicy,
+    tool_discovery::{ToolKind, ToolResolution, resolve_tool},
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 
@@ -68,6 +71,40 @@ impl DiagnosticsSnapshot {
             items,
         }
     }
+}
+
+pub fn collect_with_backup(
+    backend: &Path,
+    database: &Path,
+    values: &BTreeMap<String, String>,
+    backup_directory: &Path,
+    backup_policy: &BackupPolicy,
+) -> DiagnosticsSnapshot {
+    let mut snapshot = collect(backend, database, values);
+    let backup_item = directory("Backup directory", backup_directory, false);
+    let backup_status = backup_item.status;
+    snapshot.items.push(backup_item);
+    snapshot.items.push(item(
+        "Backup policy",
+        DiagnosticStatus::Ok,
+        &format!(
+            "enabled={} interval={}h keep={} retention={}d",
+            backup_policy.enabled,
+            backup_policy.interval_hours,
+            backup_policy.keep_count,
+            backup_policy.retention_days
+        ),
+    ));
+    snapshot.status = snapshot.status.max(backup_status);
+    snapshot.runtime_ready = snapshot.status == DiagnosticStatus::Ok;
+    if let Some(first) = snapshot.items.first_mut() {
+        *first = item(
+            "Runtime readiness",
+            snapshot.status,
+            "Environment checks only; authentication, network and media execution are not probed",
+        );
+    }
+    snapshot
 }
 
 pub fn collect(
@@ -261,6 +298,33 @@ mod tests {
             .warnings
             .push("configured path missing; using fallback".into());
         assert_eq!(tool_item(&resolution).status, DiagnosticStatus::Warning);
+    }
+
+    #[test]
+    fn backup_diagnostics_are_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        let database = dir.path().join("stream-archive.db");
+        let backup = dir.path().join("missing-backups");
+        let report = collect_with_backup(
+            &backend,
+            &database,
+            &BTreeMap::new(),
+            &backup,
+            &BackupPolicy {
+                enabled: true,
+                interval_hours: 24,
+                keep_count: 10,
+                retention_days: 3,
+            },
+        );
+        assert!(!backup.exists());
+        assert!(
+            report
+                .items
+                .iter()
+                .any(|item| item.name == "Backup directory")
+        );
     }
 
     #[test]
