@@ -37,6 +37,13 @@ export struct HistoryDisplayRow {
     meta: string,
 }
 
+export struct HistoryCalendarDay {
+    day: string,
+    date: string,
+    in-month: bool,
+    selected: bool,
+}
+
 export global QueueHistoryState {
     in-out property <[QueueDisplayRow]> queue-rows;
     in-out property <bool> queue-busy: true;
@@ -60,7 +67,16 @@ export global QueueHistoryState {
     in-out property <string> history-from-date: "";
     in-out property <string> history-to-date: "";
     in-out property <string> history-limit: "100";
+    in-out property <string> history-calendar-target: "from";
+    in-out property <string> history-calendar-label: "";
+    in-out property <int> history-calendar-year: 0;
+    in-out property <int> history-calendar-month: 0;
+    in-out property <[HistoryCalendarDay]> history-calendar-days;
     callback history-refresh();
+    callback history-calendar-open(string);
+    callback history-calendar-shift(int);
+    callback history-calendar-select(string);
+    callback history-calendar-clear();
 }
 
 component MetricCard inherits Rectangle {
@@ -246,6 +262,101 @@ export component HistoryPage inherits VerticalLayout {
         Button { height: 32px; text: "Refresh"; enabled: QueueHistoryState.history-loaded && !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-refresh(); } }
     }
 
+    calendar-popup := PopupWindow {
+        x: 250px;
+        y: 104px;
+        width: 324px;
+        height: 304px;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            background: #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #cbd5e1;
+
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+
+                HorizontalLayout {
+                    height: 32px;
+                    vertical-stretch: 0;
+                    spacing: 6px;
+                    Button {
+                        width: 34px;
+                        height: 30px;
+                        text: "<";
+                        clicked => { QueueHistoryState.history-calendar-shift(-1); }
+                    }
+                    Text {
+                        text: (QueueHistoryState.history-calendar-target == "from" ? "From · " : "To · ")
+                            + QueueHistoryState.history-calendar-label;
+                        color: #0f172a;
+                        font-size: 13px;
+                        font-weight: 700;
+                        horizontal-stretch: 1;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Button {
+                        width: 34px;
+                        height: 30px;
+                        text: ">";
+                        clicked => { QueueHistoryState.history-calendar-shift(1); }
+                    }
+                }
+
+                GridLayout {
+                    height: 224px;
+                    vertical-stretch: 0;
+                    spacing-horizontal: 3px;
+                    spacing-vertical: 3px;
+
+                    Text { row: 0; col: 0; text: "Sun"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 1; text: "Mon"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 2; text: "Tue"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 3; text: "Wed"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 4; text: "Thu"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 5; text: "Fri"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 6; text: "Sat"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+
+                    for day[index] in QueueHistoryState.history-calendar-days: Button {
+                        row: index / 7 + 1;
+                        col: index % 7;
+                        height: 28px;
+                        text: day.selected ? "✓ " + day.day : day.day;
+                        opacity: day.in-month ? 1 : 0.55;
+                        clicked => {
+                            QueueHistoryState.history-calendar-select(day.date);
+                            calendar-popup.close();
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    height: 30px;
+                    vertical-stretch: 0;
+                    spacing: 6px;
+                    Button {
+                        height: 28px;
+                        text: "Clear";
+                        clicked => {
+                            QueueHistoryState.history-calendar-clear();
+                            calendar-popup.close();
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Button {
+                        height: 28px;
+                        text: "Close";
+                        clicked => { calendar-popup.close(); }
+                    }
+                }
+            }
+        }
+    }
+
     Rectangle {
         min-height: 116px;
         vertical-stretch: 0;
@@ -281,19 +392,51 @@ export component HistoryPage inherits VerticalLayout {
                 height: 34px;
                 vertical-stretch: 0;
                 spacing: 7px;
-                LineEdit {
-                    height: 34px;
-                    text <=> QueueHistoryState.history-from-date;
-                    placeholder-text: "From YYYY-MM-DD";
-                    enabled: !QueueHistoryState.history-busy;
-                    accepted => { QueueHistoryState.history-refresh(); }
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+                    LineEdit {
+                        height: 34px;
+                        horizontal-stretch: 1;
+                        text <=> QueueHistoryState.history-from-date;
+                        placeholder-text: "From YYYY-MM-DD";
+                        enabled: !QueueHistoryState.history-busy;
+                        accepted => { QueueHistoryState.history-refresh(); }
+                    }
+                    Button {
+                        width: 52px;
+                        height: 32px;
+                        horizontal-stretch: 0;
+                        text: "Date";
+                        enabled: !QueueHistoryState.history-busy;
+                        clicked => {
+                            QueueHistoryState.history-calendar-open("from");
+                            calendar-popup.show();
+                        }
+                    }
                 }
-                LineEdit {
-                    height: 34px;
-                    text <=> QueueHistoryState.history-to-date;
-                    placeholder-text: "To YYYY-MM-DD";
-                    enabled: !QueueHistoryState.history-busy;
-                    accepted => { QueueHistoryState.history-refresh(); }
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+                    LineEdit {
+                        height: 34px;
+                        horizontal-stretch: 1;
+                        text <=> QueueHistoryState.history-to-date;
+                        placeholder-text: "To YYYY-MM-DD";
+                        enabled: !QueueHistoryState.history-busy;
+                        accepted => { QueueHistoryState.history-refresh(); }
+                    }
+                    Button {
+                        width: 52px;
+                        height: 32px;
+                        horizontal-stretch: 0;
+                        text: "Date";
+                        enabled: !QueueHistoryState.history-busy;
+                        clicked => {
+                            QueueHistoryState.history-calendar-open("to");
+                            calendar-popup.show();
+                        }
+                    }
                 }
                 LineEdit {
                     width: 110px;
