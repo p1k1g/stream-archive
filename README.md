@@ -412,11 +412,15 @@ Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습
 
 Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 추가하지 않습니다. Unix 계열은 CLI/headless 경로를 명확히 하고, Windows GUI 교체는 Phase 21로 분리합니다.
 
-### Phase 21 🔜 Slint Native GUI
+### Phase 21 🚧 Slint Native GUI
 
-- Windows 제품 UI를 Slint 기반 native Rust GUI로 구현
-- LIVE / VOD / Queue / History / Channels / Settings / Backup 기능을 순차적으로 이전
-- Slint GUI에서 shared Rust core를 직접 호출할 수 있도록 library/service boundary 정리
+- ✅ Settings / native picker / diagnostics
+- ✅ Channels + LIVE watcher/recording
+- ✅ SOOP/CHZZK VOD analyze/download
+- ✅ VOD Queue + LIVE/VOD History
+- 🚧 Native Backup/Restore + Diagnostics/Runtime Logs
+- 다음 단계: Windows native packaging/startup 전환
+- Slint GUI는 shared Rust core를 직접 호출하며 localhost HTTP, direct SQLite, direct process control을 사용하지 않음
 - 기능 parity와 regression 검증이 끝난 뒤 기존 browser/Web UI 및 launcher 의존성을 단계적으로 제거
 - Linux/macOS는 GUI를 복제하지 않고 Phase 20의 CLI/headless 인터페이스 유지
 
