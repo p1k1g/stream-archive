@@ -3,6 +3,7 @@ use crate::{
     support::platform::PlatformId,
 };
 use anyhow::{Result, bail};
+use chrono::{DateTime, Local, NaiveDate};
 use rusqlite::{Connection, params};
 use std::path::Path;
 
@@ -193,30 +194,40 @@ fn normalize_date_input(value: Option<&str>) -> Result<Option<String>> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    if value.len() != 10 {
-        bail!("history date must use YYYY-MM-DD");
-    }
-    let bytes = value.as_bytes();
-    if bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || !bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
-    {
-        bail!("history date must use YYYY-MM-DD");
-    }
-    let month: u32 = value[5..7].parse()?;
-    let day: u32 = value[8..10].parse()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        bail!("history date is out of range");
-    }
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| anyhow::anyhow!("history date must use a valid YYYY-MM-DD date"))?;
     Ok(Some(value.to_string()))
 }
 
+pub fn format_history_timestamp_local(timestamp: &str) -> String {
+    DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| {
+            value
+                .with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|_| timestamp.to_string())
+}
+
+pub fn history_timestamp_sort_key(timestamp: &str) -> i64 {
+    DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| value.timestamp_millis())
+        .unwrap_or(i64::MIN)
+}
+
 fn date_matches(timestamp: &str, from: Option<&str>, to: Option<&str>) -> bool {
-    let date = timestamp.get(..10).unwrap_or(timestamp);
-    from.is_none_or(|min| date >= min) && to.is_none_or(|max| date <= max)
+    let local_date = DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| {
+            value
+                .with_timezone(&Local)
+                .date_naive()
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .unwrap_or_else(|_| timestamp.get(..10).unwrap_or(timestamp).to_string());
+    from.is_none_or(|min| local_date.as_str() >= min)
+        && to.is_none_or(|max| local_date.as_str() <= max)
 }
 
 #[cfg(test)]
@@ -248,17 +259,29 @@ mod tests {
     }
 
     #[test]
-    fn date_filter_is_inclusive() {
+    fn date_filter_is_inclusive_in_system_local_time() {
+        let local_date = DateTime::parse_from_rfc3339("2026-09-08T03:00:00Z")
+            .unwrap()
+            .with_timezone(&Local)
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
         assert!(date_matches(
             "2026-09-08T03:00:00Z",
-            Some("2026-09-08"),
-            Some("2026-09-08")
+            Some(&local_date),
+            Some(&local_date)
         ));
-        assert!(!date_matches(
-            "2026-09-07T23:59:59Z",
-            Some("2026-09-08"),
-            None
-        ));
+    }
+
+    #[test]
+    fn timestamp_display_and_sort_use_rfc3339_instant() {
+        assert_eq!(
+            history_timestamp_sort_key("2026-09-18T11:44:15Z"),
+            history_timestamp_sort_key("2026-09-18T20:44:15+09:00")
+        );
+        let rendered = format_history_timestamp_local("2026-09-18T11:44:15Z");
+        assert!(!rendered.contains('T'));
+        assert!(!rendered.contains("+00:00"));
     }
 
     #[test]
