@@ -124,11 +124,12 @@ pub fn collect(
     if let Some(parent) = database.parent() {
         items.push(directory("Data directory", parent, true));
     }
-    // The bundled tools folder is optional when explicit paths or PATH supply tools.
-    items.push(directory(
+    // The bundled tools folder is only one discovery candidate. Its absence
+    // must not lower runtime readiness when configured paths/PATH can supply tools.
+    items.push(optional_directory(
         "Bundled VOD tools directory (optional)",
         &backend.join("vod"),
-        false,
+        "Not present; configured paths, PATH, and common install locations are still searched",
     ));
     if let Some(value) = values.get("OUTPUT_DIR").filter(|s| !s.trim().is_empty()) {
         items.push(directory(
@@ -225,6 +226,18 @@ fn directory(name: &str, path: &Path, required: bool) -> DiagnosticItem {
     )
 }
 
+fn optional_directory(name: &str, path: &Path, missing_detail: &str) -> DiagnosticItem {
+    item(
+        name,
+        DiagnosticStatus::Ok,
+        if path.is_dir() {
+            &format!("{} — exists", path.display())
+        } else {
+            &format!("{} — {missing_detail}", path.display())
+        },
+    )
+}
+
 fn database_item(path: &Path) -> DiagnosticItem {
     item(
         "Database path / existence",
@@ -281,6 +294,20 @@ mod tests {
         assert!(!report.runtime_ready);
         assert!(!backend.exists());
         assert!(!db.exists());
+    }
+
+    #[test]
+    fn missing_optional_bundled_vod_directory_is_informational() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backend").join("vod");
+        let row = optional_directory(
+            "Bundled VOD tools directory (optional)",
+            &path,
+            "Not present; configured paths, PATH, and common install locations are still searched",
+        );
+        assert_eq!(row.status, DiagnosticStatus::Ok);
+        assert!(row.detail.contains("Not present"));
+        assert!(!path.exists());
     }
 
     #[test]
