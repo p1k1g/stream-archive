@@ -1,8 +1,9 @@
 use crate::{
-    AppState, ChannelConfigRow, DiagnosticRow, HistoryDisplayRow, LiveChannelRow, MainWindow,
-    QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
-    channels_adapter::ChannelsDraft, history_adapter, live_adapter, native_picker, queue_adapter,
-    settings_adapter::SettingsDraft, vod_adapter,
+    AppState, ChannelConfigRow, DiagnosticRow, HistoryCalendarDay, HistoryDisplayRow,
+    LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow,
+    MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
+    channels_adapter::ChannelsDraft, history_adapter, live_adapter, maintenance_adapter,
+    native_picker, queue_adapter, settings_adapter::SettingsDraft, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -15,6 +16,7 @@ use std::{
 use stream_archive_server::{
     app_core::StreamArchiveCore,
     backend::resolve_backend_dir,
+    backup_service::{BackupPolicy, BackupSnapshot},
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
     history_service::HistoryFilter,
@@ -81,15 +83,28 @@ enum Request {
         filter: HistoryFilter,
         view: String,
     },
+    MaintenanceLoad,
+    BackupPickDirectory {
+        initial: String,
+    },
+    BackupSave {
+        policy: BackupPolicy,
+        directory: Option<String>,
+    },
+    BackupCreate,
+    BackupRestore {
+        file_name: String,
+    },
+    LogsLoad {
+        poll: bool,
+    },
 }
 
 enum Response {
     Snapshot {
         fields: Option<Vec<EnvironmentSetting>>,
         diagnostics: DiagnosticsSnapshot,
-        backend: String,
-        database: String,
-        channel_count: String,
+        first_run: bool,
         message: String,
     },
     Configuration {
@@ -141,6 +156,21 @@ enum Response {
         message: Option<String>,
     },
     HistoryError(String),
+    Maintenance {
+        snapshot: BackupSnapshot,
+        diagnostics: DiagnosticsSnapshot,
+        logs: Vec<String>,
+        message: String,
+    },
+    MaintenancePicked(Option<String>),
+    Logs {
+        lines: Vec<String>,
+        poll: bool,
+    },
+    MaintenanceError {
+        message: String,
+        poll: bool,
+    },
     Error(String),
 }
 
@@ -149,6 +179,7 @@ pub struct Controller {
     _live_poll_timer: Timer,
     _vod_poll_timer: Timer,
     _queue_poll_timer: Timer,
+    _maintenance_log_poll_timer: Timer,
 }
 
 fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str) -> Response {
@@ -163,12 +194,7 @@ fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str
     Response::Snapshot {
         fields,
         diagnostics: core.diagnostics(),
-        backend: core.backend_dir().display().to_string(),
-        database: core.store().path().display().to_string(),
-        channel_count: core
-            .channels()
-            .map(|c| c.len().to_string())
-            .unwrap_or_else(|_| "Unavailable".into()),
+        first_run: core.is_first_run_unconfigured().unwrap_or(false),
         message: message.into(),
     }
 }
@@ -254,6 +280,25 @@ fn queue_status(
     }
 }
 
+fn maintenance_snapshot(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    message: impl Into<String>,
+) -> Response {
+    match runtime.block_on(core.backup_snapshot()) {
+        Ok(snapshot) => Response::Maintenance {
+            snapshot,
+            diagnostics: core.diagnostics(),
+            logs: runtime.block_on(core.runtime_logs(200)),
+            message: message.into(),
+        },
+        Err(error) => Response::MaintenanceError {
+            message: format!("Maintenance refresh failed: {error:#}"),
+            poll: false,
+        },
+    }
+}
+
 fn selected_parts_label(parts: &[usize]) -> String {
     if parts.is_empty() {
         return "all".into();
@@ -334,11 +379,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     backend_path.as_deref(),
                     &message,
                 ),
-                backend: backend_path
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "Unavailable".into()),
-                database: "Unavailable".into(),
-                channel_count: "Unavailable".into(),
+                first_run: false,
                 message,
             });
             return;
@@ -350,6 +391,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     runtime.block_on(async {
         core.spawn_vod_history_sync();
         core.spawn_queue_worker();
+        core.spawn_auto_backup();
     });
     if responses
         .send(read_snapshot(
@@ -405,6 +447,17 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 return;
             }
         }
+    }
+
+    if responses
+        .send(maintenance_snapshot(
+            &core,
+            &runtime,
+            "Maintenance state loaded from shared runtime services.",
+        ))
+        .is_err()
+    {
+        return;
     }
 
     for request in requests {
@@ -656,6 +709,83 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 },
                 Err(error) => Response::HistoryError(format!("History refresh failed: {error:#}")),
             },
+            Request::MaintenanceLoad => {
+                maintenance_snapshot(&core, &runtime, "Maintenance state refreshed")
+            }
+            Request::BackupPickDirectory { initial } => {
+                match native_picker::pick_directory(&initial) {
+                    Ok(path) => Response::MaintenancePicked(path),
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("Backup directory picker failed: {error}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::BackupSave { policy, directory } => {
+                match runtime.block_on(core.update_backup_policy(&policy, directory.as_deref())) {
+                    Ok(snapshot) => Response::Maintenance {
+                        snapshot,
+                        diagnostics: core.diagnostics(),
+                        logs: runtime.block_on(core.runtime_logs(200)),
+                        message: "Backup policy saved to canonical SQLite.".into(),
+                    },
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("Backup policy was not saved: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::BackupCreate => match runtime.block_on(core.create_manual_backup()) {
+                Ok(snapshot) => Response::Maintenance {
+                    snapshot,
+                    diagnostics: core.diagnostics(),
+                    logs: runtime.block_on(core.runtime_logs(200)),
+                    message: "Manual backup created and verified.".into(),
+                },
+                Err(error) => Response::MaintenanceError {
+                    message: format!("Manual backup failed: {error:#}"),
+                    poll: false,
+                },
+            },
+            Request::BackupRestore { file_name } => {
+                match runtime.block_on(core.restore_backup(&file_name)) {
+                    Ok(outcome) => {
+                        let _ = responses.send(read_snapshot(
+                            &core,
+                            true,
+                            "Database restored; Settings reloaded from canonical SQLite.",
+                        ));
+                        let _ = responses.send(configuration_snapshot(
+                            &core,
+                            "Database restored; Channels and provider configuration reloaded.",
+                        ));
+                        let _ = responses.send(queue_status(&core, &runtime, false));
+                        if let Ok(history) = core.history(&HistoryFilter::default()) {
+                            let _ = responses.send(Response::History {
+                                history,
+                                view: "ALL".into(),
+                                message: Some("History reloaded after restore".into()),
+                            });
+                        }
+                        maintenance_snapshot(
+                            &core,
+                            &runtime,
+                            format!(
+                                "Restored {}. Safety backup: {}. Watcher remains stopped.",
+                                outcome.restored.file_name, outcome.safety_backup.file_name
+                            ),
+                        )
+                    }
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("Restore blocked or failed: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::LogsLoad { poll } => Response::Logs {
+                lines: runtime.block_on(core.runtime_logs(200)),
+                poll,
+            },
         };
         if responses.send(response).is_err() {
             break;
@@ -864,11 +994,89 @@ fn render_history(ui: &MainWindow, history: HistoryResponse, view: &str) {
     state.set_history_loaded(true);
 }
 
+fn render_history_calendar(
+    ui: &MainWindow,
+    target: &str,
+    calendar: history_adapter::CalendarMonthView,
+) {
+    let rows = calendar
+        .days
+        .into_iter()
+        .map(|day| HistoryCalendarDay {
+            day: day.day.into(),
+            date: day.date.into(),
+            in_month: day.in_month,
+            selected: day.selected,
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<QueueHistoryState>();
+    state.set_history_calendar_target(target.into());
+    state.set_history_calendar_year(calendar.year);
+    state.set_history_calendar_month(calendar.month as i32);
+    state.set_history_calendar_label(calendar.label.into());
+    state.set_history_calendar_days(ModelRc::new(VecModel::from(rows)));
+}
+
+fn render_logs(ui: &MainWindow, lines: Vec<String>) {
+    let rows = maintenance_adapter::log_rows(lines, 200)
+        .into_iter()
+        .map(|row| MaintenanceLogRow {
+            text: row.text.into(),
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<MaintenanceState>();
+    state.set_log_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_log_message("Showing the latest bounded runtime log tail (max 200 lines).".into());
+}
+
+fn render_maintenance(
+    ui: &MainWindow,
+    snapshot: BackupSnapshot,
+    diagnostics: DiagnosticsSnapshot,
+    logs: Vec<String>,
+) {
+    let backup_rows = maintenance_adapter::backup_rows(&snapshot)
+        .into_iter()
+        .map(|row| MaintenanceBackupRow {
+            file_name: row.file_name.into(),
+            kind: row.kind.into(),
+            created_at: row.created_at.into(),
+            size: row.size.into(),
+            sha256: row.sha256.into(),
+            integrity: row.integrity.into(),
+            integrity_tone: row.integrity_tone.into(),
+            can_restore: row.can_restore,
+        })
+        .collect::<Vec<_>>();
+
+    let diagnostic_rows = maintenance_adapter::diagnostic_rows(&diagnostics)
+        .into_iter()
+        .map(|row| MaintenanceDiagnosticRow {
+            name: row.name.into(),
+            status: row.status.into(),
+            detail: row.detail.into(),
+            status_tone: row.status_tone.into(),
+        })
+        .collect::<Vec<_>>();
+
+    let state = ui.global::<MaintenanceState>();
+    state.set_backup_directory(snapshot.directory.into());
+    state.set_backup_directory_editable(snapshot.directory_editable);
+    state.set_backup_enabled(snapshot.policy.enabled);
+    state.set_backup_interval_hours(snapshot.policy.interval_hours.to_string().into());
+    state.set_backup_keep_count(snapshot.policy.keep_count.to_string().into());
+    state.set_backup_retention_days(snapshot.policy.retention_days.to_string().into());
+    state.set_backup_rows(ModelRc::new(VecModel::from(backup_rows)));
+    state.set_diagnostic_rows(ModelRc::new(VecModel::from(diagnostic_rows)));
+    state.set_loaded(true);
+    drop(state);
+    render_logs(ui, logs);
+}
+
 pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     let state = ui.global::<AppState>();
     state.set_runtime_ready(diagnostics.runtime_ready);
     state.set_runtime_status(format!("Environment: {}", diagnostics.status.label()).into());
-    state.set_tool_summary("See Settings diagnostics for media-tool availability".into());
     let rows: Vec<_> = diagnostics
         .items
         .into_iter()
@@ -967,6 +1175,20 @@ fn send_history(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Reques
     }
 }
 
+fn send_maintenance(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    let state = ui.global::<MaintenanceState>();
+    if state.get_busy() {
+        return;
+    }
+    match sender.send(request) {
+        Ok(()) => {
+            state.set_busy(true);
+            state.set_message("Working...".into());
+        }
+        Err(_) => state.set_message("Maintenance runtime worker is unavailable".into()),
+    }
+}
+
 pub fn bind(ui: &MainWindow) -> Controller {
     let (sender, requests) = mpsc::channel();
     let (responses, receiver) = mpsc::channel();
@@ -978,6 +1200,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let queue_history = ui.global::<QueueHistoryState>();
     queue_history.set_queue_busy(true);
     queue_history.set_history_busy(true);
+    let maintenance = ui.global::<MaintenanceState>();
+    maintenance.set_busy(true);
     if let Err(error) = std::thread::Builder::new()
         .name("native-runtime".into())
         .spawn(move || worker(requests, responses))
@@ -988,8 +1212,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_vod_busy(false);
         queue_history.set_queue_busy(false);
         queue_history.set_history_busy(false);
+        maintenance.set_busy(false);
         queue_history.set_queue_message(format!("Cannot start worker: {error}").into());
         queue_history.set_history_message(format!("Cannot start worker: {error}").into());
+        maintenance.set_message(format!("Cannot start worker: {error}").into());
         state.set_settings_message(format!("Cannot start worker: {error}").into());
         state.set_config_message(format!("Cannot start worker: {error}").into());
         state.set_live_message(format!("Cannot start worker: {error}").into());
@@ -1003,6 +1229,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let live_poll_in_flight = Rc::new(Cell::new(false));
     let vod_poll_in_flight = Rc::new(Cell::new(false));
     let queue_poll_in_flight = Rc::new(Cell::new(false));
+    let maintenance_log_poll_in_flight = Rc::new(Cell::new(false));
 
     let weak = ui.as_weak();
     let edit_draft = draft.clone();
@@ -1484,6 +1711,70 @@ pub fn bind(ui: &MainWindow) -> Controller {
       });
 
     let weak = ui.as_weak();
+    queue_state.on_history_calendar_open(move |target| {
+        if let Some(ui) = weak.upgrade() {
+            let target = target.to_string();
+            let state = ui.global::<QueueHistoryState>();
+            let selected = if target == "to" {
+                state.get_history_to_date().to_string()
+            } else {
+                state.get_history_from_date().to_string()
+            };
+            drop(state);
+            render_history_calendar(
+                &ui,
+                if target == "to" { "to" } else { "from" },
+                history_adapter::calendar_initial(&selected),
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_shift(move |delta| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            let target = state.get_history_calendar_target().to_string();
+            let year = state.get_history_calendar_year();
+            let month = state.get_history_calendar_month().max(1) as u32;
+            let selected = if target == "to" {
+                state.get_history_to_date().to_string()
+            } else {
+                state.get_history_from_date().to_string()
+            };
+            drop(state);
+            render_history_calendar(
+                &ui,
+                &target,
+                history_adapter::calendar_shift(year, month, delta, &selected),
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_select(move |date| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            if state.get_history_calendar_target().as_str() == "to" {
+                state.set_history_to_date(date);
+            } else {
+                state.set_history_from_date(date);
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_clear(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            if state.get_history_calendar_target().as_str() == "to" {
+                state.set_history_to_date("".into());
+            } else {
+                state.set_history_from_date("".into());
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
     let history_sender = sender.clone();
     queue_state.on_history_refresh(move || {
         if let Some(ui) = weak.upgrade() {
@@ -1519,10 +1810,183 @@ pub fn bind(ui: &MainWindow) -> Controller {
         }
     });
 
+    let maintenance_state = ui.global::<MaintenanceState>();
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::MaintenanceLoad);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_pick_backup_directory(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            let initial = state.get_backup_directory().to_string();
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupPickDirectory { initial },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_toggle_backup_enabled(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_backup_enabled(!state.get_backup_enabled());
+                state.set_message("Backup policy draft changed; Save policy to persist.".into());
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_save_backup_policy(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if state.get_busy() {
+                return;
+            }
+
+            let interval = match state
+                .get_backup_interval_hours()
+                .to_string()
+                .trim()
+                .parse::<u64>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message("Backup interval must be an integer number of hours.".into());
+                    return;
+                }
+            };
+            let keep_count = match state
+                .get_backup_keep_count()
+                .to_string()
+                .trim()
+                .parse::<usize>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message("Backup keep count must be a non-negative integer.".into());
+                    return;
+                }
+            };
+            let retention_days = match state
+                .get_backup_retention_days()
+                .to_string()
+                .trim()
+                .parse::<i64>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message(
+                        "Backup retention days must be a non-negative integer.".into(),
+                    );
+                    return;
+                }
+            };
+
+            let directory = state
+                .get_backup_directory_editable()
+                .then(|| state.get_backup_directory().to_string());
+            let policy = BackupPolicy {
+                enabled: state.get_backup_enabled(),
+                interval_hours: interval,
+                keep_count,
+                retention_days,
+            };
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupSave { policy, directory },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_create_backup(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::BackupCreate);
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_request_restore(move |file_name| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_restore_pending_file(file_name);
+                state.set_message(
+                    "Confirm restore to continue. A pre_restore safety backup will be created first."
+                        .into(),
+                );
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_cancel_restore(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_restore_pending_file("".into());
+                state.set_message("Restore cancelled; no data changed.".into());
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_confirm_restore(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            let file_name = state.get_restore_pending_file().to_string();
+            if file_name.trim().is_empty() {
+                state.set_message("Select a valid backup before restore.".into());
+                return;
+            }
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupRestore { file_name },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_refresh_logs(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::LogsLoad { poll: false });
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_toggle_log_auto_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_log_auto_refresh(!state.get_log_auto_refresh());
+            }
+        }
+    });
+
     let weak = ui.as_weak();
     let response_live_poll_flag = live_poll_in_flight.clone();
     let response_vod_poll_flag = vod_poll_in_flight.clone();
     let response_queue_poll_flag = queue_poll_in_flight.clone();
+    let response_maintenance_log_poll_flag = maintenance_log_poll_in_flight.clone();
     let response_channels = channels_draft.clone();
     let response_vod_draft = vod_draft.clone();
     let response_timer = Timer::default();
@@ -1536,12 +2000,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 Response::Snapshot {
                     fields,
                     diagnostics,
-                    backend,
-                    database,
-                    channel_count,
+                    first_run,
                     message,
                 } => {
                     state.set_settings_busy(false);
+                    let has_settings_snapshot = fields.is_some();
                     let startup_failed = !state.get_live_loaded() && fields.is_none();
                     if let Some(fields) = fields {
                         draft.borrow_mut().load(fields);
@@ -1549,9 +2012,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_settings_loaded(true);
                     }
                     bind_core_snapshot(&ui, diagnostics);
-                    state.set_backend_path(backend.into());
-                    state.set_database_path(database.into());
-                    state.set_channel_count(channel_count.into());
+                    if first_run && has_settings_snapshot && state.get_active_page() == "LIVE" {
+                        state.set_active_page("Settings".into());
+                    }
                     state.set_settings_message(message.clone().into());
                     if startup_failed {
                         state.set_config_busy(false);
@@ -1559,7 +2022,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_live_busy(false);
                         state.set_live_message(message.clone().into());
                         state.set_vod_busy(false);
-                        state.set_vod_message(message.into());
+                        state.set_vod_message(message.clone().into());
+                        let maintenance_state = ui.global::<MaintenanceState>();
+                        maintenance_state.set_busy(false);
+                        maintenance_state.set_message(message.into());
                     }
                 }
                 Response::Configuration {
@@ -1572,9 +2038,6 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_config_busy(false);
                     response_channels.borrow_mut().load(channels);
                     render_channels(&ui, &response_channels.borrow());
-                    state.set_channel_count(
-                        response_channels.borrow().rows.len().to_string().into(),
-                    );
                     state.set_soop_username(username.into());
                     state.set_cloudflare_worker_url(worker_url.into());
                     state.set_soop_password_configured(
@@ -1756,6 +2219,53 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     history_state.set_history_busy(false);
                     history_state.set_history_message(message.into());
                 }
+                Response::Maintenance {
+                    snapshot,
+                    diagnostics,
+                    logs,
+                    message,
+                } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    maintenance_state.set_busy(false);
+                    if message.starts_with("Restored ") {
+                        maintenance_state.set_restore_pending_file("".into());
+                    }
+                    render_maintenance(&ui, snapshot, diagnostics, logs);
+                    maintenance_state.set_message(message.into());
+                }
+                Response::MaintenancePicked(path) => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    maintenance_state.set_busy(false);
+                    if let Some(path) = path {
+                        maintenance_state.set_backup_directory(path.into());
+                        maintenance_state.set_message(
+                            "Backup directory draft updated; Save policy to persist it.".into(),
+                        );
+                    } else {
+                        maintenance_state.set_message(
+                            "Backup directory picker cancelled; previous value retained.".into(),
+                        );
+                    }
+                }
+                Response::Logs { lines, poll } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if poll {
+                        response_maintenance_log_poll_flag.set(false);
+                    } else {
+                        maintenance_state.set_busy(false);
+                        maintenance_state.set_message("Runtime logs refreshed.".into());
+                    }
+                    render_logs(&ui, lines);
+                }
+                Response::MaintenanceError { message, poll } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if poll {
+                        response_maintenance_log_poll_flag.set(false);
+                    } else {
+                        maintenance_state.set_busy(false);
+                    }
+                    maintenance_state.set_message(message.into());
+                }
 
                 Response::Error(message) => {
                     state.set_settings_busy(false);
@@ -1779,6 +2289,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     if !queue_state.get_history_loaded() {
                         queue_state.set_history_busy(false);
                         queue_state.set_history_message(message.clone().into());
+                    }
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if !maintenance_state.get_loaded() {
+                        maintenance_state.set_busy(false);
+                        maintenance_state.set_message(message.clone().into());
                     }
                     state.set_settings_message(message.into());
                 }
@@ -1841,7 +2356,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     );
 
     let weak = ui.as_weak();
-    let queue_poll_sender = sender;
+    let queue_poll_sender = sender.clone();
     let queue_poll_flag = queue_poll_in_flight;
     let queue_poll_timer = Timer::default();
     queue_poll_timer.start(
@@ -1868,10 +2383,41 @@ pub fn bind(ui: &MainWindow) -> Controller {
         },
     );
 
+    let weak = ui.as_weak();
+    let maintenance_log_poll_sender = sender;
+    let maintenance_log_poll_flag = maintenance_log_poll_in_flight;
+    let maintenance_log_poll_timer = Timer::default();
+    maintenance_log_poll_timer.start(
+        TimerMode::Repeated,
+        Duration::from_millis(1500),
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let app_state = ui.global::<AppState>();
+            let maintenance_state = ui.global::<MaintenanceState>();
+            if app_state.get_active_page().as_str() != "Maintenance"
+                || maintenance_state.get_section().as_str() != "Logs"
+                || !maintenance_state.get_log_auto_refresh()
+                || maintenance_state.get_busy()
+                || maintenance_log_poll_flag.get()
+            {
+                return;
+            }
+            if maintenance_log_poll_sender
+                .send(Request::LogsLoad { poll: true })
+                .is_ok()
+            {
+                maintenance_log_poll_flag.set(true);
+            }
+        },
+    );
+
     Controller {
         _response_timer: response_timer,
         _live_poll_timer: live_poll_timer,
         _vod_poll_timer: vod_poll_timer,
         _queue_poll_timer: queue_poll_timer,
+        _maintenance_log_poll_timer: maintenance_log_poll_timer,
     }
 }

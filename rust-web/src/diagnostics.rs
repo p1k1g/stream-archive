@@ -1,6 +1,9 @@
 //! Read-only environment diagnostics. No network requests, subprocess probes,
 //! directory creation or settings writes are performed by this service.
-use crate::tool_discovery::{ToolKind, ToolResolution, resolve_tool};
+use crate::{
+    backup_service::BackupPolicy,
+    tool_discovery::{ToolKind, ToolResolution, resolve_tool},
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 
@@ -70,6 +73,40 @@ impl DiagnosticsSnapshot {
     }
 }
 
+pub fn collect_with_backup(
+    backend: &Path,
+    database: &Path,
+    values: &BTreeMap<String, String>,
+    backup_directory: &Path,
+    backup_policy: &BackupPolicy,
+) -> DiagnosticsSnapshot {
+    let mut snapshot = collect(backend, database, values);
+    let backup_item = directory("Backup directory", backup_directory, false);
+    let backup_status = backup_item.status;
+    snapshot.items.push(backup_item);
+    snapshot.items.push(item(
+        "Backup policy",
+        DiagnosticStatus::Ok,
+        &format!(
+            "enabled={} interval={}h keep={} retention={}d",
+            backup_policy.enabled,
+            backup_policy.interval_hours,
+            backup_policy.keep_count,
+            backup_policy.retention_days
+        ),
+    ));
+    snapshot.status = snapshot.status.max(backup_status);
+    snapshot.runtime_ready = snapshot.status == DiagnosticStatus::Ok;
+    if let Some(first) = snapshot.items.first_mut() {
+        *first = item(
+            "Runtime readiness",
+            snapshot.status,
+            "Environment checks only; authentication, network and media execution are not probed",
+        );
+    }
+    snapshot
+}
+
 pub fn collect(
     backend: &Path,
     database: &Path,
@@ -87,11 +124,12 @@ pub fn collect(
     if let Some(parent) = database.parent() {
         items.push(directory("Data directory", parent, true));
     }
-    // The bundled tools folder is optional when explicit paths or PATH supply tools.
-    items.push(directory(
+    // The bundled tools folder is only one discovery candidate. Its absence
+    // must not lower runtime readiness when configured paths/PATH can supply tools.
+    items.push(optional_directory(
         "Bundled VOD tools directory (optional)",
         &backend.join("vod"),
-        false,
+        "Not present; configured paths, PATH, and common install locations are still searched",
     ));
     if let Some(value) = values.get("OUTPUT_DIR").filter(|s| !s.trim().is_empty()) {
         items.push(directory(
@@ -188,6 +226,18 @@ fn directory(name: &str, path: &Path, required: bool) -> DiagnosticItem {
     )
 }
 
+fn optional_directory(name: &str, path: &Path, missing_detail: &str) -> DiagnosticItem {
+    item(
+        name,
+        DiagnosticStatus::Ok,
+        if path.is_dir() {
+            &format!("{} — exists", path.display())
+        } else {
+            &format!("{} — {missing_detail}", path.display())
+        },
+    )
+}
+
 fn database_item(path: &Path) -> DiagnosticItem {
     item(
         "Database path / existence",
@@ -247,6 +297,20 @@ mod tests {
     }
 
     #[test]
+    fn missing_optional_bundled_vod_directory_is_informational() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backend").join("vod");
+        let row = optional_directory(
+            "Bundled VOD tools directory (optional)",
+            &path,
+            "Not present; configured paths, PATH, and common install locations are still searched",
+        );
+        assert_eq!(row.status, DiagnosticStatus::Ok);
+        assert!(row.detail.contains("Not present"));
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn discovery_warnings_and_missing_tools_are_not_ok() {
         let mut resolution = ToolResolution {
             kind: ToolKind::Ffmpeg,
@@ -261,6 +325,33 @@ mod tests {
             .warnings
             .push("configured path missing; using fallback".into());
         assert_eq!(tool_item(&resolution).status, DiagnosticStatus::Warning);
+    }
+
+    #[test]
+    fn backup_diagnostics_are_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        let database = dir.path().join("stream-archive.db");
+        let backup = dir.path().join("missing-backups");
+        let report = collect_with_backup(
+            &backend,
+            &database,
+            &BTreeMap::new(),
+            &backup,
+            &BackupPolicy {
+                enabled: true,
+                interval_hours: 24,
+                keep_count: 10,
+                retention_days: 3,
+            },
+        );
+        assert!(!backup.exists());
+        assert!(
+            report
+                .items
+                .iter()
+                .any(|item| item.name == "Backup directory")
+        );
     }
 
     #[test]

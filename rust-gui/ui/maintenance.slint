@@ -1,0 +1,452 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct MaintenanceBackupRow {
+    file-name: string,
+    kind: string,
+    created-at: string,
+    size: string,
+    sha256: string,
+    integrity: string,
+    integrity-tone: string,
+    can-restore: bool,
+}
+
+export struct MaintenanceDiagnosticRow {
+    name: string,
+    status: string,
+    detail: string,
+    status-tone: string,
+}
+
+export struct MaintenanceLogRow {
+    text: string,
+}
+
+export global MaintenanceState {
+    in-out property <bool> busy: true;
+    in-out property <bool> loaded: false;
+    in-out property <string> message: "Loading maintenance state...";
+    in-out property <string> section: "Backup";
+
+    in-out property <string> backup-directory: "";
+    in-out property <bool> backup-directory-editable: false;
+    in-out property <bool> backup-enabled: true;
+    in-out property <string> backup-interval-hours: "24";
+    in-out property <string> backup-keep-count: "10";
+    in-out property <string> backup-retention-days: "3";
+    in-out property <[MaintenanceBackupRow]> backup-rows;
+    in-out property <string> restore-pending-file: "";
+
+    in-out property <[MaintenanceDiagnosticRow]> diagnostic-rows;
+
+    in-out property <[MaintenanceLogRow]> log-rows;
+    in-out property <bool> log-auto-refresh: true;
+    in-out property <string> log-message: "Runtime logs are bounded to the latest 200 lines.";
+
+    callback refresh();
+    callback pick-backup-directory();
+    callback toggle-backup-enabled();
+    callback save-backup-policy();
+    callback create-backup();
+    callback request-restore(string);
+    callback confirm-restore();
+    callback cancel-restore();
+    callback refresh-logs();
+    callback toggle-log-auto-refresh();
+}
+
+component SectionButton inherits Button {
+    in property <string> section-name;
+    text: MaintenanceState.section == root.section-name ? "✓ " + root.section-name : root.section-name;
+    clicked => { MaintenanceState.section = root.section-name; }
+}
+
+component SummaryLabel inherits Text {
+    color: #64748b;
+    font-size: 11px;
+    wrap: word-wrap;
+}
+
+export component MaintenancePage inherits VerticalLayout {
+    spacing: 10px;
+
+    HorizontalLayout {
+        height: 36px;
+        vertical-stretch: 0;
+        spacing: 8px;
+        Text {
+            text: "Backup / Restore / Diagnostics / Logs";
+            color: #0f172a;
+            font-size: 18px;
+            font-weight: 700;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+        SectionButton { height: 34px; section-name: "Backup"; enabled: !MaintenanceState.busy; }
+        SectionButton { height: 34px; section-name: "Diagnostics"; enabled: !MaintenanceState.busy; }
+        SectionButton { height: 34px; section-name: "Logs"; enabled: !MaintenanceState.busy; }
+        Button {
+            height: 34px;
+            text: "Refresh";
+            enabled: MaintenanceState.loaded && !MaintenanceState.busy;
+            clicked => { MaintenanceState.refresh(); }
+        }
+    }
+
+    Text {
+        text: MaintenanceState.message;
+        color: #475569;
+        font-size: 12px;
+        wrap: word-wrap;
+        vertical-stretch: 0;
+    }
+
+    if MaintenanceState.section == "Backup": VerticalLayout {
+        spacing: 10px;
+
+        Rectangle {
+            min-height: 178px;
+            vertical-stretch: 0;
+            background: #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #e2e8f0;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                Text { text: "Backup policy"; color: #0f172a; font-size: 14px; font-weight: 700; }
+
+                HorizontalLayout {
+                    height: 34px;
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    LineEdit {
+                        height: 34px;
+                        horizontal-stretch: 1;
+                        text <=> MaintenanceState.backup-directory;
+                        enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
+                        placeholder-text: "Backup directory";
+                    }
+                    Button {
+                        width: 84px;
+                        height: 34px;
+                        horizontal-stretch: 0;
+                        text: "Browse...";
+                        enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
+                        clicked => { MaintenanceState.pick-backup-directory(); }
+                    }
+                }
+
+                if !MaintenanceState.backup-directory-editable: SummaryLabel {
+                    text: "Backup directory is controlled by STREAM_ARCHIVE_BACKUP_DIR and is read-only here.";
+                    color: #a16207;
+                }
+
+                HorizontalLayout {
+                    height: 46px;
+                    vertical-stretch: 0;
+                    spacing: 12px;
+                    VerticalLayout {
+                        width: 132px;
+                        horizontal-stretch: 0;
+                        spacing: 2px;
+                        Text {
+                            text: "Auto backup";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        Button {
+                            height: 30px;
+                            text: MaintenanceState.backup-enabled ? "ON" : "OFF";
+                            enabled: !MaintenanceState.busy;
+                            clicked => { MaintenanceState.toggle-backup-enabled(); }
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "Interval hours";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-interval-hours;
+                            placeholder-text: "24";
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "Keep count";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-keep-count;
+                            placeholder-text: "10";
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "Retention days";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-retention-days;
+                            placeholder-text: "3";
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    height: 34px;
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    Button {
+                        height: 34px;
+                        text: "Save policy";
+                        enabled: MaintenanceState.loaded && !MaintenanceState.busy;
+                        clicked => { MaintenanceState.save-backup-policy(); }
+                    }
+                    Button {
+                        height: 34px;
+                        text: "Create backup";
+                        enabled: MaintenanceState.loaded && !MaintenanceState.busy;
+                        clicked => { MaintenanceState.create-backup(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+            }
+        }
+
+        if MaintenanceState.restore-pending-file != "": Rectangle {
+            min-height: 108px;
+            vertical-stretch: 0;
+            background: #fff7ed;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #fdba74;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                Text {
+                    text: "Restore " + MaintenanceState.restore-pending-file + "?";
+                    color: #9a3412;
+                    font-size: 14px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+                SummaryLabel {
+                    text: "The canonical SQLite database will be restored to this backup. A pre_restore safety backup is created first. Watcher, VOD and Queue work must be idle.";
+                    color: #9a3412;
+                }
+                HorizontalLayout {
+                    height: 32px;
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    Button {
+                        height: 32px;
+                        text: "Confirm restore";
+                        enabled: !MaintenanceState.busy;
+                        clicked => { MaintenanceState.confirm-restore(); }
+                    }
+                    Button {
+                        height: 32px;
+                        text: "Cancel";
+                        enabled: !MaintenanceState.busy;
+                        clicked => { MaintenanceState.cancel-restore(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 2px;
+                spacing: 6px;
+
+                if MaintenanceState.backup-rows.length == 0: Rectangle {
+                    height: 78px;
+                    vertical-stretch: 0;
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e2e8f0;
+                    VerticalLayout {
+                        padding: 14px;
+                        Text { text: "No managed backups found."; color: #64748b; }
+                    }
+                }
+
+                for row in MaintenanceState.backup-rows: Rectangle {
+                    height: 68px;
+                    vertical-stretch: 0;
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: row.integrity-tone == "ok" ? #bbf7d0 : row.integrity-tone == "error" ? #fecaca : #fde68a;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            height: 24px;
+                            vertical-stretch: 0;
+                            spacing: 8px;
+                            Text {
+                                text: row.file-name;
+                                color: #0f172a;
+                                font-size: 13px;
+                                font-weight: 700;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.integrity;
+                                color: row.integrity-tone == "ok" ? #15803d : row.integrity-tone == "error" ? #b91c1c : #a16207;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                            Button {
+                                height: 24px;
+                                text: "Restore";
+                                enabled: !MaintenanceState.busy && row.can-restore;
+                                clicked => { MaintenanceState.request-restore(row.file-name); }
+                            }
+                        }
+                        SummaryLabel {
+                            height: 14px;
+                            vertical-stretch: 0;
+                            vertical-alignment: center;
+                            text: row.kind + "  ·  " + row.created-at + "  ·  " + row.size;
+                        }
+                        SummaryLabel {
+                            height: 14px;
+                            vertical-stretch: 0;
+                            vertical-alignment: center;
+                            text: "SHA256: " + row.sha256;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if MaintenanceState.section == "Diagnostics": ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding: 2px;
+            spacing: 8px;
+            Text {
+                text: "Diagnostics are read-only. Refresh does not execute media tools, contact providers, or modify configuration.";
+                color: #64748b;
+                font-size: 11px;
+                wrap: word-wrap;
+                vertical-stretch: 0;
+            }
+            for row in MaintenanceState.diagnostic-rows: Rectangle {
+                min-height: 76px;
+                vertical-stretch: 0;
+                background: #ffffff;
+                border-radius: 9px;
+                border-width: 1px;
+                border-color: row.status-tone == "ok" ? #bbf7d0 : row.status-tone == "error" ? #fecaca : #fde68a;
+                VerticalLayout {
+                    padding: 11px;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        height: 20px;
+                        vertical-stretch: 0;
+                        Text { text: row.name; color: #0f172a; font-weight: 700; horizontal-stretch: 1; }
+                        Text { text: row.status; color: #475569; font-weight: 700; }
+                    }
+                    SummaryLabel { text: row.detail; }
+                }
+            }
+        }
+    }
+
+    if MaintenanceState.section == "Logs": VerticalLayout {
+        spacing: 8px;
+        HorizontalLayout {
+            height: 34px;
+            vertical-stretch: 0;
+            spacing: 8px;
+            Button {
+                height: 34px;
+                text: MaintenanceState.log-auto-refresh ? "Auto refresh: ON" : "Auto refresh: OFF";
+                enabled: !MaintenanceState.busy;
+                clicked => { MaintenanceState.toggle-log-auto-refresh(); }
+            }
+            Button {
+                height: 34px;
+                text: "Refresh logs";
+                enabled: !MaintenanceState.busy;
+                clicked => { MaintenanceState.refresh-logs(); }
+            }
+            Text {
+                text: MaintenanceState.log-message;
+                color: #64748b;
+                font-size: 11px;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 2px;
+                spacing: 4px;
+                if MaintenanceState.log-rows.length == 0: Rectangle {
+                    height: 70px;
+                    vertical-stretch: 0;
+                    background: #ffffff;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #e2e8f0;
+                    Text {
+                        x: 12px;
+                        y: 12px;
+                        width: parent.width - 24px;
+                        text: "No runtime log lines yet.";
+                        color: #64748b;
+                    }
+                }
+                for row in MaintenanceState.log-rows: Rectangle {
+                    min-height: 28px;
+                    vertical-stretch: 0;
+                    background: #ffffff;
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: #e2e8f0;
+                    Text {
+                        x: 8px;
+                        y: 6px;
+                        width: parent.width - 16px;
+                        text: row.text;
+                        color: #334155;
+                        font-size: 10px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}
