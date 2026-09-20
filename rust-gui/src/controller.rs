@@ -406,7 +406,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     if responses
         .send(configuration_snapshot(
             &core,
-            "canonical SQLite에서 채널 및 공급자 인증 정보를 불러왔습니다.",
+            "canonical SQLite에서 채널 및 서비스 연결 정보를 불러왔습니다.",
         ))
         .is_err()
     {
@@ -515,10 +515,10 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 match runtime.block_on(core.update_provider_configuration(&settings, &secrets)) {
                     Ok(_) => configuration_snapshot(
                         &core,
-                        "공급자 설정을 저장했습니다. 비밀 값은 암호화 상태로 유지되며 UI로 다시 읽어오지 않습니다.",
+                        "서비스 연결 정보를 저장했습니다. 비밀 값은 암호화 상태로 유지되며 UI로 다시 읽어오지 않습니다.",
                     ),
                     Err(error) => Response::ConfigError(format!(
-                        "공급자 설정을 저장하지 못했습니다: {error:#}"
+                        "서비스 연결 정보를 저장하지 못했습니다: {error:#}"
                     )),
                 }
             }
@@ -757,7 +757,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                         ));
                         let _ = responses.send(configuration_snapshot(
                             &core,
-                            "DB를 복원하고 채널 및 공급자 설정을 다시 불러왔습니다.",
+                            "DB를 복원하고 채널 및 서비스 연결 정보를 다시 불러왔습니다.",
                         ));
                         let _ = responses.send(queue_status(&core, &runtime, false));
                         if let Ok(history) = core.history(&HistoryFilter::default()) {
