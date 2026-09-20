@@ -260,7 +260,7 @@ pub fn view(status: &VodJobStatus) -> VodView {
     let percent = status.percent.clamp(0.0, 100.0) as f32;
     VodView {
         platform: status.platform.to_string(),
-        state: status.state.clone(),
+        state: state_label(&status.state).into(),
         state_tone: state_tone(&status.state).into(),
         running: status.running,
         message: status.message.clone(),
@@ -280,6 +280,22 @@ pub fn view(status: &VodJobStatus) -> VodView {
         streamer_id: analysis
             .map(|value| value.streamer_id.clone())
             .unwrap_or_default(),
+    }
+}
+
+fn state_label(state: &str) -> &str {
+    match state {
+        "IDLE" => "대기",
+        "ANALYZING" => "분석 중",
+        "READY" => "준비됨",
+        "STARTING" => "시작 중",
+        "RUNNING" => "다운로드 중",
+        "CANCELLING" => "취소 중",
+        "CANCELLED" => "취소됨",
+        "COMPLETED" => "완료",
+        "FAILED" => "실패",
+        "REFRESHING" => "새로고침 중",
+        other => other,
     }
 }
 

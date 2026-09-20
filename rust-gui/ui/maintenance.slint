@@ -1,0 +1,452 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct MaintenanceBackupRow {
+    file-name: string,
+    kind: string,
+    created-at: string,
+    size: string,
+    sha256: string,
+    integrity: string,
+    integrity-tone: string,
+    can-restore: bool,
+}
+
+export struct MaintenanceDiagnosticRow {
+    name: string,
+    status: string,
+    detail: string,
+    status-tone: string,
+}
+
+export struct MaintenanceLogRow {
+    text: string,
+}
+
+export global MaintenanceState {
+    in-out property <bool> busy: true;
+    in-out property <bool> loaded: false;
+    in-out property <string> message: "관리 상태를 불러오는 중...";
+    in-out property <string> section: "Backup";
+
+    in-out property <string> backup-directory: "";
+    in-out property <bool> backup-directory-editable: false;
+    in-out property <bool> backup-enabled: true;
+    in-out property <string> backup-interval-hours: "24";
+    in-out property <string> backup-keep-count: "10";
+    in-out property <string> backup-retention-days: "3";
+    in-out property <[MaintenanceBackupRow]> backup-rows;
+    in-out property <string> restore-pending-file: "";
+
+    in-out property <[MaintenanceDiagnosticRow]> diagnostic-rows;
+
+    in-out property <[MaintenanceLogRow]> log-rows;
+    in-out property <bool> log-auto-refresh: true;
+    in-out property <string> log-message: "런타임 로그는 최근 200줄까지만 표시됩니다.";
+
+    callback refresh();
+    callback pick-backup-directory();
+    callback toggle-backup-enabled();
+    callback save-backup-policy();
+    callback create-backup();
+    callback request-restore(string);
+    callback confirm-restore();
+    callback cancel-restore();
+    callback refresh-logs();
+    callback toggle-log-auto-refresh();
+}
+
+component SectionButton inherits Button {
+    in property <string> section-name;
+    text: root.section-name == "Backup" ? "백업" : root.section-name == "Diagnostics" ? "진단" : "로그";
+    clicked => { MaintenanceState.section = root.section-name; }
+}
+
+component SummaryLabel inherits Text {
+    color: #64748b;
+    font-size: 11px;
+    wrap: word-wrap;
+}
+
+export component MaintenancePage inherits VerticalLayout {
+    spacing: 10px;
+
+    HorizontalLayout {
+        height: 36px;
+        vertical-stretch: 0;
+        spacing: 8px;
+        Text {
+            text: "백업 / 복원 / 진단 / 로그";
+            color: #0f172a;
+            font-size: 18px;
+            font-weight: 700;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+        SectionButton { height: 34px; section-name: "Backup"; enabled: !MaintenanceState.busy; }
+        SectionButton { height: 34px; section-name: "Diagnostics"; enabled: !MaintenanceState.busy; }
+        SectionButton { height: 34px; section-name: "Logs"; enabled: !MaintenanceState.busy; }
+        Button {
+            height: 34px;
+            text: "새로고침";
+            enabled: MaintenanceState.loaded && !MaintenanceState.busy;
+            clicked => { MaintenanceState.refresh(); }
+        }
+    }
+
+    Text {
+        text: MaintenanceState.message;
+        color: #475569;
+        font-size: 12px;
+        wrap: word-wrap;
+        vertical-stretch: 0;
+    }
+
+    if MaintenanceState.section == "Backup": VerticalLayout {
+        spacing: 10px;
+
+        Rectangle {
+            min-height: 178px;
+            vertical-stretch: 0;
+            background: #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #e2e8f0;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                Text { text: "백업 정책"; color: #0f172a; font-size: 14px; font-weight: 700; }
+
+                HorizontalLayout {
+                    height: 34px;
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    LineEdit {
+                        height: 34px;
+                        horizontal-stretch: 1;
+                        text <=> MaintenanceState.backup-directory;
+                        enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
+                        placeholder-text: "백업 폴더";
+                    }
+                    Button {
+                        width: 84px;
+                        height: 34px;
+                        horizontal-stretch: 0;
+                        text: "찾아보기...";
+                        enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
+                        clicked => { MaintenanceState.pick-backup-directory(); }
+                    }
+                }
+
+                if !MaintenanceState.backup-directory-editable: SummaryLabel {
+                    text: "백업 폴더는 STREAM_ARCHIVE_BACKUP_DIR에서 관리하므로 여기서는 읽기 전용입니다.";
+                    color: #a16207;
+                }
+
+                HorizontalLayout {
+                    height: 46px;
+                    vertical-stretch: 0;
+                    spacing: 12px;
+                    VerticalLayout {
+                        width: 132px;
+                        horizontal-stretch: 0;
+                        spacing: 2px;
+                        Text {
+                            text: "자동 백업";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        Button {
+                            height: 30px;
+                            text: MaintenanceState.backup-enabled ? "켜짐" : "꺼짐";
+                            enabled: !MaintenanceState.busy;
+                            clicked => { MaintenanceState.toggle-backup-enabled(); }
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "간격(시간)";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-interval-hours;
+                            placeholder-text: "24";
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "보관 개수";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-keep-count;
+                            placeholder-text: "10";
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text {
+                            text: "보관 기간(일)";
+                            color: #64748b;
+                            font-size: 10px;
+                            vertical-stretch: 0;
+                        }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-retention-days;
+                            placeholder-text: "3";
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    height: 34px;
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    Button {
+                        height: 34px;
+                        text: "정책 저장";
+                        enabled: MaintenanceState.loaded && !MaintenanceState.busy;
+                        clicked => { MaintenanceState.save-backup-policy(); }
+                    }
+                    Button {
+                        height: 34px;
+                        text: "백업 생성";
+                        enabled: MaintenanceState.loaded && !MaintenanceState.busy;
+                        clicked => { MaintenanceState.create-backup(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+            }
+        }
+
+        if MaintenanceState.restore-pending-file != "": Rectangle {
+            min-height: 108px;
+            vertical-stretch: 0;
+            background: #fff7ed;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #fdba74;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                Text {
+                    text: MaintenanceState.restore-pending-file + " 파일을 복원할까요?";
+                    color: #9a3412;
+                    font-size: 14px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+                SummaryLabel {
+                    text: "canonical SQLite DB를 이 백업으로 복원합니다. 먼저 pre_restore 안전 백업을 생성하며, Watcher·VOD·Queue 작업이 모두 유휴 상태여야 합니다.";
+                    color: #9a3412;
+                }
+                HorizontalLayout {
+                    height: 32px;
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    Button {
+                        height: 32px;
+                        text: "복원 확인";
+                        enabled: !MaintenanceState.busy;
+                        clicked => { MaintenanceState.confirm-restore(); }
+                    }
+                    Button {
+                        height: 32px;
+                        text: "취소";
+                        enabled: !MaintenanceState.busy;
+                        clicked => { MaintenanceState.cancel-restore(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 2px;
+                spacing: 6px;
+
+                if MaintenanceState.backup-rows.length == 0: Rectangle {
+                    height: 78px;
+                    vertical-stretch: 0;
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e2e8f0;
+                    VerticalLayout {
+                        padding: 14px;
+                        Text { text: "관리 중인 백업이 없습니다."; color: #64748b; }
+                    }
+                }
+
+                for row in MaintenanceState.backup-rows: Rectangle {
+                    height: 68px;
+                    vertical-stretch: 0;
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: row.integrity-tone == "ok" ? #bbf7d0 : row.integrity-tone == "error" ? #fecaca : #fde68a;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            height: 24px;
+                            vertical-stretch: 0;
+                            spacing: 8px;
+                            Text {
+                                text: row.file-name;
+                                color: #0f172a;
+                                font-size: 13px;
+                                font-weight: 700;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.integrity;
+                                color: row.integrity-tone == "ok" ? #15803d : row.integrity-tone == "error" ? #b91c1c : #a16207;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                            Button {
+                                height: 24px;
+                                text: "복원";
+                                enabled: !MaintenanceState.busy && row.can-restore;
+                                clicked => { MaintenanceState.request-restore(row.file-name); }
+                            }
+                        }
+                        SummaryLabel {
+                            height: 14px;
+                            vertical-stretch: 0;
+                            vertical-alignment: center;
+                            text: row.kind + "  ·  " + row.created-at + "  ·  " + row.size;
+                        }
+                        SummaryLabel {
+                            height: 14px;
+                            vertical-stretch: 0;
+                            vertical-alignment: center;
+                            text: "SHA256: " + row.sha256;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if MaintenanceState.section == "Diagnostics": ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding: 2px;
+            spacing: 8px;
+            Text {
+                text: "진단은 읽기 전용입니다. 새로고침해도 미디어 도구 실행, 공급자 접속, 설정 변경은 수행하지 않습니다.";
+                color: #64748b;
+                font-size: 11px;
+                wrap: word-wrap;
+                vertical-stretch: 0;
+            }
+            for row in MaintenanceState.diagnostic-rows: Rectangle {
+                min-height: 76px;
+                vertical-stretch: 0;
+                background: #ffffff;
+                border-radius: 9px;
+                border-width: 1px;
+                border-color: row.status-tone == "ok" ? #bbf7d0 : row.status-tone == "error" ? #fecaca : #fde68a;
+                VerticalLayout {
+                    padding: 11px;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        height: 20px;
+                        vertical-stretch: 0;
+                        Text { text: row.name; color: #0f172a; font-weight: 700; horizontal-stretch: 1; }
+                        Text { text: row.status; color: #475569; font-weight: 700; }
+                    }
+                    SummaryLabel { text: row.detail; }
+                }
+            }
+        }
+    }
+
+    if MaintenanceState.section == "Logs": VerticalLayout {
+        spacing: 8px;
+        HorizontalLayout {
+            height: 34px;
+            vertical-stretch: 0;
+            spacing: 8px;
+            Button {
+                height: 34px;
+                text: MaintenanceState.log-auto-refresh ? "자동 새로고침: 켜짐" : "자동 새로고침: 꺼짐";
+                enabled: !MaintenanceState.busy;
+                clicked => { MaintenanceState.toggle-log-auto-refresh(); }
+            }
+            Button {
+                height: 34px;
+                text: "로그 새로고침";
+                enabled: !MaintenanceState.busy;
+                clicked => { MaintenanceState.refresh-logs(); }
+            }
+            Text {
+                text: MaintenanceState.log-message;
+                color: #64748b;
+                font-size: 11px;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 2px;
+                spacing: 4px;
+                if MaintenanceState.log-rows.length == 0: Rectangle {
+                    height: 70px;
+                    vertical-stretch: 0;
+                    background: #ffffff;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #e2e8f0;
+                    Text {
+                        x: 12px;
+                        y: 12px;
+                        width: parent.width - 24px;
+                        text: "아직 런타임 로그가 없습니다.";
+                        color: #64748b;
+                    }
+                }
+                for row in MaintenanceState.log-rows: Rectangle {
+                    min-height: 28px;
+                    vertical-stretch: 0;
+                    background: #ffffff;
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: #e2e8f0;
+                    Text {
+                        x: 8px;
+                        y: 6px;
+                        width: parent.width - 16px;
+                        text: row.text;
+                        color: #334155;
+                        font-size: 10px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

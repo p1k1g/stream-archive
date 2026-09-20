@@ -102,6 +102,32 @@ Do not remove Web routes, browser assets or launcher behavior merely because a S
 
 Queue and backup currently combine reusable managers with Axum handlers in the same source files. Before Slint consumes those functions directly, their reusable manager/service logic should be separated from the Web adapter rather than copied into the GUI.
 
+## Phase 21.7 — native backup / restore + diagnostics / logs
+
+Phase 21.7 moves the remaining day-to-day maintenance flows into the Windows Slint frontend without introducing a second runtime or persistence authority.
+
+The reusable backup implementation lives in `rust-web/src/backup_service.rs`. The current Axum handlers remain a Web presentation adapter in `rust-web/src/backup.rs`, while Slint reaches the same backup behavior through `StreamArchiveCore`.
+
+Native Maintenance follows this dependency direction:
+
+```text
+Slint Maintenance
+      ↓
+rust-gui controller / maintenance_adapter
+      ↓
+StreamArchiveCore
+      ↓
+BackupManager / DiagnosticsSnapshot / LogBuffer
+      ↓
+canonical SQLite + managed backup directory
+```
+
+Restore remains serialized by the shared lifecycle/configuration locks and is rejected while the LIVE watcher/recordings, a direct VOD operation, or pending/active Queue work exist. The shared backup service verifies integrity and creates a `pre_restore` safety backup before replacing the canonical SQLite contents. Web-only authentication/session invalidation remains in the Axum adapter.
+
+Diagnostics remain read-only filesystem/configuration discovery. Runtime logs are read from the existing bounded `LogBuffer`; the Slint Logs view polls only while active and never owns log files, processes, or provider requests.
+
+Phase 21.8 is the packaging/startup transition. Phase 21.7 does not remove the Web UI, Axum routes, or browser launcher.
+
 ## Completion criteria for Phase 21.1
 
 Phase 21.1 is complete when:

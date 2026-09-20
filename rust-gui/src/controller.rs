@@ -1,8 +1,9 @@
 use crate::{
-    AppState, ChannelConfigRow, DiagnosticRow, HistoryDisplayRow, LiveChannelRow, MainWindow,
-    QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
-    channels_adapter::ChannelsDraft, history_adapter, live_adapter, native_picker, queue_adapter,
-    settings_adapter::SettingsDraft, vod_adapter,
+    AppState, ChannelConfigRow, DiagnosticRow, HistoryCalendarDay, HistoryDisplayRow,
+    LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow,
+    MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
+    channels_adapter::ChannelsDraft, history_adapter, live_adapter, maintenance_adapter,
+    native_picker, queue_adapter, settings_adapter::SettingsDraft, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -15,6 +16,7 @@ use std::{
 use stream_archive_server::{
     app_core::StreamArchiveCore,
     backend::resolve_backend_dir,
+    backup_service::{BackupPolicy, BackupSnapshot},
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
     history_service::HistoryFilter,
@@ -81,15 +83,28 @@ enum Request {
         filter: HistoryFilter,
         view: String,
     },
+    MaintenanceLoad,
+    BackupPickDirectory {
+        initial: String,
+    },
+    BackupSave {
+        policy: BackupPolicy,
+        directory: Option<String>,
+    },
+    BackupCreate,
+    BackupRestore {
+        file_name: String,
+    },
+    LogsLoad {
+        poll: bool,
+    },
 }
 
 enum Response {
     Snapshot {
         fields: Option<Vec<EnvironmentSetting>>,
         diagnostics: DiagnosticsSnapshot,
-        backend: String,
-        database: String,
-        channel_count: String,
+        first_run: bool,
         message: String,
     },
     Configuration {
@@ -141,6 +156,21 @@ enum Response {
         message: Option<String>,
     },
     HistoryError(String),
+    Maintenance {
+        snapshot: BackupSnapshot,
+        diagnostics: DiagnosticsSnapshot,
+        logs: Vec<String>,
+        message: String,
+    },
+    MaintenancePicked(Option<String>),
+    Logs {
+        lines: Vec<String>,
+        poll: bool,
+    },
+    MaintenanceError {
+        message: String,
+        poll: bool,
+    },
     Error(String),
 }
 
@@ -149,13 +179,14 @@ pub struct Controller {
     _live_poll_timer: Timer,
     _vod_poll_timer: Timer,
     _queue_poll_timer: Timer,
+    _maintenance_log_poll_timer: Timer,
 }
 
 fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str) -> Response {
     let fields = if include_settings {
         match core.environment_settings() {
             Ok(fields) => Some(fields),
-            Err(error) => return Response::Error(format!("Settings load failed: {error:#}")),
+            Err(error) => return Response::Error(format!("설정 불러오기 실패: {error:#}")),
         }
     } else {
         None
@@ -163,12 +194,7 @@ fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str
     Response::Snapshot {
         fields,
         diagnostics: core.diagnostics(),
-        backend: core.backend_dir().display().to_string(),
-        database: core.store().path().display().to_string(),
-        channel_count: core
-            .channels()
-            .map(|c| c.len().to_string())
-            .unwrap_or_else(|_| "Unavailable".into()),
+        first_run: core.is_first_run_unconfigured().unwrap_or(false),
         message: message.into(),
     }
 }
@@ -177,19 +203,19 @@ fn configuration_snapshot(core: &StreamArchiveCore, message: &str) -> Response {
     let settings = match core.settings() {
         Ok(settings) => settings,
         Err(error) => {
-            return Response::ConfigError(format!("Provider settings load failed: {error:#}"));
+            return Response::ConfigError(format!("공급자 설정 불러오기 실패: {error:#}"));
         }
     };
     let channels = match core.channels() {
         Ok(channels) => channels,
         Err(error) => {
-            return Response::ConfigError(format!("Channel list load failed: {error:#}"));
+            return Response::ConfigError(format!("채널 목록 불러오기 실패: {error:#}"));
         }
     };
     let secrets = match core.configured_secrets() {
         Ok(secrets) => secrets,
         Err(error) => {
-            return Response::ConfigError(format!("Secret status load failed: {error:#}"));
+            return Response::ConfigError(format!("인증 정보 상태 불러오기 실패: {error:#}"));
         }
     };
     Response::Configuration {
@@ -216,7 +242,7 @@ fn live_status(
             poll,
         },
         Err(error) => Response::LiveError {
-            message: format!("LIVE status refresh failed: {error:#}"),
+            message: format!("LIVE 상태 새로고침 실패: {error:#}"),
             poll,
         },
     }
@@ -230,7 +256,7 @@ fn vod_status(core: &StreamArchiveCore, runtime: &tokio::runtime::Runtime, poll:
             poll,
         },
         Err(error) => Response::VodError {
-            message: format!("VOD status refresh failed: {error:#}"),
+            message: format!("VOD 상태 새로고침 실패: {error:#}"),
             poll,
         },
     }
@@ -248,15 +274,34 @@ fn queue_status(
             poll,
         },
         Err(error) => Response::QueueError {
-            message: format!("Queue refresh failed: {error:#}"),
+            message: format!("대기열 새로고침 실패: {error:#}"),
             poll,
+        },
+    }
+}
+
+fn maintenance_snapshot(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    message: impl Into<String>,
+) -> Response {
+    match runtime.block_on(core.backup_snapshot()) {
+        Ok(snapshot) => Response::Maintenance {
+            snapshot,
+            diagnostics: core.diagnostics(),
+            logs: runtime.block_on(core.runtime_logs(200)),
+            message: message.into(),
+        },
+        Err(error) => Response::MaintenanceError {
+            message: format!("관리 상태 새로고침 실패: {error:#}"),
+            poll: false,
         },
     }
 }
 
 fn selected_parts_label(parts: &[usize]) -> String {
     if parts.is_empty() {
-        return "all".into();
+        return "전체".into();
     }
     parts
         .iter()
@@ -288,7 +333,7 @@ fn save_channels(
                 Ok(name) => channel.name = name,
                 Err(error) => {
                     return Response::ConfigError(format!(
-                        "Channel name lookup failed for {}/{}: {error:#}",
+                        "채널 이름 조회 실패 {}/{}: {error:#}",
                         channel.platform, channel.account
                     ));
                 }
@@ -299,9 +344,9 @@ fn save_channels(
     match runtime.block_on(core.update_channels(&channels)) {
         Ok(_) => configuration_snapshot(
             core,
-            "Channel list saved. A running watcher will pick up the canonical list through its normal reload policy.",
+            "채널 목록을 저장했습니다. 실행 중인 Watcher는 기존 재로딩 정책에 따라 canonical 목록을 반영합니다.",
         ),
-        Err(error) => Response::ConfigError(format!("Channel list was not saved: {error:#}")),
+        Err(error) => Response::ConfigError(format!("채널 목록을 저장하지 못했습니다: {error:#}")),
     }
 }
 
@@ -316,9 +361,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            let _ = responses.send(Response::Error(format!(
-                "Worker initialization failed: {error}"
-            )));
+            let _ = responses.send(Response::Error(format!("Worker 초기화 실패: {error}")));
             return;
         }
     };
@@ -327,18 +370,14 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     let core = match backend.and_then(StreamArchiveCore::open) {
         Ok(opened) => opened.core,
         Err(error) => {
-            let message = format!("Runtime initialization failed: {error:#}");
+            let message = format!("런타임 초기화 실패: {error:#}");
             let _ = responses.send(Response::Snapshot {
                 fields: None,
                 diagnostics: DiagnosticsSnapshot::startup_failure(
                     backend_path.as_deref(),
                     &message,
                 ),
-                backend: backend_path
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "Unavailable".into()),
-                database: "Unavailable".into(),
-                channel_count: "Unavailable".into(),
+                first_run: false,
                 message,
             });
             return;
@@ -350,12 +389,13 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     runtime.block_on(async {
         core.spawn_vod_history_sync();
         core.spawn_queue_worker();
+        core.spawn_auto_backup();
     });
     if responses
         .send(read_snapshot(
             &core,
             true,
-            "Settings loaded from canonical SQLite. Save applies changes to future runtime operations.",
+            "canonical SQLite에서 설정을 불러왔습니다. 저장한 변경사항은 이후 런타임 작업부터 적용됩니다.",
         ))
         .is_err()
     {
@@ -364,7 +404,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     if responses
         .send(configuration_snapshot(
             &core,
-            "Channels and provider credentials loaded from canonical SQLite.",
+            "canonical SQLite에서 채널 및 서비스 연결 정보를 불러왔습니다.",
         ))
         .is_err()
     {
@@ -388,7 +428,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 .send(Response::History {
                     history,
                     view: "ALL".into(),
-                    message: Some("History loaded from canonical SQLite".into()),
+                    message: Some("canonical SQLite에서 기록을 불러왔습니다".into()),
                 })
                 .is_err()
             {
@@ -398,7 +438,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
         Err(error) => {
             if responses
                 .send(Response::HistoryError(format!(
-                    "History load failed: {error:#}"
+                    "기록 불러오기 실패: {error:#}"
                 )))
                 .is_err()
             {
@@ -407,33 +447,46 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
         }
     }
 
+    if responses
+        .send(maintenance_snapshot(
+            &core,
+            &runtime,
+            "공유 런타임 서비스에서 관리 상태를 불러왔습니다.",
+        ))
+        .is_err()
+    {
+        return;
+    }
+
     for request in requests {
         let response = match request {
             Request::Refresh => read_snapshot(
                 &core,
                 false,
-                "Diagnostics refreshed; unsaved edits retained",
+                "진단 정보를 새로고침했습니다. 저장하지 않은 편집 내용은 유지됩니다.",
             ),
-            Request::Reload => {
-                read_snapshot(&core, true, "Saved settings reloaded; draft discarded")
-            }
+            Request::Reload => read_snapshot(
+                &core,
+                true,
+                "저장된 설정을 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.",
+            ),
             Request::Save(patch) => {
                 match runtime.block_on(core.update_environment_settings(&patch)) {
                     Ok(_) => read_snapshot(
                         &core,
                         true,
-                        "Saved to canonical SQLite. Active recordings keep their current configuration.",
+                        "canonical SQLite에 저장했습니다. 진행 중인 녹화는 현재 설정을 그대로 유지합니다.",
                     ),
-                    Err(error) => Response::Error(format!("Not saved: {error:#}")),
+                    Err(error) => Response::Error(format!("저장 실패: {error:#}")),
                 }
             }
             Request::Pick(index, kind, initial) => match native_picker::pick(kind, &initial) {
                 Ok(path) => Response::Picked(index, path),
-                Err(error) => Response::Error(format!("Picker failed: {error}")),
+                Err(error) => Response::Error(format!("폴더 선택기 오류: {error}")),
             },
             Request::ConfigReload => configuration_snapshot(
                 &core,
-                "Saved channels and provider credentials reloaded; drafts discarded.",
+                "저장된 채널 및 공급자 인증 정보를 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.",
             ),
             Request::ChannelsSave(channels) => save_channels(&core, &runtime, channels),
             Request::ChannelResolve {
@@ -447,7 +500,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     name,
                 },
                 Err(error) => Response::ConfigError(format!(
-                    "Channel name lookup failed for {platform}/{account}: {error:#}"
+                    "채널 이름 조회 실패 {platform}/{account}: {error:#}"
                 )),
             },
             Request::ProviderSave {
@@ -462,46 +515,46 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 match runtime.block_on(core.update_provider_configuration(&settings, &secrets)) {
                     Ok(_) => configuration_snapshot(
                         &core,
-                        "Provider configuration saved. Secret values remain encrypted and are not read back into the UI.",
+                        "서비스 연결 정보를 저장했습니다. 비밀 값은 암호화 상태로 유지되며 UI로 다시 읽어오지 않습니다.",
                     ),
                     Err(error) => Response::ConfigError(format!(
-                        "Provider configuration was not saved: {error:#}"
+                        "서비스 연결 정보를 저장하지 못했습니다: {error:#}"
                     )),
                 }
             }
             Request::ProviderTestSoop => match runtime.block_on(core.test_soop_auth()) {
                 Ok(message) => Response::ConfigMessage(message),
                 Err(error) => {
-                    Response::ConfigError(format!("SOOP / Worker test failed: {error:#}"))
+                    Response::ConfigError(format!("SOOP / Worker 테스트 실패: {error:#}"))
                 }
             },
             Request::LiveStatus { poll } => live_status(&core, &runtime, poll),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
                 Ok(status) => Response::Live {
                     status,
-                    message: Some("LIVE watcher started".into()),
+                    message: Some("LIVE Watcher를 시작했습니다".into()),
                     poll: false,
                 },
                 Err(error) => Response::LiveError {
-                    message: format!("Watcher start failed: {error:#}"),
+                    message: format!("Watcher 시작 실패: {error:#}"),
                     poll: false,
                 },
             },
             Request::LiveStop => match runtime.block_on(core.stop_watcher()) {
                 Ok(status) => Response::Live {
                     status,
-                    message: Some("LIVE watcher stopped".into()),
+                    message: Some("LIVE Watcher를 중지했습니다".into()),
                     poll: false,
                 },
                 Err(error) => Response::LiveError {
-                    message: format!("Watcher stop failed: {error:#}"),
+                    message: format!("Watcher 중지 실패: {error:#}"),
                     poll: false,
                 },
             },
             Request::LiveAction { target, action } => {
                 let Some(action) = live_adapter::validated_action(&action) else {
                     let _ = responses.send(Response::LiveError {
-                        message: "Unsupported LIVE channel action".into(),
+                        message: "지원하지 않는 LIVE 채널 작업입니다".into(),
                         poll: false,
                     });
                     continue;
@@ -511,21 +564,21 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                         Ok(status) => Response::Live {
                             status,
                             message: Some(match action {
-                                "stop" => "Current broadcast suppressed until it changes".into(),
-                                "resume" => "Channel monitoring resumed".into(),
-                                _ => "Channel recheck requested".into(),
+                                "stop" => "현재 방송은 방송이 바뀔 때까지 제외됩니다".into(),
+                                "resume" => "채널 모니터링을 재개했습니다".into(),
+                                _ => "채널 다시 확인을 요청했습니다".into(),
                             }),
                             poll: false,
                         },
                         Err(error) => Response::LiveError {
                             message: format!(
-                                "Action succeeded but status refresh failed: {error:#}"
+                                "작업은 성공했지만 상태 새로고침에 실패했습니다: {error:#}"
                             ),
                             poll: false,
                         },
                     },
                     Err(error) => Response::LiveError {
-                        message: format!("Channel action failed: {error:#}"),
+                        message: format!("채널 작업 실패: {error:#}"),
                         poll: false,
                     },
                 }
@@ -536,19 +589,19 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                         Ok(status) => Response::Live {
                             status,
                             message: Some(
-                                "Password supplied in memory and channel recheck requested".into(),
+                                "비밀번호를 메모리에 전달하고 채널 다시 확인을 요청했습니다".into(),
                             ),
                             poll: false,
                         },
                         Err(error) => Response::LiveError {
                             message: format!(
-                                "Password accepted but status refresh failed: {error:#}"
+                                "비밀번호는 적용됐지만 상태 새로고침에 실패했습니다: {error:#}"
                             ),
                             poll: false,
                         },
                     },
                     Err(error) => Response::LiveError {
-                        message: format!("Password was not accepted: {error:#}"),
+                        message: format!("비밀번호를 적용하지 못했습니다: {error:#}"),
                         poll: false,
                     },
                 }
@@ -558,11 +611,11 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 match runtime.block_on(core.analyze_vod(vod_analyze_request(url))) {
                     Ok(status) => Response::Vod {
                         status,
-                        message: Some("VOD analysis started".into()),
+                        message: Some("VOD 분석을 시작했습니다".into()),
                         poll: false,
                     },
                     Err(error) => Response::VodError {
-                        message: format!("VOD analysis failed to start: {error:#}"),
+                        message: format!("VOD 분석을 시작하지 못했습니다: {error:#}"),
                         poll: false,
                     },
                 }
@@ -570,7 +623,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             Request::VodPickOutput { initial } => match native_picker::pick_directory(&initial) {
                 Ok(path) => Response::VodPicked(path),
                 Err(error) => Response::VodError {
-                    message: format!("VOD output picker failed: {error}"),
+                    message: format!("VOD 출력 폴더 선택기 오류: {error}"),
                     poll: false,
                 },
             },
@@ -580,12 +633,12 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     Ok(status) => Response::Vod {
                         status,
                         message: Some(format!(
-                            "VOD download started · selected PARTs: {selected_parts}"
+                            "VOD 다운로드를 시작했습니다 · 선택한 PART: {selected_parts}"
                         )),
                         poll: false,
                     },
                     Err(error) => Response::VodError {
-                        message: format!("VOD download failed to start: {error:#}"),
+                        message: format!("VOD 다운로드를 시작하지 못했습니다: {error:#}"),
                         poll: false,
                     },
                 }
@@ -593,11 +646,11 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             Request::VodCancel => match runtime.block_on(core.cancel_vod()) {
                 Ok(status) => Response::Vod {
                     status,
-                    message: Some("VOD cancellation completed".into()),
+                    message: Some("VOD 작업 취소를 완료했습니다".into()),
                     poll: false,
                 },
                 Err(error) => Response::VodError {
-                    message: format!("VOD cancellation failed: {error:#}"),
+                    message: format!("VOD 작업 취소 실패: {error:#}"),
                     poll: false,
                 },
             },
@@ -609,18 +662,20 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                         Ok(snapshot) => Response::Queue {
                             snapshot,
                             message: Some(format!(
-                                "Queued VOD job {} · selected PARTs: {selected_parts}",
+                                "VOD 작업을 대기열에 추가했습니다 {} · 선택한 PART: {selected_parts}",
                                 item.id
                             )),
                             poll: false,
                         },
                         Err(error) => Response::QueueError {
-                            message: format!("Queued job but refresh failed: {error:#}"),
+                            message: format!(
+                                "작업은 대기열에 추가됐지만 새로고침에 실패했습니다: {error:#}"
+                            ),
                             poll: false,
                         },
                     },
                     Err(error) => Response::QueueError {
-                        message: format!("Queue add failed: {error:#}"),
+                        message: format!("대기열 추가 실패: {error:#}"),
                         poll: false,
                     },
                 }
@@ -632,18 +687,26 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     "remove" => runtime.block_on(core.remove_queue_item(&id)),
                     _ => Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        format!("unsupported queue action: {action}"),
+                        format!("지원하지 않는 대기열 작업: {action}"),
                     )
                     .into()),
                 };
                 match result {
                     Ok(snapshot) => Response::Queue {
                         snapshot,
-                        message: Some(format!("Queue action completed: {action}")),
+                        message: Some(format!(
+                            "대기열 작업 완료: {}",
+                            match action.as_str() {
+                                "cancel" => "취소",
+                                "retry" => "재시도",
+                                "remove" => "삭제",
+                                _ => action.as_str(),
+                            }
+                        )),
                         poll: false,
                     },
                     Err(error) => Response::QueueError {
-                        message: format!("Queue action failed: {error:#}"),
+                        message: format!("대기열 작업 실패: {error:#}"),
                         poll: false,
                     },
                 }
@@ -652,9 +715,86 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 Ok(history) => Response::History {
                     history,
                     view,
-                    message: Some("History refreshed".into()),
+                    message: Some("기록을 새로고침했습니다".into()),
                 },
-                Err(error) => Response::HistoryError(format!("History refresh failed: {error:#}")),
+                Err(error) => Response::HistoryError(format!("기록 새로고침 실패: {error:#}")),
+            },
+            Request::MaintenanceLoad => {
+                maintenance_snapshot(&core, &runtime, "관리 상태를 새로고침했습니다")
+            }
+            Request::BackupPickDirectory { initial } => {
+                match native_picker::pick_directory(&initial) {
+                    Ok(path) => Response::MaintenancePicked(path),
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("백업 폴더 선택기 오류: {error}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::BackupSave { policy, directory } => {
+                match runtime.block_on(core.update_backup_policy(&policy, directory.as_deref())) {
+                    Ok(snapshot) => Response::Maintenance {
+                        snapshot,
+                        diagnostics: core.diagnostics(),
+                        logs: runtime.block_on(core.runtime_logs(200)),
+                        message: "백업 정책을 canonical SQLite에 저장했습니다.".into(),
+                    },
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("백업 정책을 저장하지 못했습니다: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::BackupCreate => match runtime.block_on(core.create_manual_backup()) {
+                Ok(snapshot) => Response::Maintenance {
+                    snapshot,
+                    diagnostics: core.diagnostics(),
+                    logs: runtime.block_on(core.runtime_logs(200)),
+                    message: "수동 백업을 생성하고 검증했습니다.".into(),
+                },
+                Err(error) => Response::MaintenanceError {
+                    message: format!("수동 백업 실패: {error:#}"),
+                    poll: false,
+                },
+            },
+            Request::BackupRestore { file_name } => {
+                match runtime.block_on(core.restore_backup(&file_name)) {
+                    Ok(outcome) => {
+                        let _ = responses.send(read_snapshot(
+                            &core,
+                            true,
+                            "DB를 복원하고 canonical SQLite에서 설정을 다시 불러왔습니다.",
+                        ));
+                        let _ = responses.send(configuration_snapshot(
+                            &core,
+                            "DB를 복원하고 채널 및 서비스 연결 정보를 다시 불러왔습니다.",
+                        ));
+                        let _ = responses.send(queue_status(&core, &runtime, false));
+                        if let Ok(history) = core.history(&HistoryFilter::default()) {
+                            let _ = responses.send(Response::History {
+                                history,
+                                view: "ALL".into(),
+                                message: Some("복원 후 기록을 다시 불러왔습니다".into()),
+                            });
+                        }
+                        maintenance_snapshot(
+                            &core,
+                            &runtime,
+                            format!(
+                                "복원 완료: {}. 안전 백업: {}. Watcher는 중지 상태를 유지합니다.",
+                                outcome.restored.file_name, outcome.safety_backup.file_name
+                            ),
+                        )
+                    }
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("복원이 차단되었거나 실패했습니다: {error:#}"),
+                        poll: false,
+                    },
+                }
+            }
+            Request::LogsLoad { poll } => Response::Logs {
+                lines: runtime.block_on(core.runtime_logs(200)),
+                poll,
             },
         };
         if responses.send(response).is_err() {
@@ -665,6 +805,24 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     runtime.block_on(core.shutdown());
 }
 
+fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a str {
+    match key {
+        "STREAMLINK_PATH" => {
+            "Streamlink 실행 파일 경로입니다. 비워두거나 AUTO를 사용하면 자동 탐색합니다."
+        }
+        "STREAMLINK_FALLBACK" => {
+            "대체 Streamlink 실행 파일 경로입니다. 비워두거나 AUTO를 사용하면 자동 탐색합니다."
+        }
+        "YT_DLP_PATH" => "yt-dlp 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
+        "FFMPEG_PATH" => "FFmpeg 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
+        "OUTPUT_DIR" => "LIVE 기본 저장 폴더입니다. 비워두면 런타임 기본값을 사용합니다.",
+        "CHECK_INTERVAL" => "LIVE 상태 확인 간격(초)입니다. 허용 범위: 1~86400.",
+        "MIN_FREE_SPACE_GB" => "최소 여유 디스크 공간(GB)입니다. 허용 범위: 0~1000000.",
+        "QUALITY" => "LIVE 화질입니다. 예: best",
+        _ => fallback,
+    }
+}
+
 fn render_draft(ui: &MainWindow, draft: &SettingsDraft) {
     let rows: Vec<_> = draft
         .fields
@@ -672,7 +830,7 @@ fn render_draft(ui: &MainWindow, draft: &SettingsDraft) {
         .map(|field| SettingRow {
             key: field.key.clone().into(),
             value: field.value.clone().into(),
-            description: field.description.clone().into(),
+            description: localized_setting_description(&field.key, &field.description).into(),
             pickable: field.kind != SettingKind::Text,
         })
         .collect();
@@ -864,11 +1022,96 @@ fn render_history(ui: &MainWindow, history: HistoryResponse, view: &str) {
     state.set_history_loaded(true);
 }
 
+fn render_history_calendar(
+    ui: &MainWindow,
+    target: &str,
+    calendar: history_adapter::CalendarMonthView,
+) {
+    let rows = calendar
+        .days
+        .into_iter()
+        .map(|day| HistoryCalendarDay {
+            day: day.day.into(),
+            date: day.date.into(),
+            in_month: day.in_month,
+            selected: day.selected,
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<QueueHistoryState>();
+    state.set_history_calendar_target(target.into());
+    state.set_history_calendar_year(calendar.year);
+    state.set_history_calendar_month(calendar.month as i32);
+    state.set_history_calendar_label(calendar.label.into());
+    state.set_history_calendar_days(ModelRc::new(VecModel::from(rows)));
+}
+
+fn render_logs(ui: &MainWindow, lines: Vec<String>) {
+    let rows = maintenance_adapter::log_rows(lines, 200)
+        .into_iter()
+        .map(|row| MaintenanceLogRow {
+            text: row.text.into(),
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<MaintenanceState>();
+    state.set_log_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_log_message("최근 런타임 로그를 표시합니다(최대 200줄).".into());
+}
+
+fn render_maintenance(
+    ui: &MainWindow,
+    snapshot: BackupSnapshot,
+    diagnostics: DiagnosticsSnapshot,
+    logs: Vec<String>,
+) {
+    let backup_rows = maintenance_adapter::backup_rows(&snapshot)
+        .into_iter()
+        .map(|row| MaintenanceBackupRow {
+            file_name: row.file_name.into(),
+            kind: row.kind.into(),
+            created_at: row.created_at.into(),
+            size: row.size.into(),
+            sha256: row.sha256.into(),
+            integrity: row.integrity.into(),
+            integrity_tone: row.integrity_tone.into(),
+            can_restore: row.can_restore,
+        })
+        .collect::<Vec<_>>();
+
+    let diagnostic_rows = maintenance_adapter::diagnostic_rows(&diagnostics)
+        .into_iter()
+        .map(|row| MaintenanceDiagnosticRow {
+            name: row.name.into(),
+            status: row.status.into(),
+            detail: row.detail.into(),
+            status_tone: row.status_tone.into(),
+        })
+        .collect::<Vec<_>>();
+
+    let state = ui.global::<MaintenanceState>();
+    state.set_backup_directory(snapshot.directory.into());
+    state.set_backup_directory_editable(snapshot.directory_editable);
+    state.set_backup_enabled(snapshot.policy.enabled);
+    state.set_backup_interval_hours(snapshot.policy.interval_hours.to_string().into());
+    state.set_backup_keep_count(snapshot.policy.keep_count.to_string().into());
+    state.set_backup_retention_days(snapshot.policy.retention_days.to_string().into());
+    state.set_backup_rows(ModelRc::new(VecModel::from(backup_rows)));
+    state.set_diagnostic_rows(ModelRc::new(VecModel::from(diagnostic_rows)));
+    state.set_loaded(true);
+    drop(state);
+    render_logs(ui, logs);
+}
+
 pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     let state = ui.global::<AppState>();
     state.set_runtime_ready(diagnostics.runtime_ready);
-    state.set_runtime_status(format!("Environment: {}", diagnostics.status.label()).into());
-    state.set_tool_summary("See Settings diagnostics for media-tool availability".into());
+    state.set_runtime_status(
+        if diagnostics.runtime_ready {
+            "모든 구성요소가 준비되었습니다"
+        } else {
+            "일부 구성요소를 확인하세요"
+        }
+        .into(),
+    );
     let rows: Vec<_> = diagnostics
         .items
         .into_iter()
@@ -889,10 +1132,10 @@ fn send_settings(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Reque
     match sender.send(request) {
         Ok(()) => {
             state.set_settings_busy(true);
-            state.set_settings_message("Working...".into());
+            state.set_settings_message("처리 중...".into());
         }
         Err(_) => state.set_settings_message(
-            "Runtime worker unavailable; fix the startup error and restart".into(),
+            "런타임 Worker를 사용할 수 없습니다. 시작 오류를 해결한 뒤 다시 실행하세요.".into(),
         ),
     }
 }
@@ -905,9 +1148,9 @@ fn send_config(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request
     match sender.send(request) {
         Ok(()) => {
             state.set_config_busy(true);
-            state.set_config_message("Working...".into());
+            state.set_config_message("처리 중...".into());
         }
-        Err(_) => state.set_config_message("Configuration worker is unavailable".into()),
+        Err(_) => state.set_config_message("설정 Worker를 사용할 수 없습니다".into()),
     }
 }
 
@@ -919,9 +1162,9 @@ fn send_live(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) 
     match sender.send(request) {
         Ok(()) => {
             state.set_live_busy(true);
-            state.set_live_message("Working...".into());
+            state.set_live_message("처리 중...".into());
         }
-        Err(_) => state.set_live_message("LIVE runtime worker is unavailable".into()),
+        Err(_) => state.set_live_message("LIVE 런타임 Worker를 사용할 수 없습니다".into()),
     }
 }
 
@@ -933,9 +1176,9 @@ fn send_vod(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
     match sender.send(request) {
         Ok(()) => {
             state.set_vod_busy(true);
-            state.set_vod_message("Working...".into());
+            state.set_vod_message("처리 중...".into());
         }
-        Err(_) => state.set_vod_message("VOD runtime worker is unavailable".into()),
+        Err(_) => state.set_vod_message("VOD 런타임 Worker를 사용할 수 없습니다".into()),
     }
 }
 
@@ -947,9 +1190,9 @@ fn send_queue(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request)
     match sender.send(request) {
         Ok(()) => {
             state.set_queue_busy(true);
-            state.set_queue_message("Working...".into());
+            state.set_queue_message("처리 중...".into());
         }
-        Err(_) => state.set_queue_message("Queue runtime worker is unavailable".into()),
+        Err(_) => state.set_queue_message("대기열 런타임 Worker를 사용할 수 없습니다".into()),
     }
 }
 
@@ -961,9 +1204,23 @@ fn send_history(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Reques
     match sender.send(request) {
         Ok(()) => {
             state.set_history_busy(true);
-            state.set_history_message("Loading history...".into());
+            state.set_history_message("기록을 불러오는 중...".into());
         }
-        Err(_) => state.set_history_message("History runtime worker is unavailable".into()),
+        Err(_) => state.set_history_message("기록 런타임 Worker를 사용할 수 없습니다".into()),
+    }
+}
+
+fn send_maintenance(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    let state = ui.global::<MaintenanceState>();
+    if state.get_busy() {
+        return;
+    }
+    match sender.send(request) {
+        Ok(()) => {
+            state.set_busy(true);
+            state.set_message("처리 중...".into());
+        }
+        Err(_) => state.set_message("관리 런타임 Worker를 사용할 수 없습니다".into()),
     }
 }
 
@@ -978,6 +1235,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let queue_history = ui.global::<QueueHistoryState>();
     queue_history.set_queue_busy(true);
     queue_history.set_history_busy(true);
+    let maintenance = ui.global::<MaintenanceState>();
+    maintenance.set_busy(true);
     if let Err(error) = std::thread::Builder::new()
         .name("native-runtime".into())
         .spawn(move || worker(requests, responses))
@@ -988,12 +1247,14 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_vod_busy(false);
         queue_history.set_queue_busy(false);
         queue_history.set_history_busy(false);
-        queue_history.set_queue_message(format!("Cannot start worker: {error}").into());
-        queue_history.set_history_message(format!("Cannot start worker: {error}").into());
-        state.set_settings_message(format!("Cannot start worker: {error}").into());
-        state.set_config_message(format!("Cannot start worker: {error}").into());
-        state.set_live_message(format!("Cannot start worker: {error}").into());
-        state.set_vod_message(format!("Cannot start worker: {error}").into());
+        maintenance.set_busy(false);
+        queue_history.set_queue_message(format!("Worker를 시작할 수 없습니다: {error}").into());
+        queue_history.set_history_message(format!("Worker를 시작할 수 없습니다: {error}").into());
+        maintenance.set_message(format!("Worker를 시작할 수 없습니다: {error}").into());
+        state.set_settings_message(format!("Worker를 시작할 수 없습니다: {error}").into());
+        state.set_config_message(format!("Worker를 시작할 수 없습니다: {error}").into());
+        state.set_live_message(format!("Worker를 시작할 수 없습니다: {error}").into());
+        state.set_vod_message(format!("Worker를 시작할 수 없습니다: {error}").into());
     }
 
     let draft = Rc::new(RefCell::new(SettingsDraft::default()));
@@ -1003,6 +1264,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let live_poll_in_flight = Rc::new(Cell::new(false));
     let vod_poll_in_flight = Rc::new(Cell::new(false));
     let queue_poll_in_flight = Rc::new(Cell::new(false));
+    let maintenance_log_poll_in_flight = Rc::new(Cell::new(false));
 
     let weak = ui.as_weak();
     let edit_draft = draft.clone();
@@ -1073,8 +1335,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
             }
             add_draft.borrow_mut().add();
             render_channels(&ui, &add_draft.borrow());
-            ui.global::<AppState>()
-                .set_config_message("New channel draft added; Save validates it.".into());
+            ui.global::<AppState>().set_config_message(
+                "새 채널을 추가했습니다. 저장할 때 유효성을 확인합니다.".into(),
+            );
         }
     });
 
@@ -1087,8 +1350,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
             }
             remove_draft.borrow_mut().remove(index as usize);
             render_channels(&ui, &remove_draft.borrow());
-            ui.global::<AppState>()
-                .set_config_message("Channel removed from draft; Save to persist.".into());
+            ui.global::<AppState>().set_config_message(
+                "채널을 편집 목록에서 삭제했습니다. 저장하면 반영됩니다.".into(),
+            );
         }
     });
 
@@ -1155,8 +1419,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 return;
             };
             if channel.account.trim().is_empty() {
-                ui.global::<AppState>()
-                    .set_config_message("Enter an account / channel id before resolving.".into());
+                ui.global::<AppState>().set_config_message(
+                    "이름을 조회하려면 계정 / 채널 ID를 먼저 입력하세요.".into(),
+                );
                 return;
             }
             send_config(
@@ -1283,7 +1548,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
             state.set_live_password_label("".into());
             state.set_live_password_draft("".into());
             if password.is_empty() {
-                state.set_live_message("Password is empty".into());
+                state.set_live_message("비밀번호가 비어 있습니다".into());
                 return;
             }
             send_live(
@@ -1306,8 +1571,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
             }
             edit_vod.borrow_mut().edit_url(value.to_string());
             render_vod_draft(&ui, &edit_vod.borrow());
-            ui.global::<AppState>()
-                .set_vod_message("URL changed; Analyze to load metadata and formats.".into());
+            ui.global::<AppState>().set_vod_message(
+                "URL이 변경되었습니다. 분석을 눌러 메타데이터와 형식을 불러오세요.".into(),
+            );
         }
     });
 
@@ -1333,7 +1599,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
             let url = analyze_draft.borrow().url.trim().to_string();
             if url.is_empty() {
                 ui.global::<AppState>()
-                    .set_vod_message("Enter a SOOP or CHZZK VOD URL first.".into());
+                    .set_vod_message("SOOP 또는 CHZZK VOD URL을 먼저 입력하세요.".into());
                 return;
             }
             send_vod(&ui, &vod_sender, Request::VodAnalyze { url });
@@ -1417,8 +1683,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         if let Some(ui) = weak.upgrade() {
             let Some(request) = download_draft.borrow().download_request() else {
                 ui.global::<AppState>().set_vod_message(
-                    "Analyze the URL, select quality/parts, and choose an output folder first."
-                        .into(),
+                    "URL을 분석한 뒤 화질/PART를 선택하고 출력 폴더를 지정하세요.".into(),
                 );
                 return;
             };
@@ -1471,17 +1736,80 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let queue_sender = sender.clone();
     let enqueue_draft = vod_draft.clone();
     queue_state.on_enqueue_current(move || {
-          if let Some(ui) = weak.upgrade() {
-    let Some(request) = enqueue_draft.borrow().download_request() else {
-        ui.global::<QueueHistoryState>().set_queue_message(
-            "Analyze the VOD, select quality/parts, and choose an output folder before adding it to the Queue."
-                .into(),
-        );
-        return;
-    };
-    send_queue(&ui, &queue_sender, Request::QueueEnqueue(request));
-          }
-      });
+        if let Some(ui) = weak.upgrade() {
+            let Some(request) = enqueue_draft.borrow().download_request() else {
+                ui.global::<QueueHistoryState>().set_queue_message(
+                    "VOD를 분석한 뒤 화질/PART와 출력 폴더를 지정하고 대기열에 추가하세요.".into(),
+                );
+                return;
+            };
+            send_queue(&ui, &queue_sender, Request::QueueEnqueue(request));
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_open(move |target| {
+        if let Some(ui) = weak.upgrade() {
+            let target = target.to_string();
+            let state = ui.global::<QueueHistoryState>();
+            let selected = if target == "to" {
+                state.get_history_to_date().to_string()
+            } else {
+                state.get_history_from_date().to_string()
+            };
+            drop(state);
+            render_history_calendar(
+                &ui,
+                if target == "to" { "to" } else { "from" },
+                history_adapter::calendar_initial(&selected),
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_shift(move |delta| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            let target = state.get_history_calendar_target().to_string();
+            let year = state.get_history_calendar_year();
+            let month = state.get_history_calendar_month().max(1) as u32;
+            let selected = if target == "to" {
+                state.get_history_to_date().to_string()
+            } else {
+                state.get_history_from_date().to_string()
+            };
+            drop(state);
+            render_history_calendar(
+                &ui,
+                &target,
+                history_adapter::calendar_shift(year, month, delta, &selected),
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_select(move |date| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            if state.get_history_calendar_target().as_str() == "to" {
+                state.set_history_to_date(date);
+            } else {
+                state.set_history_from_date(date);
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    queue_state.on_history_calendar_clear(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<QueueHistoryState>();
+            if state.get_history_calendar_target().as_str() == "to" {
+                state.set_history_to_date("".into());
+            } else {
+                state.set_history_from_date("".into());
+            }
+        }
+    });
 
     let weak = ui.as_weak();
     let history_sender = sender.clone();
@@ -1496,7 +1824,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     Ok(limit) => Some(limit),
                     Err(_) => {
                         state.set_history_message(
-                            "History limit must be a positive integer.".into(),
+                            "최대 조회 건수는 1 이상의 정수여야 합니다.".into(),
                         );
                         return;
                     }
@@ -1519,10 +1847,182 @@ pub fn bind(ui: &MainWindow) -> Controller {
         }
     });
 
+    let maintenance_state = ui.global::<MaintenanceState>();
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::MaintenanceLoad);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_pick_backup_directory(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            let initial = state.get_backup_directory().to_string();
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupPickDirectory { initial },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_toggle_backup_enabled(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_backup_enabled(!state.get_backup_enabled());
+                state
+                    .set_message("백업 정책이 변경되었습니다. 정책 저장을 눌러 반영하세요.".into());
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_save_backup_policy(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if state.get_busy() {
+                return;
+            }
+
+            let interval = match state
+                .get_backup_interval_hours()
+                .to_string()
+                .trim()
+                .parse::<u64>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message("백업 간격은 시간 단위 정수여야 합니다.".into());
+                    return;
+                }
+            };
+            let keep_count = match state
+                .get_backup_keep_count()
+                .to_string()
+                .trim()
+                .parse::<usize>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message("백업 보관 개수는 0 이상의 정수여야 합니다.".into());
+                    return;
+                }
+            };
+            let retention_days = match state
+                .get_backup_retention_days()
+                .to_string()
+                .trim()
+                .parse::<i64>()
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    state.set_message("백업 보관 기간은 0일 이상의 정수여야 합니다.".into());
+                    return;
+                }
+            };
+
+            let directory = state
+                .get_backup_directory_editable()
+                .then(|| state.get_backup_directory().to_string());
+            let policy = BackupPolicy {
+                enabled: state.get_backup_enabled(),
+                interval_hours: interval,
+                keep_count,
+                retention_days,
+            };
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupSave { policy, directory },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_create_backup(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::BackupCreate);
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_request_restore(move |file_name| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_restore_pending_file(file_name);
+                state.set_message(
+                    "계속하려면 복원 확인을 누르세요. 먼저 pre_restore 안전 백업을 생성합니다."
+                        .into(),
+                );
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_cancel_restore(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_restore_pending_file("".into());
+                state.set_message("복원을 취소했습니다. 변경된 데이터는 없습니다.".into());
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_confirm_restore(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            let file_name = state.get_restore_pending_file().to_string();
+            if file_name.trim().is_empty() {
+                state.set_message("복원할 유효한 백업을 선택하세요.".into());
+                return;
+            }
+            drop(state);
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::BackupRestore { file_name },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_refresh_logs(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::LogsLoad { poll: false });
+        }
+    });
+
+    let weak = ui.as_weak();
+    maintenance_state.on_toggle_log_auto_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<MaintenanceState>();
+            if !state.get_busy() {
+                state.set_log_auto_refresh(!state.get_log_auto_refresh());
+            }
+        }
+    });
+
     let weak = ui.as_weak();
     let response_live_poll_flag = live_poll_in_flight.clone();
     let response_vod_poll_flag = vod_poll_in_flight.clone();
     let response_queue_poll_flag = queue_poll_in_flight.clone();
+    let response_maintenance_log_poll_flag = maintenance_log_poll_in_flight.clone();
     let response_channels = channels_draft.clone();
     let response_vod_draft = vod_draft.clone();
     let response_timer = Timer::default();
@@ -1536,12 +2036,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 Response::Snapshot {
                     fields,
                     diagnostics,
-                    backend,
-                    database,
-                    channel_count,
+                    first_run,
                     message,
                 } => {
                     state.set_settings_busy(false);
+                    let has_settings_snapshot = fields.is_some();
                     let startup_failed = !state.get_live_loaded() && fields.is_none();
                     if let Some(fields) = fields {
                         draft.borrow_mut().load(fields);
@@ -1549,9 +2048,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_settings_loaded(true);
                     }
                     bind_core_snapshot(&ui, diagnostics);
-                    state.set_backend_path(backend.into());
-                    state.set_database_path(database.into());
-                    state.set_channel_count(channel_count.into());
+                    if first_run && has_settings_snapshot && state.get_active_page() == "LIVE" {
+                        state.set_active_page("Settings".into());
+                    }
                     state.set_settings_message(message.clone().into());
                     if startup_failed {
                         state.set_config_busy(false);
@@ -1559,7 +2058,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_live_busy(false);
                         state.set_live_message(message.clone().into());
                         state.set_vod_busy(false);
-                        state.set_vod_message(message.into());
+                        state.set_vod_message(message.clone().into());
+                        let maintenance_state = ui.global::<MaintenanceState>();
+                        maintenance_state.set_busy(false);
+                        maintenance_state.set_message(message.into());
                     }
                 }
                 Response::Configuration {
@@ -1572,9 +2074,6 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_config_busy(false);
                     response_channels.borrow_mut().load(channels);
                     render_channels(&ui, &response_channels.borrow());
-                    state.set_channel_count(
-                        response_channels.borrow().rows.len().to_string().into(),
-                    );
                     state.set_soop_username(username.into());
                     state.set_cloudflare_worker_url(worker_url.into());
                     state.set_soop_password_configured(
@@ -1617,10 +2116,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     };
                     if applied {
                         render_channels(&ui, &response_channels.borrow());
-                        state.set_config_message(format!("Resolved channel name: {name}").into());
+                        state.set_config_message(format!("채널 이름 조회 완료: {name}").into());
                     } else {
                         state.set_config_message(
-                            "Channel changed while lookup was running; lookup result ignored."
+                            "조회 중 채널 정보가 변경되어 결과를 적용하지 않았습니다."
                                 .into(),
                         );
                     }
@@ -1638,10 +2137,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     if draft.borrow_mut().accept_selection(index, path) {
                         render_draft(&ui, &draft.borrow());
                         state.set_settings_message(
-                            "Selection added to draft; Save validates and persists it".into(),
+                            "선택한 경로를 편집 내용에 반영했습니다. 저장 시 유효성을 확인하고 적용합니다.".into(),
                         );
                     } else {
-                        state.set_settings_message("Selection cancelled; draft unchanged".into());
+                        state.set_settings_message("경로 선택을 취소했습니다. 편집 내용은 변경되지 않았습니다.".into());
                     }
                 }
                 Response::Live {
@@ -1658,7 +2157,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     if let Some(message) = message {
                         state.set_live_message(message.into());
                     } else if !poll {
-                        state.set_live_message("LIVE status refreshed".into());
+                        state.set_live_message("LIVE 상태를 새로고침했습니다".into());
                     }
                 }
                 Response::LiveError { message, poll } => {
@@ -1682,13 +2181,13 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     let sync = render_vod_status(&ui, &mut response_vod_draft.borrow_mut(), status);
                     if sync == AnalysisSync::Stale {
                         state.set_vod_message(
-                            "A result for an older URL was ignored; Analyze the current URL."
+                            "이전 URL의 분석 결과는 무시했습니다. 현재 URL을 다시 분석하세요."
                                 .into(),
                         );
                     } else if let Some(message) = message {
                         state.set_vod_message(message.into());
                     } else if !poll {
-                        state.set_vod_message("VOD status refreshed".into());
+                        state.set_vod_message("VOD 상태를 새로고침했습니다".into());
                     }
                 }
                 Response::VodPicked(path) => {
@@ -1698,9 +2197,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         .accept_output_selection(path)
                     {
                         render_vod_draft(&ui, &response_vod_draft.borrow());
-                        state.set_vod_message("Output folder selected.".into());
+                        state.set_vod_message("출력 폴더를 선택했습니다.".into());
                     } else {
-                        state.set_vod_message("Output folder selection cancelled.".into());
+                        state.set_vod_message("출력 폴더 선택을 취소했습니다.".into());
                     }
                 }
                 Response::VodError { message, poll } => {
@@ -1726,7 +2225,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     if let Some(message) = message {
                         queue_state.set_queue_message(message.into());
                     } else if !poll {
-                        queue_state.set_queue_message("Queue refreshed".into());
+                        queue_state.set_queue_message("대기열을 새로고침했습니다".into());
                     }
                 }
                 Response::QueueError { message, poll } => {
@@ -1748,13 +2247,60 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     history_state.set_history_view(view.clone().into());
                     render_history(&ui, history, &view);
                     history_state.set_history_message(
-                        message.unwrap_or_else(|| "History refreshed".into()).into(),
+                        message.unwrap_or_else(|| "기록을 새로고침했습니다".into()).into(),
                     );
                 }
                 Response::HistoryError(message) => {
                     let history_state = ui.global::<QueueHistoryState>();
                     history_state.set_history_busy(false);
                     history_state.set_history_message(message.into());
+                }
+                Response::Maintenance {
+                    snapshot,
+                    diagnostics,
+                    logs,
+                    message,
+                } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    maintenance_state.set_busy(false);
+                    if message.starts_with("복원 완료:") {
+                        maintenance_state.set_restore_pending_file("".into());
+                    }
+                    render_maintenance(&ui, snapshot, diagnostics, logs);
+                    maintenance_state.set_message(message.into());
+                }
+                Response::MaintenancePicked(path) => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    maintenance_state.set_busy(false);
+                    if let Some(path) = path {
+                        maintenance_state.set_backup_directory(path.into());
+                        maintenance_state.set_message(
+                            "백업 폴더가 변경되었습니다. 정책 저장을 눌러 반영하세요.".into(),
+                        );
+                    } else {
+                        maintenance_state.set_message(
+                            "백업 폴더 선택을 취소했습니다. 기존 값을 유지합니다.".into(),
+                        );
+                    }
+                }
+                Response::Logs { lines, poll } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if poll {
+                        response_maintenance_log_poll_flag.set(false);
+                    } else {
+                        maintenance_state.set_busy(false);
+                        maintenance_state.set_message("런타임 로그를 새로고침했습니다.".into());
+                    }
+                    render_logs(&ui, lines);
+                }
+                Response::MaintenanceError { message, poll } => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if poll {
+                        response_maintenance_log_poll_flag.set(false);
+                    } else {
+                        maintenance_state.set_busy(false);
+                    }
+                    maintenance_state.set_message(message.into());
                 }
 
                 Response::Error(message) => {
@@ -1779,6 +2325,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     if !queue_state.get_history_loaded() {
                         queue_state.set_history_busy(false);
                         queue_state.set_history_message(message.clone().into());
+                    }
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    if !maintenance_state.get_loaded() {
+                        maintenance_state.set_busy(false);
+                        maintenance_state.set_message(message.clone().into());
                     }
                     state.set_settings_message(message.into());
                 }
@@ -1841,7 +2392,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     );
 
     let weak = ui.as_weak();
-    let queue_poll_sender = sender;
+    let queue_poll_sender = sender.clone();
     let queue_poll_flag = queue_poll_in_flight;
     let queue_poll_timer = Timer::default();
     queue_poll_timer.start(
@@ -1868,10 +2419,41 @@ pub fn bind(ui: &MainWindow) -> Controller {
         },
     );
 
+    let weak = ui.as_weak();
+    let maintenance_log_poll_sender = sender;
+    let maintenance_log_poll_flag = maintenance_log_poll_in_flight;
+    let maintenance_log_poll_timer = Timer::default();
+    maintenance_log_poll_timer.start(
+        TimerMode::Repeated,
+        Duration::from_millis(1500),
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let app_state = ui.global::<AppState>();
+            let maintenance_state = ui.global::<MaintenanceState>();
+            if app_state.get_active_page().as_str() != "Maintenance"
+                || maintenance_state.get_section().as_str() != "Logs"
+                || !maintenance_state.get_log_auto_refresh()
+                || maintenance_state.get_busy()
+                || maintenance_log_poll_flag.get()
+            {
+                return;
+            }
+            if maintenance_log_poll_sender
+                .send(Request::LogsLoad { poll: true })
+                .is_ok()
+            {
+                maintenance_log_poll_flag.set(true);
+            }
+        },
+    );
+
     Controller {
         _response_timer: response_timer,
         _live_poll_timer: live_poll_timer,
         _vod_poll_timer: vod_poll_timer,
         _queue_poll_timer: queue_poll_timer,
+        _maintenance_log_poll_timer: maintenance_log_poll_timer,
     }
 }

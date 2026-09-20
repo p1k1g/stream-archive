@@ -53,13 +53,13 @@ pub fn validated_action(action: &str) -> Option<&'static str> {
 
 fn status_presentation(status: &str) -> (&str, &str) {
     match status {
-        "UNKNOWN" => ("Checking", "muted"),
-        "OFFLINE" => ("Offline", "muted"),
-        "RECORDING" => ("Recording", "ok"),
-        "PASSWORD_REQUIRED" => ("Password required", "warn"),
-        "DISABLED" => ("Disabled", "muted"),
-        "WATCHER_STOPPED" => ("Watcher stopped", "muted"),
-        "ERROR" => ("Error", "error"),
+        "UNKNOWN" => ("확인 중", "muted"),
+        "OFFLINE" => ("오프라인", "muted"),
+        "RECORDING" => ("녹화 중", "ok"),
+        "PASSWORD_REQUIRED" => ("비밀번호 필요", "warn"),
+        "DISABLED" => ("사용 안 함", "muted"),
+        "WATCHER_STOPPED" => ("Watcher 중지됨", "muted"),
+        "ERROR" => ("오류", "error"),
         other => (other, "warn"),
     }
 }
@@ -114,7 +114,7 @@ pub fn view(status: NativeWatcherStatus) -> LiveView {
     let running = status.running;
     LiveView {
         running,
-        state_label: if running { "Running" } else { "Stopped" }.into(),
+        state_label: if running { "실행 중" } else { "중지됨" }.into(),
         engine: status.engine.into(),
         started_at: status.started_at.unwrap_or_else(|| "-".into()),
         channel_count: status.channel_count.to_string(),
@@ -193,7 +193,7 @@ mod tests {
             ..Default::default()
         };
         let view = view(status);
-        assert_eq!(view.state_label, "Stopped");
+        assert_eq!(view.state_label, "중지됨");
         assert_eq!(view.channels.len(), 1);
         assert!(!view.channels[0].can_recheck);
     }

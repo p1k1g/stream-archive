@@ -14,6 +14,8 @@ $watcher = Read-RepoFile 'rust-web\src\native_watcher.rs'
 $vodFacade = Read-RepoFile 'rust-web\src\vod.rs'
 $queue = Read-RepoFile 'rust-web\src\vod_queue.rs'
 $queueService = Read-RepoFile 'rust-web\src\queue_service.rs'
+$backupService = Read-RepoFile 'rust-web\src\backup_service.rs'
+$backupWeb = Read-RepoFile 'rust-web\src\backup.rs'
 $store = Read-RepoFile 'rust-web\src\store.rs'
 $main = Read-RepoFile 'rust-web\src\main.rs'
 $lib = Read-RepoFile 'rust-web\src\lib.rs'
@@ -57,6 +59,7 @@ Assert-Match $queueService 'lifecycle_lock: Arc<Mutex<\(\)>>' 'Queue must share 
 # outside this facade so Slint and CLI callers can use Rust services directly.
 Assert-Match $lib 'pub\s+mod\s+app_core' 'Shared library must expose the Phase 21 application core.'
 Assert-Match $lib 'pub\s+mod\s+store' 'Shared library must expose canonical SQLite persistence.'
+Assert-Match $lib 'pub\s+mod\s+backup_service' 'Shared library must expose the reusable backup service.'
 Assert-Match $lib 'pub\s+mod\s+native_watcher' 'Shared library must expose the native watcher boundary.'
 Assert-Match $lib 'pub\s+mod\s+vod' 'Shared library must expose the VOD facade.'
 Assert-Match $core 'pub\s+struct\s+StreamArchiveCore' 'Phase 21 shared application facade is missing.'
@@ -72,6 +75,13 @@ Assert-Match $core 'pub\s+async\s+fn\s+shutdown' 'Shared core must expose owned-
 # Match actual Axum/direct http crate dependencies, not similarly named transport types such as reqwest::StatusCode.
 Assert-NotMatch $core '(?m)^\s*use\s+(?:axum|http)(?:::|\s*\{)|\baxum::|\bhttp::(?:HeaderMap|StatusCode)\b' 'Shared core must stay independent from Axum/HTTP presentation concerns.'
 Assert-RustTest $core 'assembled_core_keeps_one_canonical_store_backend_and_queue' 'Shared core canonical-store/queue regression test is missing.'
+Assert-Match $core 'pub\s+async\s+fn\s+backup_snapshot' 'Shared core native backup snapshot service is missing.'
+Assert-Match $core 'pub\s+async\s+fn\s+restore_backup' 'Shared core native restore service is missing.'
+Assert-Match $core 'pub\s+async\s+fn\s+runtime_logs' 'Shared core bounded runtime log service is missing.'
+Assert-Match $backupService 'pub\s+struct\s+BackupManager' 'Reusable backup manager is missing from backup_service.rs.'
+Assert-Match $backupService 'pre_restore' 'Restore safety backup behavior is missing from shared backup service.'
+Assert-NotMatch $backupService '\baxum::|HeaderMap|StatusCode|State\(' 'Shared backup service must stay independent from Axum/Web presentation.'
+Assert-Match $backupWeb 'api_restore' 'Web backup adapter compatibility disappeared.'
 
 # Phase 21.2 Windows Slint shell. The desktop UI is a presentation adapter over
 # StreamArchiveCore, not another HTTP client, persistence authority, or process owner.
@@ -84,9 +94,11 @@ Assert-Match $guiSources 'bind_core_snapshot' 'Slint shell must bind runtime sta
 Assert-NotMatch $guiSources '\breqwest::|\baxum::|https?://127\.0\.0\.1|https?://localhost|rusqlite::|Command::new|taskkill|pkill|killall' 'Slint shell must not bypass shared core through HTTP, SQLite, or direct process control.'
 Assert-Match $guiUi 'export\s+global\s+AppState' 'Slint shell state boundary is missing.'
 Assert-Match $guiUi 'callback\s+refresh-requested' 'Slint runtime refresh callback is missing.'
-foreach ($page in @('Dashboard', 'LIVE', 'VOD', 'Queue', 'History', 'Settings')) {
+foreach ($page in @('LIVE', 'VOD', 'Queue', 'History', 'Maintenance', 'Settings')) {
     Assert-Match $guiUi ([regex]::Escape("page: `"$page`"")) "Slint navigation page missing: $page"
 }
+Assert-NotMatch $guiUi 'page:\s*"Dashboard"' 'Dashboard must stay removed; its information is available through Settings diagnostics.'
+Assert-Match $guiUi 'active-page:\s*"LIVE"' 'Configured native startup must default to the LIVE page.'
 
 # Provider registry/facades.
 Assert-Match $platform 'pub\s+mod\s+live' 'Platform LIVE facade must be registered.'
@@ -119,7 +131,13 @@ Write-Host 'Architecture contracts passed.'
 # Phase 21.3: inspect every GUI module, not only the small bootstrap.
 Assert-Match $core 'pub\s+async\s+fn\s+update_environment_settings' 'Native settings must persist through shared core.'
 Assert-Match $core 'pub\s+fn\s+diagnostics' 'Structured diagnostics service is missing.'
+Assert-Match $core 'pub\s+fn\s+is_first_run_unconfigured' 'Shared core must expose first-run routing state.'
+Assert-Match $guiSources 'core\.is_first_run_unconfigured\(' 'Native startup must determine first-run routing through the shared core.'
 Assert-Match $guiSources 'core\.update_environment_settings' 'GUI settings bypass shared service.'
 Assert-Match $guiSources 'core\.diagnostics\(' 'GUI diagnostics must consume shared diagnostics.'
 Assert-NotMatch $guiSources 'std::fs::write|fs::write|Connection::open|std::process|tokio::process' 'GUI must not write runtime files or own child processes.'
-Assert-Match $guiUi 'Diagnostics.*read-only' 'Read-only diagnostics must be distinguished from editable settings.'
+Assert-Match $guiUi '(?:Diagnostics.*read-only|진단.*읽기\s*전용)' 'Read-only diagnostics must be distinguished from editable settings.'
+Assert-Match $guiSources 'core\.backup_snapshot\(' 'Native Maintenance must load backups through StreamArchiveCore.'
+Assert-Match $guiSources 'core\.restore_backup\(' 'Native Maintenance restore must use StreamArchiveCore.'
+Assert-Match $guiSources 'core\.runtime_logs\(' 'Native log viewer must use the bounded shared LogBuffer service.'
+Assert-NotMatch $guiSources '\bSha256::new\b|\bsha2::Digest\b|\bread_to_end\s*\(|\bstd::io::copy\s*\(' 'Slint presentation must not implement backup hashing/copying.'

@@ -8,6 +8,7 @@
 
 use crate::{
     backend::LogBuffer,
+    backup_service::{BackupManager, BackupPolicy, BackupSnapshot, RestoreOutcome},
     history_service::{HistoryFilter, load_history},
     model::{
         Channel, HistoryResponse, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest,
@@ -52,6 +53,7 @@ pub struct StreamArchiveCore {
     watcher: Arc<NativeWatcherManager>,
     vod: Arc<VodManager>,
     queue: Arc<VodQueueManager>,
+    backups: BackupManager,
     config_write_lock: Arc<Mutex<()>>,
     lifecycle_lock: Arc<Mutex<()>>,
 }
@@ -85,6 +87,7 @@ impl StreamArchiveCore {
         let vod = Arc::new(VodManager::new(backend_dir.clone(), logs.clone()));
         let config_write_lock = Arc::new(Mutex::new(()));
         let lifecycle_lock = Arc::new(Mutex::new(()));
+        let backups = BackupManager::open(store.clone(), &backend_dir)?;
         let queue = Arc::new(VodQueueManager::new(
             store.clone(),
             vod.clone(),
@@ -98,6 +101,7 @@ impl StreamArchiveCore {
             watcher,
             vod,
             queue,
+            backups,
             config_write_lock,
             lifecycle_lock,
         })
@@ -127,6 +131,13 @@ impl StreamArchiveCore {
         self.queue.clone()
     }
 
+    /// Compatibility hooks are retained for the current Web adapter during
+    /// Phase 21 migration. Native callers use the presentation-neutral methods
+    /// below rather than taking ownership of the manager or SQLite store.
+    pub fn backups(&self) -> BackupManager {
+        self.backups.clone()
+    }
+
     /// Compatibility hook for backup/Web adapters while they are moved behind
     /// the shared service boundary in later Phase 21 slices.
     pub fn config_write_lock(&self) -> Arc<Mutex<()>> {
@@ -136,6 +147,10 @@ impl StreamArchiveCore {
     /// Compatibility hook for serialized VOD/restore orchestration.
     pub fn lifecycle_lock(&self) -> Arc<Mutex<()>> {
         self.lifecycle_lock.clone()
+    }
+
+    pub fn is_first_run_unconfigured(&self) -> Result<bool> {
+        self.store.is_first_run_unconfigured()
     }
 
     pub fn settings(&self) -> Result<BTreeMap<String, String>> {
@@ -185,9 +200,20 @@ impl StreamArchiveCore {
             Ok(values)
         });
         match values {
-            Ok(values) => {
-                crate::diagnostics::collect(self.backend_dir(), self.store.path(), &values)
-            }
+            Ok(values) => match self.backups.policy() {
+                Ok(policy) => crate::diagnostics::collect_with_backup(
+                    self.backend_dir(),
+                    self.store.path(),
+                    &values,
+                    &self.backups.backup_dir(),
+                    &policy,
+                ),
+                Err(error) => crate::diagnostics::DiagnosticsSnapshot::unavailable(
+                    Some(self.backend_dir()),
+                    Some(self.store.path()),
+                    &format!("backup policy load failed: {error:#}"),
+                ),
+            },
             Err(error) => crate::diagnostics::DiagnosticsSnapshot::unavailable(
                 Some(self.backend_dir()),
                 Some(self.store.path()),
@@ -470,6 +496,74 @@ impl StreamArchiveCore {
         load_history(self.store.path(), filter)
     }
 
+    pub async fn backup_snapshot(&self) -> Result<BackupSnapshot> {
+        self.backups.snapshot().await
+    }
+
+    pub async fn update_backup_policy(
+        &self,
+        policy: &BackupPolicy,
+        directory: Option<&str>,
+    ) -> Result<BackupSnapshot> {
+        let _config_guard = self.config_write_lock.lock().await;
+        let snapshot = self.backups.update_policy(policy, directory).await?;
+        self.logs
+            .push(format!(
+                "[BACKUP] policy updated enabled={} interval_hours={} keep_count={} retention_days={} directory={}",
+                policy.enabled,
+                policy.interval_hours,
+                policy.keep_count,
+                policy.retention_days,
+                snapshot.directory
+            ))
+            .await;
+        Ok(snapshot)
+    }
+
+    pub async fn create_manual_backup(&self) -> Result<BackupSnapshot> {
+        let item = self.backups.create_manual().await?;
+        self.logs
+            .push(format!(
+                "[BACKUP] manual backup created file={} size={} sha256={}",
+                item.file_name, item.size_bytes, item.sha256
+            ))
+            .await;
+        self.backups.snapshot().await
+    }
+
+    pub async fn restore_backup(&self, file_name: &str) -> Result<RestoreOutcome> {
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
+        let _config_guard = self.config_write_lock.lock().await;
+
+        let watcher = self.watcher.status().await?;
+        if watcher.running || watcher.recording_count > 0 {
+            bail!("stop the LIVE watcher and active recordings before restore");
+        }
+        if self.vod.status().await.running {
+            bail!("stop the active VOD operation before restore");
+        }
+        if self.queue.has_pending_or_active().await? {
+            bail!("clear or finish the VOD Queue before restore");
+        }
+
+        let outcome = self.backups.restore(file_name).await?;
+        self.logs
+            .push(format!(
+                "[BACKUP] database restored file={} safety={}",
+                outcome.restored.file_name, outcome.safety_backup.file_name
+            ))
+            .await;
+        Ok(outcome)
+    }
+
+    pub async fn runtime_logs(&self, max_lines: usize) -> Vec<String> {
+        self.logs.tail(max_lines.clamp(1, 400)).await
+    }
+
+    pub fn spawn_auto_backup(&self) {
+        crate::backup_service::spawn_auto_backup(self.backups.clone(), self.logs.clone());
+    }
+
     /// Keep VOD history synchronized even when the caller is not the Web UI.
     pub fn spawn_vod_history_sync(&self) {
         let store = self.store.clone();
@@ -516,6 +610,69 @@ mod tests {
         assert_eq!(core.store().path(), db.as_path());
         assert!(core.settings().unwrap().contains_key("STREAMLINK_PATH"));
         assert_eq!(core.queue_snapshot().await.unwrap().queued_count, 0);
+        let backup = core.backup_snapshot().await.unwrap();
+        assert_eq!(backup.policy.interval_hours, 24);
+        assert!(backup.directory_editable);
+    }
+
+    #[tokio::test]
+    async fn native_restore_requires_idle_runtime_and_refreshes_canonical_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("app").join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(
+            dir.path()
+                .join("app")
+                .join("data")
+                .join("stream-archive.db"),
+        )
+        .unwrap();
+        let core = StreamArchiveCore::assemble(backend, store).unwrap();
+
+        core.store
+            .sync_settings(
+                &BTreeMap::from([("TEST_RESTORE".into(), "before".into())]),
+                "test",
+            )
+            .unwrap();
+        let snapshot = core.create_manual_backup().await.unwrap();
+        let backup = snapshot
+            .backups
+            .iter()
+            .find(|item| item.kind == "manual")
+            .unwrap()
+            .file_name
+            .clone();
+
+        core.store
+            .sync_settings(
+                &BTreeMap::from([("TEST_RESTORE".into(), "after".into())]),
+                "test",
+            )
+            .unwrap();
+
+        let outcome = core.restore_backup(&backup).await.unwrap();
+        assert_eq!(outcome.restored.file_name, backup);
+        assert_eq!(outcome.safety_backup.kind, "pre_restore");
+        assert_eq!(
+            core.store.setting_value("TEST_RESTORE").unwrap().as_deref(),
+            Some("before")
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_logs_are_bounded_by_requested_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = StreamArchiveCore::assemble(
+            dir.path().to_path_buf(),
+            Store::open(dir.path().join("stream-archive.db")).unwrap(),
+        )
+        .unwrap();
+        for index in 0..8 {
+            core.logs.push(format!("line-{index}")).await;
+        }
+        let tail = core.runtime_logs(3).await;
+        assert_eq!(tail, vec!["line-5", "line-6", "line-7"]);
     }
 
     #[tokio::test]

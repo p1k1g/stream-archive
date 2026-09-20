@@ -7,9 +7,11 @@
 - `rust-web/src/main.rs`: 현재 Axum server/API presentation orchestration. Phase 21 동안 기존 Web UI의 regression reference로 유지하며, 새로운 제품 로직을 이 파일에 추가하지 않는다.
 - `rust-web/src/lib.rs`: shared Rust library boundary. Phase 21부터 reusable runtime/service modules를 이 경계로 노출한다.
 - `rust-web/src/app_core.rs`: `StreamArchiveCore` service facade. SQLite/settings/secrets/channels/LIVE watcher/VOD/process lifecycle을 HTTP와 분리해 Slint/CLI에서 직접 재사용하기 위한 canonical application boundary
+- `rust-web/src/backup_service.rs`: reusable BackupManager/service boundary. managed backup policy/list/create/restore/integrity/retention을 Axum과 분리하고 Slint/Web이 같은 동작을 재사용한다.
 - `rust-gui/Cargo.toml`: Windows Slint desktop frontend crate. 서버 패키지와 분리해 Slint dependency/빌드가 기존 Web 서버 배포를 임의로 바꾸지 않게 한다.
 - `rust-gui/src/main.rs`: Slint bootstrap/state binding. 반드시 `StreamArchiveCore`를 직접 호출하고 localhost HTTP, 직접 SQLite, 직접 child-process 제어를 추가하지 않는다.
 - `rust-gui/ui/*.slint`: Windows native presentation/navigation. provider/storage/process 구현 로직을 넣지 않는다.
+- Phase 21.7 Maintenance 화면은 Backup/Restore/Diagnostics/Logs presentation만 담당한다. DB copy/hash/restore, 로그 파일 직접 읽기, process control을 Slint에 넣지 않는다.
 - `rust-web/src/tool_discovery.rs`: cross-platform Streamlink/yt-dlp/FFmpeg discovery
 - `rust-web/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI baseline
 - `rust-web/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration

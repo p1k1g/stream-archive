@@ -72,7 +72,7 @@ fn row(item: VodQueueItem) -> QueueRowView {
         id: item.id,
         platform: item.platform.to_string(),
         title: if item.title.trim().is_empty() {
-            "VOD download".into()
+            "VOD 다운로드".into()
         } else {
             item.title
         },
@@ -86,9 +86,9 @@ fn row(item: VodQueueItem) -> QueueRowView {
         percent,
         percent_label: format!("{percent:.1}%"),
         part_progress: if item.part_count > 0 {
-            format!("Part {} / {}", item.current_part, item.part_count)
+            format!("PART {} / {}", item.current_part, item.part_count)
         } else {
-            "Part -".into()
+            "PART -".into()
         },
         output_directory: item.output_directory,
         output_file: item.output_file.unwrap_or_default(),
@@ -106,14 +106,14 @@ fn row(item: VodQueueItem) -> QueueRowView {
 
 fn state_meta(state: &str) -> (String, &'static str) {
     match state {
-        "QUEUED" => ("Queued".into(), "neutral"),
-        "STARTING" => ("Starting".into(), "warn"),
-        "RUNNING" => ("Running".into(), "ok"),
-        "CANCELLING" => ("Cancelling".into(), "warn"),
-        "COMPLETED" => ("Completed".into(), "ok"),
-        "FAILED" => ("Failed".into(), "error"),
-        "CANCELLED" => ("Cancelled".into(), "neutral"),
-        "INTERRUPTED" => ("Interrupted".into(), "warn"),
+        "QUEUED" => ("대기 중".into(), "neutral"),
+        "STARTING" => ("시작 중".into(), "warn"),
+        "RUNNING" => ("진행 중".into(), "ok"),
+        "CANCELLING" => ("취소 중".into(), "warn"),
+        "COMPLETED" => ("완료".into(), "ok"),
+        "FAILED" => ("실패".into(), "error"),
+        "CANCELLED" => ("취소됨".into(), "neutral"),
+        "INTERRUPTED" => ("중단됨".into(), "warn"),
         other => (other.to_owned(), "neutral"),
     }
 }
