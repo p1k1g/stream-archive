@@ -64,7 +64,7 @@ pub fn calendar_month(year: i32, month: u32, selected: &str) -> CalendarMonthVie
     CalendarMonthView {
         year,
         month,
-        label: format!("{} {year}", month_name(month)),
+        label: format!("{year}년 {}", month_name(month)),
         days,
     }
 }
@@ -94,18 +94,18 @@ fn today_utc() -> (i32, u32, u32) {
 
 fn month_name(month: u32) -> &'static str {
     match month {
-        1 => "January",
-        2 => "February",
-        3 => "March",
-        4 => "April",
-        5 => "May",
-        6 => "June",
-        7 => "July",
-        8 => "August",
-        9 => "September",
-        10 => "October",
-        11 => "November",
-        12 => "December",
+        1 => "1월",
+        2 => "2월",
+        3 => "3월",
+        4 => "4월",
+        5 => "5월",
+        6 => "6월",
+        7 => "7월",
+        8 => "8월",
+        9 => "9월",
+        10 => "10월",
+        11 => "11월",
+        12 => "12월",
         _ => "",
     }
 }
@@ -182,7 +182,7 @@ fn live_row(item: LiveHistoryItem) -> HistoryRowView {
         .unwrap_or_else(|| item.channel_name.clone());
     let subject = format!("{} · {}", item.channel_name, item.account);
     let timing = format!(
-        "Started: {}  ·  Ended: {}",
+        "시작: {}  ·  종료: {}",
         format_history_timestamp_local(&item.started_at),
         item.ended_at
             .as_deref()
@@ -190,7 +190,7 @@ fn live_row(item: LiveHistoryItem) -> HistoryRowView {
             .unwrap_or_else(|| "-".into())
     );
     let mut detail = format!(
-        "Duration: {}  ·  Size: {}",
+        "길이: {}  ·  크기: {}",
         format_duration(item.duration_seconds.max(0) as u64),
         format_bytes(item.size_bytes)
     );
@@ -208,20 +208,20 @@ fn live_row(item: LiveHistoryItem) -> HistoryRowView {
         title,
         subject,
         state_tone: state_tone(&item.status).into(),
-        state: item.status,
+        state: history_state_label(&item.status).into(),
         detail,
         timing,
         file: item.file_path.unwrap_or_default(),
         meta: item
             .bno
-            .map(|bno| format!("Broadcast: {bno}"))
+            .map(|bno| format!("방송: {bno}"))
             .unwrap_or_default(),
     }
 }
 
 fn vod_row(item: VodHistoryItem) -> HistoryRowView {
     let title = if item.title.trim().is_empty() {
-        "VOD job".into()
+        "VOD 작업".into()
     } else {
         item.title.clone()
     };
@@ -231,7 +231,7 @@ fn vod_row(item: VodHistoryItem) -> HistoryRowView {
         format!("{} · {}", item.streamer, item.vod_url)
     };
     let timing = format!(
-        "Started: {}  ·  Finished: {}",
+        "시작: {}  ·  완료: {}",
         item.started_at
             .as_deref()
             .map(format_history_timestamp_local)
@@ -242,10 +242,10 @@ fn vod_row(item: VodHistoryItem) -> HistoryRowView {
             .unwrap_or_else(|| "-".into())
     );
     let detail = if item.message.trim().is_empty() {
-        format!("{} · {} parts", item.kind, item.part_count)
+        format!("{} · PART {}개", item.kind, item.part_count)
     } else {
         format!(
-            "{} · {} parts · {}",
+            "{} · PART {}개 · {}",
             item.kind, item.part_count, item.message
         )
     };
@@ -255,11 +255,30 @@ fn vod_row(item: VodHistoryItem) -> HistoryRowView {
         title,
         subject,
         state_tone: state_tone(&item.state).into(),
-        state: item.state,
+        state: history_state_label(&item.state).into(),
         detail,
         timing,
         file: item.output_file.unwrap_or_default(),
         meta: item.kind,
+    }
+}
+
+fn history_state_label(state: &str) -> &str {
+    match state.to_ascii_uppercase().as_str() {
+        "QUEUED" => "대기 중",
+        "STARTING" => "시작 중",
+        "RUNNING" => "진행 중",
+        "RECORDING" => "녹화 중",
+        "STOPPED" => "중지됨",
+        "COMPLETED" => "완료",
+        "FAILED" => "실패",
+        "ERROR" => "오류",
+        "CANCELLING" => "취소 중",
+        "CANCELLED" => "취소됨",
+        "INTERRUPTED" => "중단됨",
+        "LOW_DISK" => "디스크 공간 부족",
+        "STALLED" => "정체됨",
+        _ => state,
     }
 }
 
@@ -307,7 +326,7 @@ mod tests {
     #[test]
     fn calendar_builds_six_weeks_and_tracks_selected_date() {
         let month = calendar_month(2026, 9, "2026-09-18");
-        assert_eq!(month.label, "September 2026");
+        assert_eq!(month.label, "2026년 9월");
         assert_eq!(month.days.len(), 42);
         assert!(
             month
