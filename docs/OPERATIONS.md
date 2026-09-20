@@ -12,7 +12,7 @@ For users upgrading from an earlier private build, startup performs only a bound
 
 ## Online backup
 
-The native Slint Maintenance -> Backup view uses the shared BackupManager/StreamArchiveCore service and can create managed backups while the native application is running. The retained Web UI exposes the same managed backup behavior through its compatibility adapter.
+The native Slint UI separates backup policy from backup operations: **Settings -> 백업 정책** edits automatic-backup settings, while **관리 -> 백업 / 복원** creates, lists, verifies, and restores managed backups. Both paths use the same BackupManager/StreamArchiveCore service and canonical SQLite policy. The retained Web UI exposes the same managed backup behavior through its compatibility adapter.
 
 Defaults:
 
@@ -25,6 +25,24 @@ Defaults:
 Set `STREAM_ARCHIVE_BACKUP_DIR` to force a specific backup directory. When the environment override is present the directory field in the Web UI is read-only, while retention settings remain editable.
 
 Managed backup names use the `stream_archive_*.db` prefix and include companion `.db.json` metadata. Files without valid metadata are not automatically pruned.
+
+## Native storage status
+
+The Native LIVE page reads storage diagnostics through `StreamArchiveCore` and the shared `storage_service`; it does not call the Web API or probe filesystems from Slint. The snapshot includes the configured `OUTPUT_DIR`, per-channel output-directory overrides, and the canonical SQLite data directory. Paths on the same Windows volume are collapsed into one row.
+
+Storage state follows the existing Web meaning:
+
+- **정상 / OK**: free space is greater than twice `MIN_FREE_SPACE_GB`;
+- **주의 / WARN**: free space is at or below twice the threshold but above the threshold;
+- **공간 부족 / CRITICAL**: free space is at or below `MIN_FREE_SPACE_GB`.
+
+The recorder's actual low-space stop/start boundary remains `MIN_FREE_SPACE_GB`; the warning band is presentation only. Storage refresh happens on initial Native load, when returning to LIVE, on explicit refresh, and on a bounded LIVE-only timer.
+
+## CHZZK destination claim sidecars
+
+CHZZK VOD publication uses a `.stream-archive.claim` sidecar beside the intended final media pathname as a reusable file-lock anchor. The claim pathname intentionally survives job completion; deleting it immediately after unlock can let concurrent contenders lock different file identities and weaken no-clobber guarantees.
+
+On Windows, Stream Archive marks these internal claim files with the Hidden attribute so they do not normally appear in Explorer while hidden items are disabled. The lock location and reuse semantics are unchanged. Existing claim files are hidden the next time that destination is claimed. `.stream-archive.finalizing` remains a temporary publication artifact and is reclaimed/removed by the existing completion, cancellation, and stale-recovery paths.
 
 ## Offline manual backup
 
