@@ -1148,6 +1148,7 @@ export component MainWindow inherits Window {
                                 }
                             }
 
+                            // Diagnostics read-only; settings above are editable.
                             Text { text: "진단 · 읽기 전용"; color: #0f172a; font-size: 18px; font-weight: 700; }
                             Text { text: "백엔드와 DB 위치는 시작 시 관리됩니다. 별도 설정 파일은 사용하지 않습니다."; color: #64748b; wrap: word-wrap; font-size: 11px; }
                             for row in AppState.diagnostics-rows: Rectangle {
