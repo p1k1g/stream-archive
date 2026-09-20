@@ -1288,6 +1288,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     state.set_settings_busy(true);
     state.set_config_busy(true);
     state.set_live_busy(true);
+    state.set_storage_busy(true);
     state.set_vod_busy(true);
     let queue_history = ui.global::<QueueHistoryState>();
     queue_history.set_queue_busy(true);
@@ -1301,6 +1302,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_settings_busy(false);
         state.set_config_busy(false);
         state.set_live_busy(false);
+        state.set_storage_busy(false);
         state.set_vod_busy(false);
         queue_history.set_queue_busy(false);
         queue_history.set_history_busy(false);
@@ -1311,6 +1313,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_settings_message(format!("Worker를 시작할 수 없습니다: {error}").into());
         state.set_config_message(format!("Worker를 시작할 수 없습니다: {error}").into());
         state.set_live_message(format!("Worker를 시작할 수 없습니다: {error}").into());
+        state.set_storage_message(format!("Worker를 시작할 수 없습니다: {error}").into());
         state.set_vod_message(format!("Worker를 시작할 수 없습니다: {error}").into());
     }
 
@@ -1319,6 +1322,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let vod_draft = Rc::new(RefCell::new(VodDraft::default()));
     render_vod_draft(ui, &vod_draft.borrow());
     let live_poll_in_flight = Rc::new(Cell::new(false));
+    let storage_poll_in_flight = Rc::new(Cell::new(false));
     let vod_poll_in_flight = Rc::new(Cell::new(false));
     let queue_poll_in_flight = Rc::new(Cell::new(false));
     let maintenance_log_poll_in_flight = Rc::new(Cell::new(false));
@@ -1578,6 +1582,24 @@ pub fn bind(ui: &MainWindow) -> Controller {
     state.on_live_refresh(move || {
         if let Some(ui) = weak.upgrade() {
             send_live(&ui, &live_sender, Request::LiveStatus { poll: false });
+        }
+    });
+
+    let weak = ui.as_weak();
+    let storage_sender = sender.clone();
+    state.on_storage_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<AppState>();
+            if state.get_storage_busy() {
+                return;
+            }
+            match storage_sender.send(Request::StorageLoad { poll: false }) {
+                Ok(()) => {
+                    state.set_storage_busy(true);
+                    state.set_storage_message("저장 공간을 확인하는 중...".into());
+                }
+                Err(_) => state.set_storage_message("저장 공간 Worker를 사용할 수 없습니다".into()),
+            }
         }
     });
 
