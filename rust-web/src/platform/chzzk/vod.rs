@@ -2041,6 +2041,24 @@ mod tests {
         assert!(sidecar.is_file());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn destination_claim_sidecar_is_hidden_on_windows() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_HIDDEN, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        let destination = claim_collision_path(temp.path(), "hidden", "ts").unwrap();
+        let sidecar = claim_path(destination.target());
+        let mut wide = sidecar.as_os_str().encode_wide().collect::<Vec<_>>();
+        wide.push(0);
+        let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+        assert_ne!(attributes, INVALID_FILE_ATTRIBUTES);
+        assert_ne!(attributes & FILE_ATTRIBUTE_HIDDEN, 0);
+    }
+
     #[test]
     fn late_external_collision_is_not_clobbered_and_retargets() {
         let temp = tempfile::tempdir().unwrap();
