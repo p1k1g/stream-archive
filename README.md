@@ -89,7 +89,7 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 - `yt-dlp`
 - `ffmpeg`
 
-Windows portable package에는 외부 미디어 도구가 포함되지 않습니다. Web 설정에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요. Linux/macOS에서는 Phase 20의 `stream-archive-cli tools` / `tools configure`로 Unix 이름과 `PATH`를 기준으로 탐색하고 SQLite에 절대 경로를 저장할 수 있습니다.
+Windows portable package에는 외부 미디어 도구가 포함되지 않습니다. Native UI의 설정 화면에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요. Linux/macOS에서는 Phase 20의 `stream-archive-cli tools` / `tools configure`로 Unix 이름과 `PATH`를 기준으로 탐색하고 SQLite에 절대 경로를 저장할 수 있습니다.
 
 각 외부 도구는 각 프로젝트의 라이선스와 배포 조건을 따릅니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참고하세요.
 
@@ -184,17 +184,17 @@ data/stream-archive.db
 
 Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_SES` 같은 민감 정보가 CurrentUser DPAPI로 암호화된 형태로 SQLite에 저장됩니다. Linux/macOS에서는 SQLite에 평문 secret 대신 불투명한 `native-secret:v1:` 참조만 저장하고, 실제 secret은 각각 Linux Secret Service 또는 macOS Keychain에 저장합니다. Linux에서는 `secret-tool`과 사용 가능한 Secret Service 세션이 필요하며, native store를 사용할 수 없을 때 평문 저장으로 자동 fallback하지 않습니다. Web API는 평문 secret을 반환하지 않습니다.
 
-기본 수신 주소는 로컬 loopback입니다.
+Web compatibility server의 기본 수신 주소는 로컬 loopback입니다. Native GUI 기본 실행에는 이 HTTP listener가 필요하지 않습니다.
 
 ```text
 127.0.0.1:8787
 ```
 
-## 관리 토큰
+## Web 관리 토큰
 
-`STREAM_ARCHIVE_TOKEN`을 지정하지 않으면 서버가 관리 토큰을 자동 생성합니다.
+`STREAM_ARCHIVE_TOKEN`을 지정하지 않으면 Web compatibility server가 관리 토큰을 자동 생성합니다.
 
-생성된 토큰은 서버 시작 시 콘솔에 출력되고 다음 위치에 저장됩니다.
+생성된 토큰은 Web server 시작 시 콘솔에 출력되고 다음 위치에 저장됩니다.
 
 ```text
 backend/.stream-archive/web-token.txt
@@ -307,9 +307,9 @@ Native UI의 관리 → 백업에서 온라인 백업을 관리할 수 있으며
 
 | 환경 변수 | 설명 |
 |---|---|
-| `STREAM_ARCHIVE_BIND` | 수신 주소. 기본값 `127.0.0.1:8787` |
-| `STREAM_ARCHIVE_TOKEN` | 선택적 고정 관리 토큰 |
-| `STREAM_ARCHIVE_START_WATCHER` | 서버 시작 후 watcher 자동 시작 여부 |
+| `STREAM_ARCHIVE_BIND` | Web compatibility 수신 주소. 기본값 `127.0.0.1:8787` |
+| `STREAM_ARCHIVE_TOKEN` | Web compatibility용 선택적 고정 관리 토큰 |
+| `STREAM_ARCHIVE_START_WATCHER` | Web server 시작 후 watcher 자동 시작 여부 |
 | `STREAM_ARCHIVE_BACKEND_DIR` | backend 디렉터리 override |
 | `STREAM_ARCHIVE_DATA_DIR` | SQLite 데이터 디렉터리 |
 | `STREAM_ARCHIVE_BACKUP_DIR` | 관리형 백업 디렉터리 override |
@@ -318,7 +318,7 @@ SOOP/CHZZK 계정 정보처럼 특정 provider에 속하는 설정 키는 provid
 
 ## HTTPS / 원격 접근
 
-원격 접근이 필요하면 Rust 서버는 loopback에 유지하고 Caddy/Nginx 같은 reverse proxy에서 HTTPS를 종료하는 구성을 권장합니다.
+원격 접근은 Web compatibility server를 사용할 때의 고급 구성입니다. Rust Web server는 loopback에 유지하고 Caddy/Nginx 같은 reverse proxy에서 HTTPS를 종료하는 구성을 권장합니다.
 
 ```text
 Internet / LAN
