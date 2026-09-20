@@ -132,7 +132,7 @@ jobs:
     needs: core-check
     if: ${{ always() }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Enforce cross-platform core results
         shell: powershell
