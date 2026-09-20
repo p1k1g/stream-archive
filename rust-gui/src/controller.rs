@@ -62,6 +62,9 @@ enum Request {
         target: String,
         password: String,
     },
+    StorageLoad {
+        poll: bool,
+    },
     VodStatus {
         poll: bool,
     },
@@ -133,6 +136,15 @@ enum Response {
         message: String,
         poll: bool,
     },
+    Storage {
+        snapshot: StorageSnapshot,
+        message: Option<String>,
+        poll: bool,
+    },
+    StorageError {
+        message: String,
+        poll: bool,
+    },
     Vod {
         status: VodJobStatus,
         message: Option<String>,
@@ -179,6 +191,7 @@ enum Response {
 pub struct Controller {
     _response_timer: Timer,
     _live_poll_timer: Timer,
+    _storage_poll_timer: Timer,
     _vod_poll_timer: Timer,
     _queue_poll_timer: Timer,
     _maintenance_log_poll_timer: Timer,
@@ -245,6 +258,20 @@ fn live_status(
         },
         Err(error) => Response::LiveError {
             message: format!("LIVE 상태 새로고침 실패: {error:#}"),
+            poll,
+        },
+    }
+}
+
+fn storage_status(core: &StreamArchiveCore, poll: bool) -> Response {
+    match core.storage_snapshot() {
+        Ok(snapshot) => Response::Storage {
+            snapshot,
+            message: None,
+            poll,
+        },
+        Err(error) => Response::StorageError {
+            message: format!("저장 공간 새로고침 실패: {error:#}"),
             poll,
         },
     }
