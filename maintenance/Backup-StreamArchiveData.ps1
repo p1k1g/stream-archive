@@ -16,7 +16,7 @@ function Resolve-DataDir {
 }
 
 function Assert-RuntimeStopped {
-    $native = Get-Process -Name 'StreamArchive' -ErrorAction SilentlyContinue
+    $native = Get-Process -Name 'StreamArchive', 'stream-archive-gui' -ErrorAction SilentlyContinue
     $server = Get-Process -Name 'stream-archive-server' -ErrorAction SilentlyContinue
     if ($native -or $server) {
         throw 'Stream Archive is running. Close StreamArchive.exe and stop any Web compatibility server before backing up SQLite.'
