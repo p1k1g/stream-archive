@@ -12,6 +12,7 @@ pub mod queue_service;
 pub mod recorder;
 pub mod security;
 pub mod store;
+pub mod storage_service;
 pub mod support;
 pub mod tool_discovery;
 pub mod vod;
