@@ -374,6 +374,7 @@ Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습
 |---|---|
 | `docs/LOCAL_LAUNCHER.md` | Windows Native 기본 실행 및 Web fallback 경로 |
 | `docs/PHASE21_NATIVE_PORTABLE.md` | Phase 21.8 portable 구조 및 Windows manual QA |
+| `docs/PHASE21_NATIVE_UX_POLISH.md` | Phase 21.9 Native storage/backup IA/claim sidecar UX 및 manual QA |
 | `docs/UNIX_CLI.md` | Linux/macOS headless CLI, tool discovery, first-run layout |
 | `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
 | `docs/REVERSE_PROXY.md` | Caddy/Nginx HTTPS reverse proxy 구성 |
@@ -420,7 +421,8 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ VOD Queue + LIVE/VOD History
 - ✅ Native Backup/Restore + Diagnostics/Runtime Logs
 - ✅ Windows Native portable packaging / startup 전환
-- 다음 단계: Native UX polish 및 단계적 Web 의존성 정리
+- 🚧 Native UX polish: LIVE 저장공간, Backup Settings/Maintenance 분리, 내부 claim sidecar 노출 개선
+- 다음 단계: Phase 22에서 Native/Web parity 결과를 기준으로 legacy Web/launcher 정리 범위 결정
 - Slint GUI는 shared Rust core를 직접 호출하며 localhost HTTP, direct SQLite, direct process control을 사용하지 않음
 - 기능 parity와 regression 검증이 끝난 뒤 기존 browser/Web UI 및 launcher 의존성을 단계적으로 제거
 - Linux/macOS는 GUI를 복제하지 않고 Phase 20의 CLI/headless 인터페이스 유지
