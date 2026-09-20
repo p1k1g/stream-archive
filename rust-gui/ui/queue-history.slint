@@ -154,7 +154,7 @@ export component QueuePage inherits VerticalLayout {
             }
 
             for row in QueueHistoryState.queue-rows: Rectangle {
-                min-height: 174px;
+                height: 250px;
                 vertical-stretch: 0;
                 background: #ffffff;
                 border-radius: 10px;
@@ -168,6 +168,7 @@ export component QueuePage inherits VerticalLayout {
                         vertical-stretch: 0;
                         spacing: 8px;
                         Text {
+                            vertical-stretch: 0;
                             text: row.platform + " · " + row.title;
                             color: #0f172a;
                             font-size: 15px;
@@ -182,8 +183,8 @@ export component QueuePage inherits VerticalLayout {
                             vertical-alignment: center;
                         }
                     }
-                    if row.streamer != "": Text { text: row.streamer; color: #64748b; font-size: 11px; }
-                    Text { text: row.url; color: #475569; font-size: 11px; wrap: word-wrap; }
+                    if row.streamer != "": Text { vertical-stretch: 0; text: row.streamer; color: #64748b; font-size: 11px; }
+                    Text { vertical-stretch: 0; text: row.url; color: #475569; font-size: 11px; wrap: word-wrap; }
                     Rectangle {
                         height: 8px;
                         vertical-stretch: 0;
@@ -199,17 +200,23 @@ export component QueuePage inherits VerticalLayout {
                         }
                     }
                     Text {
+                        vertical-stretch: 0;
                         text: row.percent-label + "  ·  " + row.part-progress + "  ·  Attempt " + row.attempts;
                         color: #64748b;
                         font-size: 11px;
                     }
-                    if row.message != "": Text { text: row.message; color: #475569; font-size: 11px; wrap: word-wrap; }
-                    if row.output-file != "": Text { text: "Output: " + row.output-file; color: #475569; font-size: 11px; wrap: word-wrap; }
+                    if row.message != "": Text { vertical-stretch: 0; text: row.message; color: #475569; font-size: 11px; wrap: word-wrap; }
+                    if row.output-file != "": Text { vertical-stretch: 0; text: "Output: " + row.output-file; color: #475569; font-size: 11px; wrap: word-wrap; }
                     Text {
+                        vertical-stretch: 0;
                         text: "Created: " + row.created-at + "  ·  Started: " + row.started-at + "  ·  Finished: " + row.finished-at;
                         color: #94a3b8;
                         font-size: 10px;
                         wrap: word-wrap;
+                    }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: transparent;
                     }
                     HorizontalLayout {
                         height: 32px;
