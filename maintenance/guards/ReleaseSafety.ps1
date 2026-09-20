@@ -73,6 +73,7 @@ try {
     Assert-Match $workflow 'fetch-depth:\s*0' 'Public-release CI must fetch full history for the history safety scan.'
     foreach ($trigger in @(
         'rust-web/\*\*',
+        'rust-gui/\*\*',
         'RUN_DEV\.bat',
         'BUILD_PORTABLE\.bat',
         'maintenance/\*\*',
@@ -92,7 +93,7 @@ try {
     Assert-Match $package 'StreamArchive\.exe' 'Portable package must include the native Stream Archive GUI.'
     Assert-Match $package 'stream-archive-server\.exe' 'Portable package must retain the Stream Archive Web compatibility server.'
     Assert-Match $package 'stream-archive-launcher\.exe' 'Portable package must retain the Stream Archive Web compatibility launcher.'
-    Assert-Match $package 'RUN\.bat[^\r\n]*(?:\r?\n).*StreamArchive\.exe' 'RUN.bat generation must make the native GUI the default entry point.'
+    Assert-Match $package '(?s)>"%OUT%\\RUN\.bat".*?StreamArchive\.exe' 'RUN.bat generation must make the native GUI the default entry point.'
     Assert-Match $package 'RUN_WEB\.bat' 'Portable package must provide an explicit Web compatibility launcher.'
     Assert-Match $package 'dist\\stream-archive' 'Portable package output must use the Stream Archive namespace.'
     Assert-Match $package 'THIRD_PARTY_NOTICES\.md' 'Portable package must include third-party notices.'
