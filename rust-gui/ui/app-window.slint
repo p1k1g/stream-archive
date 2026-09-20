@@ -998,7 +998,7 @@ export component MainWindow inherits Window {
                                 VerticalLayout {
                                     padding: 14px;
                                     spacing: 8px;
-                                    Text { text: "공급자 인증 정보"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                                    Text { text: "서비스 연결 및 인증"; color: #0f172a; font-size: 18px; font-weight: 700; }
                                     Text { text: AppState.config-message; color: #334155; wrap: word-wrap; font-size: 12px; }
                                     HorizontalLayout {
                                         height: 34px;
@@ -1006,7 +1006,7 @@ export component MainWindow inherits Window {
                                         spacing: 8px;
                                         Button {
                                             height: 32px;
-                                            text: "공급자 설정 저장";
+                                            text: "연결 정보 저장";
                                             enabled: AppState.config-loaded && !AppState.config-busy;
                                             clicked => { AppState.save-provider(); }
                                         }
@@ -1115,15 +1115,15 @@ export component MainWindow inherits Window {
                             }
 
                             for row[index] in AppState.settings-rows: Rectangle {
-                                min-height: 82px;
+                                min-height: 96px;
                                 vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 9px;
                                 border-width: 1px;
                                 border-color: #e2e8f0;
                                 VerticalLayout {
-                                    padding: 11px;
-                                    spacing: 5px;
+                                    padding: 12px;
+                                    spacing: 6px;
                                     Text { text: row.key; color: #0f172a; font-weight: 600; font-size: 12px; }
                                     HorizontalLayout {
                                         height: 34px;
