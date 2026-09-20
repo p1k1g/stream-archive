@@ -57,7 +57,7 @@ export global MaintenanceState {
 
 component SectionButton inherits Button {
     in property <string> section-name;
-    text: root.section-name == "Backup" ? "백업" : root.section-name == "Diagnostics" ? "진단" : "로그";
+    text: root.section-name == "Backup" ? "백업 / 복원" : root.section-name == "Diagnostics" ? "진단" : "로그";
     clicked => { MaintenanceState.section = root.section-name; }
 }
 
