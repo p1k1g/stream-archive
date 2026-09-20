@@ -1074,7 +1074,7 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                     Text {
-                                        text: "Blank secret fields keep the saved value. Secrets remain protected by the platform secret store and are never read back into the UI.";
+                                        text: "비밀 값 입력칸을 비워두면 기존 저장값을 유지합니다. 비밀 값은 플랫폼 보안 저장소에서 보호되며 UI로 다시 읽어오지 않습니다.";
                                         color: #64748b;
                                         wrap: word-wrap;
                                         font-size: 11px;
@@ -1160,7 +1160,7 @@ export component MainWindow inherits Window {
                                     padding: 10px;
                                     spacing: 3px;
                                     Text {
-                                        text: row.status + " · " + row.name;
+                                        text: (row.status == "OK" ? "정상" : row.status == "Warning" ? "주의" : row.status == "Error" ? "오류" : row.status) + " · " + row.name;
                                         color: row.status == "OK" ? #15803d : row.status == "Warning" ? #a16207 : #b91c1c;
                                         font-weight: 600;
                                         font-size: 12px;
