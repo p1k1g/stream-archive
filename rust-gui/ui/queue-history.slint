@@ -263,10 +263,37 @@ export component HistoryPage inherits VerticalLayout {
             horizontal-stretch: 1;
             vertical-alignment: center;
         }
-        Button { height: 32px; text: QueueHistoryState.history-view == "ALL" ? "✓ 전체" : "전체"; enabled: !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-view = "ALL"; QueueHistoryState.history-refresh(); } }
-        Button { height: 32px; text: QueueHistoryState.history-view == "LIVE" ? "✓ LIVE" : "LIVE"; enabled: !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-view = "LIVE"; QueueHistoryState.history-refresh(); } }
-        Button { height: 32px; text: QueueHistoryState.history-view == "VOD" ? "✓ VOD" : "VOD"; enabled: !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-view = "VOD"; QueueHistoryState.history-refresh(); } }
-        Button { height: 32px; text: "새로고침"; enabled: QueueHistoryState.history-loaded && !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-refresh(); } }
+        Button {
+            width: 60px;
+            height: 32px;
+            text: "전체";
+            primary: QueueHistoryState.history-view == "ALL";
+            enabled: !QueueHistoryState.history-busy;
+            clicked => { QueueHistoryState.history-view = "ALL"; QueueHistoryState.history-refresh(); }
+        }
+        Button {
+            width: 60px;
+            height: 32px;
+            text: "LIVE";
+            primary: QueueHistoryState.history-view == "LIVE";
+            enabled: !QueueHistoryState.history-busy;
+            clicked => { QueueHistoryState.history-view = "LIVE"; QueueHistoryState.history-refresh(); }
+        }
+        Button {
+            width: 60px;
+            height: 32px;
+            text: "VOD";
+            primary: QueueHistoryState.history-view == "VOD";
+            enabled: !QueueHistoryState.history-busy;
+            clicked => { QueueHistoryState.history-view = "VOD"; QueueHistoryState.history-refresh(); }
+        }
+        Button {
+            width: 72px;
+            height: 32px;
+            text: "새로고침";
+            enabled: QueueHistoryState.history-loaded && !QueueHistoryState.history-busy;
+            clicked => { QueueHistoryState.history-refresh(); }
+        }
     }
 
     calendar-popup := PopupWindow {
