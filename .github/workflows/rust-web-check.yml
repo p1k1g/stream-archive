@@ -219,7 +219,8 @@ jobs:
             "$root/maintenance/Restore-StreamArchiveData.ps1",
             "$root/docs/OPERATIONS.md",
             "$root/docs/REVERSE_PROXY.md",
-            "$root/docs/LOCAL_LAUNCHER.md"
+            "$root/docs/LOCAL_LAUNCHER.md",
+            "$root/docs/PHASE21_NATIVE_PORTABLE.md"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
