@@ -361,9 +361,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            let _ = responses.send(Response::Error(format!(
-                "Worker 초기화 실패: {error}"
-            )));
+            let _ = responses.send(Response::Error(format!("Worker 초기화 실패: {error}")));
             return;
         }
     };
@@ -467,9 +465,11 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 false,
                 "진단 정보를 새로고침했습니다. 저장하지 않은 편집 내용은 유지됩니다.",
             ),
-            Request::Reload => {
-                read_snapshot(&core, true, "저장된 설정을 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.")
-            }
+            Request::Reload => read_snapshot(
+                &core,
+                true,
+                "저장된 설정을 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.",
+            ),
             Request::Save(patch) => {
                 match runtime.block_on(core.update_environment_settings(&patch)) {
                     Ok(_) => read_snapshot(
@@ -668,7 +668,9 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                             poll: false,
                         },
                         Err(error) => Response::QueueError {
-                            message: format!("작업은 대기열에 추가됐지만 새로고침에 실패했습니다: {error:#}"),
+                            message: format!(
+                                "작업은 대기열에 추가됐지만 새로고침에 실패했습니다: {error:#}"
+                            ),
                             poll: false,
                         },
                     },
@@ -692,7 +694,15 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 match result {
                     Ok(snapshot) => Response::Queue {
                         snapshot,
-                        message: Some(format!("대기열 작업 완료: {}", match action.as_str() { "cancel" => "취소", "retry" => "재시도", "remove" => "삭제", _ => action.as_str() })),
+                        message: Some(format!(
+                            "대기열 작업 완료: {}",
+                            match action.as_str() {
+                                "cancel" => "취소",
+                                "retry" => "재시도",
+                                "remove" => "삭제",
+                                _ => action.as_str(),
+                            }
+                        )),
                         poll: false,
                     },
                     Err(error) => Response::QueueError {
@@ -797,8 +807,12 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
 
 fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a str {
     match key {
-        "STREAMLINK_PATH" => "Streamlink 실행 파일 경로입니다. 비워두거나 AUTO를 사용하면 자동 탐색합니다.",
-        "STREAMLINK_FALLBACK" => "대체 Streamlink 실행 파일 경로입니다. 비워두거나 AUTO를 사용하면 자동 탐색합니다.",
+        "STREAMLINK_PATH" => {
+            "Streamlink 실행 파일 경로입니다. 비워두거나 AUTO를 사용하면 자동 탐색합니다."
+        }
+        "STREAMLINK_FALLBACK" => {
+            "대체 Streamlink 실행 파일 경로입니다. 비워두거나 AUTO를 사용하면 자동 탐색합니다."
+        }
         "YT_DLP_PATH" => "yt-dlp 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
         "FFMPEG_PATH" => "FFmpeg 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
         "OUTPUT_DIR" => "LIVE 기본 저장 폴더입니다. 비워두면 런타임 기본값을 사용합니다.",
@@ -1321,8 +1335,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
             }
             add_draft.borrow_mut().add();
             render_channels(&ui, &add_draft.borrow());
-            ui.global::<AppState>()
-                .set_config_message("새 채널을 추가했습니다. 저장할 때 유효성을 확인합니다.".into());
+            ui.global::<AppState>().set_config_message(
+                "새 채널을 추가했습니다. 저장할 때 유효성을 확인합니다.".into(),
+            );
         }
     });
 
@@ -1335,8 +1350,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
             }
             remove_draft.borrow_mut().remove(index as usize);
             render_channels(&ui, &remove_draft.borrow());
-            ui.global::<AppState>()
-                .set_config_message("채널을 편집 목록에서 삭제했습니다. 저장하면 반영됩니다.".into());
+            ui.global::<AppState>().set_config_message(
+                "채널을 편집 목록에서 삭제했습니다. 저장하면 반영됩니다.".into(),
+            );
         }
     });
 
@@ -1403,8 +1419,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 return;
             };
             if channel.account.trim().is_empty() {
-                ui.global::<AppState>()
-                    .set_config_message("이름을 조회하려면 계정 / 채널 ID를 먼저 입력하세요.".into());
+                ui.global::<AppState>().set_config_message(
+                    "이름을 조회하려면 계정 / 채널 ID를 먼저 입력하세요.".into(),
+                );
                 return;
             }
             send_config(
@@ -1554,8 +1571,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
             }
             edit_vod.borrow_mut().edit_url(value.to_string());
             render_vod_draft(&ui, &edit_vod.borrow());
-            ui.global::<AppState>()
-                .set_vod_message("URL이 변경되었습니다. 분석을 눌러 메타데이터와 형식을 불러오세요.".into());
+            ui.global::<AppState>().set_vod_message(
+                "URL이 변경되었습니다. 분석을 눌러 메타데이터와 형식을 불러오세요.".into(),
+            );
         }
     });
 
@@ -1665,8 +1683,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         if let Some(ui) = weak.upgrade() {
             let Some(request) = download_draft.borrow().download_request() else {
                 ui.global::<AppState>().set_vod_message(
-                    "URL을 분석한 뒤 화질/PART를 선택하고 출력 폴더를 지정하세요."
-                        .into(),
+                    "URL을 분석한 뒤 화질/PART를 선택하고 출력 폴더를 지정하세요.".into(),
                 );
                 return;
             };
@@ -1862,7 +1879,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
             let state = ui.global::<MaintenanceState>();
             if !state.get_busy() {
                 state.set_backup_enabled(!state.get_backup_enabled());
-                state.set_message("백업 정책이 변경되었습니다. 정책 저장을 눌러 반영하세요.".into());
+                state
+                    .set_message("백업 정책이 변경되었습니다. 정책 저장을 눌러 반영하세요.".into());
             }
         }
     });
@@ -1908,9 +1926,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
             {
                 Ok(value) => value,
                 Err(_) => {
-                    state.set_message(
-                        "백업 보관 기간은 0일 이상의 정수여야 합니다.".into(),
-                    );
+                    state.set_message("백업 보관 기간은 0일 이상의 정수여야 합니다.".into());
                     return;
                 }
             };
