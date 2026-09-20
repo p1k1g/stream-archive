@@ -521,112 +521,154 @@ export component MainWindow inherits Window {
                                 }
                             }
                             for row[index] in AppState.channel-config-rows: Rectangle {
-                                height: 92px;
+                                height: 68px;
                                 vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
                                 border-width: 1px;
                                 border-color: #e2e8f0;
+
                                 VerticalLayout {
                                     padding: 8px;
-                                    spacing: 6px;
 
                                     HorizontalLayout {
-                                        height: 32px;
+                                        height: 50px;
                                         vertical-stretch: 0;
-                                        spacing: 7px;
+                                        spacing: 8px;
 
-                                        Button {
+                                        VerticalLayout {
                                             width: 66px;
-                                            height: 30px;
-                                            text: row.platform;
-                                            enabled: !AppState.config-busy;
-                                            clicked => { AppState.channel-toggle-platform(index); }
+                                            horizontal-stretch: 0;
+                                            spacing: 3px;
+
+                                            Text {
+                                                text: "Platform";
+                                                color: #64748b;
+                                                font-size: 10px;
+                                            }
+
+                                            Button {
+                                                height: 30px;
+                                                text: row.platform;
+                                                enabled: !AppState.config-busy;
+                                                clicked => { AppState.channel-toggle-platform(index); }
+                                            }
                                         }
-                                        Button {
+
+                                        VerticalLayout {
                                             width: 80px;
-                                            height: 30px;
-                                            text: row.enabled ? "Enabled" : "Disabled";
-                                            enabled: !AppState.config-busy;
-                                            clicked => { AppState.channel-toggle-enabled(index); }
+                                            horizontal-stretch: 0;
+                                            spacing: 3px;
+
+                                            Text {
+                                                text: "State";
+                                                color: #64748b;
+                                                font-size: 10px;
+                                            }
+
+                                            Button {
+                                                height: 30px;
+                                                text: row.enabled ? "Enabled" : "Disabled";
+                                                enabled: !AppState.config-busy;
+                                                clicked => { AppState.channel-toggle-enabled(index); }
+                                            }
                                         }
 
-                                        Text {
-                                            width: 38px;
+                                        VerticalLayout {
+                                            width: 140px;
                                             horizontal-stretch: 0;
-                                            text: "Name";
-                                            color: #64748b;
-                                            font-size: 11px;
-                                            vertical-alignment: center;
-                                        }
-                                        LineEdit {
-                                            width: 200px;
-                                            height: 30px;
-                                            horizontal-stretch: 0;
-                                            text <=> row.name;
-                                            enabled: !AppState.config-busy;
-                                            edited(value) => { AppState.channel-edited(index, "name", value); }
+                                            spacing: 3px;
+
+                                            Text {
+                                                text: "Name";
+                                                color: #64748b;
+                                                font-size: 10px;
+                                            }
+
+                                            LineEdit {
+                                                height: 30px;
+                                                text <=> row.name;
+                                                enabled: !AppState.config-busy;
+                                                edited(value) => { AppState.channel-edited(index, "name", value); }
+                                            }
                                         }
 
-                                        Text {
-                                            width: 118px;
+                                        VerticalLayout {
+                                            width: 170px;
                                             horizontal-stretch: 0;
-                                            text: "Account / channel id";
-                                            color: #64748b;
-                                            font-size: 11px;
-                                            vertical-alignment: center;
+                                            spacing: 3px;
+
+                                            Text {
+                                                text: "Account / channel id";
+                                                color: #64748b;
+                                                font-size: 10px;
+                                            }
+
+                                            LineEdit {
+                                                height: 30px;
+                                                text <=> row.account;
+                                                enabled: !AppState.config-busy;
+                                                edited(value) => { AppState.channel-edited(index, "account", value); }
+                                                accepted => { AppState.channel-resolve(index); }
+                                            }
                                         }
-                                        LineEdit {
-                                            height: 30px;
+
+                                        VerticalLayout {
                                             horizontal-stretch: 1;
-                                            text <=> row.account;
-                                            enabled: !AppState.config-busy;
-                                            edited(value) => { AppState.channel-edited(index, "account", value); }
-                                            accepted => { AppState.channel-resolve(index); }
+                                            spacing: 3px;
+
+                                            Text {
+                                                text: "Output directory";
+                                                color: #64748b;
+                                                font-size: 10px;
+                                            }
+
+                                            LineEdit {
+                                                height: 30px;
+                                                horizontal-stretch: 1;
+                                                text <=> row.outdir;
+                                                placeholder-text: "blank = runtime default";
+                                                enabled: !AppState.config-busy;
+                                                edited(value) => { AppState.channel-edited(index, "outdir", value); }
+                                            }
                                         }
-                                        Button {
+
+                                        VerticalLayout {
                                             width: 72px;
-                                            height: 30px;
-                                            text: "Resolve";
-                                            enabled: !AppState.config-busy && row.account != "";
-                                            clicked => { AppState.channel-resolve(index); }
+                                            horizontal-stretch: 0;
+                                            spacing: 3px;
+
+                                            Rectangle {
+                                                height: 12px;
+                                                vertical-stretch: 0;
+                                                background: transparent;
+                                            }
+
+                                            Button {
+                                                height: 30px;
+                                                text: "Resolve";
+                                                enabled: !AppState.config-busy && row.account != "";
+                                                clicked => { AppState.channel-resolve(index); }
+                                            }
                                         }
-                                        Button {
+
+                                        VerticalLayout {
                                             width: 68px;
-                                            height: 30px;
-                                            text: "Remove";
-                                            enabled: !AppState.config-busy;
-                                            clicked => { AppState.channel-remove(index); }
-                                        }
-                                    }
-
-                                    HorizontalLayout {
-                                        height: 32px;
-                                        vertical-stretch: 0;
-                                        spacing: 7px;
-
-                                        Text {
-                                            width: 104px;
                                             horizontal-stretch: 0;
-                                            text: "Output directory";
-                                            color: #64748b;
-                                            font-size: 11px;
-                                            vertical-alignment: center;
-                                        }
-                                        LineEdit {
-                                            height: 30px;
-                                            horizontal-stretch: 1;
-                                            text <=> row.outdir;
-                                            enabled: !AppState.config-busy;
-                                            edited(value) => { AppState.channel-edited(index, "outdir", value); }
-                                        }
-                                        Text {
-                                            width: 154px;
-                                            horizontal-stretch: 0;
-                                            text: "blank = runtime default";
-                                            color: #94a3b8;
-                                            font-size: 10px;
-                                            vertical-alignment: center;
+                                            spacing: 3px;
+
+                                            Rectangle {
+                                                height: 12px;
+                                                vertical-stretch: 0;
+                                                background: transparent;
+                                            }
+
+                                            Button {
+                                                height: 30px;
+                                                text: "Remove";
+                                                enabled: !AppState.config-busy;
+                                                clicked => { AppState.channel-remove(index); }
+                                            }
                                         }
                                     }
                                 }
