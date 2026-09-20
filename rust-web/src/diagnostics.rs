@@ -227,15 +227,12 @@ fn directory(name: &str, path: &Path, required: bool) -> DiagnosticItem {
 }
 
 fn optional_directory(name: &str, path: &Path, missing_detail: &str) -> DiagnosticItem {
-    item(
-        name,
-        DiagnosticStatus::Ok,
-        if path.is_dir() {
-            &format!("{} — exists", path.display())
-        } else {
-            &format!("{} — {missing_detail}", path.display())
-        },
-    )
+    let detail = if path.is_dir() {
+        format!("{} — exists", path.display())
+    } else {
+        format!("{} — {missing_detail}", path.display())
+    };
+    item(name, DiagnosticStatus::Ok, &detail)
 }
 
 fn database_item(path: &Path) -> DiagnosticItem {

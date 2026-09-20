@@ -15,8 +15,6 @@ use fs2::FileExt;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::Value;
-#[cfg(windows)]
-use std::process::Command as StdCommand;
 use std::{
     collections::VecDeque,
     env,
