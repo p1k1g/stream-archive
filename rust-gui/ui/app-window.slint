@@ -184,7 +184,14 @@ component NavItem inherits Rectangle {
         font-size: 15px;
     }
 
-    TouchArea { clicked => { AppState.active-page = root.page; } }
+    TouchArea {
+        clicked => {
+            AppState.active-page = root.page;
+            if root.page == "LIVE" {
+                AppState.storage-refresh();
+            }
+        }
+    }
 }
 
 component LiveMetric inherits Rectangle {
