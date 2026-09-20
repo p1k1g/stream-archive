@@ -417,7 +417,7 @@ export component HistoryPage inherits VerticalLayout {
                     height: 34px;
                     horizontal-stretch: 1;
                     text <=> QueueHistoryState.history-status;
-                    placeholder-text: "상태 (선택)";
+                    placeholder-text: "상태: 완료 / 실패 / 녹화 중 / 다운로드 중...";
                     enabled: !QueueHistoryState.history-busy;
                     accepted => { QueueHistoryState.history-refresh(); }
                 }
