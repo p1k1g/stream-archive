@@ -405,10 +405,12 @@ mod tests {
         }
         .normalized()
         .unwrap();
-        assert!(progressing
-            .statuses
-            .as_ref()
-            .is_some_and(|states| states.contains(&"DOWNLOADING".to_string())));
+        assert!(
+            progressing
+                .statuses
+                .as_ref()
+                .is_some_and(|states| states.contains(&"DOWNLOADING".to_string()))
+        );
 
         let cancelling = HistoryFilter {
             status: Some("취소".into()),
