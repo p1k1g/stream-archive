@@ -281,7 +281,7 @@ mod windows_tree {
                 SetInformationJobObject, TerminateJobObject,
             },
             Threading::{
-                CREATE_SUSPENDED, GetProcessTimes, OpenProcess, OpenThread,
+                CREATE_NO_WINDOW, CREATE_SUSPENDED, GetProcessTimes, OpenProcess, OpenThread,
                 PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
                 ResumeThread, THREAD_SUSPEND_RESUME,
             },
@@ -325,7 +325,11 @@ mod windows_tree {
     }
 
     pub(super) fn configure_suspended(command: &mut Command) {
-        command.creation_flags(CREATE_SUSPENDED);
+        // Native/portable Stream Archive is a GUI-subsystem process. Console
+        // media tools such as Streamlink would otherwise create a visible
+        // console window when launched from StreamArchive.exe. Keep the child
+        // suspended for exact Job ownership while also suppressing that window.
+        command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     }
 
     fn filetime_value(value: FILETIME) -> u64 {
