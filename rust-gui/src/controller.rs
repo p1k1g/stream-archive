@@ -1090,7 +1090,14 @@ fn render_maintenance(
 pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     let state = ui.global::<AppState>();
     state.set_runtime_ready(diagnostics.runtime_ready);
-    state.set_runtime_status(format!("환경: {}", diagnostics.status.label()).into());
+    state.set_runtime_status(
+        if diagnostics.runtime_ready {
+            "모든 구성요소가 준비되었습니다"
+        } else {
+            "일부 구성요소를 확인하세요"
+        }
+        .into(),
+    );
     let rows: Vec<_> = diagnostics
         .items
         .into_iter()
