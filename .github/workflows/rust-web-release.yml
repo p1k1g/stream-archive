@@ -22,7 +22,9 @@ jobs:
 
       - name: Shared runtime unit tests
         shell: powershell
-        run: cargo test --locked --manifest-path ./rust-web/Cargo.toml
+        # Match PR CI: the Windows Job Object regression launches real child
+        # processes, so serialize the harness to avoid scheduler/AV false negatives.
+        run: cargo test --locked --manifest-path ./rust-web/Cargo.toml -- --test-threads=1
 
       - name: Native GUI unit tests
         shell: powershell
