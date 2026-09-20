@@ -442,6 +442,9 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     if responses.send(live_status(&core, &runtime, false)).is_err() {
         return;
     }
+    if responses.send(storage_status(&core, false)).is_err() {
+        return;
+    }
     if responses.send(vod_status(&core, &runtime, false)).is_err() {
         return;
     }
@@ -558,6 +561,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 }
             },
             Request::LiveStatus { poll } => live_status(&core, &runtime, poll),
+            Request::StorageLoad { poll } => storage_status(&core, poll),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
                 Ok(status) => Response::Live {
                     status,
