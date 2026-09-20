@@ -669,6 +669,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_backup_policy_round_trips_through_shared_manager() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(dir.path().join("stream-archive.db")).unwrap();
+        let core = StreamArchiveCore::assemble(backend, store).unwrap();
+
+        let policy = BackupPolicy {
+            enabled: false,
+            interval_hours: 12,
+            keep_count: 4,
+            retention_days: 7,
+        };
+        let saved = core.update_backup_policy(&policy, None).await.unwrap();
+        assert_eq!(saved.policy, policy);
+        let loaded = core.backup_snapshot().await.unwrap();
+        assert_eq!(loaded.policy, policy);
+    }
+
+    #[tokio::test]
+    async fn native_storage_snapshot_uses_canonical_settings_and_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let store = Store::open(dir.path().join("stream-archive.db")).unwrap();
+        let core = StreamArchiveCore::assemble(backend, store).unwrap();
+
+        core.store
+            .sync_settings(
+                &BTreeMap::from([
+                    (
+                        "OUTPUT_DIR".into(),
+                        dir.path().join("live").display().to_string(),
+                    ),
+                    ("MIN_FREE_SPACE_GB".into(), "3.5".into()),
+                ]),
+                "test",
+            )
+            .unwrap();
+
+        let snapshot = core.storage_snapshot().unwrap();
+        assert_eq!(snapshot.threshold_gb, 3.5);
+        assert!(!snapshot.volumes.is_empty());
+        assert!(snapshot
+            .volumes
+            .iter()
+            .any(|volume| volume.roles.iter().any(|role| role == "LIVE 기본")));
+    }
+
+    #[tokio::test]
     async fn runtime_logs_are_bounded_by_requested_tail() {
         let dir = tempfile::tempdir().unwrap();
         let core = StreamArchiveCore::assemble(
