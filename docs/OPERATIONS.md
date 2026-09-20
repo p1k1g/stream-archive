@@ -12,7 +12,7 @@ For users upgrading from an earlier private build, startup performs only a bound
 
 ## Online backup
 
-The Web UI under Settings -> Backup uses SQLite's online backup API and can create managed backups while the server is running.
+The native Slint Maintenance -> Backup view uses the shared BackupManager/StreamArchiveCore service and can create managed backups while the native application is running. The retained Web UI exposes the same managed backup behavior through its compatibility adapter.
 
 Defaults:
 
@@ -28,7 +28,7 @@ Managed backup names use the `stream_archive_*.db` prefix and include companion 
 
 ## Offline manual backup
 
-For an offline maintenance backup, stop `stream-archive-server.exe` cleanly with `Ctrl+C` first. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
+For an offline maintenance backup, close `StreamArchive.exe` and stop any Web compatibility `stream-archive-server.exe` cleanly first. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
 
 From the repository root or portable package root:
 
@@ -38,7 +38,7 @@ powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.
 
 The script:
 
-- refuses to run while `stream-archive-server` is active;
+- refuses to run while `StreamArchive.exe` or `stream-archive-server.exe` is active;
 - validates the SQLite header;
 - backs up `stream-archive.db`;
 - writes a timestamped `stream_archive_manual_*.db` file;
@@ -70,29 +70,32 @@ powershell -ExecutionPolicy Bypass -File .\maintenance\Restore-StreamArchiveData
 
 The restore script:
 
-- refuses to run while `stream-archive-server` is active;
+- refuses to run while `StreamArchive.exe` or `stream-archive-server.exe` is active;
 - validates the SQLite header;
 - verifies SHA-256 when companion metadata exists;
 - creates a `pre_restore_*.db` safety copy of the current database;
 - removes stale `-wal` and `-shm` sidecars;
 - copies through a temporary file before replacing `stream-archive.db`.
 
-After restore, launch the server and verify settings, channels, LIVE history, VOD history, and queue state before resuming unattended operation.
+After restore, launch `StreamArchive.exe` and verify settings, channels, LIVE history, VOD history, and queue state before resuming unattended operation.
 
-The Web restore path also reinitializes authentication and invalidates all browser sessions so restoring an older database cannot resurrect an old session.
+The retained Web restore path also reinitializes authentication and invalidates all browser sessions so restoring an older database cannot resurrect an old session.
 
 ## Upgrade procedure
 
-1. Stop the running server with `Ctrl+C`.
+1. Close the native application and stop any Web compatibility server.
 2. Create a database backup.
 3. Keep the previous portable package until the new version has been exercised.
 4. Replace executable/package files while preserving the existing `data` directory.
-5. Start the new server and verify `/api/status`, settings, channels, history, LIVE start/stop, and VOD analyze/download.
-6. Roll back by stopping the new server, restoring the previous package, and restoring the pre-upgrade database backup if necessary.
+5. Start `StreamArchive.exe` or `RUN.bat` and verify Settings, Channels, LIVE start/stop, VOD analyze/download, Queue/History, and Maintenance.
+6. Run `RUN_WEB.bat` only when the compatibility browser path needs regression verification.
+7. Roll back by closing the new application, restoring the previous package, and restoring the pre-upgrade database backup if necessary.
 
 ## Portable package replacement
 
-`BUILD_PORTABLE.bat` writes to `dist\stream-archive`. For local rebuilds it preserves the existing package's `data` directory and `backend\.stream-archive` management-token directory before replacing package files, then restores them into the rebuilt package. GitHub Actions builds use a clean package instead.
+`BUILD_PORTABLE.bat` writes to `dist\stream-archive`. The package contains `StreamArchive.exe` as the default native application, `RUN.bat` as the native launcher, and `RUN_WEB.bat` plus the existing server/launcher as the explicit Web compatibility path. For local rebuilds it preserves the existing package's `data` directory and `backend\.stream-archive` management-token directory before replacing package files, then restores them into the rebuilt package. GitHub Actions builds use a clean package instead.
+
+Direct Explorer launch is supported: backend resolution prefers the `backend` directory beside `StreamArchive.exe`, and the default SQLite path is the sibling `data\stream-archive.db`. Environment overrides still take precedence where defined.
 
 Do not copy old INI/TXT configuration files into a new package. SQLite is the only runtime configuration source.
 
