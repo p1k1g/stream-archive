@@ -11,7 +11,7 @@
 - `rust-gui/Cargo.toml`: Windows Slint desktop frontend crate. 서버 패키지와 분리해 Slint dependency/빌드가 기존 Web 서버 배포를 임의로 바꾸지 않게 한다.
 - `rust-gui/src/main.rs`: Slint bootstrap/state binding. 반드시 `StreamArchiveCore`를 직접 호출하고 localhost HTTP, 직접 SQLite, 직접 child-process 제어를 추가하지 않는다.
 - `rust-gui/ui/*.slint`: Windows native presentation/navigation. provider/storage/process 구현 로직을 넣지 않는다.
-- Phase 21.7 Maintenance 화면은 Backup/Restore/Diagnostics/Logs presentation만 담당한다. DB copy/hash/restore, 로그 파일 직접 읽기, process control을 Slint에 넣지 않는다.
+- Phase 21.9에서 Native Settings는 backup policy 편집 presentation을, Maintenance는 Backup/Restore/Diagnostics/Logs 운영 action presentation을 담당한다. 둘 다 `StreamArchiveCore`/`BackupManager`를 공유하며 DB copy/hash/restore, storage probing, 로그 파일 직접 읽기, process control을 Slint에 넣지 않는다.
 - `rust-web/src/tool_discovery.rs`: cross-platform Streamlink/yt-dlp/FFmpeg discovery
 - `rust-web/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI baseline
 - `rust-web/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration
@@ -22,7 +22,8 @@
 - `rust-web/src/platform/chzzk/*`: CHZZK provider implementation
 - `rust-web/src/security.rs`: secret protection boundary
 - `rust-web/src/store.rs`: canonical SQLite persistence/config/history
-- `rust-web/src/history_storage.rs`: current Web history queries and storage diagnostics APIs
+- `rust-web/src/storage_service.rs`: shared storage-capacity diagnostics for Native/Web; canonical settings/channels are resolved here and presentation layers only render the result
+- `rust-web/src/history_storage.rs`: current Web history/storage HTTP adapter; storage calculations delegate to `storage_service.rs`
 - `rust-web/src/local_picker.rs`: localhost-only Windows file/folder picker bridge; retained only for the current Web UI until Slint native picker parity
 - `rust-web/src/backend.rs`: log buffer and backend-directory resolution
 - `rust-web/web/*`: current browser UI; retained while Phase 21 Slint parity is developed
