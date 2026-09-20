@@ -265,9 +265,15 @@ fn vod_row(item: VodHistoryItem) -> HistoryRowView {
 
 fn history_state_label(state: &str) -> &str {
     match state.to_ascii_uppercase().as_str() {
+        "IDLE" => "대기",
+        "READY" => "준비됨",
         "QUEUED" => "대기 중",
         "STARTING" => "시작 중",
+        "ANALYZING" => "분석 중",
         "RUNNING" => "진행 중",
+        "DOWNLOADING" => "다운로드 중",
+        "REFRESHING" => "인증 갱신 중",
+        "MERGING" => "병합 중",
         "RECORDING" => "녹화 중",
         "STOPPED" => "중지됨",
         "COMPLETED" => "완료",

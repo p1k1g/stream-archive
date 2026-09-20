@@ -66,12 +66,14 @@ try {
     $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
     $package = Read-RepoFile 'BUILD_PORTABLE.bat'
     $manifest = Read-RepoFile 'rust-web/Cargo.toml'
+    $guiManifest = Read-RepoFile 'rust-gui/Cargo.toml'
     Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
     Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
     Assert-NotMatch $workflow 'runs-on:\s*\[?self-hosted' 'Public CI must not depend on a private self-hosted runner.'
     Assert-Match $workflow 'fetch-depth:\s*0' 'Public-release CI must fetch full history for the history safety scan.'
     foreach ($trigger in @(
         'rust-web/\*\*',
+        'rust-gui/\*\*',
         'RUN_DEV\.bat',
         'BUILD_PORTABLE\.bat',
         'maintenance/\*\*',
@@ -86,14 +88,20 @@ try {
     }
     Assert-Match $workflow 'BUILD_PORTABLE\.bat' 'Portable package smoke step is missing.'
     Assert-Match $workflow 'Verify portable package' 'Portable package verification step is missing.'
-    Assert-Match $package 'cargo build --locked --release' 'Portable package must perform the locked Rust release build directly.'
-    Assert-Match $package 'stream-archive-server\.exe' 'Portable package must include the Stream Archive server.'
-    Assert-Match $package 'stream-archive-launcher\.exe' 'Portable package must include the native Stream Archive launcher.'
+    Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-web\\Cargo\.toml"' 'Portable package must perform the locked Web compatibility release build directly.'
+    Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-gui\\Cargo\.toml"' 'Portable package must perform the locked native GUI release build directly.'
+    Assert-Match $package 'StreamArchive\.exe' 'Portable package must include the native Stream Archive GUI.'
+    Assert-Match $package 'stream-archive-server\.exe' 'Portable package must retain the Stream Archive Web compatibility server.'
+    Assert-Match $package 'stream-archive-launcher\.exe' 'Portable package must retain the Stream Archive Web compatibility launcher.'
+    Assert-Match $package '(?s)>"%OUT%\\RUN\.bat".*?StreamArchive\.exe' 'RUN.bat generation must make the native GUI the default entry point.'
+    Assert-Match $package '(?s)>"%OUT%\\RUN_WEB\.bat".*?stream-archive-launcher\.exe' 'RUN_WEB.bat generation must preserve the Web compatibility launcher.'
     Assert-Match $package 'dist\\stream-archive' 'Portable package output must use the Stream Archive namespace.'
     Assert-Match $package 'THIRD_PARTY_NOTICES\.md' 'Portable package must include third-party notices.'
     Assert-Match $package 'LICENSE' 'Portable package must include the project license.'
     Assert-Match $manifest 'name\s*=\s*"stream-archive-server"' 'Cargo package must use the Stream Archive namespace.'
     Assert-Match $manifest 'license\s*=\s*"AGPL-3\.0-or-later"' 'Cargo package must declare AGPL-3.0-or-later.'
+    Assert-Match $guiManifest 'name\s*=\s*"stream-archive-gui"' 'Native GUI Cargo package must use the Stream Archive namespace.'
+    Assert-Match $guiManifest 'license\s*=\s*"AGPL-3\.0-or-later"' 'Native GUI Cargo package must declare AGPL-3.0-or-later.'
     Assert-NotMatch $package 'soop-server|soop-launcher|soop-recorder|SOOP_NO_PAUSE|\.rust-web' 'Portable packaging must not reintroduce generic legacy app names.'
     Write-Host "Release safety contracts passed across $($tracked.Count) tracked files and reachable Git history."
 }

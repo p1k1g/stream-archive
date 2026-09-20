@@ -35,12 +35,7 @@ impl HistoryFilter {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_ascii_lowercase),
-            status: self
-                .status
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_ascii_uppercase),
+            statuses: normalize_status_input(self.status.as_deref()),
             from,
             to,
             limit: self
@@ -54,7 +49,7 @@ impl HistoryFilter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedHistoryFilter {
     pub needle: Option<String>,
-    pub status: Option<String>,
+    pub statuses: Option<Vec<String>>,
     pub from: Option<String>,
     pub to: Option<String>,
     pub limit: usize,
@@ -67,9 +62,9 @@ pub fn load_history(path: &Path, filter: &HistoryFilter) -> Result<HistoryRespon
     history.live.retain(|item| {
         text_matches_live(item, normalized.needle.as_deref())
             && normalized
-                .status
+                .statuses
                 .as_deref()
-                .is_none_or(|wanted| item.status.eq_ignore_ascii_case(wanted))
+                .is_none_or(|wanted| status_matches(&item.status, wanted))
             && date_matches(
                 &item.started_at,
                 normalized.from.as_deref(),
@@ -79,9 +74,9 @@ pub fn load_history(path: &Path, filter: &HistoryFilter) -> Result<HistoryRespon
     history.vod.retain(|item| {
         text_matches_vod(item, normalized.needle.as_deref())
             && normalized
-                .status
+                .statuses
                 .as_deref()
-                .is_none_or(|wanted| item.state.eq_ignore_ascii_case(wanted))
+                .is_none_or(|wanted| status_matches(&item.state, wanted))
             && item.started_at.as_deref().is_none_or(|started| {
                 date_matches(
                     started,
@@ -190,6 +185,90 @@ fn text_matches_vod(item: &VodHistoryItem, needle: Option<&str>) -> bool {
     .any(|value| value.to_ascii_lowercase().contains(needle))
 }
 
+fn normalize_status_term(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase()
+}
+
+fn normalize_status_input(value: Option<&str>) -> Option<Vec<String>> {
+    let value = value?.trim();
+    if value.is_empty() || value == "전체" {
+        return None;
+    }
+
+    let needle = normalize_status_term(value);
+    let aliases: &[(&[&str], &[&str])] = &[
+        (&["완료"], &["COMPLETED"]),
+        (&["실패"], &["FAILED"]),
+        (&["비정상 종료", "중단됨", "중단"], &["INTERRUPTED"]),
+        (&["취소됨", "취소"], &["CANCELLED"]),
+        (&["중지됨", "중지"], &["STOPPED"]),
+        (&["대기"], &["READY", "QUEUED", "IDLE"]),
+        (
+            &["진행 중", "진행중", "진행"],
+            &[
+                "RUNNING",
+                "STARTING",
+                "ANALYZING",
+                "DOWNLOADING",
+                "REFRESHING",
+                "MERGING",
+                "CANCELLING",
+            ],
+        ),
+        (&["준비 중", "준비중"], &["STARTING"]),
+        (&["준비됨"], &["READY"]),
+        (&["분석 중", "분석중"], &["ANALYZING"]),
+        (&["다운로드 중", "다운로드중"], &["DOWNLOADING"]),
+        (&["인증 갱신 중"], &["REFRESHING"]),
+        (&["병합 중", "병합중"], &["MERGING"]),
+        (&["취소 중", "취소중"], &["CANCELLING"]),
+        (&["녹화 중", "녹화중"], &["RECORDING"]),
+        (&["오프라인"], &["OFFLINE"]),
+        (&["오류"], &["ERROR"]),
+        (&["비활성"], &["DISABLED"]),
+        (&["디스크 부족", "디스크 공간 부족"], &["LOW_DISK"]),
+        (&["녹화 정지", "정체됨", "정체"], &["STALLED"]),
+        (&["인증 필요"], &["AUTH"]),
+        (&["비밀번호 필요"], &["PASSWORD_REQUIRED"]),
+        (&["현재방송 중지", "현재 방송 중지"], &["PAUSED"]),
+        (&["확인중", "확인 중"], &["UNKNOWN"]),
+        (&["방송중", "방송 중"], &["LIVE"]),
+    ];
+
+    let mut matches = Vec::<String>::new();
+    for (terms, statuses) in aliases {
+        let alias_matches = terms
+            .iter()
+            .any(|term| normalize_status_term(term).contains(&needle));
+        let canonical_matches = statuses
+            .iter()
+            .any(|status| normalize_status_term(status).contains(&needle));
+        if alias_matches || canonical_matches {
+            for status in *statuses {
+                if !matches.iter().any(|existing| existing == status) {
+                    matches.push((*status).to_string());
+                }
+            }
+        }
+    }
+
+    if matches.is_empty() {
+        Some(vec![value.to_ascii_uppercase()])
+    } else {
+        Some(matches)
+    }
+}
+
+fn status_matches(actual: &str, wanted: &[String]) -> bool {
+    wanted
+        .iter()
+        .any(|status| actual.eq_ignore_ascii_case(status))
+}
+
 fn normalize_date_input(value: Option<&str>) -> Result<Option<String>> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -246,7 +325,7 @@ mod tests {
         };
         let normalized = filter.normalized().unwrap();
         assert_eq!(normalized.needle.as_deref(), Some("hello"));
-        assert_eq!(normalized.status.as_deref(), Some("COMPLETED"));
+        assert_eq!(normalized.statuses, Some(vec!["COMPLETED".to_string()]));
         assert_eq!(normalized.limit, HISTORY_MAX_LIMIT);
         assert!(
             HistoryFilter {
@@ -256,6 +335,92 @@ mod tests {
             .normalized()
             .is_err()
         );
+    }
+
+    #[test]
+    fn korean_status_aliases_map_to_canonical_history_states() {
+        let completed = HistoryFilter {
+            status: Some("완료".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(completed.statuses, Some(vec!["COMPLETED".to_string()]));
+
+        let waiting = HistoryFilter {
+            status: Some("대기".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(
+            waiting.statuses,
+            Some(vec![
+                "READY".to_string(),
+                "QUEUED".to_string(),
+                "IDLE".to_string()
+            ])
+        );
+
+        let active = HistoryFilter {
+            status: Some("진행 중".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert!(
+            active
+                .statuses
+                .as_ref()
+                .is_some_and(|states| states.contains(&"DOWNLOADING".to_string()))
+        );
+
+        let canonical = HistoryFilter {
+            status: Some("cancelled".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(canonical.statuses, Some(vec!["CANCELLED".to_string()]));
+
+        let stopped = HistoryFilter {
+            status: Some("STOP".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(stopped.statuses, Some(vec!["STOPPED".to_string()]));
+
+        let merging = HistoryFilter {
+            status: Some("병합".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(merging.statuses, Some(vec!["MERGING".to_string()]));
+
+        let progressing = HistoryFilter {
+            status: Some("진행".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert!(
+            progressing
+                .statuses
+                .as_ref()
+                .is_some_and(|states| states.contains(&"DOWNLOADING".to_string()))
+        );
+
+        let cancelling = HistoryFilter {
+            status: Some("취소".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        let cancelling_states = cancelling.statuses.unwrap();
+        assert!(cancelling_states.contains(&"CANCELLED".to_string()));
+        assert!(cancelling_states.contains(&"CANCELLING".to_string()));
     }
 
     #[test]

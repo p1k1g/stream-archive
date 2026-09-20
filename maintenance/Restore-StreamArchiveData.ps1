@@ -14,10 +14,11 @@ function Resolve-DataDir {
     return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\data'))
 }
 
-function Assert-ServerStopped {
-    $running = Get-Process -Name 'stream-archive-server' -ErrorAction SilentlyContinue
-    if ($running) {
-        throw 'Stream Archive server is running. Stop it with Ctrl+C before restoring SQLite.'
+function Assert-RuntimeStopped {
+    $native = Get-Process -Name 'StreamArchive', 'stream-archive-gui' -ErrorAction SilentlyContinue
+    $server = Get-Process -Name 'stream-archive-server' -ErrorAction SilentlyContinue
+    if ($native -or $server) {
+        throw 'Stream Archive is running. Close StreamArchive.exe and stop any Web compatibility server before restoring SQLite.'
     }
 }
 
@@ -36,7 +37,7 @@ function Assert-SqliteFile {
     }
 }
 
-Assert-ServerStopped
+Assert-RuntimeStopped
 $source = [System.IO.Path]::GetFullPath($BackupFile)
 Assert-SqliteFile $source
 

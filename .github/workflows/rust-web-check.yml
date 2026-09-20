@@ -132,7 +132,7 @@ jobs:
     needs: core-check
     if: ${{ always() }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Enforce cross-platform core results
         shell: powershell
@@ -202,9 +202,11 @@ jobs:
         run: |
           $root = './dist/stream-archive'
           $required = @(
+            "$root/StreamArchive.exe",
             "$root/stream-archive-server.exe",
             "$root/stream-archive-launcher.exe",
             "$root/RUN.bat",
+            "$root/RUN_WEB.bat",
             "$root/RUN_SERVER_CONSOLE.bat",
             "$root/BACKUP_DATA.bat",
             "$root/RESTORE_DATA.bat",
@@ -217,10 +219,14 @@ jobs:
             "$root/maintenance/Restore-StreamArchiveData.ps1",
             "$root/docs/OPERATIONS.md",
             "$root/docs/REVERSE_PROXY.md",
-            "$root/docs/LOCAL_LAUNCHER.md"
+            "$root/docs/LOCAL_LAUNCHER.md",
+            "$root/docs/PHASE21_NATIVE_PORTABLE.md"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
+          }
+          foreach ($dir in @("$root/backend", "$root/data")) {
+            if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Missing package directory: $dir" }
           }
 
           $expected = @{}
@@ -229,14 +235,18 @@ jobs:
               $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
             }
           }
-          foreach ($name in @('stream-archive-server.exe', 'stream-archive-launcher.exe')) {
+          foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe', 'stream-archive-launcher.exe')) {
             if (-not $expected.ContainsKey($name)) { throw "checksum missing: $name" }
             $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $root $name)).Hash.ToLowerInvariant()
             if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
           }
 
           $run = Get-Content "$root/RUN.bat" -Raw
-          if ($run -notmatch 'stream-archive-launcher\.exe') { throw 'RUN.bat does not use stream-archive-launcher.exe' }
+          if ($run -notmatch 'StreamArchive\.exe') { throw 'RUN.bat does not use StreamArchive.exe' }
+          if ($run -match 'stream-archive-launcher\.exe') { throw 'RUN.bat must not use the legacy Web launcher by default' }
+
+          $webRun = Get-Content "$root/RUN_WEB.bat" -Raw
+          if ($webRun -notmatch 'stream-archive-launcher\.exe') { throw 'RUN_WEB.bat does not use stream-archive-launcher.exe' }
 
           $direct = Get-Content "$root/RUN_SERVER_CONSOLE.bat" -Raw
           if ($direct -notmatch 'stream-archive-server\.exe') { throw 'RUN_SERVER_CONSOLE.bat does not start stream-archive-server.exe' }
