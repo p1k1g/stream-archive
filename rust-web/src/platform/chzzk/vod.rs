@@ -1377,6 +1377,34 @@ fn claim_path(target: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+#[cfg(windows)]
+fn hide_destination_claim(path: &Path) -> Result<()> {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_HIDDEN, GetFileAttributesW, INVALID_FILE_ATTRIBUTES, SetFileAttributesW,
+    };
+
+    let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    wide.push(0);
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("destination claim 속성 조회 실패: {}", path.display()));
+    }
+    let ok = unsafe { SetFileAttributesW(wide.as_ptr(), attributes | FILE_ATTRIBUTE_HIDDEN) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("destination claim 숨김 처리 실패: {}", path.display()));
+    }
+    let _ = ptr::null::<u8>();
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn hide_destination_claim(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 fn finalizing_path(target: &Path) -> PathBuf {
     let mut name = target.as_os_str().to_os_string();
     name.push(FINALIZING_SUFFIX);
@@ -1423,6 +1451,10 @@ fn claim_collision_path(dir: &Path, base: &str, extension: &str) -> Result<Desti
                     claim_path.display()
                 )
             })?;
+        // The pathname remains a reusable lock anchor for race-free collision
+        // ownership. On Windows make the internal sidecar hidden instead of
+        // unlinking it after unlock, which would reintroduce the inode race.
+        let _ = hide_destination_claim(&claim_path);
         match lock.try_lock_exclusive() {
             Ok(()) => {
                 if target.exists() {
