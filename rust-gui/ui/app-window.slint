@@ -144,7 +144,7 @@ export global AppState {
 
     in-out property <string> active-page: "LIVE";
     in-out property <bool> runtime-ready: false;
-    in-out property <string> runtime-status: "런타임 초기화 중...";
+    in-out property <string> runtime-status: "구성요소를 확인하는 중...";
     callback refresh-requested();
 }
 
@@ -225,7 +225,7 @@ export component MainWindow inherits Window {
                         padding: 12px;
                         spacing: 4px;
                         Text {
-                            text: AppState.runtime-ready ? "● 환경 정상" : "● 환경 확인 필요";
+                            text: AppState.runtime-ready ? "● 서비스 정상" : "● 서비스 확인 필요";
                             color: AppState.runtime-ready ? #86efac : #fda4af;
                             font-size: 13px;
                             font-weight: 600;
