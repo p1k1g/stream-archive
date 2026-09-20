@@ -202,33 +202,14 @@ fn existing_probe_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn volume_key(path: &Path) -> String {
-    #[cfg(windows)]
-    {
-        return path
-            .components()
-            .next()
-            .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_else(|| path.display().to_string().to_ascii_lowercase());
-    }
-
-    #[cfg(not(windows))]
-    {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-
-        if let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) {
-            let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-            let rc = unsafe { libc::stat(c_path.as_ptr(), stat.as_mut_ptr()) };
-            if rc == 0 {
-                let stat = unsafe { stat.assume_init() };
-                return format!("dev:{}", stat.st_dev);
-            }
-        }
-        path.components()
-            .next()
-            .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_else(|| path.display().to_string().to_ascii_lowercase())
-    }
+    // Windows native packaging is the primary UI target for this service.
+    // A drive/root component is stable for the same Windows volume. Unix keeps
+    // the previous root-component behavior for headless compatibility without
+    // introducing an OS-specific dependency solely for presentation grouping.
+    path.components()
+        .next()
+        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_else(|| path.display().to_string().to_ascii_lowercase())
 }
 
 fn database_size(path: &Path) -> u64 {
