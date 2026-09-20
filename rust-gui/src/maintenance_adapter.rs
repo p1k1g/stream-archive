@@ -37,7 +37,7 @@ fn backup_row(item: &BackupInfo) -> BackupRowView {
     let integrity = item.integrity.to_ascii_uppercase();
     BackupRowView {
         file_name: item.file_name.clone(),
-        kind: item.kind.clone(),
+        kind: backup_kind_label(&item.kind).into(),
         created_at: format_history_timestamp_local(&item.created_at),
         size: format_bytes(item.size_bytes),
         sha256: item.sha256.clone(),
@@ -54,7 +54,7 @@ pub fn diagnostic_rows(snapshot: &DiagnosticsSnapshot) -> Vec<DiagnosticRowView>
 fn diagnostic_row(item: &DiagnosticItem) -> DiagnosticRowView {
     DiagnosticRowView {
         name: item.name.clone(),
-        status: item.status.label().into(),
+        status: diagnostic_status_label(item.status).into(),
         detail: item.detail.clone(),
         status_tone: diagnostic_tone(item.status).into(),
     }
@@ -70,6 +70,23 @@ pub fn log_rows(lines: Vec<String>, max_lines: usize) -> Vec<LogRowView> {
             text: line.replace('\r', " ").replace('\n', " "),
         })
         .collect()
+}
+
+fn backup_kind_label(kind: &str) -> &str {
+    match kind {
+        "manual" => "수동",
+        "automatic" | "auto" => "자동",
+        "pre_restore" => "복원 전 안전 백업",
+        other => other,
+    }
+}
+
+fn diagnostic_status_label(status: DiagnosticStatus) -> &'static str {
+    match status {
+        DiagnosticStatus::Ok => "정상",
+        DiagnosticStatus::Warning => "주의",
+        DiagnosticStatus::Error => "오류",
+    }
 }
 
 fn integrity_tone(value: &str) -> &'static str {
