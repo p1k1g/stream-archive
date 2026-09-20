@@ -141,14 +141,19 @@ pub fn resolve_backend_dir() -> Result<PathBuf> {
         );
     }
 
+    // Prefer the backend beside the executable so a packaged GUI launched
+    // from Explorer remains anchored to its own portable directory even when
+    // the inherited working directory points somewhere else. Development runs
+    // still fall back to ./backend when target/{debug,release} has no sibling
+    // backend directory.
     let mut candidates = Vec::new();
-    if let Ok(cwd) = env::current_dir() {
-        candidates.push(cwd.join("backend"));
-    }
     if let Ok(exe) = env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             candidates.push(exe_dir.join("backend"));
         }
+    }
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join("backend"));
     }
 
     for candidate in candidates {
