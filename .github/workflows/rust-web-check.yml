@@ -40,25 +40,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lockfile-refresh:
-    name: TEMP Slint lockfile refresh
-    runs-on: windows-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Regenerate and emit rust-gui Cargo.lock
-        shell: bash
-        run: |
-          cargo update --manifest-path rust-gui/Cargo.toml -p slint --precise 1.18.0
-          echo "LOCKFILE_BASE64_BEGIN"
-          node -e "process.stdout.write(require('fs').readFileSync('rust-gui/Cargo.lock').toString('base64'))"
-          echo
-          echo "LOCKFILE_BASE64_END"
-
   core-check:
     name: core-check (${{ matrix.platform }})
     strategy:
@@ -131,16 +112,6 @@ jobs:
         if: ${{ always() && matrix.platform == 'windows' }}
         shell: bash
         run: cargo fmt --manifest-path rust-gui/Cargo.toml -- --check
-
-      - name: TEMP regenerate Slint 1.18 lockfile
-        if: ${{ matrix.platform == 'windows' }}
-        shell: bash
-        run: |
-          cargo update --manifest-path rust-gui/Cargo.toml -p slint --precise 1.18.0
-          echo "LOCKFILE_BASE64_BEGIN"
-          node -e "process.stdout.write(require('fs').readFileSync('rust-gui/Cargo.lock').toString('base64'))"
-          echo
-          echo "LOCKFILE_BASE64_END"
 
       - name: Slint shell compile check
         if: ${{ matrix.platform == 'windows' }}
