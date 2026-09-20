@@ -73,6 +73,7 @@ copy /y "maintenance\Restore-StreamArchiveData.ps1" "%OUT%\maintenance\Restore-S
 copy /y "docs\OPERATIONS.md" "%OUT%\docs\OPERATIONS.md" >nul || exit /b 1
 copy /y "docs\REVERSE_PROXY.md" "%OUT%\docs\REVERSE_PROXY.md" >nul || exit /b 1
 copy /y "docs\LOCAL_LAUNCHER.md" "%OUT%\docs\LOCAL_LAUNCHER.md" >nul || exit /b 1
+copy /y "docs\PHASE21_NATIVE_PORTABLE.md" "%OUT%\docs\PHASE21_NATIVE_PORTABLE.md" >nul || exit /b 1
 copy /y "deploy\Caddyfile.example" "%OUT%\Caddyfile.example" >nul || exit /b 1
 copy /y "LICENSE" "%OUT%\LICENSE" >nul || exit /b 1
 copy /y "THIRD_PARTY_NOTICES.md" "%OUT%\THIRD_PARTY_NOTICES.md" >nul || exit /b 1
