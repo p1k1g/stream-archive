@@ -269,6 +269,45 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_includes_channel_specific_output_directory() {
+        use crate::{model::Channel, support::platform::PlatformId};
+
+        let temp = tempfile::tempdir().unwrap();
+        let live_default = temp.path().join("default-live");
+        let channel_dir = temp.path().join("channel-live");
+        fs::create_dir_all(&live_default).unwrap();
+        fs::create_dir_all(&channel_dir).unwrap();
+        let store = Store::open(temp.path().join("stream-archive.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([
+                    ("OUTPUT_DIR".into(), live_default.display().to_string()),
+                    ("MIN_FREE_SPACE_GB".into(), "1".into()),
+                ]),
+                "test",
+            )
+            .unwrap();
+        store
+            .sync_channels(&[Channel {
+                platform: PlatformId::Soop,
+                enabled: true,
+                name: "채널".into(),
+                account: "account".into(),
+                outdir: channel_dir.display().to_string(),
+            }])
+            .unwrap();
+
+        let snapshot = snapshot(&store).unwrap();
+        assert!(snapshot.volumes.iter().any(|volume| {
+            volume
+                .paths
+                .iter()
+                .any(|path| path == &channel_dir.display().to_string())
+                && volume.roles.iter().any(|role| role.contains("채널"))
+        }));
+    }
+
+    #[test]
     fn nonexistent_child_uses_nearest_existing_parent() {
         let temp = tempfile::tempdir().unwrap();
         let probe = existing_probe_path(&temp.path().join("missing").join("child")).unwrap();
