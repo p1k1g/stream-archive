@@ -105,7 +105,7 @@ export component MaintenancePage inherits VerticalLayout {
         spacing: 10px;
 
         Rectangle {
-            min-height: 178px;
+            min-height: 92px;
             vertical-stretch: 0;
             background: #ffffff;
             border-radius: 10px;
@@ -113,123 +113,31 @@ export component MaintenancePage inherits VerticalLayout {
             border-color: #e2e8f0;
             VerticalLayout {
                 padding: 12px;
-                spacing: 8px;
-                Text { text: "백업 정책"; color: #0f172a; font-size: 14px; font-weight: 700; }
-
+                spacing: 7px;
                 HorizontalLayout {
-                    height: 34px;
+                    height: 32px;
                     vertical-stretch: 0;
                     spacing: 8px;
-                    LineEdit {
-                        height: 34px;
+                    Text {
+                        text: "백업 / 복원";
+                        color: #0f172a;
+                        font-size: 14px;
+                        font-weight: 700;
                         horizontal-stretch: 1;
-                        text <=> MaintenanceState.backup-directory;
-                        enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
-                        placeholder-text: "백업 폴더";
+                        vertical-alignment: center;
                     }
                     Button {
-                        width: 84px;
-                        height: 34px;
-                        horizontal-stretch: 0;
-                        text: "찾아보기...";
-                        enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
-                        clicked => { MaintenanceState.pick-backup-directory(); }
-                    }
-                }
-
-                if !MaintenanceState.backup-directory-editable: SummaryLabel {
-                    text: "백업 폴더는 STREAM_ARCHIVE_BACKUP_DIR에서 관리하므로 여기서는 읽기 전용입니다.";
-                    color: #a16207;
-                }
-
-                HorizontalLayout {
-                    height: 46px;
-                    vertical-stretch: 0;
-                    spacing: 12px;
-                    VerticalLayout {
-                        width: 132px;
-                        horizontal-stretch: 0;
-                        spacing: 2px;
-                        Text {
-                            text: "자동 백업";
-                            color: #64748b;
-                            font-size: 10px;
-                            vertical-stretch: 0;
-                        }
-                        Button {
-                            height: 30px;
-                            text: MaintenanceState.backup-enabled ? "켜짐" : "꺼짐";
-                            enabled: !MaintenanceState.busy;
-                            clicked => { MaintenanceState.toggle-backup-enabled(); }
-                        }
-                    }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 2px;
-                        Text {
-                            text: "간격(시간)";
-                            color: #64748b;
-                            font-size: 10px;
-                            vertical-stretch: 0;
-                        }
-                        LineEdit {
-                            height: 30px;
-                            text <=> MaintenanceState.backup-interval-hours;
-                            placeholder-text: "24";
-                            enabled: !MaintenanceState.busy;
-                        }
-                    }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 2px;
-                        Text {
-                            text: "보관 개수";
-                            color: #64748b;
-                            font-size: 10px;
-                            vertical-stretch: 0;
-                        }
-                        LineEdit {
-                            height: 30px;
-                            text <=> MaintenanceState.backup-keep-count;
-                            placeholder-text: "10";
-                            enabled: !MaintenanceState.busy;
-                        }
-                    }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 2px;
-                        Text {
-                            text: "보관 기간(일)";
-                            color: #64748b;
-                            font-size: 10px;
-                            vertical-stretch: 0;
-                        }
-                        LineEdit {
-                            height: 30px;
-                            text <=> MaintenanceState.backup-retention-days;
-                            placeholder-text: "3";
-                            enabled: !MaintenanceState.busy;
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    height: 34px;
-                    vertical-stretch: 0;
-                    spacing: 8px;
-                    Button {
-                        height: 34px;
-                        text: "정책 저장";
-                        enabled: MaintenanceState.loaded && !MaintenanceState.busy;
-                        clicked => { MaintenanceState.save-backup-policy(); }
-                    }
-                    Button {
-                        height: 34px;
-                        text: "백업 생성";
+                        height: 32px;
+                        text: "지금 백업 생성";
                         enabled: MaintenanceState.loaded && !MaintenanceState.busy;
                         clicked => { MaintenanceState.create-backup(); }
                     }
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+                SummaryLabel {
+                    text: "백업 위치: " + (MaintenanceState.backup-directory != "" ? MaintenanceState.backup-directory : "-");
+                }
+                SummaryLabel {
+                    text: "자동 백업 정책은 설정 탭에서 변경합니다. 이 화면은 백업 생성, 무결성 확인, 복원만 담당합니다.";
                 }
             }
         }
