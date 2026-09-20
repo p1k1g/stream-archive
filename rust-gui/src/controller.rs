@@ -301,7 +301,7 @@ fn maintenance_snapshot(
 
 fn selected_parts_label(parts: &[usize]) -> String {
     if parts.is_empty() {
-        return "all".into();
+        return "전체".into();
     }
     parts
         .iter()
@@ -344,7 +344,7 @@ fn save_channels(
     match runtime.block_on(core.update_channels(&channels)) {
         Ok(_) => configuration_snapshot(
             core,
-            "채널 목록을 저장했습니다. 실행 중인 Watcher는 기존 reload 정책에 따라 canonical 목록을 반영합니다.",
+            "채널 목록을 저장했습니다. 실행 중인 Watcher는 기존 재로딩 정책에 따라 canonical 목록을 반영합니다.",
         ),
         Err(error) => Response::ConfigError(format!("채널 목록을 저장하지 못했습니다: {error:#}")),
     }
@@ -692,7 +692,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 match result {
                     Ok(snapshot) => Response::Queue {
                         snapshot,
-                        message: Some(format!("대기열 작업 완료: {action}")),
+                        message: Some(format!("대기열 작업 완료: {}", match action.as_str() { "cancel" => "취소", "retry" => "재시도", "remove" => "삭제", _ => action.as_str() })),
                         poll: false,
                     },
                     Err(error) => Response::QueueError {
@@ -795,6 +795,20 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     runtime.block_on(core.shutdown());
 }
 
+fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a str {
+    match key {
+        "STREAMLINK_PATH" => "Streamlink 실행 파일 경로입니다. 비워두거나 AUTO를 사용하면 자동 탐색합니다.",
+        "STREAMLINK_FALLBACK" => "대체 Streamlink 실행 파일 경로입니다. 비워두거나 AUTO를 사용하면 자동 탐색합니다.",
+        "YT_DLP_PATH" => "yt-dlp 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
+        "FFMPEG_PATH" => "FFmpeg 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
+        "OUTPUT_DIR" => "LIVE 기본 저장 폴더입니다. 비워두면 런타임 기본값을 사용합니다.",
+        "CHECK_INTERVAL" => "LIVE 상태 확인 간격(초)입니다. 허용 범위: 1~86400.",
+        "MIN_FREE_SPACE_GB" => "최소 여유 디스크 공간(GB)입니다. 허용 범위: 0~1000000.",
+        "QUALITY" => "LIVE 화질입니다. 예: best",
+        _ => fallback,
+    }
+}
+
 fn render_draft(ui: &MainWindow, draft: &SettingsDraft) {
     let rows: Vec<_> = draft
         .fields
@@ -802,7 +816,7 @@ fn render_draft(ui: &MainWindow, draft: &SettingsDraft) {
         .map(|field| SettingRow {
             key: field.key.clone().into(),
             value: field.value.clone().into(),
-            description: field.description.clone().into(),
+            description: localized_setting_description(&field.key, &field.description).into(),
             pickable: field.kind != SettingKind::Text,
         })
         .collect();
