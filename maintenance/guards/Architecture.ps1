@@ -136,7 +136,7 @@ Assert-Match $guiSources 'core\.is_first_run_unconfigured\(' 'Native startup mus
 Assert-Match $guiSources 'core\.update_environment_settings' 'GUI settings bypass shared service.'
 Assert-Match $guiSources 'core\.diagnostics\(' 'GUI diagnostics must consume shared diagnostics.'
 Assert-NotMatch $guiSources 'std::fs::write|fs::write|Connection::open|std::process|tokio::process' 'GUI must not write runtime files or own child processes.'
-Assert-Match $guiUi 'Diagnostics.*read-only' 'Read-only diagnostics must be distinguished from editable settings.'
+Assert-Match $guiUi '(?:Diagnostics.*read-only|진단.*읽기\s*전용)' 'Read-only diagnostics must be distinguished from editable settings.'
 Assert-Match $guiSources 'core\.backup_snapshot\(' 'Native Maintenance must load backups through StreamArchiveCore.'
 Assert-Match $guiSources 'core\.restore_backup\(' 'Native Maintenance restore must use StreamArchiveCore.'
 Assert-Match $guiSources 'core\.runtime_logs\(' 'Native log viewer must use the bounded shared LogBuffer service.'
