@@ -36,7 +36,8 @@ Assert-NotMatch $runtime 'self\.root_pid' 'Retained process ownership must not r
 # process suspended and assigning the exact Child handle before ResumeThread is
 # what closes both the short-lived-root and pre-assignment descendant races.
 Assert-Match $runtime 'CREATE_SUSPENDED' 'Windows retained LIVE spawn must create the child suspended.'
-Assert-Match $runtime 'creation_flags\(CREATE_SUSPENDED\)' 'Windows retained LIVE spawn must apply CREATE_SUSPENDED before spawn.'
+Assert-Match $runtime 'CREATE_NO_WINDOW' 'Windows retained media-tool spawn must suppress console windows for the native GUI.'
+Assert-Match $runtime 'creation_flags\(CREATE_SUSPENDED\s*\|\s*CREATE_NO_WINDOW\)' 'Windows retained LIVE spawn must apply suspended, no-console creation flags before spawn.'
 Assert-Match $runtime 'capture_suspended_child\(&child\)' 'Windows retained LIVE spawn must capture the exact suspended Child handle.'
 Assert-Match $runtime 'assign_handle\(root_handle\)' 'Windows Job capture must assign the exact spawned root handle.'
 Assert-Match $runtime 'resume_child_threads\(&child\)' 'Windows retained LIVE spawn must resume only after Job ownership is established.'
