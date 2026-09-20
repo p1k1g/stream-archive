@@ -62,12 +62,14 @@ jobs:
           }
           $run = Get-Content "$root/RUN.bat" -Raw
           if ($run -notmatch 'StreamArchive\.exe') { throw 'RUN.bat does not use StreamArchive.exe' }
+          if ($run -match 'stream-archive-launcher\.exe') { throw 'RUN.bat must not use the Web launcher by default' }
           $webRun = Get-Content "$root/RUN_WEB.bat" -Raw
           if ($webRun -notmatch 'stream-archive-launcher\.exe') { throw 'RUN_WEB.bat does not preserve the Web fallback' }
           foreach ($dir in @("$root/backend", "$root/data")) {
             if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Missing package directory: $dir" }
           }
           if (-not (Test-Path "$root/docs/LOCAL_LAUNCHER.md" -PathType Leaf)) { throw 'LOCAL_LAUNCHER.md missing' }
+          if (-not (Test-Path "$root/docs/PHASE21_NATIVE_PORTABLE.md" -PathType Leaf)) { throw 'PHASE21_NATIVE_PORTABLE.md missing' }
           if ((Get-Content "$root/LICENSE" -Raw) -notmatch 'GNU AFFERO GENERAL PUBLIC LICENSE') { throw 'AGPL license text missing from package' }
           Get-Content "$root/RELEASE_INFO.txt"
 
