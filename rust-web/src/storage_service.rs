@@ -69,18 +69,11 @@ pub fn check_path(store: &Store, path: &str, role: &str) -> anyhow::Result<Stora
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(20.0)
         .max(0.0);
-    storage_volume(
-        vec![role.to_string()],
-        vec![path.to_string()],
-        threshold_gb,
-    )
-    .map_err(anyhow::Error::msg)
+    storage_volume(vec![role.to_string()], vec![path.to_string()], threshold_gb)
+        .map_err(anyhow::Error::msg)
 }
 
-pub fn collapse_volumes(
-    targets: Vec<(String, String)>,
-    threshold_gb: f64,
-) -> Vec<StorageVolume> {
+pub fn collapse_volumes(targets: Vec<(String, String)>, threshold_gb: f64) -> Vec<StorageVolume> {
     let mut grouped: BTreeMap<String, StorageVolume> = BTreeMap::new();
     for (role, path) in targets {
         match storage_volume(vec![role.clone()], vec![path.clone()], threshold_gb) {
