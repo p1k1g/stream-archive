@@ -50,7 +50,7 @@ export global AppState {
     in-out property <bool> settings-busy: true;
     in-out property <bool> settings-loaded: false;
     in-out property <bool> settings-dirty: false;
-    in-out property <string> settings-message: "Loading settings...";
+    in-out property <string> settings-message: "설정을 불러오는 중...";
     callback setting-edited(int, string);
     callback save-settings();
     callback reload-settings();
@@ -60,7 +60,7 @@ export global AppState {
     in-out property <bool> config-busy: true;
     in-out property <bool> config-loaded: false;
     in-out property <bool> channels-dirty: false;
-    in-out property <string> config-message: "Loading channels and provider configuration...";
+    in-out property <string> config-message: "채널 및 공급자 설정을 불러오는 중...";
     callback channel-add();
     callback channel-remove(int);
     callback channel-edited(int, string, string);
@@ -87,14 +87,14 @@ export global AppState {
     in-out property <bool> live-busy: true;
     in-out property <bool> live-loaded: false;
     in-out property <bool> live-running: false;
-    in-out property <string> live-state: "Loading";
+    in-out property <string> live-state: "불러오는 중";
     in-out property <string> live-engine: "-";
     in-out property <string> live-started-at: "-";
     in-out property <string> live-channel-count: "0";
     in-out property <string> live-recording-count: "0";
     in-out property <string> live-offline-count: "0";
     in-out property <string> live-error-count: "0";
-    in-out property <string> live-message: "Loading LIVE runtime...";
+    in-out property <string> live-message: "LIVE 런타임을 불러오는 중...";
     in-out property <string> live-password-target: "";
     in-out property <string> live-password-label: "";
     in-out property <string> live-password-draft: "";
@@ -117,7 +117,7 @@ export global AppState {
     in-out property <string> vod-platform: "-";
     in-out property <string> vod-state: "IDLE";
     in-out property <string> vod-state-tone: "neutral";
-    in-out property <string> vod-message: "Loading VOD runtime...";
+    in-out property <string> vod-message: "VOD 런타임을 불러오는 중...";
     in-out property <string> vod-runtime-message: "";
     in-out property <string> vod-title: "";
     in-out property <string> vod-streamer: "";
@@ -144,7 +144,7 @@ export global AppState {
 
     in-out property <string> active-page: "LIVE";
     in-out property <bool> runtime-ready: false;
-    in-out property <string> runtime-status: "Initializing runtime...";
+    in-out property <string> runtime-status: "런타임 초기화 중...";
     callback refresh-requested();
 }
 
@@ -206,15 +206,15 @@ export component MainWindow inherits Window {
                 padding: 18px;
                 spacing: 9px;
                 Text { text: "Stream Archive"; color: #f8fafc; font-size: 21px; font-weight: 700; }
-                Text { text: "Native Desktop"; color: #94a3b8; font-size: 12px; }
+                Text { text: "네이티브 데스크톱"; color: #94a3b8; font-size: 12px; }
                 Rectangle { height: 10px; vertical-stretch: 0; background: transparent; }
                 NavItem { label: "LIVE"; page: "LIVE"; }
-                NavItem { label: "Channels"; page: "Channels"; }
+                NavItem { label: "채널"; page: "Channels"; }
                 NavItem { label: "VOD"; page: "VOD"; }
-                NavItem { label: "Queue"; page: "Queue"; }
-                NavItem { label: "History"; page: "History"; }
-                NavItem { label: "Maintenance"; page: "Maintenance"; }
-                NavItem { label: "Settings"; page: "Settings"; }
+                NavItem { label: "대기열"; page: "Queue"; }
+                NavItem { label: "기록"; page: "History"; }
+                NavItem { label: "관리"; page: "Maintenance"; }
+                NavItem { label: "설정"; page: "Settings"; }
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 Rectangle {
                     height: 78px;
@@ -225,7 +225,7 @@ export component MainWindow inherits Window {
                         padding: 12px;
                         spacing: 4px;
                         Text {
-                            text: AppState.runtime-ready ? "● Environment OK" : "● Environment needs attention";
+                            text: AppState.runtime-ready ? "● 환경 정상" : "● 환경 확인 필요";
                             color: AppState.runtime-ready ? #86efac : #fda4af;
                             font-size: 13px;
                             font-weight: 600;
@@ -250,13 +250,13 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         spacing: 3px;
                         horizontal-stretch: 1;
-                        Text { text: AppState.active-page; color: #0f172a; font-size: 27px; font-weight: 700; }
+                        Text { text: AppState.active-page == "Channels" ? "채널" : AppState.active-page == "Queue" ? "대기열" : AppState.active-page == "History" ? "기록" : AppState.active-page == "Maintenance" ? "관리" : AppState.active-page == "Settings" ? "설정" : AppState.active-page; color: #0f172a; font-size: 27px; font-weight: 700; }
                         Text { text: "Phase 21 Slint native shell"; color: #64748b; font-size: 13px; }
                     }
                     Button {
                         height: 36px;
                         vertical-stretch: 0;
-                        text: "Refresh runtime";
+                        text: "런타임 새로고침";
                         enabled: !AppState.settings-busy;
                         clicked => { AppState.refresh-requested(); }
                     }
@@ -278,26 +278,26 @@ export component MainWindow inherits Window {
                         }
                         Button {
                             height: 34px;
-                            text: "Start watcher";
+                            text: "Watcher 시작";
                             enabled: AppState.live-loaded && !AppState.live-busy && !AppState.live-running;
                             clicked => { AppState.live-start(); }
                         }
                         Button {
                             height: 34px;
-                            text: "Stop watcher";
+                            text: "Watcher 중지";
                             enabled: AppState.live-loaded && !AppState.live-busy && AppState.live-running;
                             clicked => { AppState.live-stop(); }
                         }
                         Button {
                             height: 34px;
-                            text: "Refresh";
+                            text: "새로고침";
                             enabled: AppState.live-loaded && !AppState.live-busy;
                             clicked => { AppState.live-refresh(); }
                         }
                     }
                     Text { text: AppState.live-message; color: #334155; wrap: word-wrap; font-size: 12px; }
                     Text {
-                        text: "Engine: " + AppState.live-engine + "  ·  Started: " + AppState.live-started-at;
+                        text: "엔진: " + AppState.live-engine + "  ·  시작: " + AppState.live-started-at;
                         color: #64748b;
                         font-size: 12px;
                         wrap: word-wrap;
@@ -306,10 +306,10 @@ export component MainWindow inherits Window {
                         height: 74px;
                         vertical-stretch: 0;
                         spacing: 8px;
-                        LiveMetric { label: "Channels"; value: AppState.live-channel-count; }
-                        LiveMetric { label: "Recording"; value: AppState.live-recording-count; }
-                        LiveMetric { label: "Offline"; value: AppState.live-offline-count; }
-                        LiveMetric { label: "Errors"; value: AppState.live-error-count; }
+                        LiveMetric { label: "채널"; value: AppState.live-channel-count; }
+                        LiveMetric { label: "녹화 중"; value: AppState.live-recording-count; }
+                        LiveMetric { label: "오프라인"; value: AppState.live-offline-count; }
+                        LiveMetric { label: "오류"; value: AppState.live-error-count; }
                     }
 
                     if AppState.live-password-target != "": Rectangle {
@@ -322,7 +322,7 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 12px;
                             spacing: 6px;
-                            Text { text: "Protected broadcast · " + AppState.live-password-label; color: #9a3412; font-weight: 700; }
+                            Text { text: "보호된 방송 · " + AppState.live-password-label; color: #9a3412; font-weight: 700; }
                             HorizontalLayout {
                                 height: 34px;
                                 vertical-stretch: 0;
@@ -335,13 +335,13 @@ export component MainWindow inherits Window {
                                 }
                                 Button {
                                     height: 34px;
-                                    text: "Submit password";
+                                    text: "비밀번호 입력";
                                     enabled: !AppState.live-busy && AppState.live-password-draft != "";
                                     clicked => { AppState.live-password-submit(AppState.live-password-target, AppState.live-password-draft); }
                                 }
                                 Button {
                                     height: 34px;
-                                    text: "Cancel";
+                                    text: "취소";
                                     enabled: !AppState.live-busy;
                                     clicked => {
                                         AppState.live-password-target = "";
@@ -350,7 +350,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            Text { text: "Password is memory-only and is never stored in Settings or SQLite."; color: #9a3412; font-size: 11px; }
+                            Text { text: "비밀번호는 메모리에만 유지되며 설정이나 SQLite에 저장되지 않습니다."; color: #9a3412; font-size: 11px; }
                         }
                     }
 
@@ -368,7 +368,7 @@ export component MainWindow inherits Window {
                                 border-color: #e2e8f0;
                                 VerticalLayout {
                                     padding: 16px;
-                                    Text { text: "No LIVE channels in the current runtime snapshot. Add channels on the Channels page."; color: #64748b; }
+                                    Text { text: "현재 LIVE 런타임에 등록된 채널이 없습니다. 채널 탭에서 채널을 추가하세요."; color: #64748b; }
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
@@ -398,15 +398,15 @@ export component MainWindow inherits Window {
                                         }
                                         Text { text: row.account; color: #64748b; font-size: 11px; }
                                         if row.title != "": Text { text: row.title; color: #334155; wrap: word-wrap; }
-                                        if row.bno != "": Text { text: "Broadcast: " + row.bno; color: #64748b; font-size: 11px; }
-                                        if row.file != "": Text { text: "File: " + row.file; color: #475569; wrap: word-wrap; font-size: 11px; }
+                                        if row.bno != "": Text { text: "방송: " + row.bno; color: #64748b; font-size: 11px; }
+                                        if row.file != "": Text { text: "파일: " + row.file; color: #475569; wrap: word-wrap; font-size: 11px; }
                                         if row.size != "" || row.started-at != "": Text {
-                                            text: (row.size != "" ? "Size: " + row.size : "") + (row.started-at != "" ? "  ·  Started: " + row.started-at : "");
+                                            text: (row.size != "" ? "크기: " + row.size : "") + (row.started-at != "" ? "  ·  시작: " + row.started-at : "");
                                             color: #64748b;
                                             font-size: 11px;
                                         }
                                         if row.suppressed: Text {
-                                            text: "Current broadcast is suppressed until the broadcast changes or monitoring is resumed.";
+                                            text: "현재 방송은 방송이 바뀌거나 모니터링을 재개할 때까지 제외됩니다.";
                                             color: #a16207;
                                             font-size: 11px;
                                             wrap: word-wrap;
@@ -453,7 +453,7 @@ export component MainWindow inherits Window {
                                                 width: 138px;
                                                 height: 32px;
                                                 horizontal-stretch: 0;
-                                                text: "Stop current broadcast";
+                                                text: "현재 방송 녹화 중지";
                                                 enabled: !AppState.live-busy;
                                                 clicked => { AppState.live-action(row.target, "stop"); }
                                             }
@@ -461,7 +461,7 @@ export component MainWindow inherits Window {
                                                 width: 126px;
                                                 height: 32px;
                                                 horizontal-stretch: 0;
-                                                text: "Resume monitoring";
+                                                text: "모니터링 재개";
                                                 enabled: !AppState.live-busy;
                                                 clicked => { AppState.live-action(row.target, "resume"); }
                                             }
@@ -469,7 +469,7 @@ export component MainWindow inherits Window {
                                                 width: 72px;
                                                 height: 32px;
                                                 horizontal-stretch: 0;
-                                                text: "Recheck";
+                                                text: "다시 확인";
                                                 enabled: !AppState.live-busy;
                                                 clicked => { AppState.live-action(row.target, "recheck"); }
                                             }
@@ -477,7 +477,7 @@ export component MainWindow inherits Window {
                                                 width: 146px;
                                                 height: 32px;
                                                 horizontal-stretch: 0;
-                                                text: "Enter stream password";
+                                                text: "방송 비밀번호 입력";
                                                 enabled: !AppState.live-busy;
                                                 clicked => {
                                                     AppState.live-password-target = row.target;
@@ -500,7 +500,7 @@ export component MainWindow inherits Window {
                         vertical-stretch: 0;
                         spacing: 8px;
                         Text {
-                            text: "LIVE channel configuration";
+                            text: "LIVE 채널 설정";
                             color: #0f172a;
                             font-size: 18px;
                             font-weight: 700;
@@ -509,19 +509,19 @@ export component MainWindow inherits Window {
                         }
                         Button {
                             height: 34px;
-                            text: "+ Add channel";
+                            text: "+ 채널 추가";
                             enabled: AppState.config-loaded && !AppState.config-busy;
                             clicked => { AppState.channel-add(); }
                         }
                         Button {
                             height: 34px;
-                            text: AppState.channels-dirty ? "Save channels *" : "Save channels";
+                            text: AppState.channels-dirty ? "채널 저장 *" : "채널 저장";
                             enabled: AppState.config-loaded && !AppState.config-busy && AppState.channels-dirty;
                             clicked => { AppState.save-channels(); }
                         }
                         Button {
                             height: 34px;
-                            text: "Reload saved";
+                            text: "저장값 다시 불러오기";
                             enabled: AppState.config-loaded && !AppState.config-busy;
                             clicked => { AppState.reload-configuration(); }
                         }
@@ -538,7 +538,7 @@ export component MainWindow inherits Window {
                             spacing: 3px;
                             Text { text: AppState.config-message; color: #334155; wrap: word-wrap; font-size: 12px; }
                             Text {
-                                text: "SOOP uses its account id. CHZZK uses the canonical channel id. Resolve fills the display name from the provider.";
+                                text: "SOOP은 계정 ID, CHZZK는 canonical channel ID를 사용합니다. 이름 조회를 누르면 공급자에서 표시 이름을 가져옵니다.";
                                 color: #64748b;
                                 wrap: word-wrap;
                                 font-size: 11px;
@@ -559,7 +559,7 @@ export component MainWindow inherits Window {
                                 border-color: #e2e8f0;
                                 VerticalLayout {
                                     padding: 16px;
-                                    Text { text: "No channels configured. Add a channel to create the first canonical SQLite entry."; color: #64748b; wrap: word-wrap; }
+                                    Text { text: "설정된 채널이 없습니다. 채널을 추가하면 canonical SQLite에 첫 항목이 생성됩니다."; color: #64748b; wrap: word-wrap; }
                                 }
                             }
                             for row[index] in AppState.channel-config-rows: Rectangle {
@@ -584,7 +584,7 @@ export component MainWindow inherits Window {
                                             spacing: 3px;
 
                                             Text {
-                                                text: "Platform";
+                                                text: "플랫폼";
                                                 color: #64748b;
                                                 font-size: 10px;
                                             }
@@ -603,14 +603,14 @@ export component MainWindow inherits Window {
                                             spacing: 3px;
 
                                             Text {
-                                                text: "State";
+                                                text: "상태";
                                                 color: #64748b;
                                                 font-size: 10px;
                                             }
 
                                             Button {
                                                 height: 30px;
-                                                text: row.enabled ? "Enabled" : "Disabled";
+                                                text: row.enabled ? "사용" : "사용 안 함";
                                                 enabled: !AppState.config-busy;
                                                 clicked => { AppState.channel-toggle-enabled(index); }
                                             }
@@ -622,7 +622,7 @@ export component MainWindow inherits Window {
                                             spacing: 3px;
 
                                             Text {
-                                                text: "Name";
+                                                text: "이름";
                                                 color: #64748b;
                                                 font-size: 10px;
                                             }
@@ -641,7 +641,7 @@ export component MainWindow inherits Window {
                                             spacing: 3px;
 
                                             Text {
-                                                text: "Account / channel id";
+                                                text: "계정 / 채널 ID";
                                                 color: #64748b;
                                                 font-size: 10px;
                                             }
@@ -660,7 +660,7 @@ export component MainWindow inherits Window {
                                             spacing: 3px;
 
                                             Text {
-                                                text: "Output directory";
+                                                text: "저장 폴더";
                                                 color: #64748b;
                                                 font-size: 10px;
                                             }
@@ -669,7 +669,7 @@ export component MainWindow inherits Window {
                                                 height: 30px;
                                                 horizontal-stretch: 1;
                                                 text <=> row.outdir;
-                                                placeholder-text: "blank = runtime default";
+                                                placeholder-text: "비워두면 런타임 기본값 사용";
                                                 enabled: !AppState.config-busy;
                                                 edited(value) => { AppState.channel-edited(index, "outdir", value); }
                                             }
@@ -688,7 +688,7 @@ export component MainWindow inherits Window {
 
                                             Button {
                                                 height: 30px;
-                                                text: "Resolve";
+                                                text: "이름 조회";
                                                 enabled: !AppState.config-busy && row.account != "";
                                                 clicked => { AppState.channel-resolve(index); }
                                             }
@@ -707,7 +707,7 @@ export component MainWindow inherits Window {
 
                                             Button {
                                                 height: 30px;
-                                                text: "Remove";
+                                                text: "삭제";
                                                 enabled: !AppState.config-busy;
                                                 clicked => { AppState.channel-remove(index); }
                                             }
@@ -726,7 +726,7 @@ export component MainWindow inherits Window {
                         vertical-stretch: 0;
                         spacing: 8px;
                         Text {
-                            text: "VOD analysis & download";
+                            text: "VOD 분석 및 다운로드";
                             color: #0f172a;
                             font-size: 18px;
                             font-weight: 700;
@@ -735,19 +735,19 @@ export component MainWindow inherits Window {
                         }
                         Button {
                             height: 34px;
-                            text: "Analyze";
+                            text: "분석";
                             enabled: AppState.vod-loaded && AppState.vod-can-analyze && !AppState.vod-busy && !AppState.vod-running;
                             clicked => { AppState.vod-analyze(); }
                         }
                         Button {
                             height: 34px;
-                            text: "Refresh";
+                            text: "새로고침";
                             enabled: AppState.vod-loaded && !AppState.vod-busy;
                             clicked => { AppState.vod-refresh(); }
                         }
                         Button {
                             height: 34px;
-                            text: "Cancel";
+                            text: "취소";
                             enabled: AppState.vod-loaded && AppState.vod-running && !AppState.vod-busy;
                             clicked => { AppState.vod-cancel(); }
                         }
@@ -801,7 +801,7 @@ export component MainWindow inherits Window {
                                             horizontal-stretch: 1;
                                             vertical-alignment: center;
                                         }
-                                        Text { text: AppState.vod-current-part + " / " + AppState.vod-part-count + " parts"; color: #64748b; font-size: 11px; vertical-alignment: center; }
+                                        Text { text: AppState.vod-current-part + " / " + AppState.vod-part-count + "개 PART"; color: #64748b; font-size: 11px; vertical-alignment: center; }
                                         Text { text: AppState.vod-percent-label; color: #0f172a; font-weight: 700; vertical-alignment: center; }
                                     }
                                     Rectangle {
@@ -820,12 +820,12 @@ export component MainWindow inherits Window {
                                     }
                                     Text { text: AppState.vod-runtime-message; color: #475569; font-size: 11px; wrap: word-wrap; }
                                     Text {
-                                        text: "Started: " + AppState.vod-started-at + "  ·  Finished: " + AppState.vod-finished-at;
+                                        text: "시작: " + AppState.vod-started-at + "  ·  완료: " + AppState.vod-finished-at;
                                         color: #94a3b8;
                                         font-size: 11px;
                                         wrap: word-wrap;
                                     }
-                                    if AppState.vod-output-file != "": Text { text: "Output: " + AppState.vod-output-file; color: #475569; font-size: 11px; wrap: word-wrap; }
+                                    if AppState.vod-output-file != "": Text { text: "출력: " + AppState.vod-output-file; color: #475569; font-size: 11px; wrap: word-wrap; }
                                 }
                             }
 
@@ -840,8 +840,8 @@ export component MainWindow inherits Window {
                                     padding: 11px;
                                     spacing: 4px;
                                     Text { text: AppState.vod-title != "" ? AppState.vod-title : "VOD metadata"; color: #0f172a; font-size: 15px; font-weight: 700; wrap: word-wrap; }
-                                    Text { text: "Streamer: " + AppState.vod-streamer + (AppState.vod-streamer-id != "" ? "  ·  " + AppState.vod-streamer-id : ""); color: #64748b; font-size: 11px; wrap: word-wrap; }
-                                    Text { text: "Parts: " + AppState.vod-part-count; color: #64748b; font-size: 11px; }
+                                    Text { text: "스트리머: " + AppState.vod-streamer + (AppState.vod-streamer-id != "" ? "  ·  " + AppState.vod-streamer-id : ""); color: #64748b; font-size: 11px; wrap: word-wrap; }
+                                    Text { text: "PART 수: " + AppState.vod-part-count; color: #64748b; font-size: 11px; }
                                 }
                             }
 
@@ -858,12 +858,12 @@ export component MainWindow inherits Window {
                                     VerticalLayout {
                                         padding: 10px;
                                         spacing: 6px;
-                                        Text { text: "Quality"; color: #0f172a; font-size: 14px; font-weight: 700; }
+                                        Text { text: "화질"; color: #0f172a; font-size: 14px; font-weight: 700; }
                                         ScrollView {
                                             vertical-stretch: 1;
                                             VerticalLayout {
                                                 spacing: 5px;
-                                                if AppState.vod-quality-rows.length == 0: Text { text: "Analyze a VOD to load qualities."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
+                                                if AppState.vod-quality-rows.length == 0: Text { text: "VOD를 분석하면 화질 목록이 표시됩니다."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
                                                 for row[index] in AppState.vod-quality-rows: Button {
                                                     height: 30px;
                                                     text: (row.selected ? "✓ " : "") + row.label;
@@ -887,16 +887,16 @@ export component MainWindow inherits Window {
                                             height: 30px;
                                             vertical-stretch: 0;
                                             spacing: 6px;
-                                            Text { text: "Parts"; color: #0f172a; font-size: 14px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+                                            Text { text: "PART"; color: #0f172a; font-size: 14px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
                                             Button {
                                                 height: 28px;
-                                                text: "All";
+                                                text: "전체 선택";
                                                 enabled: AppState.vod-part-rows.length > 0 && !AppState.vod-busy && !AppState.vod-running;
                                                 clicked => { AppState.vod-select-all-parts(); }
                                             }
                                             Button {
                                                 height: 28px;
-                                                text: "Clear";
+                                                text: "선택 해제";
                                                 enabled: AppState.vod-part-rows.length > 0 && !AppState.vod-busy && !AppState.vod-running;
                                                 clicked => { AppState.vod-clear-parts(); }
                                             }
@@ -905,7 +905,7 @@ export component MainWindow inherits Window {
                                             vertical-stretch: 1;
                                             VerticalLayout {
                                                 spacing: 5px;
-                                                if AppState.vod-part-rows.length == 0: Text { text: "Analyze a VOD to load parts."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
+                                                if AppState.vod-part-rows.length == 0: Text { text: "VOD를 분석하면 PART 목록이 표시됩니다."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
                                                 for row[index] in AppState.vod-part-rows: Button {
                                                     height: 30px;
                                                     text: (row.selected ? "✓ " : "") + "Part " + row.part + "  ·  " + row.duration;
@@ -932,43 +932,43 @@ export component MainWindow inherits Window {
                                         height: 34px;
                                         vertical-stretch: 0;
                                         spacing: 8px;
-                                        Text { text: "Download"; color: #0f172a; font-size: 15px; font-weight: 700; vertical-alignment: center; }
+                                        Text { text: "다운로드"; color: #0f172a; font-size: 15px; font-weight: 700; vertical-alignment: center; }
                                         LineEdit {
                                             height: 34px;
                                             vertical-stretch: 0;
                                             horizontal-stretch: 1;
                                             text <=> AppState.vod-output-directory;
                                             enabled: !AppState.vod-busy && !AppState.vod-running;
-                                            placeholder-text: "Output directory";
+                                            placeholder-text: "저장 폴더";
                                             edited(value) => { AppState.vod-output-edited(value); }
                                         }
                                         Button {
                                             height: 32px;
-                                            text: "Browse...";
+                                            text: "찾아보기...";
                                             enabled: !AppState.vod-busy && !AppState.vod-running;
                                             clicked => { AppState.vod-pick-output(); }
                                         }
                                         Button {
                                             height: 32px;
-                                            text: AppState.vod-merge ? "Merge: On" : "Merge: Off";
+                                            text: AppState.vod-merge ? "병합: 켜짐" : "병합: 꺼짐";
                                             enabled: !AppState.vod-busy && !AppState.vod-running;
                                             clicked => { AppState.vod-toggle-merge(); }
                                         }
                                                   Button {
                                             height: 32px;
-                                            text: "Download";
+                                            text: "다운로드";
                                             enabled: AppState.vod-loaded && AppState.vod-can-download && !AppState.vod-busy && !AppState.vod-running;
                                             clicked => { AppState.vod-download(); }
                                         }
                                                   Button {
                                             height: 32px;
-                                            text: "Add to Queue";
+                                            text: "대기열에 추가";
                                             enabled: AppState.vod-loaded && AppState.vod-can-download && !AppState.vod-busy && !AppState.vod-running;
                                             clicked => { QueueHistoryLocal.enqueue-current(); }
                                         }
 
                                     }
-                                    Text { text: "Tool paths and provider authentication use canonical Settings."; color: #64748b; font-size: 11px; wrap: word-wrap; }
+                                    Text { text: "도구 경로와 공급자 인증 정보는 canonical 설정을 사용합니다."; color: #64748b; font-size: 11px; wrap: word-wrap; }
                                 }
                             }
                         }
@@ -981,7 +981,7 @@ export component MainWindow inherits Window {
 
                 if AppState.active-page == "Settings": VerticalLayout {
                     spacing: 9px;
-                    Text { text: "Editable settings · shared SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                    Text { text: "설정 편집 · 공유 SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
                     ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
@@ -998,7 +998,7 @@ export component MainWindow inherits Window {
                                 VerticalLayout {
                                     padding: 14px;
                                     spacing: 8px;
-                                    Text { text: "Provider credentials"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                                    Text { text: "공급자 인증 정보"; color: #0f172a; font-size: 18px; font-weight: 700; }
                                     Text { text: AppState.config-message; color: #334155; wrap: word-wrap; font-size: 12px; }
                                     HorizontalLayout {
                                         height: 34px;
@@ -1006,13 +1006,13 @@ export component MainWindow inherits Window {
                                         spacing: 8px;
                                         Button {
                                             height: 32px;
-                                            text: "Save provider configuration";
+                                            text: "공급자 설정 저장";
                                             enabled: AppState.config-loaded && !AppState.config-busy;
                                             clicked => { AppState.save-provider(); }
                                         }
                                         Button {
                                             height: 32px;
-                                            text: "Test SOOP + Worker";
+                                            text: "SOOP + Worker 테스트";
                                             enabled: AppState.config-loaded && !AppState.config-busy
                                                 && AppState.soop-username != ""
                                                 && AppState.cloudflare-worker-url != ""
@@ -1022,7 +1022,7 @@ export component MainWindow inherits Window {
                                         }
                                         Button {
                                             height: 32px;
-                                            text: "Reload saved";
+                                            text: "저장값 다시 불러오기";
                                             enabled: AppState.config-loaded && !AppState.config-busy;
                                             clicked => { AppState.reload-configuration(); }
                                         }
@@ -1034,7 +1034,7 @@ export component MainWindow inherits Window {
                                         spacing: 10px;
                                         VerticalLayout {
                                             spacing: 4px;
-                                            Text { text: "SOOP username"; color: #0f172a; font-weight: 600; font-size: 12px; }
+                                            Text { text: "SOOP 사용자명"; color: #0f172a; font-weight: 600; font-size: 12px; }
                                             LineEdit { height: 34px; text <=> AppState.soop-username; enabled: !AppState.config-busy; }
                                         }
                                         VerticalLayout {
@@ -1049,12 +1049,12 @@ export component MainWindow inherits Window {
                                         spacing: 10px;
                                         VerticalLayout {
                                             spacing: 4px;
-                                            Text { text: "SOOP password · " + (AppState.soop-password-configured ? "Configured" : "Not configured"); color: AppState.soop-password-configured ? #15803d : #a16207; font-size: 11px; }
+                                            Text { text: "SOOP 비밀번호 · " + (AppState.soop-password-configured ? "설정됨" : "미설정"); color: AppState.soop-password-configured ? #15803d : #a16207; font-size: 11px; }
                                             LineEdit { height: 34px; text <=> AppState.soop-password-draft; input-type: password; enabled: !AppState.config-busy; }
                                         }
                                         VerticalLayout {
                                             spacing: 4px;
-                                            Text { text: "Worker API key · " + (AppState.cloudflare-key-configured ? "Configured" : "Not configured"); color: AppState.cloudflare-key-configured ? #15803d : #a16207; font-size: 11px; }
+                                            Text { text: "Worker API key · " + (AppState.cloudflare-key-configured ? "설정됨" : "미설정"); color: AppState.cloudflare-key-configured ? #15803d : #a16207; font-size: 11px; }
                                             LineEdit { height: 34px; text <=> AppState.cloudflare-key-draft; input-type: password; enabled: !AppState.config-busy; }
                                         }
                                     }
@@ -1064,12 +1064,12 @@ export component MainWindow inherits Window {
                                         spacing: 10px;
                                         VerticalLayout {
                                             spacing: 4px;
-                                            Text { text: "CHZZK NID_AUT · " + (AppState.chzzk-nid-aut-configured ? "Configured" : "Not configured"); color: AppState.chzzk-nid-aut-configured ? #15803d : #a16207; font-size: 11px; }
+                                            Text { text: "CHZZK NID_AUT · " + (AppState.chzzk-nid-aut-configured ? "설정됨" : "미설정"); color: AppState.chzzk-nid-aut-configured ? #15803d : #a16207; font-size: 11px; }
                                             LineEdit { height: 34px; text <=> AppState.chzzk-nid-aut-draft; input-type: password; enabled: !AppState.config-busy; }
                                         }
                                         VerticalLayout {
                                             spacing: 4px;
-                                            Text { text: "CHZZK NID_SES · " + (AppState.chzzk-nid-ses-configured ? "Configured" : "Not configured"); color: AppState.chzzk-nid-ses-configured ? #15803d : #a16207; font-size: 11px; }
+                                            Text { text: "CHZZK NID_SES · " + (AppState.chzzk-nid-ses-configured ? "설정됨" : "미설정"); color: AppState.chzzk-nid-ses-configured ? #15803d : #a16207; font-size: 11px; }
                                             LineEdit { height: 34px; text <=> AppState.chzzk-nid-ses-draft; input-type: password; enabled: !AppState.config-busy; }
                                         }
                                     }
@@ -1096,16 +1096,16 @@ export component MainWindow inherits Window {
                                         height: 32px;
                                         vertical-stretch: 0;
                                         spacing: 8px;
-                                        Text { text: "Runtime environment"; color: #0f172a; font-size: 17px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+                                        Text { text: "런타임 환경"; color: #0f172a; font-size: 17px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
                                         Button {
                                             height: 30px;
-                                            text: AppState.settings-dirty ? "Save changes *" : "Save changes";
+                                            text: AppState.settings-dirty ? "변경사항 저장 *" : "변경사항 저장";
                                             enabled: AppState.settings-loaded && !AppState.settings-busy && AppState.settings-dirty;
                                             clicked => { AppState.save-settings(); }
                                         }
                                         Button {
                                             height: 30px;
-                                            text: "Reload saved";
+                                            text: "저장값 다시 불러오기";
                                             enabled: AppState.settings-loaded && !AppState.settings-busy;
                                             clicked => { AppState.reload-settings(); }
                                         }
@@ -1138,7 +1138,7 @@ export component MainWindow inherits Window {
                                         if row.pickable: Button {
                                             width: 78px;
                                             height: 32px;
-                                            text: "Browse...";
+                                            text: "찾아보기...";
                                             enabled: !AppState.settings-busy;
                                             clicked => { AppState.pick-setting(index); }
                                         }
@@ -1147,8 +1147,8 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            Text { text: "Diagnostics · read-only"; color: #0f172a; font-size: 18px; font-weight: 700; }
-                            Text { text: "Backend and database locations are startup-managed. No separate config file is used."; color: #64748b; wrap: word-wrap; font-size: 11px; }
+                            Text { text: "진단 · 읽기 전용"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                            Text { text: "백엔드와 DB 위치는 시작 시 관리됩니다. 별도 설정 파일은 사용하지 않습니다."; color: #64748b; wrap: word-wrap; font-size: 11px; }
                             for row in AppState.diagnostics-rows: Rectangle {
                                 min-height: 56px;
                                 vertical-stretch: 0;
