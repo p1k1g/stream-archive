@@ -496,6 +496,14 @@ impl StreamArchiveCore {
         load_history(self.store.path(), filter)
     }
 
+    pub fn storage_snapshot(&self) -> Result<crate::storage_service::StorageSnapshot> {
+        crate::storage_service::snapshot(&self.store)
+    }
+
+    pub fn storage_check(&self, path: &str) -> Result<crate::storage_service::StorageVolume> {
+        crate::storage_service::check_path(&self.store, path, "VOD 출력")
+    }
+
     pub async fn backup_snapshot(&self) -> Result<BackupSnapshot> {
         self.backups.snapshot().await
     }
