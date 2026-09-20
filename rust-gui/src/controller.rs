@@ -2099,6 +2099,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
 
     let weak = ui.as_weak();
     let response_live_poll_flag = live_poll_in_flight.clone();
+    let response_storage_poll_flag = storage_poll_in_flight.clone();
     let response_vod_poll_flag = vod_poll_in_flight.clone();
     let response_queue_poll_flag = queue_poll_in_flight.clone();
     let response_maintenance_log_poll_flag = maintenance_log_poll_in_flight.clone();
@@ -2247,6 +2248,31 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     }
                     state.set_live_message(message.into());
                 }
+                Response::Storage {
+                    snapshot,
+                    message,
+                    poll,
+                } => {
+                    if poll {
+                        response_storage_poll_flag.set(false);
+                    } else {
+                        state.set_storage_busy(false);
+                    }
+                    render_storage(&ui, snapshot);
+                    state.set_storage_message(
+                        message
+                            .unwrap_or_else(|| "저장 공간을 새로고침했습니다".into())
+                            .into(),
+                    );
+                }
+                Response::StorageError { message, poll } => {
+                    if poll {
+                        response_storage_poll_flag.set(false);
+                    } else {
+                        state.set_storage_busy(false);
+                    }
+                    state.set_storage_message(message.into());
+                }
                 Response::Vod {
                     status,
                     message,
@@ -2392,6 +2418,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_live_busy(false);
                         state.set_live_message(message.clone().into());
                     }
+                    if !state.get_storage_loaded() {
+                        state.set_storage_busy(false);
+                        state.set_storage_message(message.clone().into());
+                    }
                     if !state.get_vod_loaded() {
                         state.set_vod_busy(false);
                         state.set_vod_message(message.clone().into());
@@ -2439,6 +2469,33 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 .is_ok()
             {
                 live_poll_flag.set(true);
+            }
+        },
+    );
+
+    let weak = ui.as_weak();
+    let storage_poll_sender = sender.clone();
+    let storage_poll_flag = storage_poll_in_flight;
+    let storage_poll_timer = Timer::default();
+    storage_poll_timer.start(
+        TimerMode::Repeated,
+        Duration::from_secs(30),
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<AppState>();
+            if state.get_active_page().as_str() != "LIVE"
+                || state.get_storage_busy()
+                || storage_poll_flag.get()
+            {
+                return;
+            }
+            if storage_poll_sender
+                .send(Request::StorageLoad { poll: true })
+                .is_ok()
+            {
+                storage_poll_flag.set(true);
             }
         },
     );
@@ -2531,6 +2588,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     Controller {
         _response_timer: response_timer,
         _live_poll_timer: live_poll_timer,
+        _storage_poll_timer: storage_poll_timer,
         _vod_poll_timer: vod_poll_timer,
         _queue_poll_timer: queue_poll_timer,
         _maintenance_log_poll_timer: maintenance_log_poll_timer,
