@@ -186,7 +186,11 @@ fn text_matches_vod(item: &VodHistoryItem, needle: Option<&str>) -> bool {
 }
 
 fn normalize_status_input(value: Option<&str>) -> Option<Vec<String>> {
-    let value = value?.trim().split_whitespace().collect::<Vec<_>>().join(" ");
+    let value = value?
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if value.is_empty() || value == "전체" {
         return None;
     }
@@ -227,7 +231,12 @@ fn normalize_status_input(value: Option<&str>) -> Option<Vec<String>> {
         "방송중" | "방송 중" => &["LIVE"],
         _ => return Some(vec![value.to_ascii_uppercase()]),
     };
-    Some(statuses.iter().map(|status| (*status).to_string()).collect())
+    Some(
+        statuses
+            .iter()
+            .map(|status| (*status).to_string())
+            .collect(),
+    )
 }
 
 fn status_matches(actual: &str, wanted: &[String]) -> bool {
@@ -335,10 +344,12 @@ mod tests {
         }
         .normalized()
         .unwrap();
-        assert!(active
-            .statuses
-            .as_ref()
-            .is_some_and(|states| states.contains(&"DOWNLOADING".to_string())));
+        assert!(
+            active
+                .statuses
+                .as_ref()
+                .is_some_and(|states| states.contains(&"DOWNLOADING".to_string()))
+        );
 
         let canonical = HistoryFilter {
             status: Some("cancelled".into()),
