@@ -56,7 +56,7 @@ Windows product/package flow:
 .\BUILD_PORTABLE.bat
 ```
 
-`BUILD_PORTABLE.bat` is the single Windows release/package entry point until the Phase 21 Slint packaging migration explicitly replaces it. It performs the locked release build and assembles the runnable `dist\stream-archive` package. For compile-only developer checks, invoke Cargo directly instead of adding another build wrapper.
+`BUILD_PORTABLE.bat` is the single Windows release/package entry point. Phase 21.8 builds both the Web compatibility binaries and the Slint frontend, then assembles `dist\stream-archive` with `StreamArchive.exe` as the default native entry point. `RUN_WEB.bat` retains the browser/Axum fallback. For compile-only developer checks, invoke Cargo directly instead of adding another build wrapper.
 
 Phase 21 Windows Slint shell compile check:
 
@@ -64,7 +64,7 @@ Phase 21 Windows Slint shell compile check:
 cargo check --locked --manifest-path rust-gui/Cargo.toml
 ```
 
-The Slint crate is a separate Windows frontend package during migration; do not add it to the current portable package until Phase 21.8 explicitly changes product startup/packaging.
+The Slint crate remains a separate Windows frontend Cargo package, but Phase 21.8 includes its release binary in the Windows portable package as `StreamArchive.exe`. Portable startup must continue to use `StreamArchiveCore` directly; the Web server/launcher stay packaged only as an explicit compatibility fallback.
 
 Unix/headless Phase 20 flow:
 
