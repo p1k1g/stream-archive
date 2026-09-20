@@ -161,7 +161,8 @@ component NavItem inherits Rectangle {
         width: parent.width - 28px;
         height: parent.height;
         text: root.label;
-        color: AppState.active-page == root.page ? #f8fafc : #cbd5e1;
+        color: AppState.active-page == root.page ? #ffffff : #e2e8f0;
+        font-weight: AppState.active-page == root.page ? 600 : 500;
         vertical-alignment: center;
         font-size: 15px;
     }
