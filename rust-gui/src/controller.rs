@@ -928,6 +928,30 @@ fn render_live(ui: &MainWindow, status: NativeWatcherStatus) {
     state.set_live_loaded(true);
 }
 
+fn render_storage(ui: &MainWindow, snapshot: StorageSnapshot) {
+    let threshold = storage_adapter::threshold_label(snapshot.threshold_gb);
+    let database_size =
+        stream_archive_server::storage_service::format_bytes_compact(snapshot.database_size_bytes);
+    let rows = storage_adapter::rows(&snapshot)
+        .into_iter()
+        .map(|row| StorageDisplayRow {
+            volume: row.volume.into(),
+            roles: row.roles.into(),
+            paths: row.paths.into(),
+            capacity: row.capacity.into(),
+            used: row.used.into(),
+            status: row.status.into(),
+            status_tone: row.status_tone.into(),
+            detail: row.detail.into(),
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<AppState>();
+    state.set_storage_threshold(threshold.into());
+    state.set_storage_database_size(database_size.into());
+    state.set_storage_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_storage_loaded(true);
+}
+
 fn render_vod_draft(ui: &MainWindow, draft: &VodDraft) {
     let qualities = draft
         .qualities
