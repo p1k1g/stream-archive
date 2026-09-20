@@ -185,58 +185,82 @@ fn text_matches_vod(item: &VodHistoryItem, needle: Option<&str>) -> bool {
     .any(|value| value.to_ascii_lowercase().contains(needle))
 }
 
+fn normalize_status_term(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase()
+}
+
 fn normalize_status_input(value: Option<&str>) -> Option<Vec<String>> {
-    let value = value?
-        .trim()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let value = value?.trim();
     if value.is_empty() || value == "전체" {
         return None;
     }
 
-    let statuses: &[&str] = match value.as_str() {
-        "완료" | "COMPLETE" => &["COMPLETED"],
-        "실패" => &["FAILED"],
-        "비정상 종료" | "중단됨" | "중단" => &["INTERRUPTED"],
-        "취소" | "취소됨" => &["CANCELLED"],
-        "중지" | "중지됨" => &["STOPPED"],
-        "대기" => &["READY", "QUEUED", "IDLE"],
-        "진행 중" | "진행중" => &[
-            "RUNNING",
-            "STARTING",
-            "ANALYZING",
-            "DOWNLOADING",
-            "REFRESHING",
-            "MERGING",
-            "CANCELLING",
-        ],
-        "준비 중" | "준비중" => &["STARTING"],
-        "준비됨" => &["READY"],
-        "분석 중" | "분석중" => &["ANALYZING"],
-        "다운로드 중" | "다운로드중" => &["DOWNLOADING"],
-        "인증 갱신 중" => &["REFRESHING"],
-        "병합 중" | "병합중" => &["MERGING"],
-        "취소 중" | "취소중" => &["CANCELLING"],
-        "녹화 중" | "녹화중" => &["RECORDING"],
-        "오프라인" => &["OFFLINE"],
-        "오류" => &["ERROR"],
-        "비활성" => &["DISABLED"],
-        "디스크 부족" | "디스크 공간 부족" => &["LOW_DISK"],
-        "녹화 정지" | "정체됨" | "정체" => &["STALLED"],
-        "인증 필요" => &["AUTH"],
-        "비밀번호 필요" => &["PASSWORD_REQUIRED"],
-        "현재방송 중지" | "현재 방송 중지" => &["PAUSED"],
-        "확인중" | "확인 중" => &["UNKNOWN"],
-        "방송중" | "방송 중" => &["LIVE"],
-        _ => return Some(vec![value.to_ascii_uppercase()]),
-    };
-    Some(
-        statuses
+    let needle = normalize_status_term(value);
+    let aliases: &[(&[&str], &[&str])] = &[
+        (&["완료"], &["COMPLETED"]),
+        (&["실패"], &["FAILED"]),
+        (&["비정상 종료", "중단됨", "중단"], &["INTERRUPTED"]),
+        (&["취소됨", "취소"], &["CANCELLED"]),
+        (&["중지됨", "중지"], &["STOPPED"]),
+        (&["대기"], &["READY", "QUEUED", "IDLE"]),
+        (
+            &["진행 중", "진행중", "진행"],
+            &[
+                "RUNNING",
+                "STARTING",
+                "ANALYZING",
+                "DOWNLOADING",
+                "REFRESHING",
+                "MERGING",
+                "CANCELLING",
+            ],
+        ),
+        (&["준비 중", "준비중"], &["STARTING"]),
+        (&["준비됨"], &["READY"]),
+        (&["분석 중", "분석중"], &["ANALYZING"]),
+        (&["다운로드 중", "다운로드중"], &["DOWNLOADING"]),
+        (&["인증 갱신 중"], &["REFRESHING"]),
+        (&["병합 중", "병합중"], &["MERGING"]),
+        (&["취소 중", "취소중"], &["CANCELLING"]),
+        (&["녹화 중", "녹화중"], &["RECORDING"]),
+        (&["오프라인"], &["OFFLINE"]),
+        (&["오류"], &["ERROR"]),
+        (&["비활성"], &["DISABLED"]),
+        (&["디스크 부족", "디스크 공간 부족"], &["LOW_DISK"]),
+        (&["녹화 정지", "정체됨", "정체"], &["STALLED"]),
+        (&["인증 필요"], &["AUTH"]),
+        (&["비밀번호 필요"], &["PASSWORD_REQUIRED"]),
+        (&["현재방송 중지", "현재 방송 중지"], &["PAUSED"]),
+        (&["확인중", "확인 중"], &["UNKNOWN"]),
+        (&["방송중", "방송 중"], &["LIVE"]),
+    ];
+
+    let mut matches = Vec::<String>::new();
+    for (terms, statuses) in aliases {
+        let alias_matches = terms
             .iter()
-            .map(|status| (*status).to_string())
-            .collect(),
-    )
+            .any(|term| normalize_status_term(term).contains(&needle));
+        let canonical_matches = statuses
+            .iter()
+            .any(|status| normalize_status_term(status).contains(&needle));
+        if alias_matches || canonical_matches {
+            for status in *statuses {
+                if !matches.iter().any(|existing| existing == status) {
+                    matches.push((*status).to_string());
+                }
+            }
+        }
+    }
+
+    if matches.is_empty() {
+        Some(vec![value.to_ascii_uppercase()])
+    } else {
+        Some(matches)
+    }
 }
 
 fn status_matches(actual: &str, wanted: &[String]) -> bool {
@@ -358,6 +382,43 @@ mod tests {
         .normalized()
         .unwrap();
         assert_eq!(canonical.statuses, Some(vec!["CANCELLED".to_string()]));
+
+        let stopped = HistoryFilter {
+            status: Some("STOP".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(stopped.statuses, Some(vec!["STOPPED".to_string()]));
+
+        let merging = HistoryFilter {
+            status: Some("병합".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(merging.statuses, Some(vec!["MERGING".to_string()]));
+
+        let progressing = HistoryFilter {
+            status: Some("진행".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        assert!(progressing
+            .statuses
+            .as_ref()
+            .is_some_and(|states| states.contains(&"DOWNLOADING".to_string())));
+
+        let cancelling = HistoryFilter {
+            status: Some("취소".into()),
+            ..Default::default()
+        }
+        .normalized()
+        .unwrap();
+        let cancelling_states = cancelling.statuses.unwrap();
+        assert!(cancelling_states.contains(&"CANCELLED".to_string()));
+        assert!(cancelling_states.contains(&"CANCELLING".to_string()));
     }
 
     #[test]
