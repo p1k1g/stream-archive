@@ -25,7 +25,7 @@ export struct MaintenanceLogRow {
 export global MaintenanceState {
     in-out property <bool> busy: true;
     in-out property <bool> loaded: false;
-    in-out property <string> message: "Loading maintenance state...";
+    in-out property <string> message: "관리 상태를 불러오는 중...";
     in-out property <string> section: "Backup";
 
     in-out property <string> backup-directory: "";
@@ -41,7 +41,7 @@ export global MaintenanceState {
 
     in-out property <[MaintenanceLogRow]> log-rows;
     in-out property <bool> log-auto-refresh: true;
-    in-out property <string> log-message: "Runtime logs are bounded to the latest 200 lines.";
+    in-out property <string> log-message: "런타임 로그는 최근 200줄까지만 표시됩니다.";
 
     callback refresh();
     callback pick-backup-directory();
@@ -57,7 +57,7 @@ export global MaintenanceState {
 
 component SectionButton inherits Button {
     in property <string> section-name;
-    text: MaintenanceState.section == root.section-name ? "✓ " + root.section-name : root.section-name;
+    text: MaintenanceState.section == root.section-name ? "✓ " + (root.section-name == "Backup" ? "백업" : root.section-name == "Diagnostics" ? "진단" : "로그") : (root.section-name == "Backup" ? "백업" : root.section-name == "Diagnostics" ? "진단" : "로그");
     clicked => { MaintenanceState.section = root.section-name; }
 }
 
@@ -75,7 +75,7 @@ export component MaintenancePage inherits VerticalLayout {
         vertical-stretch: 0;
         spacing: 8px;
         Text {
-            text: "Backup / Restore / Diagnostics / Logs";
+            text: "백업 / 복원 / 진단 / 로그";
             color: #0f172a;
             font-size: 18px;
             font-weight: 700;
@@ -87,7 +87,7 @@ export component MaintenancePage inherits VerticalLayout {
         SectionButton { height: 34px; section-name: "Logs"; enabled: !MaintenanceState.busy; }
         Button {
             height: 34px;
-            text: "Refresh";
+            text: "새로고침";
             enabled: MaintenanceState.loaded && !MaintenanceState.busy;
             clicked => { MaintenanceState.refresh(); }
         }
@@ -114,7 +114,7 @@ export component MaintenancePage inherits VerticalLayout {
             VerticalLayout {
                 padding: 12px;
                 spacing: 8px;
-                Text { text: "Backup policy"; color: #0f172a; font-size: 14px; font-weight: 700; }
+                Text { text: "백업 정책"; color: #0f172a; font-size: 14px; font-weight: 700; }
 
                 HorizontalLayout {
                     height: 34px;
@@ -125,20 +125,20 @@ export component MaintenancePage inherits VerticalLayout {
                         horizontal-stretch: 1;
                         text <=> MaintenanceState.backup-directory;
                         enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
-                        placeholder-text: "Backup directory";
+                        placeholder-text: "백업 폴더";
                     }
                     Button {
                         width: 84px;
                         height: 34px;
                         horizontal-stretch: 0;
-                        text: "Browse...";
+                        text: "찾아보기...";
                         enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
                         clicked => { MaintenanceState.pick-backup-directory(); }
                     }
                 }
 
                 if !MaintenanceState.backup-directory-editable: SummaryLabel {
-                    text: "Backup directory is controlled by STREAM_ARCHIVE_BACKUP_DIR and is read-only here.";
+                    text: "백업 폴더는 STREAM_ARCHIVE_BACKUP_DIR에서 관리하므로 여기서는 읽기 전용입니다.";
                     color: #a16207;
                 }
 
@@ -151,14 +151,14 @@ export component MaintenancePage inherits VerticalLayout {
                         horizontal-stretch: 0;
                         spacing: 2px;
                         Text {
-                            text: "Auto backup";
+                            text: "자동 백업";
                             color: #64748b;
                             font-size: 10px;
                             vertical-stretch: 0;
                         }
                         Button {
                             height: 30px;
-                            text: MaintenanceState.backup-enabled ? "ON" : "OFF";
+                            text: MaintenanceState.backup-enabled ? "켜짐" : "꺼짐";
                             enabled: !MaintenanceState.busy;
                             clicked => { MaintenanceState.toggle-backup-enabled(); }
                         }
@@ -167,7 +167,7 @@ export component MaintenancePage inherits VerticalLayout {
                         horizontal-stretch: 1;
                         spacing: 2px;
                         Text {
-                            text: "Interval hours";
+                            text: "간격(시간)";
                             color: #64748b;
                             font-size: 10px;
                             vertical-stretch: 0;
@@ -183,7 +183,7 @@ export component MaintenancePage inherits VerticalLayout {
                         horizontal-stretch: 1;
                         spacing: 2px;
                         Text {
-                            text: "Keep count";
+                            text: "보관 개수";
                             color: #64748b;
                             font-size: 10px;
                             vertical-stretch: 0;
@@ -199,7 +199,7 @@ export component MaintenancePage inherits VerticalLayout {
                         horizontal-stretch: 1;
                         spacing: 2px;
                         Text {
-                            text: "Retention days";
+                            text: "보관 기간(일)";
                             color: #64748b;
                             font-size: 10px;
                             vertical-stretch: 0;
@@ -219,13 +219,13 @@ export component MaintenancePage inherits VerticalLayout {
                     spacing: 8px;
                     Button {
                         height: 34px;
-                        text: "Save policy";
+                        text: "정책 저장";
                         enabled: MaintenanceState.loaded && !MaintenanceState.busy;
                         clicked => { MaintenanceState.save-backup-policy(); }
                     }
                     Button {
                         height: 34px;
-                        text: "Create backup";
+                        text: "백업 생성";
                         enabled: MaintenanceState.loaded && !MaintenanceState.busy;
                         clicked => { MaintenanceState.create-backup(); }
                     }
@@ -245,14 +245,14 @@ export component MaintenancePage inherits VerticalLayout {
                 padding: 12px;
                 spacing: 6px;
                 Text {
-                    text: "Restore " + MaintenanceState.restore-pending-file + "?";
+                    text: MaintenanceState.restore-pending-file + " 파일을 복원할까요?";
                     color: #9a3412;
                     font-size: 14px;
                     font-weight: 700;
                     wrap: word-wrap;
                 }
                 SummaryLabel {
-                    text: "The canonical SQLite database will be restored to this backup. A pre_restore safety backup is created first. Watcher, VOD and Queue work must be idle.";
+                    text: "canonical SQLite DB를 이 백업으로 복원합니다. 먼저 pre_restore 안전 백업을 생성하며, Watcher·VOD·Queue 작업이 모두 유휴 상태여야 합니다.";
                     color: #9a3412;
                 }
                 HorizontalLayout {
@@ -261,13 +261,13 @@ export component MaintenancePage inherits VerticalLayout {
                     spacing: 8px;
                     Button {
                         height: 32px;
-                        text: "Confirm restore";
+                        text: "복원 확인";
                         enabled: !MaintenanceState.busy;
                         clicked => { MaintenanceState.confirm-restore(); }
                     }
                     Button {
                         height: 32px;
-                        text: "Cancel";
+                        text: "취소";
                         enabled: !MaintenanceState.busy;
                         clicked => { MaintenanceState.cancel-restore(); }
                     }
@@ -291,7 +291,7 @@ export component MaintenancePage inherits VerticalLayout {
                     border-color: #e2e8f0;
                     VerticalLayout {
                         padding: 14px;
-                        Text { text: "No managed backups found."; color: #64748b; }
+                        Text { text: "관리 중인 백업이 없습니다."; color: #64748b; }
                     }
                 }
 
@@ -325,7 +325,7 @@ export component MaintenancePage inherits VerticalLayout {
                             }
                             Button {
                                 height: 24px;
-                                text: "Restore";
+                                text: "복원";
                                 enabled: !MaintenanceState.busy && row.can-restore;
                                 clicked => { MaintenanceState.request-restore(row.file-name); }
                             }
@@ -354,7 +354,7 @@ export component MaintenancePage inherits VerticalLayout {
             padding: 2px;
             spacing: 8px;
             Text {
-                text: "Diagnostics are read-only. Refresh does not execute media tools, contact providers, or modify configuration.";
+                text: "진단은 읽기 전용입니다. 새로고침해도 미디어 도구 실행, 공급자 접속, 설정 변경은 수행하지 않습니다.";
                 color: #64748b;
                 font-size: 11px;
                 wrap: word-wrap;
@@ -390,13 +390,13 @@ export component MaintenancePage inherits VerticalLayout {
             spacing: 8px;
             Button {
                 height: 34px;
-                text: MaintenanceState.log-auto-refresh ? "Auto refresh: ON" : "Auto refresh: OFF";
+                text: MaintenanceState.log-auto-refresh ? "자동 새로고침: 켜짐" : "자동 새로고침: 꺼짐";
                 enabled: !MaintenanceState.busy;
                 clicked => { MaintenanceState.toggle-log-auto-refresh(); }
             }
             Button {
                 height: 34px;
-                text: "Refresh logs";
+                text: "로그 새로고침";
                 enabled: !MaintenanceState.busy;
                 clicked => { MaintenanceState.refresh-logs(); }
             }
@@ -425,7 +425,7 @@ export component MaintenancePage inherits VerticalLayout {
                         x: 12px;
                         y: 12px;
                         width: parent.width - 24px;
-                        text: "No runtime log lines yet.";
+                        text: "아직 런타임 로그가 없습니다.";
                         color: #64748b;
                     }
                 }
