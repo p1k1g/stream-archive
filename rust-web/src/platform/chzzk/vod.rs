@@ -1379,7 +1379,7 @@ fn claim_path(target: &Path) -> PathBuf {
 
 #[cfg(windows)]
 fn hide_destination_claim(path: &Path) -> Result<()> {
-    use std::{os::windows::ffi::OsStrExt, ptr};
+    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_HIDDEN, GetFileAttributesW, INVALID_FILE_ATTRIBUTES, SetFileAttributesW,
     };
@@ -1396,7 +1396,6 @@ fn hide_destination_claim(path: &Path) -> Result<()> {
         return Err(std::io::Error::last_os_error())
             .with_context(|| format!("destination claim 숨김 처리 실패: {}", path.display()));
     }
-    let _ = ptr::null::<u8>();
     Ok(())
 }
 
