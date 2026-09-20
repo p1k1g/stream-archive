@@ -1,9 +1,10 @@
 use crate::{
     AppState, ChannelConfigRow, DiagnosticRow, HistoryCalendarDay, HistoryDisplayRow,
     LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow,
-    MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
-    channels_adapter::ChannelsDraft, history_adapter, live_adapter, maintenance_adapter,
-    native_picker, queue_adapter, settings_adapter::SettingsDraft, vod_adapter,
+    MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, StorageDisplayRow, VodPartRow,
+    VodQualityRow, channels_adapter::ChannelsDraft, history_adapter, live_adapter,
+    maintenance_adapter, native_picker, queue_adapter, settings_adapter::SettingsDraft,
+    storage_adapter, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -20,6 +21,7 @@ use stream_archive_server::{
     diagnostics::DiagnosticsSnapshot,
     environment_settings::{EnvironmentSetting, SettingKind},
     history_service::HistoryFilter,
+    storage_service::StorageSnapshot,
     model::{
         Channel, HistoryResponse, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest,
         VodJobStatus, VodQueueSnapshot,
