@@ -712,10 +712,12 @@ mod tests {
         let snapshot = core.storage_snapshot().unwrap();
         assert_eq!(snapshot.threshold_gb, 3.5);
         assert!(!snapshot.volumes.is_empty());
-        assert!(snapshot
-            .volumes
-            .iter()
-            .any(|volume| volume.roles.iter().any(|role| role == "LIVE 기본")));
+        assert!(
+            snapshot
+                .volumes
+                .iter()
+                .any(|volume| volume.roles.iter().any(|role| role == "LIVE 기본"))
+        );
     }
 
     #[tokio::test]
