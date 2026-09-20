@@ -12,6 +12,7 @@ mod realtime;
 mod recorder;
 mod security;
 mod store;
+mod storage_service;
 mod support;
 mod vod;
 mod vod_queue;
