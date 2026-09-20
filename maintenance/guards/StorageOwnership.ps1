@@ -91,6 +91,8 @@ Assert-NotMatch ($chzzkVod + $runtime) 'taskkill[^\r\n]*/IM' 'CHZZK VOD must nev
 # Destination claims and cross-volume publication must be no-clobber, cancellable and crash-recoverable.
 Assert-Match $chzzkVod 'DESTINATION_CLAIM_SUFFIX:\s*&str\s*=\s*"\.stream-archive\.claim"' 'Destination claim sidecar is missing.'
 Assert-Match $chzzkVod 'FINALIZING_SUFFIX:\s*&str\s*=\s*"\.stream-archive\.finalizing"' 'Exact app-owned finalizing suffix is missing.'
+Assert-Match $chzzkVod 'hide_destination_claim' 'Windows destination claim sidecars must be hidden without deleting the reusable lock anchor.'
+Assert-Match $chzzkVod 'FILE_ATTRIBUTE_HIDDEN' 'Windows destination claim sidecars must use the hidden file attribute.'
 Assert-Match $chzzkVod 'claim_collision_path' 'Atomic destination claim helper is missing.'
 Assert-Match $chzzkVod 'lock\.try_lock_exclusive\(\)' 'Destination filename claim is not protected by an OS lock.'
 Assert-Match $chzzkVod 'reusable lock anchor' 'Destination claim sidecars must remain reusable lock anchors after release.'
