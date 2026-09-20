@@ -1736,17 +1736,16 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let queue_sender = sender.clone();
     let enqueue_draft = vod_draft.clone();
     queue_state.on_enqueue_current(move || {
-          if let Some(ui) = weak.upgrade() {
-    let Some(request) = enqueue_draft.borrow().download_request() else {
-        ui.global::<QueueHistoryState>().set_queue_message(
-            "VOD를 분석한 뒤 화질/PART와 출력 폴더를 지정하고 대기열에 추가하세요."
-                .into(),
-        );
-        return;
-    };
-    send_queue(&ui, &queue_sender, Request::QueueEnqueue(request));
-          }
-      });
+        if let Some(ui) = weak.upgrade() {
+            let Some(request) = enqueue_draft.borrow().download_request() else {
+                ui.global::<QueueHistoryState>().set_queue_message(
+                    "VOD를 분석한 뒤 화질/PART와 출력 폴더를 지정하고 대기열에 추가하세요.".into(),
+                );
+                return;
+            };
+            send_queue(&ui, &queue_sender, Request::QueueEnqueue(request));
+        }
+    });
 
     let weak = ui.as_weak();
     queue_state.on_history_calendar_open(move |target| {
