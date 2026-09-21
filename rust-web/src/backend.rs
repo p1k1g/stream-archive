@@ -124,9 +124,9 @@ fn child_process_compatible_path(path: PathBuf) -> Result<PathBuf> {
 
     #[cfg(windows)]
     {
-        return Ok(PathBuf::from(strip_windows_verbatim_prefix(
+        Ok(PathBuf::from(strip_windows_verbatim_prefix(
             &absolute.to_string_lossy(),
-        )));
+        )))
     }
 
     #[cfg(not(windows))]
