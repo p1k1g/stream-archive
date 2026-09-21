@@ -314,18 +314,18 @@ portable package verify
 
 ## 14. CI result
 
-Phase 22.4 final PR validation: **pending**.
-
-The final PR head must pass:
+GitHub Actions run **#763** validated the Phase 22.4 compatibility fix baseline:
 
 ```text
-core-check (linux)
-core-check (macos)
-core-check (windows)
-windows-check
+core-check (linux)    PASS
+core-check (macos)    PASS
+core-check (windows)  PASS
+windows-check         PASS
 ```
 
-This section will be updated after final CI completes.
+The Windows job also passed the runtime contract guard, source archive metadata smoke, Windows portable package smoke, and portable package verification.
+
+Run #761 exposed a Windows Slint cross-crate visibility regression after `StreamArchiveCore::settings()` was made private. The Native GUI still requires that read facade, so it was restored to public visibility and the audit was corrected before run #763.
 
 ## 15. Remaining risks
 
