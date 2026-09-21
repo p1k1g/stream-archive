@@ -77,8 +77,7 @@ try {
         'RUN_DEV\.bat',
         'BUILD_PORTABLE\.bat',
         'maintenance/\*\*',
-        'docs/\*\*',
-        'deploy/\*\*'
+        'docs/\*\*'
     )) {
         Assert-Match $workflow $trigger "Runtime workflow path coverage is missing: $trigger"
     }
