@@ -71,6 +71,7 @@ try {
     $agents = Read-RepoFile 'AGENTS.md'
     $contributing = Read-RepoFile 'CONTRIBUTING.md'
     $unixCli = Read-RepoFile 'docs/UNIX_CLI.md'
+    $gitignore = Read-RepoFile '.gitignore'
     $manifest = Read-RepoFile 'rust-runtime/Cargo.toml'
     $guiManifest = Read-RepoFile 'rust-gui/Cargo.toml'
 
@@ -101,6 +102,64 @@ try {
     )) {
         Assert-Match $workflow $trigger "Runtime workflow path coverage is missing: $trigger"
     }
+    Assert-Match $gitignore '(?m)^rust-runtime/target/
+    if (Test-Path -LiteralPath (Join-Path $root 'BUILD_RELEASE.bat') -PathType Leaf) {
+        throw 'Retired BUILD_RELEASE.bat wrapper must not exist; use BUILD_PORTABLE.bat or Cargo directly.'
+    }
+    Assert-Match $workflow 'BUILD_PORTABLE\.bat' 'Portable package smoke step is missing.'
+    Assert-Match $workflow 'Verify portable package' 'Portable package verification step is missing.'
+    Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-runtime\\Cargo\.toml"' 'Portable package must perform the locked shared/headless runtime release build directly.'
+    Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-gui\\Cargo\.toml"' 'Portable package must perform the locked native GUI release build directly.'
+    Assert-Match $package 'StreamArchive\.exe' 'Portable package must include the native Stream Archive GUI.'
+    Assert-Match $package 'stream-archive-server\.exe' 'Portable package must retain the compatible headless runtime binary.'
+    Assert-Match $package '(?s)>"%OUT%\\RUN\.bat".*?StreamArchive\.exe' 'RUN.bat generation must make the native GUI the default entry point.'
+    Assert-Match $package '(?s)>"%OUT%\\RUN_HEADLESS\.bat".*?stream-archive-server\.exe' 'RUN_HEADLESS.bat must launch the compatible headless runtime.'
+    Assert-NotMatch $package 'stream-archive-launcher\.exe|RUN_WEB\.bat|RUN_SERVER_CONSOLE\.bat|Caddyfile\.example|REVERSE_PROXY\.md|LOCAL_LAUNCHER\.md' 'Retired Web launcher/proxy package artifacts must not return.'
+    Assert-Match $package 'dist\\stream-archive' 'Portable package output must use the Stream Archive namespace.'
+    Assert-Match $package 'docs\\OPERATIONS\.md' 'Portable package must include current operations guidance.'
+    Assert-Match $package 'THIRD_PARTY_NOTICES\.md' 'Portable package must include third-party notices.'
+    Assert-Match $package 'LICENSE' 'Portable package must include the project license.'
+    Assert-Match $manifest 'name\s*=\s*"stream-archive-server"' 'Cargo package must keep the compatible shared/headless runtime name.'
+    Assert-NotMatch $manifest '(?m)^\s*(?:axum|tokio-stream|tower-http|tracing|tracing-subscriber)\s*=' 'Retired Web-only direct dependencies must not return to rust-runtime.'
+    Assert-Match $manifest 'license\s*=\s*"AGPL-3\.0-or-later"' 'Cargo package must declare AGPL-3.0-or-later.'
+    Assert-Match $guiManifest 'name\s*=\s*"stream-archive-gui"' 'Native GUI Cargo package must use the Stream Archive namespace.'
+    Assert-Match $guiManifest 'license\s*=\s*"AGPL-3\.0-or-later"' 'Native GUI Cargo package must declare AGPL-3.0-or-later.'
+    Assert-NotMatch $package 'soop-server|soop-launcher|soop-recorder|SOOP_NO_PAUSE|\.rust-web' 'Portable packaging must not reintroduce generic legacy app names.'
+    Write-Host "Release safety contracts passed across $($tracked.Count) tracked files and reachable Git history."
+}
+finally {
+    Pop-Location
+}
+ 'Git ignore must cover the canonical rust-runtime Cargo target directory.'
+    Assert-NotMatch $gitignore '(?m)^rust-web/target/
+    if (Test-Path -LiteralPath (Join-Path $root 'BUILD_RELEASE.bat') -PathType Leaf) {
+        throw 'Retired BUILD_RELEASE.bat wrapper must not exist; use BUILD_PORTABLE.bat or Cargo directly.'
+    }
+    Assert-Match $workflow 'BUILD_PORTABLE\.bat' 'Portable package smoke step is missing.'
+    Assert-Match $workflow 'Verify portable package' 'Portable package verification step is missing.'
+    Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-runtime\\Cargo\.toml"' 'Portable package must perform the locked shared/headless runtime release build directly.'
+    Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-gui\\Cargo\.toml"' 'Portable package must perform the locked native GUI release build directly.'
+    Assert-Match $package 'StreamArchive\.exe' 'Portable package must include the native Stream Archive GUI.'
+    Assert-Match $package 'stream-archive-server\.exe' 'Portable package must retain the compatible headless runtime binary.'
+    Assert-Match $package '(?s)>"%OUT%\\RUN\.bat".*?StreamArchive\.exe' 'RUN.bat generation must make the native GUI the default entry point.'
+    Assert-Match $package '(?s)>"%OUT%\\RUN_HEADLESS\.bat".*?stream-archive-server\.exe' 'RUN_HEADLESS.bat must launch the compatible headless runtime.'
+    Assert-NotMatch $package 'stream-archive-launcher\.exe|RUN_WEB\.bat|RUN_SERVER_CONSOLE\.bat|Caddyfile\.example|REVERSE_PROXY\.md|LOCAL_LAUNCHER\.md' 'Retired Web launcher/proxy package artifacts must not return.'
+    Assert-Match $package 'dist\\stream-archive' 'Portable package output must use the Stream Archive namespace.'
+    Assert-Match $package 'docs\\OPERATIONS\.md' 'Portable package must include current operations guidance.'
+    Assert-Match $package 'THIRD_PARTY_NOTICES\.md' 'Portable package must include third-party notices.'
+    Assert-Match $package 'LICENSE' 'Portable package must include the project license.'
+    Assert-Match $manifest 'name\s*=\s*"stream-archive-server"' 'Cargo package must keep the compatible shared/headless runtime name.'
+    Assert-NotMatch $manifest '(?m)^\s*(?:axum|tokio-stream|tower-http|tracing|tracing-subscriber)\s*=' 'Retired Web-only direct dependencies must not return to rust-runtime.'
+    Assert-Match $manifest 'license\s*=\s*"AGPL-3\.0-or-later"' 'Cargo package must declare AGPL-3.0-or-later.'
+    Assert-Match $guiManifest 'name\s*=\s*"stream-archive-gui"' 'Native GUI Cargo package must use the Stream Archive namespace.'
+    Assert-Match $guiManifest 'license\s*=\s*"AGPL-3\.0-or-later"' 'Native GUI Cargo package must declare AGPL-3.0-or-later.'
+    Assert-NotMatch $package 'soop-server|soop-launcher|soop-recorder|SOOP_NO_PAUSE|\.rust-web' 'Portable packaging must not reintroduce generic legacy app names.'
+    Write-Host "Release safety contracts passed across $($tracked.Count) tracked files and reachable Git history."
+}
+finally {
+    Pop-Location
+}
+ 'Git ignore must not retain the retired rust-web Cargo target directory.'
     Assert-NotMatch $workflow 'BUILD_RELEASE\.bat' 'Runtime workflow must not reference the retired BUILD_RELEASE.bat wrapper.'
     if (Test-Path -LiteralPath (Join-Path $root 'BUILD_RELEASE.bat') -PathType Leaf) {
         throw 'Retired BUILD_RELEASE.bat wrapper must not exist; use BUILD_PORTABLE.bat or Cargo directly.'

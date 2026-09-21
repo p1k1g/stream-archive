@@ -6,7 +6,7 @@ bin/
 obj/
 
 # Rust build output
-rust-web/target/
+rust-runtime/target/
 rust-gui/target/
 
 # Local archives, diagnostics, and runtime state

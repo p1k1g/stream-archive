@@ -169,6 +169,8 @@ Current runtime guards now read canonical source files under `rust-runtime/`:
 
 Its Cargo package lookup remains `stream-archive-server`.
 
+The root `.gitignore` now ignores `rust-runtime/target/` instead of the retired `rust-web/target/`, so normal Cargo checks do not leave the renamed build tree untracked. The historical runtime-state ignore `backend/.rust-web/` is retained because it is not the Rust source directory.
+
 ReleaseSafety additionally rejects reintroduction of an active directory reference matching:
 
 ```text
@@ -286,7 +288,8 @@ The only non-historical current `rust-web` strings intentionally retained are:
    - `.github/workflows/rust-web-check.yml`
    - `.github/workflows/rust-web-release.yml`
 2. references needed to open the retained workflow filename;
-3. ReleaseSafety's historical hidden-name rejection for `.rust-web`.
+3. the historical runtime-state ignore `backend/.rust-web/`;
+4. ReleaseSafety's historical hidden-name rejection for `.rust-web`.
 
 None of these is an active runtime source directory dependency.
 
