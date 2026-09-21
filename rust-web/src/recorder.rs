@@ -1,4 +1,6 @@
-use crate::platform_runtime::{OwnedProcessTree, spawn_owned};
+use crate::platform_runtime::{
+    OwnedProcessTree, configure_background_command, spawn_owned,
+};
 use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
@@ -441,6 +443,7 @@ async fn preflight_plugin_input(
             can_handle.current_dir(parent);
         }
     }
+    configure_background_command(&mut can_handle);
     let status = can_handle.status().await.with_context(|| {
         format!(
             "failed to inspect Streamlink plugin support: {}",
@@ -461,6 +464,7 @@ async fn preflight_plugin_input(
                 help.current_dir(parent);
             }
         }
+        configure_background_command(&mut help);
         let output = help.output().await.with_context(|| {
             format!(
                 "failed to inspect Streamlink cookie-file support: {}",
