@@ -163,8 +163,9 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
 /// Terminates only a child spawned by this server when no retained owner exists.
 ///
 /// This compatibility boundary remains available for callers that do not retain
-/// an `OwnedProcessTree`. New Windows and Unix lifetimes should prefer
-/// `spawn_owned` and retained ownership.
+/// an `OwnedProcessTree`. On Unix it adopts an existing process group only when
+/// the child is verified as that group's leader; otherwise cleanup is limited to
+/// the direct child. New lifetimes should prefer `spawn_owned`.
 pub async fn terminate_owned(child: &mut Child) {
     loop {
         if terminate_owned_checked(child).await.is_ok() {
@@ -180,7 +181,15 @@ pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<
         terminate_windows_tree(child).await?;
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    match unix_group::OwnedProcessGroup::capture_running_child(child) {
+        Ok(group) => group.terminate(child).await?,
+        Err(_) => {
+            let _ = child.kill().await;
+        }
+    }
+
+    #[cfg(not(any(windows, unix)))]
     let _ = child.kill().await;
 
     Ok(child.wait().await.ok().and_then(|status| status.code()))
