@@ -26,6 +26,7 @@ $core = Read-RepoFile 'rust-web\src\app_core.rs'
 $guiManifest = Read-RepoFile 'rust-gui\Cargo.toml'
 $guiMain = Read-RepoFile 'rust-gui\src\main.rs'
 $guiUi = Read-RepoFile 'rust-gui\ui\app-window.slint'
+$maintenanceUi = Read-RepoFile 'rust-gui\ui\maintenance.slint'
 $guiSources = (Get-ChildItem (Join-Path $script:RuntimeContractsRoot 'rust-gui/src') -Filter '*.rs' -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 
 # Frontend state guarantees remain prerequisites for platform expansion.
@@ -150,6 +151,9 @@ Assert-Match $guiSources 'core\.backup_snapshot\(' 'Native Maintenance must load
 Assert-Match $guiSources 'core\.restore_backup\(' 'Native Maintenance restore must use StreamArchiveCore.'
 Assert-Match $guiSources 'core\.runtime_logs\(' 'Native log viewer must use the bounded shared LogBuffer service.'
 Assert-Match $guiSources 'core\.storage_snapshot\(' 'Native storage diagnostics must use StreamArchiveCore.'
-Assert-Match $guiUi '백업\s*정책' 'Native Settings must expose backup policy presentation.'
-Assert-Match $guiUi '실제\s*백업\s*생성/복원은\s*관리\s*탭' 'Native Settings must distinguish backup policy from maintenance actions.'
+Assert-Match $guiUi 'Phase 21\.9: Settings owns editable backup policy presentation\.' 'Native Settings must expose backup policy presentation.'
+Assert-Match $guiUi 'MaintenanceState\.save-backup-policy\(' 'Native Settings must save backup policy through the shared MaintenanceState callback.'
+Assert-Match $guiUi 'MaintenanceState\.backup-directory' 'Native Settings must bind the shared backup directory policy.'
+Assert-Match $maintenanceUi 'MaintenanceState\.create-backup\(' 'Native Maintenance must retain operational backup creation.'
+Assert-Match $maintenanceUi 'MaintenanceState\.request-restore\(' 'Native Maintenance must retain operational restore actions.'
 Assert-NotMatch $guiSources '\bSha256::new\b|\bsha2::Digest\b|\bread_to_end\s*\(|\bstd::io::copy\s*\(' 'Slint presentation must not implement backup hashing/copying.'
