@@ -12,7 +12,7 @@ For users upgrading from an earlier private build, startup performs only a bound
 
 ## Online backup
 
-The native Slint UI separates backup policy from backup operations: **Settings -> 백업 정책** edits automatic-backup settings, while **관리 -> 백업 / 복원** creates, lists, verifies, and restores managed backups. Both paths use the same BackupManager/StreamArchiveCore service and canonical SQLite policy. The retained Web UI exposes the same managed backup behavior through its compatibility adapter.
+The native Slint UI keeps backup configuration and operations under one top-level **설정** page. **설정 -> 설정 -> 백업 정책** edits automatic-backup settings, while **설정 -> 관리 -> 백업 / 복원** creates, lists, verifies, and restores managed backups. Diagnostics and Runtime Logs are also available from the nested 관리 view. Both paths use the same BackupManager/StreamArchiveCore service and canonical SQLite policy. The retained Web UI exposes the same managed backup behavior through its compatibility adapter.
 
 Defaults:
 
@@ -105,7 +105,7 @@ The retained Web restore path also reinitializes authentication and invalidates 
 2. Create a database backup.
 3. Keep the previous portable package until the new version has been exercised.
 4. Replace executable/package files while preserving the existing `data` directory.
-5. Start `StreamArchive.exe` or `RUN.bat` and verify Settings, Channels, LIVE start/stop, VOD analyze/download, Queue/History, and Maintenance.
+5. Start `StreamArchive.exe` or `RUN.bat` and verify Settings (including the nested 관리 view), Channels, LIVE start/stop, VOD analyze/download, and Queue/History.
 6. Run `RUN_WEB.bat` only when the compatibility browser path needs regression verification.
 7. Roll back by closing the new application, restoring the previous package, and restoring the pre-upgrade database backup if necessary.
 
