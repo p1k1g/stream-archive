@@ -258,10 +258,10 @@ impl RecorderManager {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        if let Some(parent) = config.streamlink.parent() {
-            if parent.is_dir() {
-                command.current_dir(parent);
-            }
+        if let Some(parent) = config.streamlink.parent()
+            && parent.is_dir()
+        {
+            command.current_dir(parent);
         }
 
         // Windows LIVE starts suspended inside the common runtime boundary.
@@ -296,8 +296,8 @@ impl RecorderManager {
 
         let started_at = Utc::now();
         let history_id = Uuid::new_v4().to_string();
-        if let Ok(db) = store::global() {
-            if let Err(err) = db.start_live(&LiveHistoryItem {
+        if let Ok(db) = store::global()
+            && let Err(err) = db.start_live(&LiveHistoryItem {
                 platform,
                 id: history_id.clone(),
                 account: account.to_string(),
@@ -311,11 +311,11 @@ impl RecorderManager {
                 size_bytes: 0,
                 reason: None,
                 status: "RECORDING".into(),
-            }) {
-                self.logs
-                    .push(format!("[DB:WARN] LIVE history start failed: {err:#}"))
-                    .await;
-            }
+            })
+        {
+            self.logs
+                .push(format!("[DB:WARN] LIVE history start failed: {err:#}"))
+                .await;
         }
 
         self.logs
@@ -401,19 +401,19 @@ impl RecorderManager {
         } else {
             "STOPPED"
         };
-        if let Ok(db) = store::global() {
-            if let Err(err) = db.finish_live(
+        if let Ok(db) = store::global()
+            && let Err(err) = db.finish_live(
                 &rec.history_id,
                 &ended_at.to_rfc3339(),
                 secs,
                 size,
                 reason,
                 status,
-            ) {
-                self.logs
-                    .push(format!("[DB:WARN] LIVE history finish failed: {err:#}"))
-                    .await;
-            }
+            )
+        {
+            self.logs
+                .push(format!("[DB:WARN] LIVE history finish failed: {err:#}"))
+                .await;
         }
         self.logs
             .push(format!(
@@ -436,10 +436,10 @@ async fn preflight_plugin_input(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Some(parent) = config.streamlink.parent() {
-        if parent.is_dir() {
-            can_handle.current_dir(parent);
-        }
+    if let Some(parent) = config.streamlink.parent()
+        && parent.is_dir()
+    {
+        can_handle.current_dir(parent);
     }
     configure_background_command(&mut can_handle);
     let status = can_handle.status().await.with_context(|| {
@@ -457,10 +457,10 @@ async fn preflight_plugin_input(
     if needs_cookie_file {
         let mut help = Command::new(&config.streamlink);
         help.arg("--help").stdin(Stdio::null());
-        if let Some(parent) = config.streamlink.parent() {
-            if parent.is_dir() {
-                help.current_dir(parent);
-            }
+        if let Some(parent) = config.streamlink.parent()
+            && parent.is_dir()
+        {
+            help.current_dir(parent);
         }
         configure_background_command(&mut help);
         let output = help.output().await.with_context(|| {
