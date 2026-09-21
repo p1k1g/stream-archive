@@ -499,10 +499,10 @@ mod tests {
         )
         .unwrap();
         let status = configured_secrets(&path).unwrap();
-        assert_eq!(status["SOOP_PASSWORD"], true);
-        assert_eq!(status["CLOUDFLARE_API_KEY"], false);
-        assert_eq!(status["CHZZK_NID_AUT"], true);
-        assert_eq!(status["CHZZK_NID_SES"], true);
+        assert!(status["SOOP_PASSWORD"]);
+        assert!(!status["CLOUDFLARE_API_KEY"]);
+        assert!(status["CHZZK_NID_AUT"]);
+        assert!(status["CHZZK_NID_SES"]);
     }
 
     #[cfg(windows)]
