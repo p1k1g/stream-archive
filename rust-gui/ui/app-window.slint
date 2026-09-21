@@ -160,6 +160,7 @@ export global AppState {
     callback vod-refresh();
 
     in-out property <string> active-page: "LIVE";
+    in-out property <string> settings-view: "Settings";
     in-out property <bool> runtime-ready: false;
     in-out property <string> runtime-status: "구성요소를 확인하는 중...";
     callback refresh-requested();
@@ -238,7 +239,6 @@ export component MainWindow inherits Window {
                 NavItem { label: "VOD"; page: "VOD"; }
                 NavItem { label: "대기열"; page: "Queue"; }
                 NavItem { label: "기록"; page: "History"; }
-                NavItem { label: "관리"; page: "Maintenance"; }
                 NavItem { label: "설정"; page: "Settings"; }
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 Rectangle {
@@ -275,7 +275,7 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         spacing: 3px;
                         horizontal-stretch: 1;
-                        Text { text: AppState.active-page == "Channels" ? "채널" : AppState.active-page == "Queue" ? "대기열" : AppState.active-page == "History" ? "기록" : AppState.active-page == "Maintenance" ? "관리" : AppState.active-page == "Settings" ? "설정" : AppState.active-page; color: #0f172a; font-size: 27px; font-weight: 700; }
+                        Text { text: AppState.active-page == "Channels" ? "채널" : AppState.active-page == "Queue" ? "대기열" : AppState.active-page == "History" ? "기록" : AppState.active-page == "Settings" ? "설정" : AppState.active-page; color: #0f172a; font-size: 27px; font-weight: 700; }
                         Text { text: "Phase 21 Slint native shell"; color: #64748b; font-size: 13px; }
                     }
                     Button {
@@ -1087,13 +1087,40 @@ export component MainWindow inherits Window {
                 }
                           if AppState.active-page == "Queue": QueuePage { vertical-stretch: 1; }
                 if AppState.active-page == "History": HistoryPage { vertical-stretch: 1; }
-                if AppState.active-page == "Maintenance": MaintenancePage { vertical-stretch: 1; }
-
-
                 if AppState.active-page == "Settings": VerticalLayout {
                     spacing: 9px;
-                    Text { text: "설정 편집 · 공유 SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
-                    ScrollView {
+                    HorizontalLayout {
+                        height: 36px;
+                        vertical-stretch: 0;
+                        spacing: 8px;
+                        Text {
+                            text: "설정";
+                            color: #0f172a;
+                            font-size: 18px;
+                            font-weight: 700;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        Button {
+                            width: 72px;
+                            height: 32px;
+                            text: "설정";
+                            primary: AppState.settings-view == "Settings";
+                            clicked => { AppState.settings-view = "Settings"; }
+                        }
+                        Button {
+                            width: 72px;
+                            height: 32px;
+                            text: "관리";
+                            primary: AppState.settings-view == "Manage";
+                            clicked => { AppState.settings-view = "Manage"; MaintenanceState.refresh(); }
+                        }
+                    }
+
+                    if AppState.settings-view == "Settings": VerticalLayout {
+                        spacing: 9px;
+                        Text { text: "설정 편집 · 공유 SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                        ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
                             padding: 3px;
@@ -1216,7 +1243,7 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                     Text {
-                                        text: "자동 백업의 위치와 보존 정책을 설정합니다. 실제 백업 생성/복원은 관리 탭에서 수행합니다.";
+                                        text: "자동 백업의 위치와 보존 정책을 설정합니다. 실제 백업 생성/복원은 설정 > 관리에서 수행합니다.";
                                         color: #64748b;
                                         font-size: 11px;
                                         wrap: word-wrap;
@@ -1372,6 +1399,10 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+                    }
+
+                    if AppState.settings-view == "Manage": MaintenancePage {
+                        vertical-stretch: 1;
                     }
                 }
             }
