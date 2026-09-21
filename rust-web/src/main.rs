@@ -1,21 +1,14 @@
 mod auth;
-mod backend;
 mod backup;
-mod backup_service;
 mod history_storage;
 mod local_picker;
-mod model;
-mod native_watcher;
-mod platform_runtime;
-mod primary_config;
 mod realtime;
-mod recorder;
-mod security;
-mod storage_service;
-mod store;
-mod support;
-mod vod;
 mod vod_queue;
+
+use stream_archive_server::{
+    backend, backup_service, history_service, model, native_watcher, platform_runtime,
+    primary_config, queue_service, recorder, security, storage_service, store, support, vod,
+};
 
 use anyhow::{Context, Result, bail};
 use auth::AuthManager;
