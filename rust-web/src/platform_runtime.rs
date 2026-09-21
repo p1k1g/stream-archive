@@ -245,16 +245,17 @@ async fn terminate_windows_tree(child: &Child) -> Result<()> {
                 if !windows_tree::child_pid_is_current(child)? {
                     return Ok(());
                 }
-                let _ = Command::new("taskkill.exe")
+                let mut taskkill = Command::new("taskkill.exe");
+                taskkill
                     .arg("/PID")
                     .arg(root_pid.to_string())
                     .arg("/T")
                     .arg("/F")
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .await;
+                    .stderr(Stdio::null());
+                windows_tree::configure_no_window(&mut taskkill);
+                let _ = taskkill.status().await;
             }
         }
 
@@ -336,6 +337,11 @@ mod windows_tree {
     }
 
     pub(super) fn configure_no_window(command: &mut Command) {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    pub(super) fn configure_std_no_window(command: &mut std::process::Command) {
+        use std::os::windows::process::CommandExt;
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
@@ -792,7 +798,8 @@ pub(crate) fn restrict_private_dir(dir: &Path) -> Result<()> {
     } else {
         format!("{domain}\\{username}")
     };
-    let status = std::process::Command::new("icacls.exe")
+    let mut command = std::process::Command::new("icacls.exe");
+    command
         .arg(dir)
         .arg("/inheritance:r")
         .arg("/grant:r")
@@ -800,7 +807,9 @@ pub(crate) fn restrict_private_dir(dir: &Path) -> Result<()> {
         .arg("/Q")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    windows_tree::configure_std_no_window(&mut command);
+    let status = command
         .status()
         .with_context(|| format!("CHZZK 임시 폴더 ACL 설정 실패: {}", dir.display()))?;
     if !status.success() {
