@@ -12,7 +12,7 @@ For users upgrading from an earlier private build, startup performs only a bound
 
 ## Online backup
 
-The native Slint UI keeps administration under one top-level **설정** page. **설정 -> 일반** contains provider/runtime configuration, while **설정 -> 관리** owns the complete backup surface: automatic-backup policy, managed backup creation/list/integrity/restore, Diagnostics, and Runtime Logs. These views use the same BackupManager/StreamArchiveCore service and canonical SQLite policy. The retained Web UI exposes the same managed backup behavior through its compatibility adapter.
+The native Slint UI keeps administration under one top-level **설정** page. **설정 -> 일반** contains provider/runtime configuration, while **설정 -> 관리** owns the complete backup surface: automatic-backup policy, managed backup creation/list/integrity/restore, Diagnostics, and Runtime Logs. These views use the shared BackupManager/StreamArchiveCore service and canonical SQLite policy.
 
 Defaults:
 
@@ -22,15 +22,15 @@ Defaults:
 - remove managed backups older than 3 days;
 - default directory is the sibling `stream-archive-backups` folder outside the replaceable portable package directory.
 
-Set `STREAM_ARCHIVE_BACKUP_DIR` to force a specific backup directory. When the environment override is present the directory field in the Web UI is read-only, while retention settings remain editable.
+Set `STREAM_ARCHIVE_BACKUP_DIR` to force a specific backup directory. When the environment override is present the Native backup-directory field is read-only, while retention settings remain editable.
 
 Managed backup names use the `stream_archive_*.db` prefix and include companion `.db.json` metadata. Files without valid metadata are not automatically pruned.
 
 ## Native storage status
 
-The Native LIVE page reads storage diagnostics through `StreamArchiveCore` and the shared `storage_service`; it does not call the Web API or probe filesystems from Slint. The snapshot includes the configured `OUTPUT_DIR`, per-channel output-directory overrides, and the canonical SQLite data directory. Paths on the same Windows volume are collapsed into one row.
+The Native LIVE page reads storage diagnostics through `StreamArchiveCore` and the shared `storage_service`; it does not use localhost HTTP or probe filesystems from Slint. The snapshot includes the configured `OUTPUT_DIR`, per-channel output-directory overrides, and the canonical SQLite data directory. Paths on the same Windows volume are collapsed into one row.
 
-Storage state follows the existing Web meaning:
+Storage state uses the shared runtime thresholds:
 
 - **정상 / OK**: free space is greater than twice `MIN_FREE_SPACE_GB`;
 - **주의 / WARN**: free space is at or below twice the threshold but above the threshold;
@@ -46,7 +46,7 @@ On Windows, Stream Archive marks these internal claim files with the Hidden attr
 
 ## Offline manual backup
 
-For an offline maintenance backup, close `StreamArchive.exe` and stop any Web compatibility `stream-archive-server.exe` cleanly first. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
+For an offline maintenance backup, close `StreamArchive.exe` and stop any optional headless `stream-archive-server.exe` runtime cleanly first. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
 
 From the repository root or portable package root:
 
@@ -78,7 +78,7 @@ powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.
 
 ## Restore
 
-Restore is destructive to the active authoritative database and therefore requires the watcher, active VOD work, and VOD queue to be stopped. The Web restore path enforces these runtime conditions and creates a `pre_restore` safety backup first.
+Restore is destructive to the active authoritative database and therefore requires the watcher, active VOD work, and VOD queue to be stopped. `StreamArchiveCore::restore_backup` enforces these runtime conditions and creates a `pre_restore` safety backup first.
 
 Offline restore:
 
@@ -97,21 +97,20 @@ The restore script:
 
 After restore, launch `StreamArchive.exe` and verify settings, channels, LIVE history, VOD history, and queue state before resuming unattended operation.
 
-The retained Web restore path also reinitializes authentication and invalidates all browser sessions so restoring an older database cannot resurrect an old session.
 
 ## Upgrade procedure
 
-1. Close the native application and stop any Web compatibility server.
+1. Close the native application and stop any optional headless runtime.
 2. Create a database backup.
 3. Keep the previous portable package until the new version has been exercised.
 4. Replace executable/package files while preserving the existing `data` directory.
 5. Start `StreamArchive.exe` or `RUN.bat` and verify Settings (including the nested 관리 view), Channels, LIVE start/stop, VOD analyze/download, and Queue/History.
-6. Run `RUN_WEB.bat` only when the compatibility browser path needs regression verification.
+6. If headless operation is used, verify `RUN_HEADLESS.bat` separately.
 7. Roll back by closing the new application, restoring the previous package, and restoring the pre-upgrade database backup if necessary.
 
 ## Portable package replacement
 
-`BUILD_PORTABLE.bat` writes to `dist\stream-archive`. The package contains `StreamArchive.exe` as the default native application, `RUN.bat` as the native launcher, and `RUN_WEB.bat` plus the existing server/launcher as the explicit Web compatibility path. For local rebuilds it preserves the existing package's `data` directory and `backend\.stream-archive` management-token directory before replacing package files, then restores them into the rebuilt package. GitHub Actions builds use a clean package instead.
+`BUILD_PORTABLE.bat` writes to `dist\stream-archive`. The package contains `StreamArchive.exe` as the default native application, `RUN.bat` as the native launcher, and `stream-archive-server.exe` plus `RUN_HEADLESS.bat` as the optional compatible headless runtime path. Browser launcher, Web static assets and reverse-proxy artifacts are not packaged. For local rebuilds the existing `data` directory is preserved before package replacement; GitHub Actions builds use a clean package.
 
 Direct Explorer launch is supported: backend resolution prefers the `backend` directory beside `StreamArchive.exe`, and the default SQLite path is the sibling `data\stream-archive.db`. Environment overrides still take precedence where defined.
 
@@ -119,9 +118,7 @@ Do not copy old INI/TXT configuration files into a new package. SQLite is the on
 
 ## Runtime environment overrides
 
-- `STREAM_ARCHIVE_BIND`: Axum listener, default `127.0.0.1:8787`.
-- `STREAM_ARCHIVE_TOKEN`: optional fixed recovery/management token.
-- `STREAM_ARCHIVE_START_WATCHER`: watcher auto-start flag.
+- `STREAM_ARCHIVE_START_WATCHER`: optional headless-runtime watcher auto-start flag.
 - `STREAM_ARCHIVE_BACKEND_DIR`: explicit backend directory.
 - `STREAM_ARCHIVE_DATA_DIR`: explicit SQLite data directory.
 - `STREAM_ARCHIVE_BACKUP_DIR`: explicit managed backup directory.
