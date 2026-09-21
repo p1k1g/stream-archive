@@ -36,35 +36,6 @@ pub(crate) struct OwnedProcessTree {
 }
 
 impl OwnedProcessTree {
-    /// Capture an already-running child for compatibility callers.
-    ///
-    /// New retained lifetimes must use `spawn_owned`. Windows compatibility
-    /// capture binds the exact process handle before snapshot traversal. Unix
-    /// compatibility capture is accepted only for an already-isolated process-
-    /// group leader and never adopts the server's own process group.
-    pub(crate) fn capture(child: &Child) -> Result<Self> {
-        #[cfg(windows)]
-        {
-            let pid = child.id().context("spawned child PID unavailable")?;
-            let job = windows_tree::OwnedTreeJob::capture_running_child(child)
-                .with_context(|| format!("failed to retain Windows process tree pid={pid}"))?;
-            return Ok(Self { job });
-        }
-
-        #[cfg(unix)]
-        {
-            let group = unix_group::OwnedProcessGroup::capture_running_child(child)
-                .context("failed to retain Unix process group")?;
-            return Ok(Self { group });
-        }
-
-        #[cfg(not(any(windows, unix)))]
-        {
-            let _ = child;
-            Ok(Self {})
-        }
-    }
-
     /// Synchronous retained-owner cleanup used when polling observes the root
     /// already exited. Root exit is not treated as descendant cleanup.
     pub(crate) fn terminate_now(&self) -> Result<()> {
@@ -189,20 +160,7 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
     }
 }
 
-/// Terminates only a child spawned by this server when no retained owner exists.
-///
-/// This is a compatibility boundary. New Windows and Unix lifetimes must use
-/// `spawn_owned`; without retained ownership Unix can safely terminate only the
-/// exact direct child rather than guessing at a process group or descendant set.
-pub(crate) async fn terminate_owned(child: &mut Child) {
-    loop {
-        if terminate_owned_checked(child).await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
+#[cfg(test)]
 pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<i32>> {
     #[cfg(windows)]
     if child.id().is_some() {
@@ -215,7 +173,7 @@ pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<
     Ok(child.wait().await.ok().and_then(|status| status.code()))
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 async fn terminate_windows_tree(child: &Child) -> Result<()> {
     loop {
         let Some(root_pid) = child.id() else {
