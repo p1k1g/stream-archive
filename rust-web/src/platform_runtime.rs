@@ -229,13 +229,26 @@ mod unix_group;
 #[cfg(windows)]
 mod windows_tree {
     use anyhow::{Context, Result, anyhow};
-    use std::{ffi::c_void, mem::size_of, ptr};
     #[cfg(test)]
     use std::{
         collections::{HashMap, HashSet, VecDeque},
         time::{SystemTime, UNIX_EPOCH},
     };
+    use std::{ffi::c_void, mem::size_of, ptr};
     use tokio::process::{Child, Command};
+    #[cfg(test)]
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::{
+            Diagnostics::ToolHelp::{
+                PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+                PROCESS_TERMINATE,
+            },
+        },
+    };
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
         System::{
@@ -252,19 +265,6 @@ mod windows_tree {
             },
             Threading::{
                 CREATE_NO_WINDOW, CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
-            },
-        },
-    };
-    #[cfg(test)]
-    use windows_sys::Win32::{
-        Foundation::FILETIME,
-        System::{
-            Diagnostics::ToolHelp::{
-                PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
-            },
-            Threading::{
-                GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
-                PROCESS_TERMINATE,
             },
         },
     };
