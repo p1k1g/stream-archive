@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 #[cfg(windows)]
 use std::process::Stdio;
+#[cfg(windows)]
 use std::time::Duration;
 use tokio::process::{Child, Command};
 
@@ -150,7 +151,7 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
                 return Err(err).context("failed to retain spawned Unix process group");
             }
         };
-        return Ok((child, OwnedProcessTree { group }));
+        Ok((child, OwnedProcessTree { group }))
     }
 
     #[cfg(not(any(windows, unix)))]
@@ -228,20 +229,19 @@ mod unix_group;
 #[cfg(windows)]
 mod windows_tree {
     use anyhow::{Context, Result, anyhow};
+    use std::{ffi::c_void, mem::size_of, ptr};
+    #[cfg(test)]
     use std::{
         collections::{HashMap, HashSet, VecDeque},
-        ffi::c_void,
-        mem::size_of,
-        ptr,
         time::{SystemTime, UNIX_EPOCH},
     };
     use tokio::process::{Child, Command};
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE},
+        Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
         System::{
             Diagnostics::ToolHelp::{
-                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-                TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+                CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First,
+                Thread32Next,
             },
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
@@ -251,17 +251,32 @@ mod windows_tree {
                 SetInformationJobObject, TerminateJobObject,
             },
             Threading::{
-                CREATE_NO_WINDOW, CREATE_SUSPENDED, GetProcessTimes, OpenProcess, OpenThread,
-                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
-                ResumeThread, THREAD_SUSPEND_RESUME,
+                CREATE_NO_WINDOW, CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
+            },
+        },
+    };
+    #[cfg(test)]
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::{
+            Diagnostics::ToolHelp::{
+                PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+                PROCESS_TERMINATE,
             },
         },
     };
 
+    #[cfg(test)]
     const ERROR_ACCESS_DENIED: i32 = 5;
     const ERROR_NO_MORE_FILES: i32 = 18;
+    #[cfg(test)]
     const ERROR_INVALID_PARAMETER: i32 = 87;
+    #[cfg(test)]
     const WINDOWS_UNIX_EPOCH_DELTA_SECONDS: u64 = 11_644_473_600;
+    #[cfg(test)]
     const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
 
     struct OwnedHandle(isize);
@@ -282,12 +297,14 @@ mod windows_tree {
         }
     }
 
+    #[cfg(test)]
     #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
     struct ProcessIdentity {
         pid: u32,
         creation_time: u64,
     }
 
+    #[cfg(test)]
     struct ProcessSnapshot {
         cutoff_creation_time: u64,
         children: HashMap<u32, Vec<u32>>,
@@ -311,10 +328,12 @@ mod windows_tree {
         command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     }
 
+    #[cfg(test)]
     fn filetime_value(value: FILETIME) -> u64 {
         ((value.dwHighDateTime as u64) << 32) | value.dwLowDateTime as u64
     }
 
+    #[cfg(test)]
     fn current_filetime_ticks() -> Result<u64> {
         let elapsed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -329,6 +348,7 @@ mod windows_tree {
         Ok(whole + u64::from(elapsed.subsec_nanos()) / 100)
     }
 
+    #[cfg(test)]
     fn process_creation_time(handle: HANDLE) -> Result<u64> {
         let mut creation = FILETIME::default();
         let mut exit = FILETIME::default();
@@ -348,6 +368,7 @@ mod windows_tree {
             .context("spawned child process handle unavailable")
     }
 
+    #[cfg(test)]
     fn child_identity(child: &Child) -> Result<ProcessIdentity> {
         let pid = child.id().context("spawned child PID unavailable")?;
         let handle = child_raw_handle(child)?;
@@ -358,6 +379,7 @@ mod windows_tree {
         })
     }
 
+    #[cfg(test)]
     fn open_identity(pid: u32, access: u32) -> Result<Option<(OwnedHandle, ProcessIdentity)>> {
         let process = unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if process.is_null() {
@@ -380,14 +402,17 @@ mod windows_tree {
         Ok(Some((process, identity)))
     }
 
+    #[cfg(test)]
     fn query_identity(pid: u32) -> Result<Option<ProcessIdentity>> {
         Ok(open_identity(pid, 0)?.map(|(_, identity)| identity))
     }
 
+    #[cfg(test)]
     fn identity_belongs_to_snapshot(identity: ProcessIdentity, snapshot: &ProcessSnapshot) -> bool {
         identity.creation_time <= snapshot.cutoff_creation_time
     }
 
+    #[cfg(test)]
     fn snapshot_root_is_current(
         root: ProcessIdentity,
         current_root: Option<ProcessIdentity>,
@@ -444,6 +469,7 @@ mod windows_tree {
         /// before that assignment are absorbed from ToolHelp snapshots only when
         /// the snapshot still contains the exact original root identity and each
         /// descendant's creation time proves it existed at that snapshot.
+        #[cfg(test)]
         pub(super) fn capture_running_child(child: &Child) -> Result<Self> {
             let root = child_identity(child)?;
             let job = Self::create()?;
@@ -458,6 +484,7 @@ mod windows_tree {
             Ok(job)
         }
 
+        #[cfg(test)]
         fn absorb_preexisting_descendants(&self, root: ProcessIdentity) -> Result<()> {
             let mut assigned = HashSet::from([root]);
 
@@ -619,6 +646,7 @@ mod windows_tree {
         Ok(())
     }
 
+    #[cfg(test)]
     fn process_snapshot() -> Result<ProcessSnapshot> {
         // Take the cutoff before asking Windows for the snapshot. A process
         // created after this instant is rejected even if its reused PID equals
@@ -665,6 +693,7 @@ mod windows_tree {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn process_tree_pids(root_pid: u32) -> Result<HashSet<u32>> {
         let snapshot = process_snapshot()?;
         let mut owned = HashSet::new();
@@ -690,6 +719,7 @@ mod windows_tree {
         Ok(owned)
     }
 
+    #[cfg(test)]
     pub(super) fn child_pid_is_current(child: &Child) -> Result<bool> {
         let expected = child_identity(child)?;
         Ok(query_identity(expected.pid)? == Some(expected))
