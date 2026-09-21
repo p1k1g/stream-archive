@@ -122,7 +122,7 @@ impl StreamArchiveCore {
         self.store.is_first_run_unconfigured()
     }
 
-    fn settings(&self) -> Result<BTreeMap<String, String>> {
+    pub fn settings(&self) -> Result<BTreeMap<String, String>> {
         self.store.safe_settings()
     }
 
