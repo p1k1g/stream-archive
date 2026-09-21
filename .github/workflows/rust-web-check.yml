@@ -59,10 +59,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -87,13 +83,6 @@ jobs:
           node --version
           git --version
 
-      - name: JavaScript syntax check
-        shell: bash
-        run: |
-          set -euo pipefail
-          for file in ./rust-web/web/*.js; do
-            node --check "$file"
-          done
 
       - name: Rust format check
         shell: bash
@@ -226,27 +215,30 @@ jobs:
           $required = @(
             "$root/StreamArchive.exe",
             "$root/stream-archive-server.exe",
-            "$root/stream-archive-launcher.exe",
             "$root/RUN.bat",
-            "$root/RUN_WEB.bat",
-            "$root/RUN_SERVER_CONSOLE.bat",
+            "$root/RUN_HEADLESS.bat",
             "$root/BACKUP_DATA.bat",
             "$root/RESTORE_DATA.bat",
-            "$root/Caddyfile.example",
             "$root/LICENSE",
             "$root/THIRD_PARTY_NOTICES.md",
             "$root/RELEASE_INFO.txt",
             "$root/SHA256SUMS.txt",
             "$root/maintenance/Backup-StreamArchiveData.ps1",
             "$root/maintenance/Restore-StreamArchiveData.ps1",
-            "$root/docs/OPERATIONS.md",
-            "$root/docs/REVERSE_PROXY.md",
-            "$root/docs/LOCAL_LAUNCHER.md",
-            "$root/docs/PHASE21_NATIVE_PORTABLE.md",
-            "$root/docs/PHASE21_NATIVE_UX_POLISH.md"
+            "$root/docs/OPERATIONS.md"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
+          }
+          foreach ($forbidden in @(
+            "$root/stream-archive-launcher.exe",
+            "$root/RUN_WEB.bat",
+            "$root/RUN_SERVER_CONSOLE.bat",
+            "$root/Caddyfile.example",
+            "$root/docs/REVERSE_PROXY.md",
+            "$root/docs/LOCAL_LAUNCHER.md"
+          )) {
+            if (Test-Path -LiteralPath $forbidden) { throw "Retired Web package file returned: $forbidden" }
           }
           foreach ($dir in @("$root/backend", "$root/data")) {
             if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Missing package directory: $dir" }
@@ -258,7 +250,7 @@ jobs:
               $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
             }
           }
-          foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe', 'stream-archive-launcher.exe')) {
+          foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe')) {
             if (-not $expected.ContainsKey($name)) { throw "checksum missing: $name" }
             $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $root $name)).Hash.ToLowerInvariant()
             if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
@@ -266,39 +258,10 @@ jobs:
 
           $run = Get-Content "$root/RUN.bat" -Raw
           if ($run -notmatch 'StreamArchive\.exe') { throw 'RUN.bat does not use StreamArchive.exe' }
-          if ($run -match 'stream-archive-launcher\.exe') { throw 'RUN.bat must not use the legacy Web launcher by default' }
+          if ($run -match 'launcher|RUN_WEB|127\.0\.0\.1|http') { throw 'RUN.bat must remain native-only' }
 
-          $webRun = Get-Content "$root/RUN_WEB.bat" -Raw
-          if ($webRun -notmatch 'stream-archive-launcher\.exe') { throw 'RUN_WEB.bat does not use stream-archive-launcher.exe' }
+          $headless = Get-Content "$root/RUN_HEADLESS.bat" -Raw
+          if ($headless -notmatch 'stream-archive-server\.exe') { throw 'RUN_HEADLESS.bat does not use the headless runtime' }
 
-          $direct = Get-Content "$root/RUN_SERVER_CONSOLE.bat" -Raw
-          if ($direct -notmatch 'stream-archive-server\.exe') { throw 'RUN_SERVER_CONSOLE.bat does not start stream-archive-server.exe' }
-
-          $caddy = Get-Content "$root/Caddyfile.example" -Raw
-          if ($caddy -notmatch 'reverse_proxy\s+127\.0\.0\.1:8787') { throw 'Caddy template upstream mismatch' }
-
-          $license = Get-Content "$root/LICENSE" -Raw
-          if ($license -notmatch 'GNU AFFERO GENERAL PUBLIC LICENSE') { throw 'AGPL license text missing from package' }
-
-          $thirdParty = Get-Content "$root/THIRD_PARTY_NOTICES.md" -Raw
-          foreach ($tool in @('Streamlink', 'FFmpeg', 'yt-dlp')) {
-            if ($thirdParty -notmatch [regex]::Escape($tool)) { throw "Third-party notice missing: $tool" }
-          }
-
-          $metadata = cargo metadata --locked --no-deps --format-version 1 --manifest-path ./rust-web/Cargo.toml | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
-          $package = $metadata.packages | Where-Object { $_.name -eq 'stream-archive-server' } | Select-Object -First 1
-          $cargoVersion = $package.version
-          if ([string]::IsNullOrWhiteSpace($cargoVersion)) { throw 'stream-archive-server version not found in cargo metadata' }
-          if ($package.license -ne 'AGPL-3.0-or-later') { throw "Cargo license mismatch: $($package.license)" }
-
-          $releaseMap = @{}
-          foreach ($line in Get-Content "$root/RELEASE_INFO.txt") {
-            $clean = $line.Trim().TrimStart([char]0xFEFF)
-            if ($clean -match '^([^=]+)=(.*)$') {
-              $releaseMap[$matches[1].Trim()] = $matches[2].Trim()
-            }
-          }
-          if ($releaseMap['product'] -ne 'Stream Archive') { throw 'release metadata product mismatch' }
-          if (-not $releaseMap.ContainsKey('version')) { throw 'release metadata missing version key' }
-          if ($releaseMap['version'] -ne $cargoVersion) { throw "release metadata version mismatch: expected $cargoVersion actual $($releaseMap['version'])" }
+          $releaseInfo = Get-Content "$root/RELEASE_INFO.txt" -Raw
+          if ($releaseInfo -notmatch 'version=') { throw 'release metadata version missing' }
