@@ -130,10 +130,11 @@ The following areas were deliberately treated as architecture contracts rather t
 
 ### `pub` -> private
 
-- `StreamArchiveCore::settings()`;
 - `StreamArchiveCore::vod_tool_settings()`.
 
-They remain internal helpers used by the canonical Native/shared-core services and tests.
+`StreamArchiveCore::settings()` remains public because the Native controller reads the canonical safe-settings snapshot directly. The CI compile check caught this external caller during the audit, so its visibility was retained.
+
+`vod_tool_settings()` remains an internal helper used by canonical shared-core services/tests.
 
 ### Retained public APIs
 
@@ -141,6 +142,7 @@ Public APIs with actual binary/Native callers or explicit architecture contracts
 
 - `StreamArchiveCore::open`;
 - backend/store/log access used by runtime bootstrap;
+- canonical safe-settings access used by the Native controller;
 - Native environment/provider/channel services;
 - watcher start/stop/status and scoped channel actions;
 - VOD analyze/download/status/cancel;
