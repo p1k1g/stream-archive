@@ -12,6 +12,17 @@ pub(crate) fn configure_utf8_cli(command: &mut Command) {
     command.env("PYTHONIOENCODING", "utf-8");
 }
 
+/// Suppresses a console window for short-lived helper commands launched
+/// by the Native GUI. Retained media processes still use `spawn_owned` so
+/// process-tree ownership and cancellation semantics are unchanged.
+pub(crate) fn configure_background_command(command: &mut Command) {
+    #[cfg(windows)]
+    windows_tree::configure_no_window(command);
+
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 /// Durable process-tree owner retained for a runtime child.
 ///
 /// Windows uses an exact child process handle assigned to a kill-on-close Job
@@ -322,6 +333,10 @@ mod windows_tree {
         cutoff_creation_time: u64,
         children: HashMap<u32, Vec<u32>>,
         present: HashSet<u32>,
+    }
+
+    pub(super) fn configure_no_window(command: &mut Command) {
+        command.creation_flags(CREATE_NO_WINDOW);
     }
 
     pub(super) fn configure_suspended(command: &mut Command) {
