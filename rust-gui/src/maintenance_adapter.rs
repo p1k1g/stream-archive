@@ -67,7 +67,7 @@ pub fn log_rows(lines: Vec<String>, max_lines: usize) -> Vec<LogRowView> {
         .into_iter()
         .skip(start)
         .map(|line| LogRowView {
-            text: line.replace('\r', " ").replace('\n', " "),
+            text: line.replace(['\r', '\n'], " "),
         })
         .collect()
 }
