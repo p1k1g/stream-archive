@@ -376,12 +376,12 @@ fn backend_dir(require_existing: bool) -> Result<PathBuf> {
     if cwd_backend.is_dir() {
         return Ok(cwd_backend);
     }
-    if let Ok(exe) = env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            let sibling = parent.join("backend");
-            if sibling.is_dir() {
-                return Ok(sibling);
-            }
+    if let Ok(exe) = env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        let sibling = parent.join("backend");
+        if sibling.is_dir() {
+            return Ok(sibling);
         }
     }
     if require_existing {
@@ -391,10 +391,10 @@ fn backend_dir(require_existing: bool) -> Result<PathBuf> {
 }
 
 fn data_dir(backend: &Path) -> Result<PathBuf> {
-    if let Ok(value) = env::var("STREAM_ARCHIVE_DATA_DIR") {
-        if !value.trim().is_empty() {
-            return absolute_path(PathBuf::from(value));
-        }
+    if let Ok(value) = env::var("STREAM_ARCHIVE_DATA_DIR")
+        && !value.trim().is_empty()
+    {
+        return absolute_path(PathBuf::from(value));
     }
     Ok(backend.parent().unwrap_or(backend).join("data"))
 }
@@ -423,13 +423,13 @@ fn server_binary() -> Option<PathBuf> {
     #[cfg(not(windows))]
     const NAMES: &[&str] = &["stream-archive-server", "stream-archive-server.exe"];
 
-    if let Ok(exe) = env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            for name in NAMES {
-                let candidate = parent.join(name);
-                if executable_file(&candidate) {
-                    return Some(candidate);
-                }
+    if let Ok(exe) = env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        for name in NAMES {
+            let candidate = parent.join(name);
+            if executable_file(&candidate) {
+                return Some(candidate);
             }
         }
     }

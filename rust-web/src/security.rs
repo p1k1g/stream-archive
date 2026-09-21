@@ -16,7 +16,8 @@ const SECRET_KEYS: &[&str] = &[
     "CHZZK_NID_SES",
 ];
 
-pub fn is_protected(value: &str) -> bool {
+#[cfg(test)]
+fn is_protected(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     normalized.starts_with(DPAPI_PREFIX) || normalized.starts_with(NATIVE_SECRET_PREFIX)
 }
@@ -61,7 +62,7 @@ pub fn protect_secret(value: &str) -> Result<String> {
     #[cfg(windows)]
     {
         let cipher = dpapi::protect(value.as_bytes()).context("DPAPI encrypt failed")?;
-        return Ok(format!("{DPAPI_PREFIX}{}", BASE64.encode(cipher)));
+        Ok(format!("{DPAPI_PREFIX}{}", BASE64.encode(cipher)))
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -70,11 +71,13 @@ pub fn protect_secret(value: &str) -> Result<String> {
         // the current user's native credential store.
         let reference = Uuid::new_v4().hyphenated().to_string();
         native_secret_store(&reference, value).context("native secret store failed")?;
-        return Ok(format!("{NATIVE_SECRET_PREFIX}{reference}"));
+        Ok(format!("{NATIVE_SECRET_PREFIX}{reference}"))
     }
 
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-    bail!("native protected secret storage is unsupported on this operating system")
+    {
+        bail!("native protected secret storage is unsupported on this operating system")
+    }
 }
 
 fn parse_native_reference<'a>(value: &'a str, name: &str) -> Result<&'a str> {
@@ -498,10 +501,10 @@ mod tests {
         )
         .unwrap();
         let status = configured_secrets(&path).unwrap();
-        assert_eq!(status["SOOP_PASSWORD"], true);
-        assert_eq!(status["CLOUDFLARE_API_KEY"], false);
-        assert_eq!(status["CHZZK_NID_AUT"], true);
-        assert_eq!(status["CHZZK_NID_SES"], true);
+        assert!(status["SOOP_PASSWORD"]);
+        assert!(!status["CLOUDFLARE_API_KEY"]);
+        assert!(status["CHZZK_NID_AUT"]);
+        assert!(status["CHZZK_NID_SES"]);
     }
 
     #[cfg(windows)]

@@ -56,6 +56,12 @@ pub struct LogBuffer {
     events: broadcast::Sender<()>,
 }
 
+impl Default for LogBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LogBuffer {
     pub fn new() -> Self {
         let (events, _) = broadcast::channel(128);
@@ -118,9 +124,9 @@ fn child_process_compatible_path(path: PathBuf) -> Result<PathBuf> {
 
     #[cfg(windows)]
     {
-        return Ok(PathBuf::from(strip_windows_verbatim_prefix(
+        Ok(PathBuf::from(strip_windows_verbatim_prefix(
             &absolute.to_string_lossy(),
-        )));
+        )))
     }
 
     #[cfg(not(windows))]
@@ -147,10 +153,10 @@ pub fn resolve_backend_dir() -> Result<PathBuf> {
     // still fall back to ./backend when target/{debug,release} has no sibling
     // backend directory.
     let mut candidates = Vec::new();
-    if let Ok(exe) = env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("backend"));
-        }
+    if let Ok(exe) = env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.push(exe_dir.join("backend"));
     }
     if let Ok(cwd) = env::current_dir() {
         candidates.push(cwd.join("backend"));

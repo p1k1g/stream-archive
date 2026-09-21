@@ -141,6 +141,11 @@ struct Runtime {
     command_tx: Option<mpsc::Sender<WatcherCommand>>,
 }
 
+struct WatcherControl {
+    stop_rx: oneshot::Receiver<()>,
+    command_rx: mpsc::Receiver<WatcherCommand>,
+}
+
 pub struct NativeWatcherManager {
     backend_dir: PathBuf,
     logs: LogBuffer,
@@ -164,10 +169,12 @@ impl NativeWatcherManager {
 
     pub async fn start(&self) -> Result<WatcherStatus> {
         let mut runtime = self.runtime.lock().await;
-        if let Some(task) = runtime.task.as_ref() {
-            if !task.is_finished() {
-                return Ok(self.snapshot.read().await.clone());
-            }
+        if runtime
+            .task
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            return Ok(self.snapshot.read().await.clone());
         }
         if let Some(task) = runtime.task.take() {
             finish_watcher_task(task, &self.logs, &self.snapshot, "before restart").await;
@@ -229,8 +236,10 @@ impl NativeWatcherManager {
                 channels,
                 logs.clone(),
                 snapshot.clone(),
-                stop_rx,
-                command_rx,
+                WatcherControl {
+                    stop_rx,
+                    command_rx,
+                },
             )
             .await;
             if let Err(err) = result {
@@ -405,8 +414,7 @@ async fn run_native_watcher(
     initial_channels: Vec<Channel>,
     logs: LogBuffer,
     snapshot: Arc<RwLock<WatcherStatus>>,
-    mut stop_rx: oneshot::Receiver<()>,
-    mut command_rx: mpsc::Receiver<WatcherCommand>,
+    mut control: WatcherControl,
 ) -> Result<()> {
     let client = Client::builder()
         .no_proxy()
@@ -439,8 +447,8 @@ async fn run_native_watcher(
 
     loop {
         tokio::select! {
-            _ = &mut stop_rx => break,
-            Some(command) = command_rx.recv() => {
+            _ = &mut control.stop_rx => break,
+            Some(command) = control.command_rx.recv() => {
                 handle_command(command, &mut states, &recorder, &logs).await;
                 update_snapshot(&states, &snapshot).await;
             }
@@ -623,14 +631,12 @@ async fn apply_channels(
                     .await;
                 }
             }
-            if can_remove {
-                if let Some(state) = states.remove(&key) {
-                    logs.push(format!(
-                        "[RUST] channel removed: {}/{}",
-                        state.channel.platform, state.channel.account
-                    ))
-                    .await;
-                }
+            if can_remove && let Some(state) = states.remove(&key) {
+                logs.push(format!(
+                    "[RUST] channel removed: {}/{}",
+                    state.channel.platform, state.channel.account
+                ))
+                .await;
             }
         }
     }
@@ -1195,12 +1201,13 @@ impl WatcherConfig {
 
 fn resolve_streamlink(backend_dir: &Path, map: &BTreeMap<String, String>) -> Result<PathBuf> {
     for key in ["STREAMLINK_PATH", "STREAMLINK_FALLBACK"] {
-        if let Some(value) = map.get(key) {
-            if !value.trim().is_empty() && !value.eq_ignore_ascii_case("AUTO") {
-                let path = PathBuf::from(value);
-                if path.is_file() {
-                    return Ok(path);
-                }
+        if let Some(value) = map.get(key)
+            && !value.trim().is_empty()
+            && !value.eq_ignore_ascii_case("AUTO")
+        {
+            let path = PathBuf::from(value);
+            if path.is_file() {
+                return Ok(path);
             }
         }
     }

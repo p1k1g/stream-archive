@@ -131,9 +131,15 @@ jobs:
         shell: bash
         run: cargo test --locked --manifest-path rust-gui/Cargo.toml
 
-      - name: Rust clippy advisory
+      # Phase 22.2 treats project Clippy warnings as CI failures.
+      - name: Rust clippy strict
         shell: bash
-        run: cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets
+        run: cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Slint shell clippy strict
+        if: ${{ matrix.platform == 'windows' }}
+        shell: bash
+        run: cargo clippy --locked --manifest-path rust-gui/Cargo.toml --all-targets --all-features -- -D warnings
 
   windows-check:
     name: windows-check

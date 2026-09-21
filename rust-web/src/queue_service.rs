@@ -77,14 +77,14 @@ impl VodQueueManager {
     pub async fn shutdown(&self) {
         self.stopping.store(true, Ordering::Release);
         let active = self.active_id.lock().await.clone();
-        if let Some(id) = active {
-            if let Err(error) = self.cancel(&id).await {
-                self.logs
-                    .push(format!(
-                        "[VOD_QUEUE:WARN] shutdown cancel failed id={id}: {error:#}"
-                    ))
-                    .await;
-            }
+        if let Some(id) = active
+            && let Err(error) = self.cancel(&id).await
+        {
+            self.logs
+                .push(format!(
+                    "[VOD_QUEUE:WARN] shutdown cancel failed id={id}: {error:#}"
+                ))
+                .await;
         }
     }
 
@@ -163,10 +163,10 @@ impl VodQueueManager {
         )?;
         drop(conn);
 
-        if let Some(active) = active_id.as_deref() {
-            if let Some(item) = items.iter_mut().find(|item| item.id == active) {
-                apply_runtime_status(item, &current);
-            }
+        if let Some(active) = active_id.as_deref()
+            && let Some(item) = items.iter_mut().find(|item| item.id == active)
+        {
+            apply_runtime_status(item, &current);
         }
         Ok(VodQueueSnapshot {
             active_id,
@@ -616,11 +616,13 @@ mod tests {
             finished_at: None,
             updated_at: String::new(),
         };
-        let mut status = VodJobStatus::default();
-        status.running = true;
-        status.current_part = 2;
-        status.part_count = 3;
-        status.percent = 66.5;
+        let status = VodJobStatus {
+            running: true,
+            current_part: 2,
+            part_count: 3,
+            percent: 66.5,
+            ..Default::default()
+        };
         apply_runtime_status(&mut item, &status);
         assert_eq!(item.id, "q1");
         assert_eq!(item.current_part, 2);

@@ -9,9 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-#[path = "history_service.rs"]
-mod shared_history;
-use shared_history::HistoryFilter;
+use crate::history_service::{self, HistoryFilter};
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct HistoryQuery {
@@ -40,7 +38,7 @@ pub(crate) async fn api_history(
         to: query.to,
         limit: query.limit,
     };
-    shared_history::load_history(state.store.path(), &filter)
+    history_service::load_history(state.store.path(), &filter)
         .map(Json)
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))
 }

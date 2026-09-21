@@ -36,35 +36,6 @@ pub(crate) struct OwnedProcessTree {
 }
 
 impl OwnedProcessTree {
-    /// Capture an already-running child for compatibility callers.
-    ///
-    /// New retained lifetimes must use `spawn_owned`. Windows compatibility
-    /// capture binds the exact process handle before snapshot traversal. Unix
-    /// compatibility capture is accepted only for an already-isolated process-
-    /// group leader and never adopts the server's own process group.
-    pub(crate) fn capture(child: &Child) -> Result<Self> {
-        #[cfg(windows)]
-        {
-            let pid = child.id().context("spawned child PID unavailable")?;
-            let job = windows_tree::OwnedTreeJob::capture_running_child(child)
-                .with_context(|| format!("failed to retain Windows process tree pid={pid}"))?;
-            return Ok(Self { job });
-        }
-
-        #[cfg(unix)]
-        {
-            let group = unix_group::OwnedProcessGroup::capture_running_child(child)
-                .context("failed to retain Unix process group")?;
-            return Ok(Self { group });
-        }
-
-        #[cfg(not(any(windows, unix)))]
-        {
-            let _ = child;
-            Ok(Self {})
-        }
-    }
-
     /// Synchronous retained-owner cleanup used when polling observes the root
     /// already exited. Root exit is not treated as descendant cleanup.
     pub(crate) fn terminate_now(&self) -> Result<()> {
@@ -162,7 +133,7 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
             return Err(err).with_context(|| format!("failed to resume owned child pid={pid}"));
         }
 
-        return Ok((child, OwnedProcessTree { job }));
+        Ok((child, OwnedProcessTree { job }))
     }
 
     #[cfg(unix)]
@@ -179,7 +150,7 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
                 return Err(err).context("failed to retain spawned Unix process group");
             }
         };
-        return Ok((child, OwnedProcessTree { group }));
+        Ok((child, OwnedProcessTree { group }))
     }
 
     #[cfg(not(any(windows, unix)))]
@@ -191,10 +162,11 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
 
 /// Terminates only a child spawned by this server when no retained owner exists.
 ///
-/// This is a compatibility boundary. New Windows and Unix lifetimes must use
-/// `spawn_owned`; without retained ownership Unix can safely terminate only the
-/// exact direct child rather than guessing at a process group or descendant set.
-pub(crate) async fn terminate_owned(child: &mut Child) {
+/// This compatibility boundary remains available for callers that do not retain
+/// an `OwnedProcessTree`. On Unix it adopts an existing process group only when
+/// the child is verified as that group's leader; otherwise cleanup is limited to
+/// the direct child. New lifetimes should prefer `spawn_owned`.
+pub async fn terminate_owned(child: &mut Child) {
     loop {
         if terminate_owned_checked(child).await.is_ok() {
             return;
@@ -209,7 +181,15 @@ pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<
         terminate_windows_tree(child).await?;
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    match unix_group::OwnedProcessGroup::capture_running_child(child) {
+        Ok(group) => group.terminate(child).await?,
+        Err(_) => {
+            let _ = child.kill().await;
+        }
+    }
+
+    #[cfg(not(any(windows, unix)))]
     let _ = child.kill().await;
 
     Ok(child.wait().await.ok().and_then(|status| status.code()))
@@ -707,6 +687,7 @@ mod windows_tree {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn process_tree_pids(root_pid: u32) -> Result<HashSet<u32>> {
         let snapshot = process_snapshot()?;
         let mut owned = HashSet::new();

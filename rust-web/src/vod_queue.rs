@@ -10,9 +10,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-#[path = "queue_service.rs"]
-mod shared_queue;
-pub use shared_queue::VodQueueManager;
+pub use crate::queue_service::VodQueueManager;
 
 pub(crate) async fn api_list(
     State(state): State<AppState>,

@@ -852,13 +852,13 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(value: &str) -> Result<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         bail!("invalid hex length");
     }
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
-        output.push((hex_value(pair[0])? << 4) | hex_value(pair[1])?);
+    for index in (0..bytes.len()).step_by(2) {
+        output.push((hex_value(bytes[index])? << 4) | hex_value(bytes[index + 1])?);
     }
     Ok(output)
 }

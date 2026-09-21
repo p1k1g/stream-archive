@@ -224,35 +224,34 @@ impl SoopLiveSession {
                 Ok(response) => {
                     let status = response.status();
                     let text = response.text().await.unwrap_or_default();
-                    if status.is_success() {
-                        if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                            if value.get("success").and_then(Value::as_bool) == Some(true) {
-                                let playlist_url = value
-                                    .get("playlist_url")
+                    if status.is_success()
+                        && let Ok(value) = serde_json::from_str::<Value>(&text)
+                        && value.get("success").and_then(Value::as_bool) == Some(true)
+                    {
+                        let playlist_url = value
+                            .get("playlist_url")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        if !playlist_url.is_empty() {
+                            return Ok(SoopResolvedStream {
+                                quality: value
+                                    .get("quality")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("master")
+                                    .to_string(),
+                                cdn: value
+                                    .get("cdn")
                                     .and_then(Value::as_str)
                                     .unwrap_or("")
-                                    .to_string();
-                                if !playlist_url.is_empty() {
-                                    return Ok(SoopResolvedStream {
-                                        quality: value
-                                            .get("quality")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("master")
-                                            .to_string(),
-                                        cdn: value
-                                            .get("cdn")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        host: value
-                                            .get("host")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        playlist_url,
-                                    });
-                                }
-                            }
+                                    .to_string(),
+                                host: value
+                                    .get("host")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                                playlist_url,
+                            });
                         }
                     }
                     last_error = format!("Worker HTTP {status}: {}", compact(&text, 240));
@@ -277,12 +276,11 @@ pub fn is_password_protected(value: &str) -> bool {
 
 fn collect_cookies(target: &mut BTreeMap<String, String>, response: &Response) {
     for value in response.headers().get_all(SET_COOKIE).iter() {
-        if let Ok(text) = value.to_str() {
-            if let Some(pair) = text.split(';').next() {
-                if let Some((name, value)) = pair.split_once('=') {
-                    target.insert(name.trim().to_string(), value.trim().to_string());
-                }
-            }
+        if let Ok(text) = value.to_str()
+            && let Some(pair) = text.split(';').next()
+            && let Some((name, value)) = pair.split_once('=')
+        {
+            target.insert(name.trim().to_string(), value.trim().to_string());
         }
     }
 }

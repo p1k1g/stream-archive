@@ -392,7 +392,6 @@ async fn run_download(
             metadata.duration_seconds,
             status,
             cancel,
-            logs,
         )
         .await
         {
@@ -670,7 +669,6 @@ async fn download_video(
     duration_seconds: u64,
     status: &Arc<RwLock<VodJobStatus>>,
     cancel: &AtomicBool,
-    _logs: &LogBuffer,
 ) -> Result<()> {
     let (mut sorting_args, stream_name) = streamlink_quality_args(req.quality.trim());
     let mut args = vec![
@@ -831,10 +829,10 @@ async fn run_streamlink_download(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Some(parent) = streamlink.parent() {
-        if parent.is_dir() {
-            streamlink_command.current_dir(parent);
-        }
+    if let Some(parent) = streamlink.parent()
+        && parent.is_dir()
+    {
+        streamlink_command.current_dir(parent);
     }
     let (mut streamlink_child, mut streamlink_tree) = spawn_owned(&mut streamlink_command)
         .await
@@ -955,25 +953,20 @@ async fn run_streamlink_download(
             streamlink_exit = streamlink_child
                 .try_wait()
                 .context("Streamlink CHZZK 상태 확인 실패")?;
-            if let Some(exit) = streamlink_exit.as_ref() {
-                if !exit.success() {
-                    let _ = ffmpeg_tree.terminate(&mut ffmpeg_child).await;
-                    pump.abort();
-                    let _ = pump.await;
-                    drain_failed_reader_tasks(
-                        reader_tasks,
-                        &mut log_rx,
-                        &mut progress_rx,
-                        &mut tail,
-                    )
+            if let Some(exit) = streamlink_exit.as_ref()
+                && !exit.success()
+            {
+                let _ = ffmpeg_tree.terminate(&mut ffmpeg_child).await;
+                pump.abort();
+                let _ = pump.await;
+                drain_failed_reader_tasks(reader_tasks, &mut log_rx, &mut progress_rx, &mut tail)
                     .await;
-                    let _ = fs::remove_file(output);
-                    bail!(
-                        "Streamlink CHZZK 다운로드 실패 (exit={}): {}",
-                        exit_code(*exit),
-                        redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
-                    );
-                }
+                let _ = fs::remove_file(output);
+                bail!(
+                    "Streamlink CHZZK 다운로드 실패 (exit={}): {}",
+                    exit_code(*exit),
+                    redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
+                );
             }
         }
 
@@ -981,25 +974,20 @@ async fn run_streamlink_download(
             ffmpeg_exit = ffmpeg_child
                 .try_wait()
                 .context("FFmpeg CHZZK 상태 확인 실패")?;
-            if let Some(exit) = ffmpeg_exit.as_ref() {
-                if !exit.success() {
-                    let _ = streamlink_tree.terminate(&mut streamlink_child).await;
-                    pump.abort();
-                    let _ = pump.await;
-                    drain_failed_reader_tasks(
-                        reader_tasks,
-                        &mut log_rx,
-                        &mut progress_rx,
-                        &mut tail,
-                    )
+            if let Some(exit) = ffmpeg_exit.as_ref()
+                && !exit.success()
+            {
+                let _ = streamlink_tree.terminate(&mut streamlink_child).await;
+                pump.abort();
+                let _ = pump.await;
+                drain_failed_reader_tasks(reader_tasks, &mut log_rx, &mut progress_rx, &mut tail)
                     .await;
-                    let _ = fs::remove_file(output);
-                    bail!(
-                        "FFmpeg CHZZK MPEG-TS 저장 실패 (exit={}): {}",
-                        exit_code(*exit),
-                        redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
-                    );
-                }
+                let _ = fs::remove_file(output);
+                bail!(
+                    "FFmpeg CHZZK MPEG-TS 저장 실패 (exit={}): {}",
+                    exit_code(*exit),
+                    redact(&tail.into_iter().collect::<Vec<_>>().join(" | "))
+                );
             }
         }
 
@@ -1224,6 +1212,7 @@ fn root_creation_lock(root: &Path) -> Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&lock_path)
         .with_context(|| {
             format!(
@@ -1416,7 +1405,7 @@ fn is_lock_contention(err: &std::io::Error) -> bool {
     }
     #[cfg(windows)]
     {
-        return matches!(err.raw_os_error(), Some(32) | Some(33));
+        matches!(err.raw_os_error(), Some(32) | Some(33))
     }
     #[cfg(not(windows))]
     {
@@ -1443,6 +1432,7 @@ fn claim_collision_path(dir: &Path, base: &str, extension: &str) -> Result<Desti
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&claim_path)
             .with_context(|| {
                 format!(
