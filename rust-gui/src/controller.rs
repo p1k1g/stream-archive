@@ -2477,28 +2477,24 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let storage_poll_sender = sender.clone();
     let storage_poll_flag = storage_poll_in_flight;
     let storage_poll_timer = Timer::default();
-    storage_poll_timer.start(
-        TimerMode::Repeated,
-        Duration::from_secs(30),
-        move || {
-            let Some(ui) = weak.upgrade() else {
-                return;
-            };
-            let state = ui.global::<AppState>();
-            if state.get_active_page().as_str() != "LIVE"
-                || state.get_storage_busy()
-                || storage_poll_flag.get()
-            {
-                return;
-            }
-            if storage_poll_sender
-                .send(Request::StorageLoad { poll: true })
-                .is_ok()
-            {
-                storage_poll_flag.set(true);
-            }
-        },
-    );
+    storage_poll_timer.start(TimerMode::Repeated, Duration::from_secs(30), move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let state = ui.global::<AppState>();
+        if state.get_active_page().as_str() != "LIVE"
+            || state.get_storage_busy()
+            || storage_poll_flag.get()
+        {
+            return;
+        }
+        if storage_poll_sender
+            .send(Request::StorageLoad { poll: true })
+            .is_ok()
+        {
+            storage_poll_flag.set(true);
+        }
+    });
 
     let weak = ui.as_weak();
     let vod_poll_sender = sender.clone();
