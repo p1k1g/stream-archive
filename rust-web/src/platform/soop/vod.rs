@@ -397,6 +397,14 @@ enum VodJobKind {
     Download(VodDownloadRequest),
 }
 
+#[derive(Clone, Copy)]
+struct CookieSource<'a> {
+    mode: &'a str,
+    cookie_file: &'a str,
+    browser: &'a str,
+    job_dir: &'a Path,
+}
+
 async fn run_analysis(
     backend: &Path,
     req: VodAnalyzeRequest,
@@ -414,10 +422,12 @@ async fn run_analysis(
         backend,
         &tools,
         &req.vod_url,
-        &req.cookie_mode,
-        &req.cookie_file,
-        &req.browser_name,
-        &job_dir,
+        CookieSource {
+            mode: &req.cookie_mode,
+            cookie_file: &req.cookie_file,
+            browser: &req.browser_name,
+            job_dir: &job_dir,
+        },
         cancel,
         logs,
     )
@@ -506,10 +516,12 @@ async fn run_download(
         backend,
         &tools,
         &req.vod_url,
-        &req.cookie_mode,
-        &req.cookie_file,
-        &req.browser_name,
-        &job_dir,
+        CookieSource {
+            mode: &req.cookie_mode,
+            cookie_file: &req.cookie_file,
+            browser: &req.browser_name,
+            job_dir: &job_dir,
+        },
         cancel,
         logs,
     )
@@ -562,10 +574,12 @@ async fn run_download(
                     backend,
                     &tools,
                     &req.vod_url,
-                    &req.cookie_mode,
-                    &req.cookie_file,
-                    &req.browser_name,
-                    &job_dir,
+                    CookieSource {
+                        mode: &req.cookie_mode,
+                        cookie_file: &req.cookie_file,
+                        browser: &req.browser_name,
+                        job_dir: &job_dir,
+                    },
                     cancel,
                     logs,
                 )
@@ -712,21 +726,18 @@ async fn init_cookie(
     backend: &Path,
     tools: &Tools,
     vod_url: &str,
-    mode: &str,
-    cookie_file: &str,
-    browser: &str,
-    job_dir: &Path,
+    source: CookieSource<'_>,
     cancel: &AtomicBool,
     logs: &LogBuffer,
 ) -> Result<CookieJar> {
-    match mode.to_ascii_uppercase().as_str() {
+    match source.mode.to_ascii_uppercase().as_str() {
         "SOOP_LOGIN" => login_cookie(backend, vod_url, logs).await,
-        "FILE" => CookieJar::parse_file(Path::new(cookie_file)),
+        "FILE" => CookieJar::parse_file(Path::new(source.cookie_file)),
         "BROWSER" => {
-            let target = job_dir.join("browser-cookies.txt");
+            let target = source.job_dir.join("browser-cookies.txt");
             let args = vec![
                 "--cookies-from-browser".to_string(),
-                browser.to_string(),
+                source.browser.to_string(),
                 "--cookies".to_string(),
                 target.display().to_string(),
                 "--skip-download".to_string(),
@@ -743,25 +754,11 @@ async fn renew_base_cookie(
     backend: &Path,
     tools: &Tools,
     vod_url: &str,
-    mode: &str,
-    cookie_file: &str,
-    browser: &str,
-    job_dir: &Path,
+    source: CookieSource<'_>,
     cancel: &AtomicBool,
     logs: &LogBuffer,
 ) -> Result<CookieJar> {
-    init_cookie(
-        backend,
-        tools,
-        vod_url,
-        mode,
-        cookie_file,
-        browser,
-        job_dir,
-        cancel,
-        logs,
-    )
-    .await
+    init_cookie(backend, tools, vod_url, source, cancel, logs).await
 }
 
 async fn login_cookie(_backend: &Path, vod_url: &str, logs: &LogBuffer) -> Result<CookieJar> {
@@ -1198,16 +1195,15 @@ async fn run_progress(
         }
         tokio::select! {
             line = lines.next_line() => {
-                if let Ok(Some(line)) = line {
-                    if let Some(captures) = re.captures(&line) {
-                        if let Ok(percent) = captures["p"].parse::<f64>() {
-                            let mut s = status.write().await;
-                            s.percent = percent;
-                            s.current_part = part;
-                            s.part_count = part_count;
-                            s.message = format!("PART {part}: {percent:.1}%");
-                        }
-                    }
+                if let Ok(Some(line)) = line
+                    && let Some(captures) = re.captures(&line)
+                    && let Ok(percent) = captures["p"].parse::<f64>()
+                {
+                    let mut s = status.write().await;
+                    s.percent = percent;
+                    s.current_part = part;
+                    s.part_count = part_count;
+                    s.message = format!("PART {part}: {percent:.1}%");
                 }
             }
             _ = tokio::time::sleep(Duration::from_millis(250)) => {}
@@ -1477,24 +1473,23 @@ fn title_no(url: &str) -> Result<String> {
 
 fn entry_url(value: &Value) -> String {
     for key in ["url", "manifest_url", "manifestUrl", "hls_url", "hlsUrl"] {
-        if let Some(s) = value.get(key).and_then(Value::as_str) {
-            if s.starts_with("https://")
-                && !Url::parse(s)
-                    .ok()
-                    .is_some_and(|url| url.path().starts_with("/player/"))
-            {
-                return s.into();
-            }
+        if let Some(s) = value.get(key).and_then(Value::as_str)
+            && s.starts_with("https://")
+            && !Url::parse(s)
+                .ok()
+                .is_some_and(|url| url.path().starts_with("/player/"))
+        {
+            return s.into();
         }
     }
     for collection in ["formats", "requested_formats"] {
         if let Some(formats) = value.get(collection).and_then(Value::as_array) {
             for format in formats {
                 for key in ["manifest_url", "manifestUrl", "url"] {
-                    if let Some(s) = format.get(key).and_then(Value::as_str) {
-                        if s.starts_with("https://") {
-                            return s.into();
-                        }
+                    if let Some(s) = format.get(key).and_then(Value::as_str)
+                        && s.starts_with("https://")
+                    {
+                        return s.into();
                     }
                 }
             }
@@ -1517,16 +1512,16 @@ fn api_file_url(value: &Value) -> String {
 
 fn entry_duration(value: &Value) -> u64 {
     for key in ["duration", "file_duration", "play_time"] {
-        if let Some(number) = value.get(key).and_then(Value::as_f64) {
-            if number > 0.0 {
-                return number.round() as u64;
-            }
+        if let Some(number) = value.get(key).and_then(Value::as_f64)
+            && number > 0.0
+        {
+            return number.round() as u64;
         }
         if let Some(text) = value.get(key).and_then(Value::as_str) {
-            if let Ok(number) = text.parse::<f64>() {
-                if number > 0.0 {
-                    return number.round() as u64;
-                }
+            if let Ok(number) = text.parse::<f64>()
+                && number > 0.0
+            {
+                return number.round() as u64;
             }
             if let Some(seconds) = parse_duration_string(text) {
                 return seconds;
@@ -1534,10 +1529,10 @@ fn entry_duration(value: &Value) -> u64 {
         }
     }
     for key in ["duration_string", "durationString"] {
-        if let Some(text) = value.get(key).and_then(Value::as_str) {
-            if let Some(seconds) = parse_duration_string(text) {
-                return seconds;
-            }
+        if let Some(text) = value.get(key).and_then(Value::as_str)
+            && let Some(seconds) = parse_duration_string(text)
+        {
+            return seconds;
         }
     }
     0
@@ -1692,9 +1687,9 @@ fn incomplete_artifacts(target: &Path) -> Vec<PathBuf> {
     }
     if let (Some(parent), Some(name)) =
         (target.parent(), target.file_name().and_then(|v| v.to_str()))
+        && let Ok(entries) = fs::read_dir(parent)
     {
-        if let Ok(entries) = fs::read_dir(parent) {
-            for entry in entries.flatten() {
+        for entry in entries.flatten() {
                 let file_name = entry.file_name();
                 let file_name = file_name.to_string_lossy();
                 if file_name.starts_with(&format!("{name}.part"))
@@ -1706,7 +1701,6 @@ fn incomplete_artifacts(target: &Path) -> Vec<PathBuf> {
                         paths.push(path);
                     }
                 }
-            }
         }
     }
     paths
