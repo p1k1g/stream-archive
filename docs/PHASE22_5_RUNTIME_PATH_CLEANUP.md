@@ -261,18 +261,23 @@ portable package verification
 
 ## 12. CI result
 
-Final PR CI result: **pending**.
-
-Required jobs:
+GitHub Actions run **#769** validated the final Phase 22.5 code/guard baseline:
 
 ```text
-core-check (linux)
-core-check (macos)
-core-check (windows)
-windows-check
+core-check (linux)    PASS
+core-check (macos)    PASS
+core-check (windows)  PASS
+windows-check         PASS
 ```
 
-This section will be updated after final PR validation.
+The Windows job also passed:
+
+- runtime contract guard;
+- source archive metadata smoke;
+- Windows portable package smoke;
+- portable package verification.
+
+Codex review identified that the root `.gitignore` still ignored `rust-web/target/` after the source-directory rename. The canonical ignore was migrated to `rust-runtime/target/`, ReleaseSafety now guards that contract, and the review thread was resolved after run #769 passed.
 
 ## 13. Active rust-web references after cleanup
 
