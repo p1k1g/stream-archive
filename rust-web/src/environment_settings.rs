@@ -78,8 +78,8 @@ pub fn snapshot(values: &BTreeMap<String, String>) -> Vec<EnvironmentSetting> {
         .collect()
 }
 
-/// Validate only changed keys. Existing paths loaded from Web/CLI are not
-/// rewritten or rejected merely by opening/saving an unrelated native field.
+/// Validate only changed keys. Existing persisted paths are not rewritten or
+/// rejected merely by opening/saving an unrelated native field.
 /// Explicit new paths must exist; blank/AUTO retain existing discovery rules.
 pub fn validate_updates(updates: &BTreeMap<String, String>) -> Result<()> {
     let mut general = BTreeMap::new();
