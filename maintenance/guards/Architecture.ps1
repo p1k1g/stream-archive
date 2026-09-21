@@ -64,6 +64,9 @@ Assert-Match $core 'protect_secret\(value\)' 'Shared core secret writes must use
 Assert-Match $core 'validate_channels\(channels\)' 'Shared core channel writes must preserve provider validation.'
 Assert-Match $core 'apply_vod_tool_defaults' 'Shared core VOD operations must preserve canonical media-tool defaults.'
 Assert-Match $core 'lifecycle_lock: Arc<Mutex<\(\)>>' 'Shared core must serialize VOD lifecycle operations.'
+Assert-NotMatch $core 'pub\s+fn\s+(?:watcher|vod|queue|backups|config_write_lock|lifecycle_lock)\s*\(' 'Dead manager/lock compatibility getters must not return to the public core API.'
+Assert-NotMatch $core 'pub\s+async\s+fn\s+(?:update_settings|update_secrets|update_vod_tool_settings)\s*\(' 'Dead generic configuration compatibility facades must not return to the public core API.'
+Assert-NotMatch $core 'pub\s+fn\s+storage_check\s*\(' 'Unused single-path storage compatibility facade must not return to the public core API.'
 Assert-Match $core 'pub\s+async\s+fn\s+shutdown' 'Shared core must expose owned-runtime shutdown.'
 # Match actual Axum/direct http crate dependencies, not similarly named transport types such as reqwest::StatusCode.
 Assert-NotMatch $core '(?m)^\s*use\s+(?:axum|http)(?:::|\s*\{)|\baxum::|\bhttp::(?:HeaderMap|StatusCode)\b' 'Shared core must stay independent from Axum/HTTP presentation concerns.'
