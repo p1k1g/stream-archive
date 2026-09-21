@@ -1,10 +1,9 @@
 //! Shared application/service boundary for non-HTTP frontends.
 //!
-//! Phase 21 introduces this facade so the current Axum server, the Unix CLI,
-//! and the Slint desktop UI can converge on the same Rust runtime instead of
-//! duplicating SQLite, watcher, VOD, Queue, History, security, and lifecycle
-//! logic. Browser authentication and HTTP concerns deliberately stay outside
-//! this module.
+//! Canonical presentation-neutral application facade shared by the Native UI,
+//! Unix CLI and compatible headless runtime. It centralizes SQLite, watcher,
+//! VOD, Queue, History, security, backup and lifecycle logic. Presentation
+//! concerns deliberately stay outside this module.
 
 use crate::{
     backend::LogBuffer,
@@ -67,7 +66,7 @@ impl StreamArchiveCore {
     /// Open the canonical SQLite store and assemble the shared runtime spine.
     ///
     /// This is intended to become the common bootstrap entry point for the
-    /// Axum server, Unix CLI, and Slint UI. Only one core may initialize the
+    /// Native UI, Unix CLI, and headless runtime. Only one core may initialize the
     /// process-global store in a process.
     pub fn open(backend_dir: impl AsRef<Path>) -> Result<CoreOpenResult> {
         let backend_dir = backend_dir.as_ref().to_path_buf();
@@ -131,15 +130,14 @@ impl StreamArchiveCore {
         self.queue.clone()
     }
 
-    /// Compatibility hooks are retained for the current Web adapter during
-    /// Phase 21 migration. Native callers use the presentation-neutral methods
-    /// below rather than taking ownership of the manager or SQLite store.
+    /// Compatibility hooks remain available for shared runtime callers.
+    /// Native callers should prefer the presentation-neutral methods below rather
+    /// than taking ownership of the manager or SQLite store.
     pub fn backups(&self) -> BackupManager {
         self.backups.clone()
     }
 
-    /// Compatibility hook for backup/Web adapters while they are moved behind
-    /// the shared service boundary in later Phase 21 slices.
+    /// Compatibility hook for callers that still need serialized configuration access.
     pub fn config_write_lock(&self) -> Arc<Mutex<()>> {
         self.config_write_lock.clone()
     }
@@ -251,8 +249,8 @@ impl StreamArchiveCore {
         self.store.configured_secrets()
     }
 
-    /// Save the provider-facing native configuration through the same
-    /// validators and protected-secret boundary used by the Web UI. Empty
+    /// Save provider-facing native configuration through the canonical
+    /// validators and protected-secret boundary. Empty
     /// secret drafts intentionally preserve the previously stored secret.
     pub async fn update_provider_configuration(
         &self,
@@ -572,7 +570,7 @@ impl StreamArchiveCore {
         crate::backup_service::spawn_auto_backup(self.backups.clone(), self.logs.clone());
     }
 
-    /// Keep VOD history synchronized even when the caller is not the Web UI.
+    /// Keep VOD history synchronized for headless/native runtime callers.
     pub fn spawn_vod_history_sync(&self) {
         let store = self.store.clone();
         let vod = self.vod.clone();
