@@ -160,7 +160,7 @@ export global AppState {
     callback vod-refresh();
 
     in-out property <string> active-page: "LIVE";
-    in-out property <string> settings-view: "Settings";
+    in-out property <string> settings-view: "General";
     in-out property <bool> runtime-ready: false;
     in-out property <string> runtime-status: "구성요소를 확인하는 중...";
     callback refresh-requested();
@@ -1104,9 +1104,9 @@ export component MainWindow inherits Window {
                         Button {
                             width: 72px;
                             height: 32px;
-                            text: "설정";
-                            primary: AppState.settings-view == "Settings";
-                            clicked => { AppState.settings-view = "Settings"; }
+                            text: "일반";
+                            primary: AppState.settings-view == "General";
+                            clicked => { AppState.settings-view = "General"; }
                         }
                         Button {
                             width: 72px;
@@ -1117,9 +1117,9 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    if AppState.settings-view == "Settings": VerticalLayout {
+                    if AppState.settings-view == "General": VerticalLayout {
                         spacing: 9px;
-                        Text { text: "설정 편집 · 공유 SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                        Text { text: "일반 설정 · 공유 SQLite"; color: #0f172a; font-size: 18px; font-weight: 700; }
                         ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
@@ -1220,98 +1220,7 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // Phase 21.9: Settings owns editable backup policy presentation.
-                            Rectangle {
-                                min-height: 188px;
-                                vertical-stretch: 0;
-                                background: #ffffff;
-                                border-radius: 10px;
-                                border-width: 1px;
-                                border-color: #e2e8f0;
-                                VerticalLayout {
-                                    padding: 12px;
-                                    spacing: 8px;
-                                    HorizontalLayout {
-                                        height: 28px;
-                                        vertical-stretch: 0;
-                                        Text { text: "백업 정책"; color: #0f172a; font-size: 17px; font-weight: 700; horizontal-stretch: 1; }
-                                        Button {
-                                            height: 28px;
-                                            text: "정책 저장";
-                                            enabled: MaintenanceState.loaded && !MaintenanceState.busy;
-                                            clicked => { MaintenanceState.save-backup-policy(); }
-                                        }
-                                    }
-                                    Text {
-                                        text: "자동 백업의 위치와 보존 정책을 설정합니다. 실제 백업 생성/복원은 설정 > 관리에서 수행합니다.";
-                                        color: #64748b;
-                                        font-size: 11px;
-                                        wrap: word-wrap;
-                                    }
-                                    HorizontalLayout {
-                                        height: 34px;
-                                        vertical-stretch: 0;
-                                        spacing: 8px;
-                                        LineEdit {
-                                            height: 34px;
-                                            horizontal-stretch: 1;
-                                            text <=> MaintenanceState.backup-directory;
-                                            enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
-                                            placeholder-text: "백업 폴더";
-                                        }
-                                        Button {
-                                            width: 84px;
-                                            height: 32px;
-                                            text: "찾아보기...";
-                                            enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
-                                            clicked => { MaintenanceState.pick-backup-directory(); }
-                                        }
-                                    }
-                                    if !MaintenanceState.backup-directory-editable: Text {
-                                        text: "STREAM_ARCHIVE_BACKUP_DIR에서 관리되는 경로이므로 읽기 전용입니다.";
-                                        color: #a16207;
-                                        font-size: 10px;
-                                        wrap: word-wrap;
-                                    }
-                                    HorizontalLayout {
-                                        height: 48px;
-                                        vertical-stretch: 0;
-                                        spacing: 10px;
-                                        VerticalLayout {
-                                            width: 126px;
-                                            horizontal-stretch: 0;
-                                            spacing: 2px;
-                                            Text { text: "자동 백업"; color: #64748b; font-size: 10px; }
-                                            Button {
-                                                height: 30px;
-                                                text: MaintenanceState.backup-enabled ? "켜짐" : "꺼짐";
-                                                enabled: !MaintenanceState.busy;
-                                                clicked => { MaintenanceState.toggle-backup-enabled(); }
-                                            }
-                                        }
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: 2px;
-                                            Text { text: "백업 주기(시간)"; color: #64748b; font-size: 10px; }
-                                            LineEdit { height: 30px; text <=> MaintenanceState.backup-interval-hours; enabled: !MaintenanceState.busy; }
-                                        }
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: 2px;
-                                            Text { text: "최대 백업 개수 · 0 = 제한 없음"; color: #64748b; font-size: 10px; }
-                                            LineEdit { height: 30px; text <=> MaintenanceState.backup-keep-count; enabled: !MaintenanceState.busy; }
-                                        }
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: 2px;
-                                            Text { text: "보관 기간(일) · 0 = 제한 없음"; color: #64748b; font-size: 10px; }
-                                            LineEdit { height: 30px; text <=> MaintenanceState.backup-retention-days; enabled: !MaintenanceState.busy; }
-                                        }
-                                    }
-                                }
-                            }
-
-                            Rectangle {
+                                                        Rectangle {
                                 min-height: 72px;
                                 vertical-stretch: 0;
                                 background: #ffffff;
@@ -1376,29 +1285,7 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // Diagnostics read-only; settings above are editable.
-                            Text { text: "진단 · 읽기 전용"; color: #0f172a; font-size: 18px; font-weight: 700; }
-                            Text { text: "백엔드와 DB 위치는 시작 시 관리됩니다. 별도 설정 파일은 사용하지 않습니다."; color: #64748b; wrap: word-wrap; font-size: 11px; }
-                            for row in AppState.diagnostics-rows: Rectangle {
-                                min-height: 56px;
-                                vertical-stretch: 0;
-                                background: #ffffff;
-                                border-radius: 9px;
-                                border-width: 1px;
-                                border-color: #e2e8f0;
-                                VerticalLayout {
-                                    padding: 10px;
-                                    spacing: 3px;
-                                    Text {
-                                        text: (row.status == "OK" ? "정상" : row.status == "Warning" ? "주의" : row.status == "Error" ? "오류" : row.status) + " · " + row.name;
-                                        color: row.status == "OK" ? #15803d : row.status == "Warning" ? #a16207 : #b91c1c;
-                                        font-weight: 600;
-                                        font-size: 12px;
-                                    }
-                                    Text { text: row.detail; color: #475569; wrap: word-wrap; font-size: 11px; }
-                                }
-                            }
-                        }
+                                                    }
                     }
                     }
 
