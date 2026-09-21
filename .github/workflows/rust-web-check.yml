@@ -87,6 +87,14 @@ jobs:
         shell: bash
         run: cargo fmt --manifest-path rust-web/Cargo.toml -- --check
 
+      - name: Lockfile freshness diagnostic
+        if: ${{ matrix.platform == 'linux' }}
+        shell: bash
+        run: |
+          cargo generate-lockfile --manifest-path rust-web/Cargo.toml
+          git diff -- rust-web/Cargo.lock
+          git diff --quiet -- rust-web/Cargo.lock || exit 1
+
       - name: Rust unit tests
         shell: bash
         run: |
