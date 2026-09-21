@@ -65,13 +65,13 @@ try {
 
     $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
     $package = Read-RepoFile 'BUILD_PORTABLE.bat'
+    $gitignore = Read-RepoFile '.gitignore'
     $runDev = Read-RepoFile 'RUN_DEV.bat'
     $releaseMetadata = Read-RepoFile 'maintenance/Write-ReleaseMetadata.ps1'
     $readme = Read-RepoFile 'README.md'
     $agents = Read-RepoFile 'AGENTS.md'
     $contributing = Read-RepoFile 'CONTRIBUTING.md'
     $unixCli = Read-RepoFile 'docs/UNIX_CLI.md'
-    $gitignore = Read-RepoFile '.gitignore'
     $manifest = Read-RepoFile 'rust-runtime/Cargo.toml'
     $guiManifest = Read-RepoFile 'rust-gui/Cargo.toml'
 
@@ -88,7 +88,7 @@ try {
     )) {
         Assert-NotMatch $activeRuntimePath.Text 'rust-web[\\/]' "Active runtime path must use rust-runtime, not rust-web: $($activeRuntimePath.Name)"
     }
-    Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
+    Assert-Match $gitignore '(?m)^rust-runtime/target/\r?
     Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
     Assert-NotMatch $workflow 'runs-on:\s*\[?self-hosted' 'Public CI must not depend on a private self-hosted runner.'
     Assert-Match $workflow 'fetch-depth:\s*0' 'Public-release CI must fetch full history for the history safety scan.'
@@ -102,7 +102,7 @@ try {
     )) {
         Assert-Match $workflow $trigger "Runtime workflow path coverage is missing: $trigger"
     }
-    Assert-Match $gitignore '(?m)^rust-runtime/target/
+    Assert-NotMatch $workflow 'BUILD_RELEASE\.bat' 'Runtime workflow must not reference the retired BUILD_RELEASE.bat wrapper.'
     if (Test-Path -LiteralPath (Join-Path $root 'BUILD_RELEASE.bat') -PathType Leaf) {
         throw 'Retired BUILD_RELEASE.bat wrapper must not exist; use BUILD_PORTABLE.bat or Cargo directly.'
     }
@@ -131,7 +131,21 @@ finally {
     Pop-Location
 }
  'Git ignore must cover the canonical rust-runtime Cargo target directory.'
-    Assert-NotMatch $gitignore '(?m)^rust-web/target/
+    Assert-NotMatch $gitignore '(?m)^rust-web/target/\r?
+    Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
+    Assert-NotMatch $workflow 'runs-on:\s*\[?self-hosted' 'Public CI must not depend on a private self-hosted runner.'
+    Assert-Match $workflow 'fetch-depth:\s*0' 'Public-release CI must fetch full history for the history safety scan.'
+    foreach ($trigger in @(
+        'rust-runtime/\*\*',
+        'rust-gui/\*\*',
+        'RUN_DEV\.bat',
+        'BUILD_PORTABLE\.bat',
+        'maintenance/\*\*',
+        'docs/\*\*'
+    )) {
+        Assert-Match $workflow $trigger "Runtime workflow path coverage is missing: $trigger"
+    }
+    Assert-NotMatch $workflow 'BUILD_RELEASE\.bat' 'Runtime workflow must not reference the retired BUILD_RELEASE.bat wrapper.'
     if (Test-Path -LiteralPath (Join-Path $root 'BUILD_RELEASE.bat') -PathType Leaf) {
         throw 'Retired BUILD_RELEASE.bat wrapper must not exist; use BUILD_PORTABLE.bat or Cargo directly.'
     }
@@ -160,6 +174,20 @@ finally {
     Pop-Location
 }
  'Git ignore must not retain the retired rust-web Cargo target directory.'
+    Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
+    Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
+    Assert-NotMatch $workflow 'runs-on:\s*\[?self-hosted' 'Public CI must not depend on a private self-hosted runner.'
+    Assert-Match $workflow 'fetch-depth:\s*0' 'Public-release CI must fetch full history for the history safety scan.'
+    foreach ($trigger in @(
+        'rust-runtime/\*\*',
+        'rust-gui/\*\*',
+        'RUN_DEV\.bat',
+        'BUILD_PORTABLE\.bat',
+        'maintenance/\*\*',
+        'docs/\*\*'
+    )) {
+        Assert-Match $workflow $trigger "Runtime workflow path coverage is missing: $trigger"
+    }
     Assert-NotMatch $workflow 'BUILD_RELEASE\.bat' 'Runtime workflow must not reference the retired BUILD_RELEASE.bat wrapper.'
     if (Test-Path -LiteralPath (Join-Path $root 'BUILD_RELEASE.bat') -PathType Leaf) {
         throw 'Retired BUILD_RELEASE.bat wrapper must not exist; use BUILD_PORTABLE.bat or Cargo directly.'
