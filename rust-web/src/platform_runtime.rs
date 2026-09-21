@@ -134,7 +134,7 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
             return Err(err).with_context(|| format!("failed to resume owned child pid={pid}"));
         }
 
-        return Ok((child, OwnedProcessTree { job }));
+        Ok((child, OwnedProcessTree { job }))
     }
 
     #[cfg(unix)]
