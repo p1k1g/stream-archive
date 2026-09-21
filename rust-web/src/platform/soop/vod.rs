@@ -1690,17 +1690,17 @@ fn incomplete_artifacts(target: &Path) -> Vec<PathBuf> {
         && let Ok(entries) = fs::read_dir(parent)
     {
         for entry in entries.flatten() {
-                let file_name = entry.file_name();
-                let file_name = file_name.to_string_lossy();
-                if file_name.starts_with(&format!("{name}.part"))
-                    || file_name.starts_with(&format!("{name}.ytdl"))
-                    || file_name.starts_with(&format!("{name}.temp"))
-                {
-                    let path = entry.path();
-                    if !paths.contains(&path) {
-                        paths.push(path);
-                    }
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if file_name.starts_with(&format!("{name}.part"))
+                || file_name.starts_with(&format!("{name}.ytdl"))
+                || file_name.starts_with(&format!("{name}.temp"))
+            {
+                let path = entry.path();
+                if !paths.contains(&path) {
+                    paths.push(path);
                 }
+            }
         }
     }
     paths
