@@ -4415,7 +4415,6 @@ name = "stream-archive-server"
 version = "0.5.2"
 dependencies = [
  "anyhow",
- "axum",
  "base64 0.22.1",
  "chrono",
  "fs2",
@@ -4426,10 +4425,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
- "tokio-stream",
- "tower-http",
- "tracing",
- "tracing-subscriber",
  "url",
  "uuid",
  "windows-sys 0.61.2",
