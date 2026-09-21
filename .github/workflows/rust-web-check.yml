@@ -99,6 +99,17 @@ jobs:
         shell: bash
         run: cargo fmt --manifest-path rust-web/Cargo.toml -- --check
 
+      - name: Phase 22.2 lockfile refresh preview
+        shell: bash
+        run: |
+          cargo metadata --manifest-path rust-web/Cargo.toml --format-version 1 > /dev/null
+          cargo metadata --manifest-path rust-gui/Cargo.toml --format-version 1 > /dev/null
+          if [[ "${{ matrix.platform }}" == "linux" ]]; then
+            echo "=== PHASE22_LOCK_DIFF_BEGIN ==="
+            git diff -- rust-web/Cargo.lock rust-gui/Cargo.lock
+            echo "=== PHASE22_LOCK_DIFF_END ==="
+          fi
+
       - name: Rust unit tests
         shell: bash
         run: |
