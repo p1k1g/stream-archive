@@ -4,32 +4,32 @@
 
 ## Canonical runtime
 
-- `rust-web/src/main.rs`: HTTP/Web presentation이 없는 compatibility headless runtime entry. `StreamArchiveCore`를 열고 Queue/backup/history sync와 선택적 watcher를 구동하며 종료 시 shared runtime cleanup을 사용한다.
-- `rust-web/src/lib.rs`: shared Rust library boundary. `rust-web` crate 이름은 유지하지만 제품 핵심은 presentation-neutral runtime/service modules이다.
-- `rust-web/src/app_core.rs`: `StreamArchiveCore` service facade. SQLite/settings/secrets/channels/LIVE watcher/VOD/Queue/History/Backup/Storage/process lifecycle의 canonical application boundary.
-- `rust-web/src/backup_service.rs`: reusable BackupManager/service boundary. managed backup policy/list/create/restore/integrity/retention을 presentation과 분리한다.
+- `rust-runtime/src/main.rs`: HTTP/Web presentation이 없는 compatibility headless runtime entry. `StreamArchiveCore`를 열고 Queue/backup/history sync와 선택적 watcher를 구동하며 종료 시 shared runtime cleanup을 사용한다.
+- `rust-runtime/src/lib.rs`: shared Rust library boundary. `rust-runtime` crate 이름은 유지하지만 제품 핵심은 presentation-neutral runtime/service modules이다.
+- `rust-runtime/src/app_core.rs`: `StreamArchiveCore` service facade. SQLite/settings/secrets/channels/LIVE watcher/VOD/Queue/History/Backup/Storage/process lifecycle의 canonical application boundary.
+- `rust-runtime/src/backup_service.rs`: reusable BackupManager/service boundary. managed backup policy/list/create/restore/integrity/retention을 presentation과 분리한다.
 - `rust-gui/Cargo.toml`: Windows Slint desktop frontend crate.
 - `rust-gui/src/main.rs`: Slint bootstrap/state binding. 반드시 `StreamArchiveCore`를 직접 호출하고 localhost HTTP, 직접 SQLite, 직접 child-process 제어를 추가하지 않는다.
 - `rust-gui/ui/*.slint`: Windows native presentation/navigation. provider/storage/process 구현 로직을 넣지 않는다.
 - Native `설정` 내부는 `일반`과 `관리`로 나뉜다. `일반`은 provider/runtime 설정, `관리`는 backup policy + Backup/Restore/Diagnostics/Logs를 담당한다. 모든 작업은 shared services를 사용한다.
-- `rust-web/src/tool_discovery.rs`: cross-platform Streamlink/yt-dlp/FFmpeg discovery.
-- `rust-web/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI baseline. `serve`는 sibling `stream-archive-server` headless runtime을 실행하며 Web server를 시작하지 않는다.
-- `rust-web/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration.
-- `rust-web/src/recorder.rs`: Streamlink/FFmpeg process ownership/lifecycle.
-- `rust-web/src/platform/live.rs`: platform-neutral LIVE provider facade/session types.
-- `rust-web/src/platform/vod.rs`: platform-neutral VOD lifecycle/dispatch.
-- `rust-web/src/platform/soop/*`: SOOP provider implementation.
-- `rust-web/src/platform/chzzk/*`: CHZZK provider implementation.
-- `rust-web/src/security.rs`: secret protection boundary.
-- `rust-web/src/store.rs`: canonical SQLite persistence/config/history.
-- `rust-web/src/storage_service.rs`: shared storage-capacity diagnostics.
-- `rust-web/src/history_service.rs`: shared History query service.
-- `rust-web/src/queue_service.rs`: shared persistent VOD Queue service.
-- `rust-web/src/backend.rs`: log buffer and backend-directory resolution.
+- `rust-runtime/src/tool_discovery.rs`: cross-platform Streamlink/yt-dlp/FFmpeg discovery.
+- `rust-runtime/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI baseline. `serve`는 sibling `stream-archive-server` headless runtime을 실행하며 Web server를 시작하지 않는다.
+- `rust-runtime/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration.
+- `rust-runtime/src/recorder.rs`: Streamlink/FFmpeg process ownership/lifecycle.
+- `rust-runtime/src/platform/live.rs`: platform-neutral LIVE provider facade/session types.
+- `rust-runtime/src/platform/vod.rs`: platform-neutral VOD lifecycle/dispatch.
+- `rust-runtime/src/platform/soop/*`: SOOP provider implementation.
+- `rust-runtime/src/platform/chzzk/*`: CHZZK provider implementation.
+- `rust-runtime/src/security.rs`: secret protection boundary.
+- `rust-runtime/src/store.rs`: canonical SQLite persistence/config/history.
+- `rust-runtime/src/storage_service.rs`: shared storage-capacity diagnostics.
+- `rust-runtime/src/history_service.rs`: shared History query service.
+- `rust-runtime/src/queue_service.rs`: shared persistent VOD Queue service.
+- `rust-runtime/src/backend.rs`: log buffer and backend-directory resolution.
 
 Browser static UI, Axum routes, browser auth/session/CSRF, SSE, Web local picker and the Windows browser launcher were retired in Phase 22.3. Do not reintroduce them as a shortcut around `StreamArchiveCore`.
 
-Provider-specific network/authentication/stream mechanics live under `rust-web/src/platform/<provider>/`. Common queue/history/runtime orchestration must depend on platform-neutral facades rather than provider implementations directly.
+Provider-specific network/authentication/stream mechanics live under `rust-runtime/src/platform/<provider>/`. Common queue/history/runtime orchestration must depend on platform-neutral facades rather than provider implementations directly.
 
 ## Configuration source of truth
 
@@ -60,7 +60,7 @@ Windows product/package flow:
 
 `RUN_DEV.bat` starts the compatible headless runtime. The Native GUI can be run directly through Cargo.
 
-`BUILD_PORTABLE.bat` is the single Windows release/package entry point. It builds the retained shared/headless `rust-web` package plus the Slint frontend and assembles `dist\stream-archive` with `StreamArchive.exe` as the default entry point. `RUN_HEADLESS.bat` is the optional console/headless entry. Browser/Web fallback artifacts are not packaged.
+`BUILD_PORTABLE.bat` is the single Windows release/package entry point. It builds the retained shared/headless `rust-runtime` package plus the Slint frontend and assembles `dist\stream-archive` with `StreamArchive.exe` as the default entry point. `RUN_HEADLESS.bat` is the optional console/headless entry. Browser/Web fallback artifacts are not packaged.
 
 Windows Slint compile check:
 
@@ -71,20 +71,20 @@ cargo check --locked --manifest-path rust-gui/Cargo.toml
 Unix/headless flow:
 
 ```bash
-cargo build --locked --release --manifest-path rust-web/Cargo.toml
-./rust-web/target/release/stream-archive-cli init
-./rust-web/target/release/stream-archive-cli tools configure
-./rust-web/target/release/stream-archive-cli doctor
-./rust-web/target/release/stream-archive-cli serve --watch
+cargo build --locked --release --manifest-path rust-runtime/Cargo.toml
+./rust-runtime/target/release/stream-archive-cli init
+./rust-runtime/target/release/stream-archive-cli tools configure
+./rust-runtime/target/release/stream-archive-cli doctor
+./rust-runtime/target/release/stream-archive-cli serve --watch
 ```
 
 Rust checks:
 
 ```powershell
-cargo fmt --manifest-path rust-web/Cargo.toml -- --check
-cargo test --locked --manifest-path rust-web/Cargo.toml
-cargo check --locked --manifest-path rust-web/Cargo.toml
-cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets --all-features -- -D warnings
+cargo fmt --manifest-path rust-runtime/Cargo.toml -- --check
+cargo test --locked --manifest-path rust-runtime/Cargo.toml
+cargo check --locked --manifest-path rust-runtime/Cargo.toml
+cargo clippy --locked --manifest-path rust-runtime/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
 Runtime contracts:
