@@ -9,11 +9,10 @@ $recorder = Read-RepoFile 'rust-web/src/recorder.rs'
 $watcher = Read-RepoFile 'rust-web/src/native_watcher.rs'
 $primary = Read-RepoFile 'rust-web/src/primary_config.rs'
 $backend = Read-RepoFile 'rust-web/src/backend.rs'
-$app = Read-RepoFile 'rust-web/web/app.js'
-$phase8 = Read-RepoFile 'rust-web/web/phase8.js'
-$phase14 = Read-RepoFile 'rust-web/web/phase14.js'
 $soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'
-$main = Read-RepoFile 'rust-web/src/main.rs'
+$core = Read-RepoFile 'rust-web/src/app_core.rs'
+$guiSources = (Get-ChildItem (Join-Path $script:RuntimeContractsRoot 'rust-gui/src') -Filter '*.rs' -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+$guiUi = (Get-ChildItem (Join-Path $script:RuntimeContractsRoot 'rust-gui/ui') -Filter '*.slint' -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 
 # Provider registration / CHZZK LIVE boundary. CHZZK VOD may enable VOD separately.
 Assert-Match $platform 'Chzzk' 'PlatformId::Chzzk registration is missing.'
@@ -106,41 +105,26 @@ Assert-Match $watcher 'channels_require_soop\(&channels\)' 'Watcher startup does
 Assert-Match $watcher 'fn scoped_channel_target' 'Watcher scoped channel-target parser is missing.'
 Assert-Match $watcher 'channel_key\(platform, account\)' 'Watcher commands are not resolved through the composite platform/account key.'
 Assert-Match $watcher 'scoped_channel_command_targets_composite_identity' 'Composite channel-command regression test is missing.'
-Assert-Match $app 'function channelTarget\(platform,account\)' 'Runtime controls do not construct a platform-scoped channel target.'
-Assert-Match $app 'channelAction\(platformId,c\.account' 'Runtime action buttons are not passing the platform.'
-Assert-Match $app 'channelPassword\(platformId,c\.account\)' 'Runtime password control is not passing the platform.'
+Assert-Match $guiSources 'pub fn scoped_target\(platform: PlatformId, account: &str\)' 'Native LIVE controls must construct a platform-scoped channel target.'
+Assert-Match $guiSources 'scoped_target\(channel\.platform, &channel\.account\)' 'Native LIVE rows must use the composite platform/account target.'
 
-# Browser LIVE notification state must use the same composite identity.
-Assert-Match $phase14 'function p14LiveKey\(c,index=0\)' 'LIVE notification composite-key helper is missing.'
-Assert-Match $phase14 'c\?\.platform\|\|''SOOP''' 'LIVE notification key is not namespaced by platform.'
-Assert-Match $phase14 'p14LiveStates\.set\(p14LiveKey\(' 'Initial LIVE notification state is still keyed only by account.'
-Assert-Match $phase14 'const key=p14LiveKey\(' 'LIVE notification transitions are still keyed only by account.'
+# Native provider configuration must stay routed through the shared core.
+Assert-Match $primary 'provider\(channel\.platform\)\s*\.validate_account' 'Shared platform channel validation is missing.'
+Assert-Match $core 'pub async fn update_provider_configuration' 'Shared provider configuration service is missing.'
+Assert-Match $core 'NATIVE_PROVIDER_SECRET_KEYS' 'Shared provider secret allowlist is missing.'
+Assert-Match $core '"CHZZK_NID_AUT"' 'CHZZK NID_AUT must remain a protected provider secret.'
+Assert-Match $core '"CHZZK_NID_SES"' 'CHZZK NID_SES must remain a protected provider secret.'
+Assert-Match $core 'pub async fn test_soop_auth' 'Shared SOOP authentication test service is missing.'
+Assert-Match $guiSources 'core\.update_provider_configuration' 'Native Settings must save provider configuration through StreamArchiveCore.'
+Assert-Match $guiSources 'Request::ProviderTestSoop' 'Native Settings must retain the SOOP authentication test action.'
+Assert-Match $guiSources 'core\.test_soop_auth\(\)' 'Native SOOP authentication test must execute through StreamArchiveCore.'
+Assert-Match $guiSources 'PlatformId::Soop\s*=>\s*PlatformId::Chzzk' 'Native channel editor must retain SOOP/CHZZK platform selection.'
+Assert-Match $guiSources 'get_chzzk_nid_aut_draft' 'Native Settings must retain CHZZK NID_AUT input.'
+Assert-Match $guiSources 'get_chzzk_nid_ses_draft' 'Native Settings must retain CHZZK NID_SES input.'
+Assert-Match $guiUi 'platform' 'Native Queue/History presentation must retain platform identity.'
+Assert-NotMatch $guiSources '\baxum::|https?://127\.0\.0\.1|https?://localhost' 'Native provider controls must not depend on the retired Web adapter.'
 
-# API-side validation and user-facing platform selection must remain connected.
-Assert-Match $primary 'provider\(channel\.platform\)\s*\.validate_account' 'Server-side platform channel validation is missing.'
-Assert-Match $app '<option value="CHZZK">CHZZK</option>' 'Channel UI CHZZK selector is missing.'
-Assert-Match $app 'saveChzzkSecrets' 'CHZZK settings save flow is missing.'
-Assert-Match $app 'CHZZK_NID_AUT' 'CHZZK NID_AUT settings UI binding is missing.'
-Assert-Match $app 'CHZZK_NID_SES' 'CHZZK NID_SES settings UI binding is missing.'
-Assert-Match $app '\[\$\{platform\}\]' 'Runtime platform label rendering is missing.'
-Assert-Match $phase8 'function p8LiveRow\(x\).*x\.platform' 'Visible LIVE history renderer does not show the platform label.'
-
-# Export and settings-tab transitions must preserve multiplatform UX.
-Assert-Match $phase8 '\[''type'',''platform'',''status''' 'History CSV export is missing the platform column.'
-Assert-Match $phase8 '\[''LIVE'',String\(x\.platform\|\|''SOOP''\)\.toUpperCase\(\)' 'LIVE CSV rows do not preserve platform identity.'
-Assert-Match $app 'function deactivateChzzkSettings\(destination=''''\)' 'CHZZK settings cleanup does not inspect the destination tab.'
-Assert-Match $app 'destination===''notifications''' 'Leaving CHZZK for Notifications does not preserve notification panel isolation.'
-Assert-Match $app 'deactivateChzzkSettings\(tab\.dataset\.settingsTab\|\|''''\)' 'CHZZK settings tab listeners do not pass their destination identity.'
+# Shared diagnostics/tool discovery must retain the official Streamlink FFmpeg candidate.
+Assert-Match $soopVod 'C:\\Program Files\\Streamlink\\ffmpeg\\ffmpeg\.exe' 'SOOP VOD AUTO FFmpeg does not include Streamlink bundled FFmpeg.'
 
 Write-Host 'Provider contracts passed.'
-
-# Phase 19.5 UI cleanup regression: deleted DOM must not abort base initialization.
-Assert-NotMatch $app 'restoreChannels|channelBackupFile|importSettings|settingsImportFile|refreshHistory' 'Removed legacy DOM is still referenced by the base UI script.'
-Assert-Match $app '\$\(''add''\)\.onclick' 'Channel Add binding is missing from the base UI.'
-Assert-Match $app '\$\(''saveSecrets''\)\.onclick' 'SOOP secret-save binding is missing from the base UI.'
-Assert-Match $app '\$\(''vodAnalyze''\)\.onclick=vodAnalyze' 'VOD Analyze binding is missing from the base UI.'
-Assert-Match $app 'setTimeout\(installChzzkSettings,120\)' 'CHZZK authentication tab installation is missing.'
-Assert-Match $app 'api\(''/api/secrets/test/soop''' 'SOOP authentication test UI is missing.'
-Assert-Match $main '"/api/secrets/test/soop"' 'SOOP authentication test endpoint is missing.'
-Assert-Match $main 'C:\\Program Files\\Streamlink\\ffmpeg\\ffmpeg\.exe' 'Diagnostics do not include Streamlink bundled FFmpeg.'
-Assert-Match $soopVod 'C:\\Program Files\\Streamlink\\ffmpeg\\ffmpeg\.exe' 'SOOP VOD AUTO FFmpeg does not include Streamlink bundled FFmpeg.'
