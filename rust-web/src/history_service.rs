@@ -23,10 +23,10 @@ impl HistoryFilter {
     pub fn normalized(&self) -> Result<NormalizedHistoryFilter> {
         let from = normalize_date_input(self.from.as_deref())?;
         let to = normalize_date_input(self.to.as_deref())?;
-        if let (Some(from), Some(to)) = (&from, &to) {
-            if from > to {
-                bail!("history from date must not be after to date");
-            }
+        if let (Some(from), Some(to)) = (&from, &to)
+            && from > to
+        {
+            bail!("history from date must not be after to date");
         }
         Ok(NormalizedHistoryFilter {
             needle: self
@@ -453,12 +453,14 @@ mod tests {
     fn vod_search_status_and_limit_use_canonical_store() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("stream-archive.db")).unwrap();
-        let mut status = VodJobStatus::default();
-        status.job_id = Some("job-1".into());
-        status.state = "COMPLETED".into();
-        status.message = "Needle Message".into();
-        status.started_at = Some("2026-09-08T03:00:00Z".into());
-        status.finished_at = Some("2026-09-08T04:00:00Z".into());
+        let status = VodJobStatus {
+            job_id: Some("job-1".into()),
+            state: "COMPLETED".into(),
+            message: "Needle Message".into(),
+            started_at: Some("2026-09-08T03:00:00Z".into()),
+            finished_at: Some("2026-09-08T04:00:00Z".into()),
+            ..Default::default()
+        };
         store.upsert_vod(&status).unwrap();
 
         let history = load_history(
