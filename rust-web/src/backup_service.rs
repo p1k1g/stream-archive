@@ -85,12 +85,12 @@ impl BackupManager {
     }
 
     pub fn backup_dir(&self) -> PathBuf {
-        if !self.env_override {
-            if let Ok(Some(value)) = self.store.setting_value("BACKUP_DIR") {
-                let value = value.trim();
-                if !value.is_empty() {
-                    return PathBuf::from(value);
-                }
+        if !self.env_override
+            && let Ok(Some(value)) = self.store.setting_value("BACKUP_DIR")
+        {
+            let value = value.trim();
+            if !value.is_empty() {
+                return PathBuf::from(value);
             }
         }
         self.default_backup_dir.as_ref().clone()
@@ -413,10 +413,10 @@ fn is_owned_backup(path: &Path) -> bool {
 }
 
 pub fn resolve_backup_dir(backend_dir: &Path) -> Result<PathBuf> {
-    if let Ok(value) = env::var("STREAM_ARCHIVE_BACKUP_DIR") {
-        if !value.trim().is_empty() {
-            return Ok(PathBuf::from(value));
-        }
+    if let Ok(value) = env::var("STREAM_ARCHIVE_BACKUP_DIR")
+        && !value.trim().is_empty()
+    {
+        return Ok(PathBuf::from(value));
     }
     let app_root = backend_dir.parent().unwrap_or(backend_dir);
     let parent = app_root.parent().unwrap_or(app_root);
