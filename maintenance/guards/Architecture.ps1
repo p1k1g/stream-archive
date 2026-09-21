@@ -104,10 +104,14 @@ Assert-Match $guiSources 'bind_core_snapshot' 'Slint shell must bind runtime sta
 Assert-NotMatch $guiSources '\breqwest::|\baxum::|https?://127\.0\.0\.1|https?://localhost|rusqlite::|Command::new|taskkill|pkill|killall' 'Slint shell must not bypass shared core through HTTP, SQLite, or direct process control.'
 Assert-Match $guiUi 'export\s+global\s+AppState' 'Slint shell state boundary is missing.'
 Assert-Match $guiUi 'callback\s+refresh-requested' 'Slint runtime refresh callback is missing.'
-foreach ($page in @('LIVE', 'VOD', 'Queue', 'History', 'Maintenance', 'Settings')) {
+foreach ($page in @('LIVE', 'VOD', 'Queue', 'History', 'Settings')) {
     Assert-Match $guiUi ([regex]::Escape("page: `"$page`"")) "Slint navigation page missing: $page"
 }
+Assert-NotMatch $guiUi 'page:\s*"Maintenance"' 'Maintenance must stay nested under Settings rather than return as a top-level navigation page.'
 Assert-NotMatch $guiUi 'page:\s*"Dashboard"' 'Dashboard must stay removed; its information is available through Settings diagnostics.'
+Assert-Match $guiUi 'settings-view:\s*"Settings"' 'Settings must own an internal Settings/Manage view boundary.'
+Assert-Match $guiUi 'settings-view\s*==\s*"Manage"' 'Settings must expose the nested management view.'
+Assert-Match $guiUi 'MaintenancePage\s*\{' 'Backup/restore/diagnostics/logs must remain reachable inside Settings.'
 Assert-Match $guiUi 'active-page:\s*"LIVE"' 'Configured native startup must default to the LIVE page.'
 
 # Provider registry/facades.
@@ -154,6 +158,6 @@ Assert-Match $guiSources 'core\.storage_snapshot\(' 'Native storage diagnostics 
 Assert-Match $guiUi 'Phase 21\.9: Settings owns editable backup policy presentation\.' 'Native Settings must expose backup policy presentation.'
 Assert-Match $guiUi 'MaintenanceState\.save-backup-policy\(' 'Native Settings must save backup policy through the shared MaintenanceState callback.'
 Assert-Match $guiUi 'MaintenanceState\.backup-directory' 'Native Settings must bind the shared backup directory policy.'
-Assert-Match $maintenanceUi 'MaintenanceState\.create-backup\(' 'Native Maintenance must retain operational backup creation.'
-Assert-Match $maintenanceUi 'MaintenanceState\.request-restore\(' 'Native Maintenance must retain operational restore actions.'
+Assert-Match $maintenanceUi 'MaintenanceState\.create-backup\(' 'Nested Settings management must retain operational backup creation.'
+Assert-Match $maintenanceUi 'MaintenanceState\.request-restore\(' 'Nested Settings management must retain operational restore actions.'
 Assert-NotMatch $guiSources '\bSha256::new\b|\bsha2::Digest\b|\bread_to_end\s*\(|\bstd::io::copy\s*\(' 'Slint presentation must not implement backup hashing/copying.'
