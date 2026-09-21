@@ -209,11 +209,6 @@ impl BackupManager {
         })
     }
 
-    pub async fn list(&self) -> Result<Vec<BackupInfo>> {
-        let _guard = self.operation.lock().await;
-        self.list_locked()
-    }
-
     pub async fn create_manual(&self) -> Result<BackupInfo> {
         let _guard = self.operation.lock().await;
         self.create_locked("manual")
