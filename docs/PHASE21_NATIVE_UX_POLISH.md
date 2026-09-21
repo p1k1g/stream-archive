@@ -7,7 +7,7 @@ Phase 21.9 builds on the Phase 21.8 Windows Native portable cutover. It keeps th
 This slice covers:
 
 - shared storage-capacity diagnostics surfaced in the Native LIVE page;
-- backup policy in Settings and backup/restore operations in Maintenance;
+- backup policy plus backup/restore/diagnostics/logs consolidated under the top-level Settings page;
 - History/status UX regression protection from Phase 21.8;
 - Windows destination-claim sidecar visibility without weakening no-clobber locking;
 - a Native/Web parity audit to define the later Phase 22 cleanup boundary.
@@ -42,9 +42,9 @@ Native refresh is bounded: initial load, explicit refresh, return to LIVE, and a
 
 ## Backup information architecture
 
-Native backup configuration and operations now have separate presentation responsibilities.
+Native backup configuration and operations share one top-level Settings page but retain separate presentation responsibilities.
 
-### Settings — backup policy
+### Settings -> 설정 — backup policy
 
 Settings owns:
 
@@ -56,7 +56,7 @@ Settings owns:
 
 `0` for maximum count or retention days means unlimited, matching the existing shared policy semantics.
 
-### Maintenance — backup / restore
+### Settings -> 관리 — backup / restore
 
 Maintenance owns:
 
@@ -170,8 +170,8 @@ Then use `dist\stream-archive`:
 2. Open LIVE and verify storage rows show the actual configured drive, free/total capacity, usage, and Korean status.
 3. Verify multiple LIVE paths on the same drive collapse to one volume row while their roles/paths remain visible.
 4. Refresh storage manually and return to LIVE from another page.
-5. Check Settings -> 백업 정책; edit/save policy and restart to verify persistence.
-6. Check 관리 -> 백업 / 복원; create a backup and inspect time/kind/size/SHA-256/integrity.
+5. Check 설정 -> 설정 -> 백업 정책; edit/save policy and restart to verify persistence.
+6. Check 설정 -> 관리 -> 백업 / 복원; create a backup and inspect time/kind/size/SHA-256/integrity.
 7. Confirm restore remains gated while Watcher/VOD/Queue work is active and uses the pre-restore safety backup.
 8. In History test `STOP`, `병합`, `진행`, `취소`, and `녹화`.
 9. Switch `전체 / LIVE / VOD` and confirm the filter row does not shift.
