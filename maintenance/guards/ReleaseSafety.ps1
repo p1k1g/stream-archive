@@ -65,8 +65,28 @@ try {
 
     $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
     $package = Read-RepoFile 'BUILD_PORTABLE.bat'
+    $runDev = Read-RepoFile 'RUN_DEV.bat'
+    $releaseMetadata = Read-RepoFile 'maintenance/Write-ReleaseMetadata.ps1'
+    $readme = Read-RepoFile 'README.md'
+    $agents = Read-RepoFile 'AGENTS.md'
+    $contributing = Read-RepoFile 'CONTRIBUTING.md'
+    $unixCli = Read-RepoFile 'docs/UNIX_CLI.md'
     $manifest = Read-RepoFile 'rust-runtime/Cargo.toml'
     $guiManifest = Read-RepoFile 'rust-gui/Cargo.toml'
+
+    foreach ($activeRuntimePath in @(
+        @{ Name = 'PR workflow'; Text = $workflow },
+        @{ Name = 'portable build'; Text = $package },
+        @{ Name = 'developer runner'; Text = $runDev },
+        @{ Name = 'release metadata'; Text = $releaseMetadata },
+        @{ Name = 'README'; Text = $readme },
+        @{ Name = 'AGENTS'; Text = $agents },
+        @{ Name = 'CONTRIBUTING'; Text = $contributing },
+        @{ Name = 'Unix CLI guide'; Text = $unixCli },
+        @{ Name = 'GUI manifest'; Text = $guiManifest }
+    )) {
+        Assert-NotMatch $activeRuntimePath.Text 'rust-web[\\/]' "Active runtime path must use rust-runtime, not rust-web: $($activeRuntimePath.Name)"
+    }
     Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
     Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
     Assert-NotMatch $workflow 'runs-on:\s*\[?self-hosted' 'Public CI must not depend on a private self-hosted runner.'

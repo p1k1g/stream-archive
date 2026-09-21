@@ -5,7 +5,7 @@
 ## Canonical runtime
 
 - `rust-runtime/src/main.rs`: HTTP/Web presentation이 없는 compatibility headless runtime entry. `StreamArchiveCore`를 열고 Queue/backup/history sync와 선택적 watcher를 구동하며 종료 시 shared runtime cleanup을 사용한다.
-- `rust-runtime/src/lib.rs`: shared Rust library boundary. `rust-runtime` crate 이름은 유지하지만 제품 핵심은 presentation-neutral runtime/service modules이다.
+- `rust-runtime/src/lib.rs`: shared Rust library boundary. source directory는 `rust-runtime`이고 Cargo package / Rust crate compatibility identity는 `stream-archive-server` / `stream_archive_server`로 유지한다.
 - `rust-runtime/src/app_core.rs`: `StreamArchiveCore` service facade. SQLite/settings/secrets/channels/LIVE watcher/VOD/Queue/History/Backup/Storage/process lifecycle의 canonical application boundary.
 - `rust-runtime/src/backup_service.rs`: reusable BackupManager/service boundary. managed backup policy/list/create/restore/integrity/retention을 presentation과 분리한다.
 - `rust-gui/Cargo.toml`: Windows Slint desktop frontend crate.
