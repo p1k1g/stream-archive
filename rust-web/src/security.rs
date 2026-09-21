@@ -16,6 +16,12 @@ const SECRET_KEYS: &[&str] = &[
     "CHZZK_NID_SES",
 ];
 
+#[cfg(test)]
+fn is_protected(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.starts_with(DPAPI_PREFIX) || normalized.starts_with(NATIVE_SECRET_PREFIX)
+}
+
 pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
