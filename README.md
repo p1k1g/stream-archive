@@ -285,7 +285,7 @@ cargo build --locked --release --manifest-path rust-web/Cargo.toml
 
 SQLite primary 전환 이후 핵심 백업 대상은 `data/stream-archive.db`입니다.
 
-Native UI의 관리 → 백업에서 온라인 백업을 관리할 수 있으며, Web compatibility UI도 같은 shared backup service를 유지합니다. 기본 관리형 백업 위치는 portable 디렉터리의 형제 폴더인 `stream-archive-backups`이며, `STREAM_ARCHIVE_BACKUP_DIR`로 위치를 고정할 수 있습니다.
+Native UI의 설정 → 관리에서 백업 정책, 온라인 백업 생성/무결성 확인/복원을 함께 관리할 수 있으며, Web compatibility UI도 같은 shared backup service를 유지합니다. 기본 관리형 백업 위치는 portable 디렉터리의 형제 폴더인 `stream-archive-backups`이며, `STREAM_ARCHIVE_BACKUP_DIR`로 위치를 고정할 수 있습니다.
 
 오프라인 수동 백업은 `StreamArchive.exe`를 닫고 Web compatibility server도 중지한 뒤 portable package의 다음 스크립트를 사용할 수 있습니다.
 
@@ -421,7 +421,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ VOD Queue + LIVE/VOD History
 - ✅ Native Backup/Restore + Diagnostics/Runtime Logs
 - ✅ Windows Native portable packaging / startup 전환
-- 🚧 Native UX polish: LIVE 저장공간, 설정 내부 Backup 관리 통합, 내부 claim sidecar 노출 개선
+- 🚧 Native UX polish: LIVE 저장공간, 설정 내부 일반/관리 정리 및 Backup 관리 통합, 내부 claim sidecar 노출 개선
 - 다음 단계: Phase 22에서 Native/Web parity 결과를 기준으로 legacy Web/launcher 정리 범위 결정
 - Slint GUI는 shared Rust core를 직접 호출하며 localhost HTTP, direct SQLite, direct process control을 사용하지 않음
 - 기능 parity와 regression 검증이 끝난 뒤 기존 browser/Web UI 및 launcher 의존성을 단계적으로 제거
