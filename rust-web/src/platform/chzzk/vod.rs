@@ -1415,7 +1415,7 @@ fn is_lock_contention(err: &std::io::Error) -> bool {
     }
     #[cfg(windows)]
     {
-        return matches!(err.raw_os_error(), Some(32) | Some(33));
+        matches!(err.raw_os_error(), Some(32) | Some(33))
     }
     #[cfg(not(windows))]
     {
