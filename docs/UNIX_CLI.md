@@ -1,6 +1,6 @@
 # Unix / headless CLI
 
-Phase 20 introduces a CLI-oriented Linux/macOS path without adding a second GUI stack. Windows remains the current packaged GUI/Web UI product during Phase 20; Phase 21 will move the Windows product surface to Slint.
+Linux/macOS use a CLI-oriented headless path without adding a second GUI stack. Windows uses the Slint Native UI as the default product surface.
 
 The Unix CLI binary is:
 
@@ -42,7 +42,7 @@ Default layout:
   stream-archive.db
 ```
 
-The same overrides used by the server are honored:
+The same canonical runtime overrides are honored:
 
 ```bash
 export STREAM_ARCHIVE_BACKEND_DIR=/srv/stream-archive/backend
@@ -102,9 +102,9 @@ It reports:
 
 A missing required tool causes a non-zero exit code so the command can also be used in scripts.
 
-## Start the server
+## Start the headless runtime
 
-Run the Rust server in the foreground:
+Run the shared Rust headless runtime in the foreground:
 
 ```bash
 stream-archive-cli serve
@@ -116,9 +116,9 @@ To start the LIVE watcher automatically:
 stream-archive-cli serve --watch
 ```
 
-The CLI locates `stream-archive-server` next to itself first and then searches `PATH`. It passes the canonical backend path through `STREAM_ARCHIVE_BACKEND_DIR` and does not add a browser launcher.
+The CLI locates the compatibility-named `stream-archive-server` headless runtime next to itself first and then searches `PATH`. It passes the canonical backend path through `STREAM_ARCHIVE_BACKEND_DIR`; no HTTP listener or browser launcher is started.
 
-Use `Ctrl+C` for normal shutdown. The server remains responsible for owned LIVE/VOD process-group cleanup.
+Use `Ctrl+C` for normal shutdown. The headless runtime remains responsible for owned LIVE/VOD process-group cleanup.
 
 ## Linux secret requirement
 
@@ -130,4 +130,4 @@ On headless Linux hosts without Secret Service, secret injection/configuration n
 
 Phase 20 is responsible for cross-platform runtime readiness, Unix/headless operation, tool discovery, process ownership, native secret storage and integration coverage.
 
-Phase 21 will introduce a Slint-based Windows GUI over the shared Rust core. The Phase 20 Unix CLI is therefore kept free of Windows GUI dependencies such as PowerShell dialogs, WinForms or WebView-specific behavior.
+The Unix CLI remains free of Windows GUI dependencies such as PowerShell dialogs, WinForms or WebView-specific behavior.
