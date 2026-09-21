@@ -104,6 +104,115 @@ export component MaintenancePage inherits VerticalLayout {
     if MaintenanceState.section == "Backup": VerticalLayout {
         spacing: 10px;
 
+        // Phase 21.9: Settings > Manage owns backup policy and operations.
+        Rectangle {
+            min-height: 188px;
+            vertical-stretch: 0;
+            background: #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #e2e8f0;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                HorizontalLayout {
+                    height: 28px;
+                    vertical-stretch: 0;
+                    Text {
+                        text: "백업 정책";
+                        color: #0f172a;
+                        font-size: 17px;
+                        font-weight: 700;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        height: 28px;
+                        text: "정책 저장";
+                        enabled: MaintenanceState.loaded && !MaintenanceState.busy;
+                        clicked => { MaintenanceState.save-backup-policy(); }
+                    }
+                }
+                Text {
+                    text: "자동 백업의 위치와 보존 정책을 설정합니다. 아래에서 즉시 백업 생성과 복원도 함께 관리합니다.";
+                    color: #64748b;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    height: 34px;
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    LineEdit {
+                        height: 34px;
+                        horizontal-stretch: 1;
+                        text <=> MaintenanceState.backup-directory;
+                        enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
+                        placeholder-text: "백업 폴더";
+                    }
+                    Button {
+                        width: 84px;
+                        height: 32px;
+                        text: "찾아보기...";
+                        enabled: !MaintenanceState.busy && MaintenanceState.backup-directory-editable;
+                        clicked => { MaintenanceState.pick-backup-directory(); }
+                    }
+                }
+                if !MaintenanceState.backup-directory-editable: Text {
+                    text: "STREAM_ARCHIVE_BACKUP_DIR에서 관리되는 경로이므로 읽기 전용입니다.";
+                    color: #a16207;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    height: 48px;
+                    vertical-stretch: 0;
+                    spacing: 10px;
+                    VerticalLayout {
+                        width: 126px;
+                        horizontal-stretch: 0;
+                        spacing: 2px;
+                        Text { text: "자동 백업"; color: #64748b; font-size: 10px; }
+                        Button {
+                            height: 30px;
+                            text: MaintenanceState.backup-enabled ? "켜짐" : "꺼짐";
+                            enabled: !MaintenanceState.busy;
+                            clicked => { MaintenanceState.toggle-backup-enabled(); }
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text { text: "백업 주기(시간)"; color: #64748b; font-size: 10px; }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-interval-hours;
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text { text: "최대 백업 개수 · 0 = 제한 없음"; color: #64748b; font-size: 10px; }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-keep-count;
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text { text: "보관 기간(일) · 0 = 제한 없음"; color: #64748b; font-size: 10px; }
+                        LineEdit {
+                            height: 30px;
+                            text <=> MaintenanceState.backup-retention-days;
+                            enabled: !MaintenanceState.busy;
+                        }
+                    }
+                }
+            }
+        }
+
         Rectangle {
             min-height: 92px;
             vertical-stretch: 0;
@@ -137,7 +246,7 @@ export component MaintenancePage inherits VerticalLayout {
                     text: "백업 위치: " + (MaintenanceState.backup-directory != "" ? MaintenanceState.backup-directory : "-");
                 }
                 SummaryLabel {
-                    text: "자동 백업 정책은 설정 탭에서 변경합니다. 이 화면은 백업 생성, 무결성 확인, 복원만 담당합니다.";
+                    text: "현재 정책으로 수동 백업을 생성하고, 무결성 확인과 복원을 수행합니다.";
                 }
             }
         }
