@@ -12,7 +12,7 @@ For users upgrading from an earlier private build, startup performs only a bound
 
 ## Online backup
 
-The native Slint UI keeps backup configuration and operations under one top-level **설정** page. **설정 -> 설정 -> 백업 정책** edits automatic-backup settings, while **설정 -> 관리 -> 백업 / 복원** creates, lists, verifies, and restores managed backups. Diagnostics and Runtime Logs are also available from the nested 관리 view. Both paths use the same BackupManager/StreamArchiveCore service and canonical SQLite policy. The retained Web UI exposes the same managed backup behavior through its compatibility adapter.
+The native Slint UI keeps administration under one top-level **설정** page. **설정 -> 일반** contains provider/runtime configuration, while **설정 -> 관리** owns the complete backup surface: automatic-backup policy, managed backup creation/list/integrity/restore, Diagnostics, and Runtime Logs. These views use the same BackupManager/StreamArchiveCore service and canonical SQLite policy. The retained Web UI exposes the same managed backup behavior through its compatibility adapter.
 
 Defaults:
 
