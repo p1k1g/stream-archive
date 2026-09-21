@@ -9,7 +9,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-cargo build --locked --release --manifest-path ".\rust-web\Cargo.toml"
+cargo build --locked --release --manifest-path ".\rust-runtime\Cargo.toml"
 if errorlevel 1 (
   echo.
   echo [ERROR] Stream Archive shared/headless runtime release build failed.
@@ -57,7 +57,7 @@ mkdir "%OUT%\maintenance" || exit /b 1
 mkdir "%OUT%\docs" || exit /b 1
 
 copy /y "rust-gui\target\release\stream-archive-gui.exe" "%OUT%\StreamArchive.exe" >nul || exit /b 1
-copy /y "rust-web\target\release\stream-archive-server.exe" "%OUT%\stream-archive-server.exe" >nul || exit /b 1
+copy /y "rust-runtime\target\release\stream-archive-server.exe" "%OUT%\stream-archive-server.exe" >nul || exit /b 1
 copy /y "maintenance\Backup-StreamArchiveData.ps1" "%OUT%\maintenance\Backup-StreamArchiveData.ps1" >nul || exit /b 1
 copy /y "maintenance\Restore-StreamArchiveData.ps1" "%OUT%\maintenance\Restore-StreamArchiveData.ps1" >nul || exit /b 1
 copy /y "docs\OPERATIONS.md" "%OUT%\docs\OPERATIONS.md" >nul || exit /b 1
@@ -89,7 +89,7 @@ if "%PRESERVE_RUNTIME%"=="1" (
 >>"%OUT%\RESTORE_DATA.bat" echo cd /d "%%~dp0"
 >>"%OUT%\RESTORE_DATA.bat" echo powershell -NoProfile -ExecutionPolicy Bypass -File ".\maintenance\Restore-StreamArchiveData.ps1" %%*
 
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\maintenance\Write-ReleaseMetadata.ps1" -OutputPath ".\%OUT%\RELEASE_INFO.txt" -ManifestPath ".\rust-web\Cargo.toml"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\maintenance\Write-ReleaseMetadata.ps1" -OutputPath ".\%OUT%\RELEASE_INFO.txt" -ManifestPath ".\rust-runtime\Cargo.toml"
 if errorlevel 1 exit /b 1
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$names=@('StreamArchive.exe','stream-archive-server.exe'); $lines=foreach($n in $names){$h=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path '.\%OUT%' $n)).Hash.ToLowerInvariant(); $h+'  '+$n}; $lines | Set-Content -LiteralPath '.\%OUT%\SHA256SUMS.txt' -Encoding ASCII"

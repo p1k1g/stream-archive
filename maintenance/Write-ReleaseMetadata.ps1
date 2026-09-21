@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
-    [string]$ManifestPath = ".\rust-web\Cargo.toml"
+    [string]$ManifestPath = ".\rust-runtime\Cargo.toml"
 )
 
 $ErrorActionPreference = 'Stop'
