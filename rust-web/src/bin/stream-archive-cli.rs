@@ -199,7 +199,7 @@ fn command_serve(args: &[String]) -> Result<()> {
         );
     }
     let server = server_binary().context(
-        "stream-archive-server was not found next to the CLI or in PATH; build/install both binaries",
+        "stream-archive-server headless runtime was not found next to the CLI or in PATH; build/install both binaries",
     )?;
     let mut command = Command::new(&server);
     command.env("STREAM_ARCHIVE_BACKEND_DIR", &backend);
@@ -210,7 +210,7 @@ fn command_serve(args: &[String]) -> Result<()> {
         .status()
         .with_context(|| format!("failed to start {}", server.display()))?;
     if !status.success() {
-        bail!("stream-archive-server exited with {status}");
+        bail!("stream-archive-server headless runtime exited with {status}");
     }
     Ok(())
 }
