@@ -96,7 +96,7 @@ try {
     Assert-Match $package '(?s)>"%OUT%\\RUN_HEADLESS\.bat".*?stream-archive-server\.exe' 'RUN_HEADLESS.bat must launch the compatible headless runtime.'
     Assert-NotMatch $package 'stream-archive-launcher\.exe|RUN_WEB\.bat|RUN_SERVER_CONSOLE\.bat|Caddyfile\.example|REVERSE_PROXY\.md|LOCAL_LAUNCHER\.md' 'Retired Web launcher/proxy package artifacts must not return.'
     Assert-Match $package 'dist\\stream-archive' 'Portable package output must use the Stream Archive namespace.'
-    Assert-Match $package 'PHASE21_NATIVE_UX_POLISH\.md' 'Portable package must include the Phase 21.9 Native UX QA document.'
+    Assert-Match $package 'docs\\OPERATIONS\.md' 'Portable package must include current operations guidance.'
     Assert-Match $package 'THIRD_PARTY_NOTICES\.md' 'Portable package must include third-party notices.'
     Assert-Match $package 'LICENSE' 'Portable package must include the project license.'
     Assert-Match $manifest 'name\s*=\s*"stream-archive-server"' 'Cargo package must keep the compatible shared/headless runtime name.'
