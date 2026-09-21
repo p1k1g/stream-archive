@@ -119,10 +119,10 @@ pub fn global() -> Result<Store> {
 
 impl Store {
     pub fn default_path(backend_dir: &Path) -> PathBuf {
-        if let Ok(value) = env::var("STREAM_ARCHIVE_DATA_DIR") {
-            if !value.trim().is_empty() {
-                return PathBuf::from(value).join(DATABASE_FILE);
-            }
+        if let Ok(value) = env::var("STREAM_ARCHIVE_DATA_DIR")
+            && !value.trim().is_empty()
+        {
+            return PathBuf::from(value).join(DATABASE_FILE);
         }
         backend_dir
             .parent()
@@ -270,7 +270,7 @@ impl Store {
         let source = self.conn()?;
         let mut target = Connection::open(destination)
             .with_context(|| format!("failed to create backup {}", destination.display()))?;
-        let backup = Backup::new(&*source, &mut target)?;
+        let backup = Backup::new(&source, &mut target)?;
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
         target.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
@@ -285,7 +285,7 @@ impl Store {
             anyhow::bail!("backup SQLite quick_check failed: {check}");
         }
         let mut target = self.conn()?;
-        let backup = Backup::new(&source, &mut *target)?;
+        let backup = Backup::new(&source, &mut target)?;
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
         target.execute_batch("PRAGMA foreign_keys=ON;")?;
