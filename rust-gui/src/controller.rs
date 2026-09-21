@@ -1330,13 +1330,14 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let weak = ui.as_weak();
     let edit_draft = draft.clone();
     state.on_setting_edited(move |index, value| {
-        if let Some(ui) = weak.upgrade() {
-            if index >= 0 && !ui.global::<AppState>().get_settings_busy() {
-                let mut draft = edit_draft.borrow_mut();
-                draft.edit(index as usize, value.to_string());
-                ui.global::<AppState>()
-                    .set_settings_dirty(!draft.patch().is_empty());
-            }
+        if let Some(ui) = weak.upgrade()
+            && index >= 0
+            && !ui.global::<AppState>().get_settings_busy()
+        {
+            let mut draft = edit_draft.borrow_mut();
+            draft.edit(index as usize, value.to_string());
+            ui.global::<AppState>()
+                .set_settings_dirty(!draft.patch().is_empty());
         }
     });
 
@@ -1373,17 +1374,16 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let pick_draft = draft.clone();
     let pick_sender = sender.clone();
     state.on_pick_setting(move |index| {
-        if let Some(ui) = weak.upgrade() {
-            if let Some(field) = usize::try_from(index)
+        if let Some(ui) = weak.upgrade()
+            && let Some(field) = usize::try_from(index)
                 .ok()
                 .and_then(|index| pick_draft.borrow().fields.get(index).cloned())
-            {
-                send_settings(
-                    &ui,
-                    &pick_sender,
-                    Request::Pick(index as usize, field.kind, field.value),
-                );
-            }
+        {
+            send_settings(
+                &ui,
+                &pick_sender,
+                Request::Pick(index as usize, field.kind, field.value),
+            );
         }
     });
 
