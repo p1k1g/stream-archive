@@ -2,7 +2,7 @@
 
 **SOOP과 CHZZK의 LIVE 녹화 및 VOD 다운로드를 Windows Native UI에서 관리하는 로컬 미디어 아카이브입니다.**
 
-Rust + Slint + SQLite 기반의 Native UI를 기본으로 사용하며, 기존 Rust/Axum Web UI는 호환·문제 해결용 fallback으로 유지합니다. 현재는 Windows portable 환경을 중심으로 지원합니다. LIVE/VOD 수명주기, Queue, 설정, History, 백업/복구를 Rust 런타임에서 관리하고 Streamlink · yt-dlp · FFmpeg를 외부 미디어 처리 도구로 사용합니다.
+Rust + Slint + SQLite 기반의 Native UI를 기본으로 사용하며, Windows portable 환경을 중심으로 지원합니다. Linux/macOS에서는 CLI/headless 경로를 유지합니다. LIVE/VOD 수명주기, Queue, 설정, History, 백업/복구를 Rust 런타임에서 관리하고 Streamlink · yt-dlp · FFmpeg를 외부 미디어 처리 도구로 사용합니다.
 
 > [!IMPORTANT]
 > Stream Archive는 현재 **SOOP LIVE/VOD와 CHZZK LIVE/VOD만 지원**합니다. CATCH, 클립, 쇼츠/짧은 영상 및 기타 별도 콘텐츠 유형은 지원하지 않습니다.
@@ -53,14 +53,13 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 ### 공통
 
 - Windows Slint Native UI 기반 관리
-- 기존 Web UI compatibility fallback
 - LIVE watcher 및 녹화 상태 관리
 - VOD Queue / History / 재시도 / 취소
 - SQLite 기반 설정·채널·History 저장
 - 애플리케이션 종료 시 소유한 LIVE/VOD child process 정리
 - 데이터 백업 / 복구 / 진단 / Runtime Logs
 - Windows portable package
-- native secret 보호 및 Web 관리 토큰 지원
+- native secret 보호
 
 ## 지원 현황
 
@@ -107,19 +106,9 @@ StreamArchiveCore
 data\stream-archive.db
 ```
 
-Explorer에서 `StreamArchive.exe`를 직접 더블클릭해도 portable root의 `backend\`와 `data\stream-archive.db`를 기준으로 동작합니다. 기존 브라우저 UI가 필요한 경우에만 `RUN_WEB.bat`을 사용합니다.
+Explorer에서 `StreamArchive.exe`를 직접 더블클릭해도 portable root의 `backend\`와 `data\stream-archive.db`를 기준으로 동작합니다.
 
-```text
-RUN_WEB.bat
-   ↓
-stream-archive-launcher.exe
-   ↓
-stream-archive-server.exe
-   ↓
-http://127.0.0.1:8787/
-```
-
-개발 환경에서 기존 Web 런타임을 직접 실행하려면 저장소 루트에서 `RUN_DEV.bat`을 사용하고, Native GUI는 Cargo로 직접 실행할 수 있습니다.
+개발 환경에서 headless runtime을 직접 실행하려면 저장소 루트에서 `RUN_DEV.bat`을 사용하고, Native GUI는 Cargo로 직접 실행할 수 있습니다.
 
 ```powershell
 .\RUN_DEV.bat
@@ -128,7 +117,7 @@ cargo run --locked --manifest-path .\rust-gui\Cargo.toml
 
 ### 3. 종료
 
-Native 앱은 창을 정상 종료합니다. Web compatibility server를 직접 실행한 경우 서버 콘솔에서 `Ctrl+C`를 누릅니다.
+Native 앱은 창을 정상 종료합니다. 선택적으로 headless runtime을 직접 실행한 경우 콘솔에서 `Ctrl+C`를 누릅니다.
 
 Stream Archive는 종료 과정에서 자신이 소유한 LIVE/VOD child process를 정리합니다. 프로세스 이름 전체를 대상으로 하는 `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe` 같은 방식은 사용하지 않습니다.
 
@@ -140,7 +129,7 @@ Stream Archive는 종료 과정에서 자신이 소유한 LIVE/VOD child process
 2. 저장 경로와 필요한 설정을 구성합니다.
 3. Watcher를 시작합니다.
 4. 방송이 시작되면 Recorder가 LIVE 녹화를 시작합니다.
-5. 방송 종료, 수동 중지 또는 서버 종료 시 소유한 녹화 프로세스를 정리합니다.
+5. 방송 종료, 수동 중지 또는 런타임 종료 시 소유한 녹화 프로세스를 정리합니다.
 
 ### VOD
 
@@ -155,16 +144,16 @@ Stream Archive는 종료 과정에서 자신이 소유한 LIVE/VOD child process
 ```text
 Windows Slint Native GUI ─┐
 Unix CLI/headless ─────────┼──> StreamArchiveCore / shared Rust runtime
-Axum Web compatibility ────┘             │
+Headless runtime binary ───┘             │
                                          ├─ SQLite: data/stream-archive.db
                                          ├─ NativeWatcherManager / RecorderManager
                                          ├─ VOD / Queue / History / Backup
                                          └─ Streamlink / yt-dlp / FFmpeg
 ```
 
-Windows portable의 기본 진입점은 Slint Native GUI이며 localhost HTTP를 애플리케이션 API로 사용하지 않습니다. Native UI는 `StreamArchiveCore`를 직접 호출하고 Web presentation과 같은 SQLite/runtime 서비스를 공유합니다.
+Windows portable의 기본 진입점은 Slint Native GUI이며 localhost HTTP를 애플리케이션 API로 사용하지 않습니다. Native UI와 headless runtime은 모두 `StreamArchiveCore`와 같은 SQLite/runtime 서비스를 직접 사용합니다.
 
-기존 Axum/browser UI는 Phase 21.8에서 제거하지 않고 `RUN_WEB.bat` 기반의 compatibility fallback으로 유지합니다. 이전 WinUI/PowerShell 런타임과 INI/TXT 설정 mirror는 제거된 상태를 유지합니다.
+Phase 22.3에서 기존 Axum/browser presentation, browser launcher와 Web fallback package 경로를 제거했습니다. 이전 WinUI/PowerShell 런타임과 INI/TXT 설정 mirror도 제거된 상태를 유지합니다.
 
 Phase 20의 Linux/macOS 경로는 계속 `stream-archive-cli` 기반 headless 인터페이스를 사용합니다.
 
@@ -182,27 +171,8 @@ data/stream-archive.db
 
 이전 개발 버전의 `data/soop.db`만 존재하고 `stream-archive.db`가 없는 경우에는 시작 시 새 파일명으로 한 번 이전합니다. INI/TXT 설정 파일을 런타임 원본이나 mirror로 사용하지 않습니다.
 
-Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_SES` 같은 민감 정보가 CurrentUser DPAPI로 암호화된 형태로 SQLite에 저장됩니다. Linux/macOS에서는 SQLite에 평문 secret 대신 불투명한 `native-secret:v1:` 참조만 저장하고, 실제 secret은 각각 Linux Secret Service 또는 macOS Keychain에 저장합니다. Linux에서는 `secret-tool`과 사용 가능한 Secret Service 세션이 필요하며, native store를 사용할 수 없을 때 평문 저장으로 자동 fallback하지 않습니다. Web API는 평문 secret을 반환하지 않습니다.
+Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_SES` 같은 민감 정보가 CurrentUser DPAPI로 암호화된 형태로 SQLite에 저장됩니다. Linux/macOS에서는 SQLite에 평문 secret 대신 불투명한 `native-secret:v1:` 참조만 저장하고, 실제 secret은 각각 Linux Secret Service 또는 macOS Keychain에 저장합니다. Linux에서는 `secret-tool`과 사용 가능한 Secret Service 세션이 필요하며, native store를 사용할 수 없을 때 평문 저장으로 자동 fallback하지 않습니다.
 
-Web compatibility server의 기본 수신 주소는 로컬 loopback입니다. Native GUI 기본 실행에는 이 HTTP listener가 필요하지 않습니다.
-
-```text
-127.0.0.1:8787
-```
-
-## Web 관리 토큰
-
-`STREAM_ARCHIVE_TOKEN`을 지정하지 않으면 Web compatibility server가 관리 토큰을 자동 생성합니다.
-
-생성된 토큰은 Web server 시작 시 콘솔에 출력되고 다음 위치에 저장됩니다.
-
-```text
-backend/.stream-archive/web-token.txt
-```
-
-브라우저 자격 증명이나 세션을 잃은 경우 이 토큰으로 다시 인증할 수 있습니다.
-
-`web-token.txt`는 관리 권한을 부여하는 secret이므로 공유하거나 Git에 커밋하지 마세요.
 
 ## 빌드
 
@@ -220,10 +190,10 @@ Windows에서 실제 실행·테스트·배포에 사용하는 단일 빌드 진
 .\BUILD_PORTABLE.bat
 ```
 
-`BUILD_PORTABLE.bat`은 Web compatibility runtime과 Slint Native GUI를 각각 tracked `Cargo.lock`으로 release build한 뒤 실행 가능한 portable 디렉터리를 조립합니다.
+`BUILD_PORTABLE.bat`은 shared/headless Rust runtime과 Slint Native GUI를 각각 tracked `Cargo.lock`으로 release build한 뒤 실행 가능한 portable 디렉터리를 조립합니다.
 
 ```text
-rust-web release build + rust-gui release build
+shared/headless rust-web build + rust-gui release build
                     ↓
              dist\stream-archive
 ```
@@ -239,10 +209,8 @@ dist\stream-archive
 ```text
 StreamArchive.exe
 RUN.bat
-RUN_WEB.bat
 stream-archive-server.exe
-stream-archive-launcher.exe
-RUN_SERVER_CONSOLE.bat
+RUN_HEADLESS.bat
 BACKUP_DATA.bat
 RESTORE_DATA.bat
 RELEASE_INFO.txt
@@ -253,7 +221,7 @@ maintenance\...
 docs\...
 ```
 
-`RUN.bat`과 `StreamArchive.exe`가 기본 Native 경로이고, `RUN_WEB.bat`은 기존 browser/Axum 경로를 유지하는 fallback입니다.
+`RUN.bat`과 `StreamArchive.exe`가 기본 Native 경로이며, `RUN_HEADLESS.bat`은 선택적인 headless runtime 경로입니다.
 
 별도의 `BUILD_RELEASE.bat` wrapper는 사용하지 않습니다. 컴파일 결과만 확인해야 하는 개발 작업에서는 Cargo를 직접 실행할 수 있습니다.
 
@@ -285,9 +253,9 @@ cargo build --locked --release --manifest-path rust-web/Cargo.toml
 
 SQLite primary 전환 이후 핵심 백업 대상은 `data/stream-archive.db`입니다.
 
-Native UI의 설정 → 관리에서 백업 정책, 온라인 백업 생성/무결성 확인/복원을 함께 관리할 수 있으며, Web compatibility UI도 같은 shared backup service를 유지합니다. 기본 관리형 백업 위치는 portable 디렉터리의 형제 폴더인 `stream-archive-backups`이며, `STREAM_ARCHIVE_BACKUP_DIR`로 위치를 고정할 수 있습니다.
+Native UI의 설정 → 관리에서 백업 정책, 온라인 백업 생성/무결성 확인/복원을 shared backup service를 통해 함께 관리할 수 있습니다. 기본 관리형 백업 위치는 portable 디렉터리의 형제 폴더인 `stream-archive-backups`이며, `STREAM_ARCHIVE_BACKUP_DIR`로 위치를 고정할 수 있습니다.
 
-오프라인 수동 백업은 `StreamArchive.exe`를 닫고 Web compatibility server도 중지한 뒤 portable package의 다음 스크립트를 사용할 수 있습니다.
+오프라인 수동 백업은 `StreamArchive.exe`를 닫고 선택적인 headless runtime도 중지한 뒤 portable package의 다음 스크립트를 사용할 수 있습니다.
 
 ```powershell
 .\BACKUP_DATA.bat
@@ -299,7 +267,7 @@ Native UI의 설정 → 관리에서 백업 정책, 온라인 백업 생성/무�
 .\RESTORE_DATA.bat -BackupFile ..\stream-archive-backups\stream_archive_manual_YYYYMMDD_HHMMSS.db
 ```
 
-백업/복구 스크립트는 Native 앱 또는 Web compatibility server 실행 중에는 동작하지 않으며, 복구 시 기존 DB의 `pre_restore_*.db` 안전 복사본을 만든 뒤 교체합니다.
+백업/복구 스크립트는 Native 앱 또는 headless runtime 실행 중에는 동작하지 않으며, 복구 시 기존 DB의 `pre_restore_*.db` 안전 복사본을 만든 뒤 교체합니다.
 
 자세한 운영 절차는 `docs/OPERATIONS.md`를 참고하세요.
 
@@ -307,32 +275,13 @@ Native UI의 설정 → 관리에서 백업 정책, 온라인 백업 생성/무�
 
 | 환경 변수 | 설명 |
 |---|---|
-| `STREAM_ARCHIVE_BIND` | Web compatibility 수신 주소. 기본값 `127.0.0.1:8787` |
-| `STREAM_ARCHIVE_TOKEN` | Web compatibility용 선택적 고정 관리 토큰 |
-| `STREAM_ARCHIVE_START_WATCHER` | Web server 시작 후 watcher 자동 시작 여부 |
+| `STREAM_ARCHIVE_START_WATCHER` | headless runtime 시작 후 watcher 자동 시작 여부 |
 | `STREAM_ARCHIVE_BACKEND_DIR` | backend 디렉터리 override |
 | `STREAM_ARCHIVE_DATA_DIR` | SQLite 데이터 디렉터리 |
 | `STREAM_ARCHIVE_BACKUP_DIR` | 관리형 백업 디렉터리 override |
 
 SOOP/CHZZK 계정 정보처럼 특정 provider에 속하는 설정 키는 provider namespace를 유지합니다.
 
-## HTTPS / 원격 접근
-
-원격 접근은 Web compatibility server를 사용할 때의 고급 구성입니다. Rust Web server는 loopback에 유지하고 Caddy/Nginx 같은 reverse proxy에서 HTTPS를 종료하는 구성을 권장합니다.
-
-```text
-Internet / LAN
-      ↓
-HTTPS reverse proxy
-      ↓
-127.0.0.1:8787
-      ↓
-Stream Archive
-```
-
-Launcher는 Windows Firewall, router port forwarding 또는 reverse proxy를 자동 구성하지 않습니다.
-
-Caddy/Nginx 예제와 운영 보안 주의사항은 `docs/REVERSE_PROXY.md`를 참고하세요.
 
 ## 프로젝트 및 서비스 관련 안내
 
@@ -354,11 +303,10 @@ Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 
 
 주요 검증 항목:
 
-- Windows / Linux / macOS JavaScript syntax check
 - Windows / Linux / macOS whole-crate `cargo fmt --check`
 - Windows / Linux / macOS Rust unit tests
 - Windows / Linux / macOS native compile check
-- Windows / Linux / macOS Clippy advisory
+- Windows / Linux / macOS strict Clippy (`-D warnings`)
 - Windows Runtime contract guard
 - Source archive release-metadata smoke test
 - Windows portable package smoke test
@@ -372,12 +320,10 @@ Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습
 
 | 문서 | 내용 |
 |---|---|
-| `docs/LOCAL_LAUNCHER.md` | Windows Native 기본 실행 및 Web fallback 경로 |
 | `docs/PHASE21_NATIVE_PORTABLE.md` | Phase 21.8 portable 구조 및 Windows manual QA |
 | `docs/PHASE21_NATIVE_UX_POLISH.md` | Phase 21.9 Native storage/backup IA/claim sidecar UX 및 manual QA |
 | `docs/UNIX_CLI.md` | Linux/macOS headless CLI, tool discovery, first-run layout |
 | `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
-| `docs/REVERSE_PROXY.md` | Caddy/Nginx HTTPS reverse proxy 구성 |
 | `docs/PHASE19_AUDIT.md` | Runtime hardening, ownership, architecture audit 및 Phase 20 경계 |
 | `THIRD_PARTY_NOTICES.md` | 외부 도구 및 라이선스 안내 |
 | `SECURITY.md` | 보안 취약점 제보 정책 |
@@ -422,9 +368,8 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ Native Backup/Restore + Diagnostics/Runtime Logs
 - ✅ Windows Native portable packaging / startup 전환
 - 🚧 Native UX polish: LIVE 저장공간, 설정 내부 일반/관리 정리 및 Backup 관리 통합, 내부 claim sidecar 노출 개선
-- 다음 단계: Phase 22에서 Native/Web parity 결과를 기준으로 legacy Web/launcher 정리 범위 결정
 - Slint GUI는 shared Rust core를 직접 호출하며 localhost HTTP, direct SQLite, direct process control을 사용하지 않음
-- 기능 parity와 regression 검증이 끝난 뒤 기존 browser/Web UI 및 launcher 의존성을 단계적으로 제거
+- ✅ Phase 22.3에서 legacy browser/Web UI, Axum presentation, Web launcher/fallback 제거
 - Linux/macOS는 GUI를 복제하지 않고 Phase 20의 CLI/headless 인터페이스 유지
 
 ---
