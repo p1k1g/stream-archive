@@ -421,7 +421,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ VOD Queue + LIVE/VOD History
 - ✅ Native Backup/Restore + Diagnostics/Runtime Logs
 - ✅ Windows Native portable packaging / startup 전환
-- 🚧 Native UX polish: LIVE 저장공간, Backup Settings/Maintenance 분리, 내부 claim sidecar 노출 개선
+- 🚧 Native UX polish: LIVE 저장공간, 설정 내부 Backup 관리 통합, 내부 claim sidecar 노출 개선
 - 다음 단계: Phase 22에서 Native/Web parity 결과를 기준으로 legacy Web/launcher 정리 범위 결정
 - Slint GUI는 shared Rust core를 직접 호출하며 localhost HTTP, direct SQLite, direct process control을 사용하지 않음
 - 기능 parity와 regression 검증이 끝난 뒤 기존 browser/Web UI 및 launcher 의존성을 단계적으로 제거
