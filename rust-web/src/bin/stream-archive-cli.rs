@@ -72,14 +72,14 @@ Commands:
   doctor           Show paths, native secret-store readiness and media-tool status.
   tools            Discover Streamlink, yt-dlp and FFmpeg without Windows-only names.
   tools configure  Persist discovered absolute tool paths into SQLite atomically.
-  serve            Run the sibling stream-archive-server in the foreground.
-  serve --watch    Run the server and auto-start the LIVE watcher.
+  serve            Run the sibling headless runtime in the foreground.
+  serve --watch    Run the headless runtime and auto-start the LIVE watcher.
 
 Environment:
   STREAM_ARCHIVE_BACKEND_DIR  Explicit backend directory.
   STREAM_ARCHIVE_DATA_DIR     Explicit data directory containing stream-archive.db.
 
-Phase 20 keeps Windows GUI work out of this CLI. Phase 21 will introduce the Slint UI.
+The CLI remains the Linux/macOS headless interface; Windows uses the Slint Native UI by default.
 "#
     );
 }
@@ -199,7 +199,7 @@ fn command_serve(args: &[String]) -> Result<()> {
         );
     }
     let server = server_binary().context(
-        "stream-archive-server was not found next to the CLI or in PATH; build/install both binaries",
+        "stream-archive-server headless runtime was not found next to the CLI or in PATH; build/install both binaries",
     )?;
     let mut command = Command::new(&server);
     command.env("STREAM_ARCHIVE_BACKEND_DIR", &backend);
@@ -210,7 +210,7 @@ fn command_serve(args: &[String]) -> Result<()> {
         .status()
         .with_context(|| format!("failed to start {}", server.display()))?;
     if !status.success() {
-        bail!("stream-archive-server exited with {status}");
+        bail!("stream-archive-server headless runtime exited with {status}");
     }
     Ok(())
 }

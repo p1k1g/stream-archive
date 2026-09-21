@@ -49,14 +49,24 @@ jobs:
           $required = @(
             "$root/StreamArchive.exe",
             "$root/stream-archive-server.exe",
-            "$root/stream-archive-launcher.exe",
             "$root/RUN.bat",
-            "$root/RUN_WEB.bat",
+            "$root/RUN_HEADLESS.bat",
             "$root/LICENSE",
-            "$root/THIRD_PARTY_NOTICES.md"
+            "$root/THIRD_PARTY_NOTICES.md",
+            "$root/docs/OPERATIONS.md"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
+          }
+          foreach ($forbidden in @(
+            "$root/stream-archive-launcher.exe",
+            "$root/RUN_WEB.bat",
+            "$root/RUN_SERVER_CONSOLE.bat",
+            "$root/Caddyfile.example",
+            "$root/docs/REVERSE_PROXY.md",
+            "$root/docs/LOCAL_LAUNCHER.md"
+          )) {
+            if (Test-Path -LiteralPath $forbidden) { throw "Retired Web package file returned: $forbidden" }
           }
 
           $expected = @{}
@@ -65,22 +75,19 @@ jobs:
               $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
             }
           }
-          foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe', 'stream-archive-launcher.exe')) {
+          foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe')) {
             if (-not $expected.ContainsKey($name)) { throw "checksum missing: $name" }
             $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $root $name)).Hash.ToLowerInvariant()
             if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
           }
           $run = Get-Content "$root/RUN.bat" -Raw
           if ($run -notmatch 'StreamArchive\.exe') { throw 'RUN.bat does not use StreamArchive.exe' }
-          if ($run -match 'stream-archive-launcher\.exe') { throw 'RUN.bat must not use the Web launcher by default' }
-          $webRun = Get-Content "$root/RUN_WEB.bat" -Raw
-          if ($webRun -notmatch 'stream-archive-launcher\.exe') { throw 'RUN_WEB.bat does not preserve the Web fallback' }
+          if ($run -match 'launcher|RUN_WEB|127\.0\.0\.1|http') { throw 'RUN.bat must remain native-only' }
+          $headless = Get-Content "$root/RUN_HEADLESS.bat" -Raw
+          if ($headless -notmatch 'stream-archive-server\.exe') { throw 'RUN_HEADLESS.bat does not use the headless runtime' }
           foreach ($dir in @("$root/backend", "$root/data")) {
             if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Missing package directory: $dir" }
           }
-          if (-not (Test-Path "$root/docs/LOCAL_LAUNCHER.md" -PathType Leaf)) { throw 'LOCAL_LAUNCHER.md missing' }
-          if (-not (Test-Path "$root/docs/PHASE21_NATIVE_PORTABLE.md" -PathType Leaf)) { throw 'PHASE21_NATIVE_PORTABLE.md missing' }
-          if (-not (Test-Path "$root/docs/PHASE21_NATIVE_UX_POLISH.md" -PathType Leaf)) { throw 'PHASE21_NATIVE_UX_POLISH.md missing' }
           if ((Get-Content "$root/LICENSE" -Raw) -notmatch 'GNU AFFERO GENERAL PUBLIC LICENSE') { throw 'AGPL license text missing from package' }
           Get-Content "$root/RELEASE_INFO.txt"
 

@@ -4,11 +4,11 @@ $platform = Read-RepoFile 'rust-web/src/platform/mod.rs'
 $chzzk = Read-RepoFile 'rust-web/src/platform/chzzk/mod.rs'
 $vodFacade = Read-RepoFile 'rust-web/src/platform/vod.rs'
 $chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
-$queue = Read-RepoFile 'rust-web/src/vod_queue.rs'
 $queueService = Read-RepoFile 'rust-web/src/queue_service.rs'
 $auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
 $recorder = Read-RepoFile 'rust-web/src/recorder.rs'
 $main = Read-RepoFile 'rust-web/src/main.rs'
+$core = Read-RepoFile 'rust-web/src/app_core.rs'
 $runtime = Read-RepoFile 'rust-web/src/platform_runtime.rs'
 $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
 
@@ -27,7 +27,7 @@ Assert-Match $vodFacade 'PlatformId::Chzzk\s*=>\s*chzzk::vod::validate_download_
 Assert-Match $vodFacade 'lifecycle:\s*Mutex<\(\)>' 'Common VOD facade does not serialize provider starts.'
 Assert-Match $vodFacade 'ensure_idle\(\)\.await\?' 'Cross-provider VOD start guard is missing.'
 Assert-Match $vodFacade 'running_provider\(\)' 'VOD status/cancel cannot recover the actually running provider.'
-Assert-NotMatch ($queue + "`n" + $queueService) 'api\.chzzk\.naver\.com|NID_AUT|NID_SES' 'Provider-specific CHZZK network/auth logic leaked into Queue orchestration.'
+Assert-NotMatch $queueService 'api\.chzzk\.naver\.com|NID_AUT|NID_SES' 'Provider-specific CHZZK network/auth logic leaked into Queue orchestration.'
 
 # Existing CHZZK auth encrypted CHZZK auth must be reused; plaintext temp data is private and scavenged.
 Assert-Match $chzzkVod 'ChzzkAuth::load\(\)' 'CHZZK VOD does not reuse the encrypted CHZZK auth authentication store.'
@@ -41,8 +41,12 @@ Assert-NotMatch $chzzkVod 'NID_AUT=.*--|NID_SES=.*--' 'CHZZK cookies must not be
 Assert-Match $auth 'CHZZK_NID_AUT' 'Shared CHZZK auth key disappeared.'
 Assert-Match $auth 'CHZZK_NID_SES' 'Shared CHZZK auth key disappeared.'
 
-# Listener bind remains defense-in-depth, but backend/job ownership must not depend on a port.
-Assert-Match $main 'TcpListener::bind\(&bind\)[\s\S]*?VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)' 'Early server bind defense-in-depth ordering disappeared.'
+# Phase 22.3 removes the Web listener. Runtime startup must go through the
+# shared core, while per-job/destination OS locks remain the source of truth for
+# active CHZZK ownership and cleanup safety.
+Assert-Match $main 'StreamArchiveCore::open\(&backend_dir\)' 'Headless runtime must initialize ownership-sensitive services through StreamArchiveCore.'
+Assert-Match $core 'VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)' 'Shared core must construct the canonical VOD manager.'
+Assert-NotMatch $main 'TcpListener::bind|STREAM_ARCHIVE_BIND' 'Retired Web listener ownership must not return.'
 
 # Per-job OS locking is the source of truth for active CHZZK temp ownership.
 Assert-Match $chzzkVod 'use fs2::FileExt;' 'CHZZK VOD per-job OS locking is missing.'

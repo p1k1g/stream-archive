@@ -1,8 +1,5 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
 
-$app = Read-RepoFile 'rust-web\web\app.js'
-$phase13 = Read-RepoFile 'rust-web\web\phase13.js'
-$phase14 = Read-RepoFile 'rust-web\web\phase14.js'
 $platform = Read-RepoFile 'rust-web\src\platform\mod.rs'
 $platformLive = Read-RepoFile 'rust-web\src\platform\live.rs'
 $platformVod = Read-RepoFile 'rust-web\src\platform\vod.rs'
@@ -13,12 +10,9 @@ $support = Read-RepoFile 'rust-web\src\support.rs'
 $backend = Read-RepoFile 'rust-web\src\backend.rs'
 $watcher = Read-RepoFile 'rust-web\src\native_watcher.rs'
 $vodFacade = Read-RepoFile 'rust-web\src\vod.rs'
-$queue = Read-RepoFile 'rust-web\src\vod_queue.rs'
 $queueService = Read-RepoFile 'rust-web\src\queue_service.rs'
 $backupService = Read-RepoFile 'rust-web\src\backup_service.rs'
-$backupWeb = Read-RepoFile 'rust-web\src\backup.rs'
 $storageService = Read-RepoFile 'rust-web\src\storage_service.rs'
-$historyStorage = Read-RepoFile 'rust-web\src\history_storage.rs'
 $store = Read-RepoFile 'rust-web\src\store.rs'
 $main = Read-RepoFile 'rust-web\src\main.rs'
 $lib = Read-RepoFile 'rust-web\src\lib.rs'
@@ -29,27 +23,21 @@ $guiUi = Read-RepoFile 'rust-gui\ui\app-window.slint'
 $maintenanceUi = Read-RepoFile 'rust-gui\ui\maintenance.slint'
 $guiSources = (Get-ChildItem (Join-Path $script:RuntimeContractsRoot 'rust-gui/src') -Filter '*.rs' -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 
-# Frontend state guarantees remain prerequisites for platform expansion.
-Assert-Match $app 'window\.StreamArchiveState\s*=\s*StreamArchiveState' 'app.js must expose the shared StreamArchiveState bus.'
-Assert-Match $app "StreamArchiveState\.publish\('status'" 'status must publish through StreamArchiveState.'
-Assert-Match $app "StreamArchiveState\.publish\('vod'" 'VOD status must publish through StreamArchiveState.'
-Assert-Match $app "StreamArchiveState\.publish\('snapshot'" 'SSE snapshots must publish through StreamArchiveState.'
-Assert-Match $phase13 "StreamArchiveState\?\.publish\('queue'" 'Queue UI queue must publish queue state through the shared bus.'
-Assert-Match $phase13 "StreamArchiveState\?\.subscribe\('snapshot'" 'Queue UI queue must consume SSE snapshots through the shared bus.'
-Assert-NotMatch $phase13 'renderStatus\s*=\s*function' 'Queue UI must not wrap renderStatus.'
-Assert-NotMatch $phase13 'renderVodStatus\s*=\s*function' 'Queue UI must not wrap renderVodStatus.'
-Assert-NotMatch $phase13 'applyRealtimeSnapshot\s*=\s*function' 'Queue UI must not wrap applyRealtimeSnapshot.'
-Assert-NotMatch $phase13 'p13Notify\s*\(' 'Legacy Queue UI browser notification code must stay removed.'
-Assert-Match $phase14 "bus\.subscribe\('status'" 'Notification UI notifications must subscribe to status state.'
-Assert-Match $phase14 "bus\.subscribe\('queue'" 'Notification UI notifications must subscribe to queue state.'
-Assert-NotMatch $phase14 'window\.renderStatus\s*=' 'Notification UI must not replace renderStatus.'
-Assert-NotMatch $phase14 'window\.api\s*=' 'Notification UI must not replace api.'
-Assert-NotMatch $phase14 'window\.applyRealtimeSnapshot\s*=' 'Notification UI must not replace applyRealtimeSnapshot.'
-Assert-NotMatch $phase14 '__p14Wrapped' 'Legacy Notification UI wrapper markers must stay removed.'
+# Phase 22.3 runtime/presentation boundary.
+# The retained server binary is now a headless shared-core runtime entry. It must
+# not reintroduce HTTP/Web presentation while preserving Queue/backup/history
+# lifecycle startup and owned-runtime shutdown.
+Assert-Match $main 'StreamArchiveCore::open\(&backend_dir\)' 'Headless runtime must bootstrap through StreamArchiveCore.'
+Assert-Match $main 'core\.spawn_vod_history_sync\(\)' 'Headless runtime must keep VOD history synchronization.'
+Assert-Match $main 'core\.spawn_auto_backup\(\)' 'Headless runtime must keep automatic backup scheduling.'
+Assert-Match $main 'core\.spawn_queue_worker\(\)' 'Headless runtime must keep the persistent Queue worker.'
+Assert-Match $main 'core\.shutdown\(\)\.await' 'Headless runtime must shut down through shared owned-runtime cleanup.'
+Assert-NotMatch $main '\baxum::|Router::new|TcpListener::bind|include_str!\("\.\./web|STREAM_ARCHIVE_BIND|STREAM_ARCHIVE_TOKEN' 'Headless runtime must stay free of retired Web presentation/listener state.'
 
 # SQLite is the only runtime configuration/history authority.
-Assert-Match $main 'Store::migrate_legacy_database\(&db_path\)' 'Startup must perform only the bounded legacy database filename migration.'
-Assert-Match $main 'Store::open\(db_path\)' 'Server startup must open the canonical SQLite store.'
+Assert-Match $main 'StreamArchiveCore::open\(&backend_dir\)' 'Headless startup must use the canonical shared core.'
+Assert-Match $core 'Store::migrate_legacy_database\(&db_path\)' 'Shared core startup must perform only the bounded legacy database filename migration.'
+Assert-Match $core 'Store::open\(db_path\)' 'Shared core startup must open the canonical SQLite store.'
 Assert-Match $store 'const DATABASE_FILE:\s*&str\s*=\s*"stream-archive\.db"' 'Canonical database filename must use the Stream Archive namespace.'
 Assert-Match $store 'STREAM_ARCHIVE_DATA_DIR' 'Data directory environment override must use the Stream Archive namespace.'
 Assert-NotMatch $main 'bootstrap_primary_once|materialize_primary_files|SOOP_LIVE_SETTING\.ini|SOOP_LIVE_CHANNELS\.txt|SOOP_VOD_SETTING\.ini' 'Runtime must not import or emit legacy INI/TXT mirrors.'
@@ -85,12 +73,11 @@ Assert-Match $core 'pub\s+async\s+fn\s+restore_backup' 'Shared core native resto
 Assert-Match $core 'pub\s+fn\s+storage_snapshot' 'Shared core native storage snapshot service is missing.'
 Assert-Match $storageService 'MIN_FREE_SPACE_GB' 'Shared storage diagnostics must use the canonical free-space threshold.'
 Assert-Match $storageService 'channel\.outdir' 'Shared storage diagnostics must include channel-specific output directories.'
-Assert-Match $historyStorage 'storage_service::\{self, StorageSnapshot, StorageVolume\}' 'Web storage diagnostics must delegate to the shared storage service.'
+Assert-Match $core 'storage_service::snapshot\(&self\.store\)' 'Shared core storage diagnostics must delegate to the storage service.'
 Assert-Match $core 'pub\s+async\s+fn\s+runtime_logs' 'Shared core bounded runtime log service is missing.'
 Assert-Match $backupService 'pub\s+struct\s+BackupManager' 'Reusable backup manager is missing from backup_service.rs.'
 Assert-Match $backupService 'pre_restore' 'Restore safety backup behavior is missing from shared backup service.'
 Assert-NotMatch $backupService '\baxum::|HeaderMap|StatusCode|State\(' 'Shared backup service must stay independent from Axum/Web presentation.'
-Assert-Match $backupWeb 'api_restore' 'Web backup adapter compatibility disappeared.'
 
 # Phase 21.2 Windows Slint shell. The desktop UI is a presentation adapter over
 # StreamArchiveCore, not another HTTP client, persistence authority, or process owner.
@@ -138,7 +125,7 @@ Assert-Match $platformSoopVod 'vod\.sooplive\.com' 'SOOP VOD provider must own S
 # Queue/orchestration may identify a provider and include routing fixtures in tests,
 # but must not contain provider authentication/network implementation.
 Assert-Match $queueService 'detect_vod_platform' 'VOD queue must persist detected platform identity.'
-Assert-NotMatch ($queue + "`n" + $queueService) 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'VOD queue must remain provider-neutral.'
+Assert-NotMatch $queueService 'CloudFront|private_auth\.php|LoginAction\.php|player_live_api\.php' 'VOD queue must remain provider-neutral.'
 
 Write-Host 'Architecture contracts passed.'
 

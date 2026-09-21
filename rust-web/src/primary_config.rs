@@ -19,7 +19,7 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
     let allowed: HashSet<&str> = SAFE_SETTING_KEYS.iter().copied().collect();
     for (key, value) in updates {
         if !allowed.contains(key.as_str()) {
-            bail!("setting is not editable in Rust web: {key}");
+            bail!("setting is not editable in the Stream Archive runtime: {key}");
         }
         validate_single_line(value, 2048, &format!("setting {key}"))?;
         match key.as_str() {

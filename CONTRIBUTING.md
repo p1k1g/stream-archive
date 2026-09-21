@@ -44,10 +44,9 @@ At minimum, run the checks relevant to your change. The current Windows validati
 cargo fmt --manifest-path rust-web/Cargo.toml -- --check
 cargo test --locked --manifest-path rust-web/Cargo.toml
 cargo check --locked --manifest-path rust-web/Cargo.toml
-cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets
+cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
-JavaScript under `rust-web/web` should also pass `node --check`.
 
 Phase 20 expands this policy to Windows/Linux/macOS CI. A change that claims cross-platform support should include tests or an explicit explanation of what remains platform-specific.
 

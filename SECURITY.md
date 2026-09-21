@@ -28,6 +28,6 @@ On Windows, protected secrets are stored using CurrentUser DPAPI. Linux/macOS se
 
 ## Remote access
 
-The default server binding is loopback-only (`127.0.0.1:8787`). If remote access is required, keep the Stream Archive server on loopback and terminate HTTPS/authentication at a properly configured reverse proxy as documented in `docs/REVERSE_PROXY.md`.
+The supported product surface is the Native UI plus the optional local headless runtime. Stream Archive no longer ships an HTTP/Web listener or reverse-proxy deployment path.
 
 Do not expose the management token or raw loopback service directly to the public Internet.
