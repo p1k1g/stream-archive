@@ -19,6 +19,7 @@ type UnixPid = i32;
 unsafe extern "C" {
     #[link_name = "kill"]
     fn posix_kill(pid: UnixPid, signal: i32) -> i32;
+    #[cfg(test)]
     #[link_name = "getpgid"]
     fn posix_getpgid(pid: UnixPid) -> UnixPid;
 }
@@ -42,22 +43,6 @@ impl OwnedProcessGroup {
             bail!("spawned Unix child PID is not positive: {pid}");
         }
         Ok(Self { pgid })
-    }
-
-    /// Compatibility capture is safe only when the already-running child is
-    /// itself an isolated process-group leader. Never adopt the server's own
-    /// process group or an unrelated group discovered from a numeric PID.
-    pub(super) fn capture_running_child(child: &Child) -> Result<Self> {
-        let pid = child.id().context("running Unix child PID unavailable")?;
-        let expected = UnixPid::try_from(pid).context("running Unix child PID exceeds pid_t")?;
-        let actual = process_group(expected)
-            .with_context(|| format!("getpgid failed for running Unix child pid={pid}"))?;
-        if actual != expected {
-            bail!(
-                "running Unix child pid={pid} is not an isolated process-group leader (pgid={actual})"
-            );
-        }
-        Ok(Self { pgid: actual })
     }
 
     fn signal_group(&self, signal: i32) -> Result<()> {
@@ -152,6 +137,7 @@ impl Drop for OwnedProcessGroup {
     }
 }
 
+#[cfg(test)]
 fn process_group(pid: UnixPid) -> Result<UnixPid, io::Error> {
     let pgid = unsafe { posix_getpgid(pid) };
     if pgid == -1 {
