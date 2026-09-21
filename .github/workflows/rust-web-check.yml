@@ -131,6 +131,7 @@ jobs:
         shell: bash
         run: cargo test --locked --manifest-path rust-gui/Cargo.toml
 
+      # Phase 22.2 treats project Clippy warnings as CI failures.
       - name: Rust clippy strict
         shell: bash
         run: cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets --all-features -- -D warnings
