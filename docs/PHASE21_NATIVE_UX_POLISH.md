@@ -7,7 +7,7 @@ Phase 21.9 builds on the Phase 21.8 Windows Native portable cutover. It keeps th
 This slice covers:
 
 - shared storage-capacity diagnostics surfaced in the Native LIVE page;
-- backup policy plus backup/restore/diagnostics/logs consolidated under the top-level Settings page;
+- top-level Settings split into General and Manage, with all backup/restore/diagnostics/logs consolidated under Manage;
 - History/status UX regression protection from Phase 21.8;
 - Windows destination-claim sidecar visibility without weakening no-clobber locking;
 - a Native/Web parity audit to define the later Phase 22 cleanup boundary.
@@ -42,9 +42,9 @@ Native refresh is bounded: initial load, explicit refresh, return to LIVE, and a
 
 ## Backup information architecture
 
-Native backup configuration and operations share one top-level Settings page but retain separate presentation responsibilities.
+Native administration uses one top-level Settings page with two internal views: General for provider/runtime configuration and Manage for backup policy, backup/restore operations, diagnostics, and runtime logs.
 
-### Settings -> 설정 — backup policy
+### Settings -> 관리 — backup policy and operations
 
 Settings owns:
 
@@ -56,7 +56,7 @@ Settings owns:
 
 `0` for maximum count or retention days means unlimited, matching the existing shared policy semantics.
 
-### Settings -> 관리 — backup / restore
+
 
 Maintenance owns:
 
@@ -170,8 +170,8 @@ Then use `dist\stream-archive`:
 2. Open LIVE and verify storage rows show the actual configured drive, free/total capacity, usage, and Korean status.
 3. Verify multiple LIVE paths on the same drive collapse to one volume row while their roles/paths remain visible.
 4. Refresh storage manually and return to LIVE from another page.
-5. Check 설정 -> 설정 -> 백업 정책; edit/save policy and restart to verify persistence.
-6. Check 설정 -> 관리 -> 백업 / 복원; create a backup and inspect time/kind/size/SHA-256/integrity.
+5. Check 설정 -> 일반 and verify provider/runtime settings remain there without duplicate backup or diagnostics cards.
+6. Check 설정 -> 관리; edit/save backup policy, create a backup, and inspect time/kind/size/SHA-256/integrity.
 7. Confirm restore remains gated while Watcher/VOD/Queue work is active and uses the pre-restore safety backup.
 8. In History test `STOP`, `병합`, `진행`, `취소`, and `녹화`.
 9. Switch `전체 / LIVE / VOD` and confirm the filter row does not shift.
