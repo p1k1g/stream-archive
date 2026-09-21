@@ -1,9 +1,10 @@
 use crate::{
     AppState, ChannelConfigRow, DiagnosticRow, HistoryCalendarDay, HistoryDisplayRow,
     LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow,
-    MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, VodPartRow, VodQualityRow,
-    channels_adapter::ChannelsDraft, history_adapter, live_adapter, maintenance_adapter,
-    native_picker, queue_adapter, settings_adapter::SettingsDraft, vod_adapter,
+    MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, StorageDisplayRow,
+    VodPartRow, VodQualityRow, channels_adapter::ChannelsDraft, history_adapter, live_adapter,
+    maintenance_adapter, native_picker, queue_adapter, settings_adapter::SettingsDraft,
+    storage_adapter, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -24,6 +25,7 @@ use stream_archive_server::{
         Channel, HistoryResponse, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest,
         VodJobStatus, VodQueueSnapshot,
     },
+    storage_service::StorageSnapshot,
     support::platform::PlatformId,
 };
 
@@ -59,6 +61,9 @@ enum Request {
     LivePassword {
         target: String,
         password: String,
+    },
+    StorageLoad {
+        poll: bool,
     },
     VodStatus {
         poll: bool,
@@ -131,6 +136,15 @@ enum Response {
         message: String,
         poll: bool,
     },
+    Storage {
+        snapshot: StorageSnapshot,
+        message: Option<String>,
+        poll: bool,
+    },
+    StorageError {
+        message: String,
+        poll: bool,
+    },
     Vod {
         status: VodJobStatus,
         message: Option<String>,
@@ -177,6 +191,7 @@ enum Response {
 pub struct Controller {
     _response_timer: Timer,
     _live_poll_timer: Timer,
+    _storage_poll_timer: Timer,
     _vod_poll_timer: Timer,
     _queue_poll_timer: Timer,
     _maintenance_log_poll_timer: Timer,
@@ -243,6 +258,20 @@ fn live_status(
         },
         Err(error) => Response::LiveError {
             message: format!("LIVE 상태 새로고침 실패: {error:#}"),
+            poll,
+        },
+    }
+}
+
+fn storage_status(core: &StreamArchiveCore, poll: bool) -> Response {
+    match core.storage_snapshot() {
+        Ok(snapshot) => Response::Storage {
+            snapshot,
+            message: None,
+            poll,
+        },
+        Err(error) => Response::StorageError {
+            message: format!("저장 공간 새로고침 실패: {error:#}"),
             poll,
         },
     }
@@ -413,6 +442,9 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     if responses.send(live_status(&core, &runtime, false)).is_err() {
         return;
     }
+    if responses.send(storage_status(&core, false)).is_err() {
+        return;
+    }
     if responses.send(vod_status(&core, &runtime, false)).is_err() {
         return;
     }
@@ -529,6 +561,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 }
             },
             Request::LiveStatus { poll } => live_status(&core, &runtime, poll),
+            Request::StorageLoad { poll } => storage_status(&core, poll),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
                 Ok(status) => Response::Live {
                     status,
@@ -895,6 +928,30 @@ fn render_live(ui: &MainWindow, status: NativeWatcherStatus) {
     state.set_live_loaded(true);
 }
 
+fn render_storage(ui: &MainWindow, snapshot: StorageSnapshot) {
+    let threshold = storage_adapter::threshold_label(snapshot.threshold_gb);
+    let database_size =
+        stream_archive_server::storage_service::format_bytes_compact(snapshot.database_size_bytes);
+    let rows = storage_adapter::rows(&snapshot)
+        .into_iter()
+        .map(|row| StorageDisplayRow {
+            volume: row.volume.into(),
+            roles: row.roles.into(),
+            paths: row.paths.into(),
+            capacity: row.capacity.into(),
+            used: row.used.into(),
+            status: row.status.into(),
+            status_tone: row.status_tone.into(),
+            detail: row.detail.into(),
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<AppState>();
+    state.set_storage_threshold(threshold.into());
+    state.set_storage_database_size(database_size.into());
+    state.set_storage_rows(ModelRc::new(VecModel::from(rows)));
+    state.set_storage_loaded(true);
+}
+
 fn render_vod_draft(ui: &MainWindow, draft: &VodDraft) {
     let qualities = draft
         .qualities
@@ -1231,6 +1288,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     state.set_settings_busy(true);
     state.set_config_busy(true);
     state.set_live_busy(true);
+    state.set_storage_busy(true);
     state.set_vod_busy(true);
     let queue_history = ui.global::<QueueHistoryState>();
     queue_history.set_queue_busy(true);
@@ -1244,6 +1302,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_settings_busy(false);
         state.set_config_busy(false);
         state.set_live_busy(false);
+        state.set_storage_busy(false);
         state.set_vod_busy(false);
         queue_history.set_queue_busy(false);
         queue_history.set_history_busy(false);
@@ -1254,6 +1313,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         state.set_settings_message(format!("Worker를 시작할 수 없습니다: {error}").into());
         state.set_config_message(format!("Worker를 시작할 수 없습니다: {error}").into());
         state.set_live_message(format!("Worker를 시작할 수 없습니다: {error}").into());
+        state.set_storage_message(format!("Worker를 시작할 수 없습니다: {error}").into());
         state.set_vod_message(format!("Worker를 시작할 수 없습니다: {error}").into());
     }
 
@@ -1262,6 +1322,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let vod_draft = Rc::new(RefCell::new(VodDraft::default()));
     render_vod_draft(ui, &vod_draft.borrow());
     let live_poll_in_flight = Rc::new(Cell::new(false));
+    let storage_poll_in_flight = Rc::new(Cell::new(false));
     let vod_poll_in_flight = Rc::new(Cell::new(false));
     let queue_poll_in_flight = Rc::new(Cell::new(false));
     let maintenance_log_poll_in_flight = Rc::new(Cell::new(false));
@@ -1521,6 +1582,24 @@ pub fn bind(ui: &MainWindow) -> Controller {
     state.on_live_refresh(move || {
         if let Some(ui) = weak.upgrade() {
             send_live(&ui, &live_sender, Request::LiveStatus { poll: false });
+        }
+    });
+
+    let weak = ui.as_weak();
+    let storage_sender = sender.clone();
+    state.on_storage_refresh(move || {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<AppState>();
+            if state.get_storage_busy() {
+                return;
+            }
+            match storage_sender.send(Request::StorageLoad { poll: false }) {
+                Ok(()) => {
+                    state.set_storage_busy(true);
+                    state.set_storage_message("저장 공간을 확인하는 중...".into());
+                }
+                Err(_) => state.set_storage_message("저장 공간 Worker를 사용할 수 없습니다".into()),
+            }
         }
     });
 
@@ -2020,6 +2099,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
 
     let weak = ui.as_weak();
     let response_live_poll_flag = live_poll_in_flight.clone();
+    let response_storage_poll_flag = storage_poll_in_flight.clone();
     let response_vod_poll_flag = vod_poll_in_flight.clone();
     let response_queue_poll_flag = queue_poll_in_flight.clone();
     let response_maintenance_log_poll_flag = maintenance_log_poll_in_flight.clone();
@@ -2168,6 +2248,31 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     }
                     state.set_live_message(message.into());
                 }
+                Response::Storage {
+                    snapshot,
+                    message,
+                    poll,
+                } => {
+                    if poll {
+                        response_storage_poll_flag.set(false);
+                    } else {
+                        state.set_storage_busy(false);
+                    }
+                    render_storage(&ui, snapshot);
+                    state.set_storage_message(
+                        message
+                            .unwrap_or_else(|| "저장 공간을 새로고침했습니다".into())
+                            .into(),
+                    );
+                }
+                Response::StorageError { message, poll } => {
+                    if poll {
+                        response_storage_poll_flag.set(false);
+                    } else {
+                        state.set_storage_busy(false);
+                    }
+                    state.set_storage_message(message.into());
+                }
                 Response::Vod {
                     status,
                     message,
@@ -2313,6 +2418,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_live_busy(false);
                         state.set_live_message(message.clone().into());
                     }
+                    if !state.get_storage_loaded() {
+                        state.set_storage_busy(false);
+                        state.set_storage_message(message.clone().into());
+                    }
                     if !state.get_vod_loaded() {
                         state.set_vod_busy(false);
                         state.set_vod_message(message.clone().into());
@@ -2363,6 +2472,29 @@ pub fn bind(ui: &MainWindow) -> Controller {
             }
         },
     );
+
+    let weak = ui.as_weak();
+    let storage_poll_sender = sender.clone();
+    let storage_poll_flag = storage_poll_in_flight;
+    let storage_poll_timer = Timer::default();
+    storage_poll_timer.start(TimerMode::Repeated, Duration::from_secs(30), move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let state = ui.global::<AppState>();
+        if state.get_active_page().as_str() != "LIVE"
+            || state.get_storage_busy()
+            || storage_poll_flag.get()
+        {
+            return;
+        }
+        if storage_poll_sender
+            .send(Request::StorageLoad { poll: true })
+            .is_ok()
+        {
+            storage_poll_flag.set(true);
+        }
+    });
 
     let weak = ui.as_weak();
     let vod_poll_sender = sender.clone();
@@ -2452,6 +2584,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     Controller {
         _response_timer: response_timer,
         _live_poll_timer: live_poll_timer,
+        _storage_poll_timer: storage_poll_timer,
         _vod_poll_timer: vod_poll_timer,
         _queue_poll_timer: queue_poll_timer,
         _maintenance_log_poll_timer: maintenance_log_poll_timer,

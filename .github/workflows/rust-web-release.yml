@@ -13,6 +13,14 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies and targets
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust-web -> target
+            rust-gui -> target
+          cache-on-failure: true
+
       - name: Environment
         shell: powershell
         run: |
@@ -72,6 +80,7 @@ jobs:
           }
           if (-not (Test-Path "$root/docs/LOCAL_LAUNCHER.md" -PathType Leaf)) { throw 'LOCAL_LAUNCHER.md missing' }
           if (-not (Test-Path "$root/docs/PHASE21_NATIVE_PORTABLE.md" -PathType Leaf)) { throw 'PHASE21_NATIVE_PORTABLE.md missing' }
+          if (-not (Test-Path "$root/docs/PHASE21_NATIVE_UX_POLISH.md" -PathType Leaf)) { throw 'PHASE21_NATIVE_UX_POLISH.md missing' }
           if ((Get-Content "$root/LICENSE" -Raw) -notmatch 'GNU AFFERO GENERAL PUBLIC LICENSE') { throw 'AGPL license text missing from package' }
           Get-Content "$root/RELEASE_INFO.txt"
 

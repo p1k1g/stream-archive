@@ -11,6 +11,7 @@ mod primary_config;
 mod realtime;
 mod recorder;
 mod security;
+mod storage_service;
 mod store;
 mod support;
 mod vod;

@@ -69,6 +69,14 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Cache Rust dependencies and targets
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust-web -> target
+            rust-gui -> target
+          cache-on-failure: true
+
       - name: Environment
         shell: bash
         run: |
@@ -148,6 +156,14 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies and targets
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust-web -> target
+            rust-gui -> target
+          cache-on-failure: true
+
       - name: Environment
         shell: powershell
         run: |
@@ -220,7 +236,8 @@ jobs:
             "$root/docs/OPERATIONS.md",
             "$root/docs/REVERSE_PROXY.md",
             "$root/docs/LOCAL_LAUNCHER.md",
-            "$root/docs/PHASE21_NATIVE_PORTABLE.md"
+            "$root/docs/PHASE21_NATIVE_PORTABLE.md",
+            "$root/docs/PHASE21_NATIVE_UX_POLISH.md"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }

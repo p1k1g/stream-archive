@@ -8,6 +8,7 @@ mod maintenance_adapter;
 mod native_picker;
 mod queue_adapter;
 mod settings_adapter;
+mod storage_adapter;
 mod vod_adapter;
 
 use slint::ComponentHandle;

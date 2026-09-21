@@ -11,6 +11,7 @@ pub mod primary_config;
 pub mod queue_service;
 pub mod recorder;
 pub mod security;
+pub mod storage_service;
 pub mod store;
 pub mod support;
 pub mod tool_discovery;

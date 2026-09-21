@@ -96,6 +96,7 @@ try {
     Assert-Match $package '(?s)>"%OUT%\\RUN\.bat".*?StreamArchive\.exe' 'RUN.bat generation must make the native GUI the default entry point.'
     Assert-Match $package '(?s)>"%OUT%\\RUN_WEB\.bat".*?stream-archive-launcher\.exe' 'RUN_WEB.bat generation must preserve the Web compatibility launcher.'
     Assert-Match $package 'dist\\stream-archive' 'Portable package output must use the Stream Archive namespace.'
+    Assert-Match $package 'PHASE21_NATIVE_UX_POLISH\.md' 'Portable package must include the Phase 21.9 Native UX QA document.'
     Assert-Match $package 'THIRD_PARTY_NOTICES\.md' 'Portable package must include third-party notices.'
     Assert-Match $package 'LICENSE' 'Portable package must include the project license.'
     Assert-Match $manifest 'name\s*=\s*"stream-archive-server"' 'Cargo package must use the Stream Archive namespace.'
