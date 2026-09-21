@@ -1,15 +1,15 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
 
-$platform = Read-RepoFile 'rust-web/src/platform/mod.rs'
-$chzzk = Read-RepoFile 'rust-web/src/platform/chzzk/mod.rs'
-$vodFacade = Read-RepoFile 'rust-web/src/platform/vod.rs'
-$chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
-$queueService = Read-RepoFile 'rust-web/src/queue_service.rs'
-$auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
-$recorder = Read-RepoFile 'rust-web/src/recorder.rs'
-$main = Read-RepoFile 'rust-web/src/main.rs'
-$core = Read-RepoFile 'rust-web/src/app_core.rs'
-$runtime = Read-RepoFile 'rust-web/src/platform_runtime.rs'
+$platform = Read-RepoFile 'rust-runtime/src/platform/mod.rs'
+$chzzk = Read-RepoFile 'rust-runtime/src/platform/chzzk/mod.rs'
+$vodFacade = Read-RepoFile 'rust-runtime/src/platform/vod.rs'
+$chzzkVod = Read-RepoFile 'rust-runtime/src/platform/chzzk/vod.rs'
+$queueService = Read-RepoFile 'rust-runtime/src/queue_service.rs'
+$auth = Read-RepoFile 'rust-runtime/src/platform/chzzk/auth.rs'
+$recorder = Read-RepoFile 'rust-runtime/src/recorder.rs'
+$main = Read-RepoFile 'rust-runtime/src/main.rs'
+$core = Read-RepoFile 'rust-runtime/src/app_core.rs'
+$runtime = Read-RepoFile 'rust-runtime/src/platform_runtime.rs'
 $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
 
 # Platform registration / URL routing.
