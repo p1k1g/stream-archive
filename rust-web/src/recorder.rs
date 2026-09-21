@@ -1,6 +1,4 @@
-use crate::platform_runtime::{
-    OwnedProcessTree, configure_background_command, spawn_owned,
-};
+use crate::platform_runtime::{OwnedProcessTree, configure_background_command, spawn_owned};
 use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
