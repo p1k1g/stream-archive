@@ -196,8 +196,8 @@ impl BackupManager {
             updates.insert("BACKUP_DIR".into(), directory.trim().to_string());
         }
 
-        // Reuse the same canonical settings validation as the existing Web
-        // settings path, including numeric ranges and writable-directory checks.
+        // Reuse canonical settings validation, including numeric ranges and
+        // writable-directory checks.
         validate_setting_updates(&updates)?;
         self.store.sync_settings(&updates, "native-backup")?;
         self.ensure_policy_defaults()?;

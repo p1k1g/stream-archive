@@ -16,7 +16,7 @@ use crate::{
     native_watcher::NativeWatcherManager,
     primary_config::{
         apply_vod_tool_defaults, validate_channels, validate_secret_updates,
-        validate_setting_updates, validate_vod_tool_updates,
+        validate_setting_updates,
     },
     queue_service::VodQueueManager,
     security::{protect_secret, unprotect_secret},
@@ -118,57 +118,11 @@ impl StreamArchiveCore {
         &self.logs
     }
 
-    pub fn watcher(&self) -> Arc<NativeWatcherManager> {
-        self.watcher.clone()
-    }
-
-    pub fn vod(&self) -> Arc<VodManager> {
-        self.vod.clone()
-    }
-
-    pub fn queue(&self) -> Arc<VodQueueManager> {
-        self.queue.clone()
-    }
-
-    /// Compatibility hooks remain available for shared runtime callers.
-    /// Native callers should prefer the presentation-neutral methods below rather
-    /// than taking ownership of the manager or SQLite store.
-    pub fn backups(&self) -> BackupManager {
-        self.backups.clone()
-    }
-
-    /// Compatibility hook for callers that still need serialized configuration access.
-    pub fn config_write_lock(&self) -> Arc<Mutex<()>> {
-        self.config_write_lock.clone()
-    }
-
-    /// Compatibility hook for serialized VOD/restore orchestration.
-    pub fn lifecycle_lock(&self) -> Arc<Mutex<()>> {
-        self.lifecycle_lock.clone()
-    }
-
     pub fn is_first_run_unconfigured(&self) -> Result<bool> {
         self.store.is_first_run_unconfigured()
     }
 
     pub fn settings(&self) -> Result<BTreeMap<String, String>> {
-        self.store.safe_settings()
-    }
-
-    pub async fn update_settings(
-        &self,
-        updates: &BTreeMap<String, String>,
-        source: &str,
-    ) -> Result<BTreeMap<String, String>> {
-        validate_setting_updates(updates)?;
-        let _guard = self.config_write_lock.lock().await;
-        self.store.sync_settings(updates, source)?;
-        self.logs
-            .push(format!(
-                "[CORE] settings updated: {}",
-                updates.keys().cloned().collect::<Vec<_>>().join(", ")
-            ))
-            .await;
         self.store.safe_settings()
     }
 
@@ -221,31 +175,6 @@ impl StreamArchiveCore {
     }
 
     pub fn configured_secrets(&self) -> Result<BTreeMap<String, bool>> {
-        self.store.configured_secrets()
-    }
-
-    pub async fn update_secrets(
-        &self,
-        updates: &BTreeMap<String, String>,
-        source: &str,
-    ) -> Result<BTreeMap<String, bool>> {
-        validate_secret_updates(updates)?;
-        let _guard = self.config_write_lock.lock().await;
-        let mut protected = BTreeMap::new();
-        for (key, value) in updates {
-            if !value.is_empty() {
-                protected.insert(key.clone(), protect_secret(value)?);
-            }
-        }
-        if !protected.is_empty() {
-            self.store.sync_settings(&protected, source)?;
-            self.logs
-                .push(format!(
-                    "[CORE] protected secrets updated: {}",
-                    protected.keys().cloned().collect::<Vec<_>>().join(", ")
-                ))
-                .await;
-        }
         self.store.configured_secrets()
     }
 
@@ -411,18 +340,7 @@ impl StreamArchiveCore {
         self.watcher.channel_password(account, password).await
     }
 
-    pub fn vod_tool_settings(&self) -> Result<BTreeMap<String, String>> {
-        self.store.vod_tool_settings()
-    }
-
-    pub async fn update_vod_tool_settings(
-        &self,
-        updates: &BTreeMap<String, String>,
-        source: &str,
-    ) -> Result<BTreeMap<String, String>> {
-        validate_vod_tool_updates(updates)?;
-        let _guard = self.config_write_lock.lock().await;
-        self.store.sync_settings(updates, source)?;
+    fn vod_tool_settings(&self) -> Result<BTreeMap<String, String>> {
         self.store.vod_tool_settings()
     }
 
@@ -496,10 +414,6 @@ impl StreamArchiveCore {
 
     pub fn storage_snapshot(&self) -> Result<crate::storage_service::StorageSnapshot> {
         crate::storage_service::snapshot(&self.store)
-    }
-
-    pub fn storage_check(&self, path: &str) -> Result<crate::storage_service::StorageVolume> {
-        crate::storage_service::check_path(&self.store, path, "VOD 출력")
     }
 
     pub async fn backup_snapshot(&self) -> Result<BackupSnapshot> {
