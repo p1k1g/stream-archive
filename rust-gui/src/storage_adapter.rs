@@ -1,4 +1,6 @@
-use stream_archive_server::storage_service::{StorageSnapshot, StorageVolume, format_bytes_compact};
+use stream_archive_server::storage_service::{
+    StorageSnapshot, StorageVolume, format_bytes_compact,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageRowView {
