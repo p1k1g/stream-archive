@@ -62,7 +62,7 @@ pub fn protect_secret(value: &str) -> Result<String> {
     #[cfg(windows)]
     {
         let cipher = dpapi::protect(value.as_bytes()).context("DPAPI encrypt failed")?;
-        return Ok(format!("{DPAPI_PREFIX}{}", BASE64.encode(cipher)));
+        Ok(format!("{DPAPI_PREFIX}{}", BASE64.encode(cipher)))
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -71,11 +71,13 @@ pub fn protect_secret(value: &str) -> Result<String> {
         // the current user's native credential store.
         let reference = Uuid::new_v4().hyphenated().to_string();
         native_secret_store(&reference, value).context("native secret store failed")?;
-        return Ok(format!("{NATIVE_SECRET_PREFIX}{reference}"));
+        Ok(format!("{NATIVE_SECRET_PREFIX}{reference}"))
     }
 
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-    bail!("native protected secret storage is unsupported on this operating system")
+    {
+        bail!("native protected secret storage is unsupported on this operating system")
+    }
 }
 
 fn parse_native_reference<'a>(value: &'a str, name: &str) -> Result<&'a str> {
