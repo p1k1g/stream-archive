@@ -13,6 +13,14 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies and targets
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust-web -> target
+            rust-gui -> target
+          cache-on-failure: true
+
       - name: Environment
         shell: powershell
         run: |
