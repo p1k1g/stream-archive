@@ -299,7 +299,7 @@ Streamlink, FFmpeg, yt-dlp는 Stream Archive에 포함된 코드가 아니라 �
 
 ## 개발 / CI
 
-Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 수행합니다.
+Pull Request runtime validation은 `.github/workflows/rust-runtime-check.yml`에서 수행합니다.
 
 주요 검증 항목:
 
@@ -312,7 +312,7 @@ Pull Request runtime validation은 `.github/workflows/rust-web-check.yml`에서 
 - Windows portable package smoke test
 - Windows portable package verification
 
-Release workflow는 `.github/workflows/rust-web-release.yml`의 수동 `workflow_dispatch` 방식입니다.
+Release workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식입니다.
 
 Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습니다. Linux/macOS는 CI 빌드·단위 테스트, Unix process-group ownership, native secret-storage 경계와 cross-platform tool-discovery/CLI 코드까지 검증하고 있으며 실제 로그인 세션·미디어 도구를 이용한 end-to-end integration은 아직 진행 중입니다.
 
