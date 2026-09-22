@@ -555,7 +555,6 @@ mod tests {
         assert!(settings.is_empty());
     }
 
-
     #[test]
     fn doctor_warning_only_is_successful() {
         use stream_archive_server::diagnostics::{
