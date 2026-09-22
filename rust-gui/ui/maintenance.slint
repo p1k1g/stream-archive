@@ -313,7 +313,7 @@ export component MaintenancePage inherits VerticalLayout {
                 }
 
                 for row in MaintenanceState.backup-rows: Rectangle {
-                    height: 68px;
+                    min-height: 68px;
                     vertical-stretch: 0;
                     background: #ffffff;
                     border-radius: 10px;
@@ -323,7 +323,7 @@ export component MaintenancePage inherits VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
                         HorizontalLayout {
-                            height: 24px;
+                            min-height: 24px;
                             vertical-stretch: 0;
                             spacing: 8px;
                             Text {
@@ -333,6 +333,7 @@ export component MaintenancePage inherits VerticalLayout {
                                 font-weight: 700;
                                 horizontal-stretch: 1;
                                 vertical-alignment: center;
+                                wrap: word-wrap;
                             }
                             Text {
                                 text: row.integrity;
@@ -348,13 +349,11 @@ export component MaintenancePage inherits VerticalLayout {
                             }
                         }
                         SummaryLabel {
-                            height: 14px;
                             vertical-stretch: 0;
                             vertical-alignment: center;
                             text: row.kind + "  ·  " + row.created-at + "  ·  " + row.size;
                         }
                         SummaryLabel {
-                            height: 14px;
                             vertical-stretch: 0;
                             vertical-alignment: center;
                             text: "SHA256: " + row.sha256;
@@ -392,7 +391,7 @@ export component MaintenancePage inherits VerticalLayout {
                         height: 20px;
                         vertical-stretch: 0;
                         Text { text: row.name; color: #0f172a; font-weight: 700; horizontal-stretch: 1; }
-                        Text { text: row.status; color: #475569; font-weight: 700; }
+                        Text { text: row.status; color: row.status-tone == "error" ? #b91c1c : row.status-tone == "warn" ? #a16207 : #15803d; font-weight: 700; }
                     }
                     SummaryLabel { text: row.detail; }
                 }
@@ -454,14 +453,14 @@ export component MaintenancePage inherits VerticalLayout {
                     border-radius: 5px;
                     border-width: 1px;
                     border-color: #e2e8f0;
-                    Text {
-                        x: 8px;
-                        y: 6px;
-                        width: parent.width - 16px;
-                        text: row.text;
-                        color: #334155;
-                        font-size: 10px;
-                        wrap: word-wrap;
+                    VerticalLayout {
+                        padding: 6px;
+                        Text {
+                            text: row.text;
+                            color: #334155;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
                     }
                 }
             }
