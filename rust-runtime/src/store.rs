@@ -167,8 +167,7 @@ impl Store {
             .map(|key| {
                 (
                     (*key).to_string(),
-                    all.get(*key)
-                        .is_some_and(|value| !value.trim().is_empty()),
+                    all.get(*key).is_some_and(|value| !value.trim().is_empty()),
                 )
             })
             .collect();
@@ -886,7 +885,10 @@ mod tests {
             .unwrap();
 
         let input = Store::read_preflight_settings(&db_path).unwrap();
-        assert_eq!(input.values.get("SOOP_USERNAME").map(String::as_str), Some("tester"));
+        assert_eq!(
+            input.values.get("SOOP_USERNAME").map(String::as_str),
+            Some("tester")
+        );
         assert_eq!(
             input.values.get("YT_DLP_PATH").map(String::as_str),
             Some("/opt/tools/yt-dlp")
