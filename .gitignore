@@ -17,6 +17,8 @@ SOOPLiveWinUI_startup.log
 backend/logs/
 backend/control/
 backend/history/
+backend/.stream-archive/
+# Legacy pre-Phase-22 CHZZK temp namespace; retained only for bounded stale cleanup.
 backend/.rust-web/
 backend/*.tmp
 backend/*.processing
