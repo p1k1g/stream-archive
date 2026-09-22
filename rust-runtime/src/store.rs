@@ -104,6 +104,12 @@ pub struct Store {
     channels_cache: Arc<RwLock<Vec<Channel>>>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct StorePreflightSettings {
+    pub values: BTreeMap<String, String>,
+    pub configured_secrets: BTreeMap<String, bool>,
+}
+
 pub fn init_global(store: Store) -> Result<()> {
     GLOBAL_STORE
         .set(store)
@@ -129,6 +135,48 @@ impl Store {
             .unwrap_or(backend_dir)
             .join("data")
             .join(DATABASE_FILE)
+    }
+
+    /// Load diagnostics inputs through the canonical Store persistence rules
+    /// without creating, migrating, or mutating the database.
+    pub fn read_preflight_settings(path: &Path) -> Result<StorePreflightSettings> {
+        if !path.is_file() {
+            return Ok(StorePreflightSettings::default());
+        }
+
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open SQLite database {}", path.display()))?;
+        let table_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !table_exists {
+            return Ok(StorePreflightSettings::default());
+        }
+
+        let all = load_all_settings_from_conn(&conn)?;
+        let mut values = BTreeMap::new();
+        for key in SAFE_SETTING_KEYS.iter().chain(VOD_TOOL_KEYS.iter()) {
+            if let Some(value) = all.get(*key) {
+                values.insert((*key).to_string(), value.clone());
+            }
+        }
+        let configured_secrets = HIDDEN_SETTING_KEYS
+            .iter()
+            .map(|key| {
+                (
+                    (*key).to_string(),
+                    all.get(*key)
+                        .is_some_and(|value| !value.trim().is_empty()),
+                )
+            })
+            .collect();
+
+        Ok(StorePreflightSettings {
+            values,
+            configured_secrets,
+        })
     }
 
     pub fn migrate_legacy_database(path: &Path) -> Result<bool> {
@@ -819,6 +867,32 @@ mod tests {
         assert!(current.is_file());
         assert!(!legacy.is_file());
         assert!(!Store::migrate_legacy_database(&current).unwrap());
+    }
+
+    #[test]
+    fn read_preflight_settings_uses_canonical_store_filtering() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join(DATABASE_FILE);
+        let store = Store::open(db_path.clone()).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([
+                    ("SOOP_USERNAME".into(), "tester".into()),
+                    ("CHZZK_NID_AUT".into(), "native-secret:v1:configured".into()),
+                    ("YT_DLP_PATH".into(), "/opt/tools/yt-dlp".into()),
+                ]),
+                "test",
+            )
+            .unwrap();
+
+        let input = Store::read_preflight_settings(&db_path).unwrap();
+        assert_eq!(input.values.get("SOOP_USERNAME").map(String::as_str), Some("tester"));
+        assert_eq!(
+            input.values.get("YT_DLP_PATH").map(String::as_str),
+            Some("/opt/tools/yt-dlp")
+        );
+        assert!(!input.values.contains_key("CHZZK_NID_AUT"));
+        assert_eq!(input.configured_secrets.get("CHZZK_NID_AUT"), Some(&true));
     }
 
     #[test]
