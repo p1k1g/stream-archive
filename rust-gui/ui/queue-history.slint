@@ -154,7 +154,7 @@ export component QueuePage inherits VerticalLayout {
             }
 
             for row in QueueHistoryState.queue-rows: Rectangle {
-                height: 250px;
+                min-height: 250px;
                 vertical-stretch: 0;
                 background: #ffffff;
                 border-radius: 10px;
@@ -164,7 +164,7 @@ export component QueuePage inherits VerticalLayout {
                     padding: 12px;
                     spacing: 5px;
                     HorizontalLayout {
-                        height: 24px;
+                        min-height: 24px;
                         vertical-stretch: 0;
                         spacing: 8px;
                         Text {
@@ -175,6 +175,7 @@ export component QueuePage inherits VerticalLayout {
                             font-weight: 700;
                             horizontal-stretch: 1;
                             vertical-alignment: center;
+                            wrap: word-wrap;
                         }
                         Text {
                             text: row.state-label;
@@ -519,7 +520,7 @@ export component HistoryPage inherits VerticalLayout {
                     padding: 8px;
                     spacing: 2px;
                     HorizontalLayout {
-                        height: 21px;
+                        min-height: 21px;
                         vertical-stretch: 0;
                         spacing: 8px;
                         Text {
@@ -530,6 +531,7 @@ export component HistoryPage inherits VerticalLayout {
                             horizontal-stretch: 1;
                             vertical-stretch: 0;
                             vertical-alignment: center;
+                            wrap: word-wrap;
                         }
                         Text {
                             text: row.state;
@@ -543,7 +545,7 @@ export component HistoryPage inherits VerticalLayout {
                     if row.detail != "": Text { vertical-stretch: 0; text: row.detail; color: #64748b; font-size: 10px; wrap: word-wrap; }
                     Text { vertical-stretch: 0; text: row.timing; color: #94a3b8; font-size: 9px; wrap: word-wrap; }
                     if row.file != "": Text { vertical-stretch: 0; text: "파일: " + row.file; color: #475569; font-size: 9px; wrap: word-wrap; }
-                    if row.meta != "": Text { vertical-stretch: 0; text: row.meta; color: #94a3b8; font-size: 9px; }
+                    if row.meta != "": Text { vertical-stretch: 0; text: row.meta; color: #94a3b8; font-size: 9px; wrap: word-wrap; }
                 }
             }
         }
