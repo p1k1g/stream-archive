@@ -392,24 +392,33 @@ using fixtures/fake executables rather than provider network downloads.
 
 Provider network/E2E remains Phase 23.4.
 
-## 24. Status
+## 24. Validation closure
 
-Implementation is complete pending PR validation and final Codex review.
-
-Closure gates:
+GitHub Actions run:
 
 ```text
-core-check (linux)
-core-check (macos)
-core-check (windows)
-windows-check
-runtime contract guard
-portable package smoke
-portable verification
-final Codex review
+35790143183
 ```
 
-After those gates:
+Results:
+
+```text
+core-check (linux)   PASS
+core-check (macos)   PASS
+core-check (windows) PASS
+windows-check        PASS
+
+Runtime contract guard          PASS
+Source archive metadata smoke   PASS
+Windows portable package smoke PASS
+Verify portable package        PASS
+```
+
+The runtime contract guard was updated for the Phase 23.2 shared-preflight contract rather than weakening it. It now also protects the requirement model, stable IDs, read-only SQLite integrity check, blocking-error readiness semantics, Native/CLI shared model, and local/no-secret-value preflight boundary.
+
+Final Codex review is requested only after this closure commit reaches a green final HEAD.
+
+## 25. Status
 
 ```text
 Phase 23.2 COMPLETE
