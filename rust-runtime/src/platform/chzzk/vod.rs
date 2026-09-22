@@ -1986,11 +1986,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let legacy_root = legacy_vod_job_root(temp.path());
         fs::create_dir_all(legacy_root.join("chzzk-stale")).unwrap();
-        fs::write(
-            legacy_root.join("chzzk-stale").join("secret.txt"),
-            "secret",
-        )
-        .unwrap();
+        fs::write(legacy_root.join("chzzk-stale").join("secret.txt"), "secret").unwrap();
 
         cleanup_stale_job_dirs(temp.path()).unwrap();
         assert!(!legacy_root.join("chzzk-stale").exists());
