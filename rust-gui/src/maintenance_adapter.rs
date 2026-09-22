@@ -100,7 +100,6 @@ fn diagnostic_status_label(status: DiagnosticStatus) -> &'static str {
     }
 }
 
-
 fn diagnostic_category_label(category: DiagnosticCategory) -> &'static str {
     match category {
         DiagnosticCategory::Runtime => "런타임",
