@@ -1,16 +1,16 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
 
-$platform = Read-RepoFile 'rust-web/src/platform/mod.rs'
-$platformLive = Read-RepoFile 'rust-web/src/platform/live.rs'
-$chzzk = Read-RepoFile 'rust-web/src/platform/chzzk/mod.rs'
-$auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
-$live = Read-RepoFile 'rust-web/src/platform/chzzk/live.rs'
-$recorder = Read-RepoFile 'rust-web/src/recorder.rs'
-$watcher = Read-RepoFile 'rust-web/src/native_watcher.rs'
-$primary = Read-RepoFile 'rust-web/src/primary_config.rs'
-$backend = Read-RepoFile 'rust-web/src/backend.rs'
-$soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'
-$core = Read-RepoFile 'rust-web/src/app_core.rs'
+$platform = Read-RepoFile 'rust-runtime/src/platform/mod.rs'
+$platformLive = Read-RepoFile 'rust-runtime/src/platform/live.rs'
+$chzzk = Read-RepoFile 'rust-runtime/src/platform/chzzk/mod.rs'
+$auth = Read-RepoFile 'rust-runtime/src/platform/chzzk/auth.rs'
+$live = Read-RepoFile 'rust-runtime/src/platform/chzzk/live.rs'
+$recorder = Read-RepoFile 'rust-runtime/src/recorder.rs'
+$watcher = Read-RepoFile 'rust-runtime/src/native_watcher.rs'
+$primary = Read-RepoFile 'rust-runtime/src/primary_config.rs'
+$backend = Read-RepoFile 'rust-runtime/src/backend.rs'
+$soopVod = Read-RepoFile 'rust-runtime/src/platform/soop/vod.rs'
+$core = Read-RepoFile 'rust-runtime/src/app_core.rs'
 $guiSources = (Get-ChildItem (Join-Path $script:RuntimeContractsRoot 'rust-gui/src') -Filter '*.rs' -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 $guiUi = (Get-ChildItem (Join-Path $script:RuntimeContractsRoot 'rust-gui/ui') -Filter '*.slint' -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 

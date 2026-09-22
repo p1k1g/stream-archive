@@ -193,7 +193,7 @@ Windows에서 실제 실행·테스트·배포에 사용하는 단일 빌드 진
 `BUILD_PORTABLE.bat`은 shared/headless Rust runtime과 Slint Native GUI를 각각 tracked `Cargo.lock`으로 release build한 뒤 실행 가능한 portable 디렉터리를 조립합니다.
 
 ```text
-shared/headless rust-web build + rust-gui release build
+shared/headless rust-runtime build + rust-gui release build
                     ↓
              dist\stream-archive
 ```
@@ -226,7 +226,7 @@ docs\...
 별도의 `BUILD_RELEASE.bat` wrapper는 사용하지 않습니다. 컴파일 결과만 확인해야 하는 개발 작업에서는 Cargo를 직접 실행할 수 있습니다.
 
 ```powershell
-cargo build --locked --release --manifest-path .\rust-web\Cargo.toml
+cargo build --locked --release --manifest-path .\rust-runtime\Cargo.toml
 cargo build --locked --release --manifest-path .\rust-gui\Cargo.toml
 ```
 
@@ -237,12 +237,12 @@ cargo build --locked --release --manifest-path .\rust-gui\Cargo.toml
 Phase 20의 Unix 경로는 GUI launcher가 아니라 `stream-archive-cli`를 사용합니다.
 
 ```bash
-cargo build --locked --release --manifest-path rust-web/Cargo.toml
-./rust-web/target/release/stream-archive-cli init
-./rust-web/target/release/stream-archive-cli tools
-./rust-web/target/release/stream-archive-cli tools configure
-./rust-web/target/release/stream-archive-cli doctor
-./rust-web/target/release/stream-archive-cli serve --watch
+cargo build --locked --release --manifest-path rust-runtime/Cargo.toml
+./rust-runtime/target/release/stream-archive-cli init
+./rust-runtime/target/release/stream-archive-cli tools
+./rust-runtime/target/release/stream-archive-cli tools configure
+./rust-runtime/target/release/stream-archive-cli doctor
+./rust-runtime/target/release/stream-archive-cli serve --watch
 ```
 
 `tools configure`는 Streamlink/yt-dlp/FFmpeg를 기존 SQLite 설정 → backend layout → `PATH` → 일반적인 Unix 설치 경로 순서로 찾고, 발견된 절대 경로를 canonical SQLite 설정에 원자적으로 기록합니다. 별도 INI/TXT 설정 파일은 만들지 않습니다.

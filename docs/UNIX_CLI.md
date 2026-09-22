@@ -15,14 +15,14 @@ It is intentionally separate from the future Windows `stream-archive` Slint appl
 From the repository root:
 
 ```bash
-cargo build --locked --release --manifest-path rust-web/Cargo.toml
+cargo build --locked --release --manifest-path rust-runtime/Cargo.toml
 ```
 
 Relevant release binaries:
 
 ```text
-rust-web/target/release/stream-archive-cli
-rust-web/target/release/stream-archive-server
+rust-runtime/target/release/stream-archive-cli
+rust-runtime/target/release/stream-archive-server
 ```
 
 ## First-run layout
@@ -30,7 +30,7 @@ rust-web/target/release/stream-archive-server
 Create the backend/data layout and the SQLite settings table:
 
 ```bash
-./rust-web/target/release/stream-archive-cli init
+./rust-runtime/target/release/stream-archive-cli init
 ```
 
 Default layout:

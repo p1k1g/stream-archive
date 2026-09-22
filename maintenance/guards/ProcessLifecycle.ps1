@@ -1,12 +1,12 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
 
-$recorder = Read-RepoFile 'rust-web/src/recorder.rs'
-$watcher = Read-RepoFile 'rust-web/src/native_watcher.rs'
-$vodFacade = Read-RepoFile 'rust-web/src/vod.rs'
-$soopVod = Read-RepoFile 'rust-web/src/platform/soop/vod.rs'
-$chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
-$runtime = Read-RepoFile 'rust-web/src/platform_runtime.rs'
-$unixRuntime = Read-RepoFile 'rust-web/src/platform_runtime_unix.rs'
+$recorder = Read-RepoFile 'rust-runtime/src/recorder.rs'
+$watcher = Read-RepoFile 'rust-runtime/src/native_watcher.rs'
+$vodFacade = Read-RepoFile 'rust-runtime/src/vod.rs'
+$soopVod = Read-RepoFile 'rust-runtime/src/platform/soop/vod.rs'
+$chzzkVod = Read-RepoFile 'rust-runtime/src/platform/chzzk/vod.rs'
+$runtime = Read-RepoFile 'rust-runtime/src/platform_runtime.rs'
+$unixRuntime = Read-RepoFile 'rust-runtime/src/platform_runtime_unix.rs'
 $allRuntime = $recorder + $soopVod + $chzzkVod + $runtime + $unixRuntime
 
 Assert-Match $recorder '\.kill_on_drop\(true\)' 'LIVE Streamlink child must retain kill-on-drop fallback.'

@@ -41,10 +41,10 @@ At minimum, run the checks relevant to your change. The current Windows validati
 
 ```powershell
 ./maintenance/Test-RuntimeContracts.ps1
-cargo fmt --manifest-path rust-web/Cargo.toml -- --check
-cargo test --locked --manifest-path rust-web/Cargo.toml
-cargo check --locked --manifest-path rust-web/Cargo.toml
-cargo clippy --locked --manifest-path rust-web/Cargo.toml --all-targets --all-features -- -D warnings
+cargo fmt --manifest-path rust-runtime/Cargo.toml -- --check
+cargo test --locked --manifest-path rust-runtime/Cargo.toml
+cargo check --locked --manifest-path rust-runtime/Cargo.toml
+cargo clippy --locked --manifest-path rust-runtime/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
 

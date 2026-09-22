@@ -65,14 +65,37 @@ try {
 
     $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
     $package = Read-RepoFile 'BUILD_PORTABLE.bat'
-    $manifest = Read-RepoFile 'rust-web/Cargo.toml'
+    $gitignore = Read-RepoFile '.gitignore'
+    $runDev = Read-RepoFile 'RUN_DEV.bat'
+    $releaseMetadata = Read-RepoFile 'maintenance/Write-ReleaseMetadata.ps1'
+    $readme = Read-RepoFile 'README.md'
+    $agents = Read-RepoFile 'AGENTS.md'
+    $contributing = Read-RepoFile 'CONTRIBUTING.md'
+    $unixCli = Read-RepoFile 'docs/UNIX_CLI.md'
+    $manifest = Read-RepoFile 'rust-runtime/Cargo.toml'
     $guiManifest = Read-RepoFile 'rust-gui/Cargo.toml'
+
+    foreach ($activeRuntimePath in @(
+        @{ Name = 'PR workflow'; Text = $workflow },
+        @{ Name = 'portable build'; Text = $package },
+        @{ Name = 'developer runner'; Text = $runDev },
+        @{ Name = 'release metadata'; Text = $releaseMetadata },
+        @{ Name = 'README'; Text = $readme },
+        @{ Name = 'AGENTS'; Text = $agents },
+        @{ Name = 'CONTRIBUTING'; Text = $contributing },
+        @{ Name = 'Unix CLI guide'; Text = $unixCli },
+        @{ Name = 'GUI manifest'; Text = $guiManifest }
+    )) {
+        Assert-NotMatch $activeRuntimePath.Text 'rust-web[\\/]' "Active runtime path must use rust-runtime, not rust-web: $($activeRuntimePath.Name)"
+    }
+    Assert-Match $gitignore '(?m)^rust-runtime/target/\r?$' 'Git ignore must cover the canonical rust-runtime Cargo target directory.'
+    Assert-NotMatch $gitignore '(?m)^rust-web/target/\r?$' 'Git ignore must not retain the retired rust-web Cargo target directory.'
     Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
     Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
     Assert-NotMatch $workflow 'runs-on:\s*\[?self-hosted' 'Public CI must not depend on a private self-hosted runner.'
     Assert-Match $workflow 'fetch-depth:\s*0' 'Public-release CI must fetch full history for the history safety scan.'
     foreach ($trigger in @(
-        'rust-web/\*\*',
+        'rust-runtime/\*\*',
         'rust-gui/\*\*',
         'RUN_DEV\.bat',
         'BUILD_PORTABLE\.bat',
@@ -87,7 +110,7 @@ try {
     }
     Assert-Match $workflow 'BUILD_PORTABLE\.bat' 'Portable package smoke step is missing.'
     Assert-Match $workflow 'Verify portable package' 'Portable package verification step is missing.'
-    Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-web\\Cargo\.toml"' 'Portable package must perform the locked shared/headless runtime release build directly.'
+    Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-runtime\\Cargo\.toml"' 'Portable package must perform the locked shared/headless runtime release build directly.'
     Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-gui\\Cargo\.toml"' 'Portable package must perform the locked native GUI release build directly.'
     Assert-Match $package 'StreamArchive\.exe' 'Portable package must include the native Stream Archive GUI.'
     Assert-Match $package 'stream-archive-server\.exe' 'Portable package must retain the compatible headless runtime binary.'
@@ -99,7 +122,7 @@ try {
     Assert-Match $package 'THIRD_PARTY_NOTICES\.md' 'Portable package must include third-party notices.'
     Assert-Match $package 'LICENSE' 'Portable package must include the project license.'
     Assert-Match $manifest 'name\s*=\s*"stream-archive-server"' 'Cargo package must keep the compatible shared/headless runtime name.'
-    Assert-NotMatch $manifest '(?m)^\s*(?:axum|tokio-stream|tower-http|tracing|tracing-subscriber)\s*=' 'Retired Web-only direct dependencies must not return to rust-web.'
+    Assert-NotMatch $manifest '(?m)^\s*(?:axum|tokio-stream|tower-http|tracing|tracing-subscriber)\s*=' 'Retired Web-only direct dependencies must not return to rust-runtime.'
     Assert-Match $manifest 'license\s*=\s*"AGPL-3\.0-or-later"' 'Cargo package must declare AGPL-3.0-or-later.'
     Assert-Match $guiManifest 'name\s*=\s*"stream-archive-gui"' 'Native GUI Cargo package must use the Stream Archive namespace.'
     Assert-Match $guiManifest 'license\s*=\s*"AGPL-3\.0-or-later"' 'Native GUI Cargo package must declare AGPL-3.0-or-later.'

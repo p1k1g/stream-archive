@@ -1,8 +1,8 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
 
-$lib = Read-RepoFile 'rust-web/src/lib.rs'
-$tools = Read-RepoFile 'rust-web/src/tool_discovery.rs'
-$cli = Read-RepoFile 'rust-web/src/bin/stream-archive-cli.rs'
+$lib = Read-RepoFile 'rust-runtime/src/lib.rs'
+$tools = Read-RepoFile 'rust-runtime/src/tool_discovery.rs'
+$cli = Read-RepoFile 'rust-runtime/src/bin/stream-archive-cli.rs'
 
 Assert-Match $lib 'pub mod tool_discovery;' 'Shared library boundary must export tool discovery.'
 Assert-Match $tools 'ToolKind::Streamlink' 'Tool discovery must include Streamlink.'

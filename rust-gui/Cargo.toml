@@ -8,7 +8,7 @@ build = "build.rs"
 
 [dependencies]
 slint = { version = "=1.18.0", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-2"] }
-stream-archive-server = { path = "../rust-web" }
+stream-archive-server = { path = "../rust-runtime" }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
 [target.'cfg(windows)'.dependencies]

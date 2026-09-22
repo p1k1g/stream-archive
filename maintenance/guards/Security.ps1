@@ -1,11 +1,11 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
 
-$backend = Read-RepoFile 'rust-web/src/backend.rs'
-$security = Read-RepoFile 'rust-web/src/security.rs'
-$auth = Read-RepoFile 'rust-web/src/platform/chzzk/auth.rs'
-$chzzkVod = Read-RepoFile 'rust-web/src/platform/chzzk/vod.rs'
-$recorder = Read-RepoFile 'rust-web/src/recorder.rs'
-$runtime = Read-RepoFile 'rust-web/src/platform_runtime.rs'
+$backend = Read-RepoFile 'rust-runtime/src/backend.rs'
+$security = Read-RepoFile 'rust-runtime/src/security.rs'
+$auth = Read-RepoFile 'rust-runtime/src/platform/chzzk/auth.rs'
+$chzzkVod = Read-RepoFile 'rust-runtime/src/platform/chzzk/vod.rs'
+$recorder = Read-RepoFile 'rust-runtime/src/recorder.rs'
+$runtime = Read-RepoFile 'rust-runtime/src/platform_runtime.rs'
 
 Assert-Match $backend '"CHZZK_NID_AUT"' 'NID_AUT must remain a hidden setting.'
 Assert-Match $backend '"CHZZK_NID_SES"' 'NID_SES must remain a hidden setting.'
