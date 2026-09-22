@@ -407,7 +407,7 @@ windows-check:
 - Windows portable package smoke:  PASS
 - Verify portable package:         PASS
 
-Codex review: PENDING FINAL REVIEW
+Codex review: PASS — no major issues reported on PR #95 (closure implementation reviewed at `03cb3cff66`).
 ```
 
 ## 15. Remaining risks
