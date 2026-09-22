@@ -5,12 +5,17 @@
 //! settings, or expose secret values. External executable execution remains a
 //! Phase 23.3 integration concern; tool checks here are deterministic discovery.
 use crate::{
-    backup_service::BackupPolicy,
+    backup_service::{BackupManager, BackupPolicy},
+    store::Store,
     tool_discovery::{ToolKind, ToolResolution, resolve_tool},
 };
+use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DiagnosticStatus {
@@ -115,6 +120,14 @@ pub struct DiagnosticsSnapshot {
     pub items: Vec<DiagnosticItem>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PreflightInput {
+    pub values: BTreeMap<String, String>,
+    pub configured_secrets: BTreeMap<String, bool>,
+    pub backup_directory: PathBuf,
+    pub backup_policy: BackupPolicy,
+}
+
 impl DiagnosticsSnapshot {
     pub fn startup_failure(backend: Option<&Path>, error: &str) -> Self {
         let database = backend.map(crate::store::Store::default_path);
@@ -173,6 +186,48 @@ impl DiagnosticsSnapshot {
             summary,
             items,
         }
+    }
+}
+
+pub fn load_read_only_preflight_input(
+    backend: &Path,
+    database: &Path,
+) -> Result<PreflightInput> {
+    let store_input = Store::read_preflight_settings(database)
+        .context("settings load failed")?;
+    let backup = BackupManager::preflight_state(backend, &store_input.values)
+        .context("backup preflight load failed")?;
+    Ok(PreflightInput {
+        values: store_input.values,
+        configured_secrets: store_input.configured_secrets,
+        backup_directory: backup.directory,
+        backup_policy: backup.policy,
+    })
+}
+
+pub fn collect_preflight_input(
+    backend: &Path,
+    database: &Path,
+    input: &PreflightInput,
+) -> DiagnosticsSnapshot {
+    collect_with_backup_and_secrets(
+        backend,
+        database,
+        &input.values,
+        &input.configured_secrets,
+        &input.backup_directory,
+        &input.backup_policy,
+    )
+}
+
+pub fn collect_read_only_preflight(backend: &Path, database: &Path) -> DiagnosticsSnapshot {
+    match load_read_only_preflight_input(backend, database) {
+        Ok(input) => collect_preflight_input(backend, database, &input),
+        Err(error) => DiagnosticsSnapshot::unavailable(
+            Some(backend),
+            Some(database),
+            &format!("{error:#}"),
+        ),
     }
 }
 
@@ -728,6 +783,29 @@ mod tests {
             "ready",
             "",
         )
+    }
+
+    #[test]
+    fn read_only_preflight_input_preserves_store_load_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let db = dir.path().join("broken-settings.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY);")
+            .unwrap();
+        drop(conn);
+
+        let snapshot = collect_read_only_preflight(&backend, &db);
+        assert!(!snapshot.runtime_ready);
+        assert!(snapshot.summary.blocking_errors >= 1);
+        let settings = snapshot
+            .items
+            .iter()
+            .find(|item| item.id == "runtime.settings")
+            .expect("settings failure check");
+        assert_eq!(settings.status, DiagnosticStatus::Error);
+        assert!(settings.detail.contains("settings load failed"));
     }
 
     #[test]
