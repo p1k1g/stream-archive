@@ -298,6 +298,7 @@ export component MaintenancePage inherits VerticalLayout {
             VerticalLayout {
                 padding: 2px;
                 spacing: 6px;
+                alignment: start;
 
                 if MaintenanceState.backup-rows.length == 0: Rectangle {
                     height: 78px;
@@ -370,6 +371,7 @@ export component MaintenancePage inherits VerticalLayout {
         VerticalLayout {
             padding: 2px;
             spacing: 8px;
+            alignment: start;
             Text {
                 text: "진단은 읽기 전용입니다. 새로고침해도 미디어 도구 실행, 공급자 접속, 설정 변경은 수행하지 않습니다.";
                 color: #64748b;
@@ -431,6 +433,7 @@ export component MaintenancePage inherits VerticalLayout {
             VerticalLayout {
                 padding: 2px;
                 spacing: 4px;
+                alignment: start;
                 if MaintenanceState.log-rows.length == 0: Rectangle {
                     height: 70px;
                     vertical-stretch: 0;
