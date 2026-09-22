@@ -437,17 +437,28 @@ Phase 23.1 does not implement this engine.
 
 ## 21. Status
 
-Implementation and the first full CI/package validation are complete.
+Implementation, automated validation and final code review are complete.
 
 ```text
-Phase 23.1 implementation: COMPLETE
-Automated CI/package validation: PASS
-Codex review: PENDING FINAL REVIEW
+Final validated implementation HEAD: c4067df811d5feaac86c0d8f017878926a43af5e
+Final validation run: 35708567750
+
+core-check (linux):   PASS
+core-check (macos):   PASS
+core-check (windows): PASS
+windows-check:        PASS
+
+Runtime contract guard:         PASS
+Source archive metadata smoke:  PASS
+Windows portable package smoke: PASS
+Verify portable package:        PASS
+
+Codex reviewed commit: c4067df811
+Codex result: Didn't find any major issues.
+Unresolved review threads: 0
 ```
 
-The final documentation-only HEAD must pass the same CI contract and a final Codex review with no unresolved material findings.
-
-After that final review gate:
+This closure-status update is documentation-only and does not change the validated Native/runtime implementation.
 
 ```text
 Phase 23.1 COMPLETE
