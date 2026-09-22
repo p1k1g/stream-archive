@@ -395,8 +395,19 @@ windows-check
 The final CI run/result is recorded below after PR validation.
 
 ```text
-GitHub Actions: PENDING FINAL CI
-Codex review:   PENDING
+GitHub Actions run: 35700982962
+- core-check (linux):   PASS
+- core-check (macos):   PASS
+- core-check (windows): PASS
+- windows-check:        PASS
+
+windows-check:
+- Runtime contract guard:          PASS
+- Source archive metadata smoke:   PASS
+- Windows portable package smoke:  PASS
+- Verify portable package:         PASS
+
+Codex review: PENDING FINAL REVIEW
 ```
 
 ## 15. Remaining risks
@@ -424,16 +435,12 @@ A `stream-archive-server` hard rename should not be bundled into unrelated Phase
 
 ## 17. Closure status
 
-Current status before final PR validation:
-
-```text
-Phase 22 status: PENDING FINAL CI
-```
-
-After all PR checks and Codex review pass without unresolved blockers, this document will be updated to:
+PR CI validation passed across Linux, macOS and Windows, including runtime contracts and the portable package verification path.
 
 ```text
 Phase 22 status: COMPLETE
 Phase 22 COMPLETE
 Ready for Phase 23
 ```
+
+Codex review is the final PR review gate; any material finding must be resolved before merge, but the Phase 22 implementation/audit scope itself has no remaining known blocker.
