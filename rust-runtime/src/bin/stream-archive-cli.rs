@@ -506,10 +506,6 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-fn exists_marker(path: &Path) -> &'static str {
-    if path.exists() { " [OK]" } else { " [missing]" }
-}
-
 fn server_binary() -> Option<PathBuf> {
     #[cfg(windows)]
     const NAMES: &[&str] = &["stream-archive-server.exe", "stream-archive-server"];
