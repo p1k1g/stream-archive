@@ -577,7 +577,7 @@ fn secret_store_check() -> DiagnosticItem {
     }
     #[cfg(target_os = "macos")]
     {
-        return check!(
+        check!(
             "secret.native_store",
             DiagnosticCategory::Secrets,
             DiagnosticRequirement::Optional,
@@ -586,11 +586,11 @@ fn secret_store_check() -> DiagnosticItem {
             "macOS Keychain integration is available",
             "Native Keychain capability only; credentials are not read back by diagnostics.",
             "",
-        );
+        )
     }
     #[cfg(windows)]
     {
-        return check!(
+        check!(
             "secret.native_store",
             DiagnosticCategory::Secrets,
             DiagnosticRequirement::Optional,
@@ -599,7 +599,7 @@ fn secret_store_check() -> DiagnosticItem {
             "Windows CurrentUser DPAPI integration is available",
             "Native DPAPI capability only; credentials are not read back by diagnostics.",
             "",
-        );
+        )
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
