@@ -114,17 +114,7 @@ fn command_doctor(args: &[String]) -> Result<()> {
 
     let backend = backend_dir(false)?;
     let db = database_path(&backend)?;
-    let (settings, secrets) = load_preflight_settings(&db).unwrap_or_default();
-    let backup_policy = backup_policy_from_settings(&settings);
-    let backup_dir = backup_directory_from_settings(&backend, &settings)?;
-    let snapshot = collect_with_backup_and_secrets(
-        &backend,
-        &db,
-        &settings,
-        &secrets,
-        &backup_dir,
-        &backup_policy,
-    );
+    let snapshot = doctor_snapshot(&backend, &db);
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&snapshot)?);
@@ -133,6 +123,38 @@ fn command_doctor(args: &[String]) -> Result<()> {
     }
 
     doctor_result(&snapshot)
+}
+
+fn doctor_snapshot(backend: &Path, db: &Path) -> DiagnosticsSnapshot {
+    let (settings, secrets) = match load_preflight_settings(db) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            return DiagnosticsSnapshot::unavailable(
+                Some(backend),
+                Some(db),
+                &format!("settings load failed: {error:#}"),
+            );
+        }
+    };
+    let backup_policy = backup_policy_from_settings(&settings);
+    let backup_dir = match backup_directory_from_settings(backend, &settings) {
+        Ok(path) => path,
+        Err(error) => {
+            return DiagnosticsSnapshot::unavailable(
+                Some(backend),
+                Some(db),
+                &format!("backup directory resolution failed: {error:#}"),
+            );
+        }
+    };
+    collect_with_backup_and_secrets(
+        backend,
+        db,
+        &settings,
+        &secrets,
+        &backup_dir,
+        &backup_policy,
+    )
 }
 
 fn print_preflight(snapshot: &DiagnosticsSnapshot) {
@@ -586,6 +608,33 @@ mod tests {
             detail: String::new(),
             remediation: String::new(),
         }]);
+        assert!(doctor_result(&snapshot).is_err());
+    }
+
+    #[test]
+    fn doctor_preserves_settings_read_failure_as_blocking_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let db = dir.path().join("broken-settings.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY);")
+            .unwrap();
+        drop(conn);
+
+        let snapshot = doctor_snapshot(&backend, &db);
+        assert!(!snapshot.runtime_ready);
+        assert!(snapshot.summary.blocking_errors >= 1);
+        let settings = snapshot
+            .items
+            .iter()
+            .find(|item| item.id == "runtime.settings")
+            .expect("settings failure check");
+        assert_eq!(
+            settings.status,
+            stream_archive_server::diagnostics::DiagnosticStatus::Error
+        );
+        assert!(settings.detail.contains("settings load failed"));
         assert!(doctor_result(&snapshot).is_err());
     }
 
