@@ -255,6 +255,22 @@ The Phase 23.1 `alignment: start` layout remains intact.
 
 `stream-archive-cli doctor` now uses the same `DiagnosticsSnapshot` construction as Native Diagnostics rather than its previous independent tool/path/secret decision tree.
 
+The CLI also no longer opens SQLite to reconstruct diagnostics settings or reparses backup defaults itself. Read-only preflight inputs are loaded through shared runtime services:
+
+```text
+Store::read_preflight_settings()
+        +
+BackupManager::preflight_state()
+        ↓
+diagnostics::load_read_only_preflight_input()
+        ↓
+diagnostics::collect_read_only_preflight()
+        ↓
+stream-archive-cli doctor / doctor --json
+```
+
+This keeps SQLite filtering, hidden-secret configured state, backup policy defaults and backup-directory resolution under the canonical shared runtime interpretation.
+
 Human-readable output includes each check and summary.
 
 ## 16. JSON and exit-code contract
@@ -323,7 +339,10 @@ Regression coverage includes:
 - backup diagnostics remain non-creating/read-only;
 - CLI warning-only exit semantics;
 - CLI required-error exit semantics;
-- CLI secret loading returns configured booleans instead of secret values.
+- settings-read failures remain blocking instead of falling back to empty settings;
+- Store preflight loading filters secret values into configured booleans;
+- BackupManager preflight state matches the live manager policy/directory rules;
+- CLI JSON never serializes actual secret values.
 
 ## 20. Runtime contracts
 
@@ -394,33 +413,30 @@ Provider network/E2E remains Phase 23.4.
 
 ## 24. Validation closure
 
-GitHub Actions run:
+The first complete Phase 23.2 implementation reached green CI, then Codex identified two persistence-boundary issues during review:
 
-```text
-35790143183
-```
+1. settings-read failures were initially able to fall back to empty settings;
+2. the CLI doctor initially reconstructed SQLite/backup preflight inputs itself.
 
-Results:
+Both are now fixed with regression coverage. The final branch must be validated again after the shared Store/BackupManager input-service change.
 
-```text
-core-check (linux)   PASS
-core-check (macos)   PASS
-core-check (windows) PASS
-windows-check        PASS
+The runtime contract guard now protects:
 
-Runtime contract guard          PASS
-Source archive metadata smoke   PASS
-Windows portable package smoke PASS
-Verify portable package        PASS
-```
+- Required/Optional/Informational semantics;
+- stable check IDs;
+- read-only SQLite integrity checking;
+- blocking-error readiness semantics;
+- Native/CLI shared diagnostics model;
+- CLI use of the shared read-only preflight input service;
+- no duplicate CLI settings/backup preflight parser;
+- local/no-secret-value diagnostics boundary.
 
-The runtime contract guard was updated for the Phase 23.2 shared-preflight contract rather than weakening it. It now also protects the requirement model, stable IDs, read-only SQLite integrity check, blocking-error readiness semantics, Native/CLI shared model, and local/no-secret-value preflight boundary.
-
-Final Codex review is requested only after this closure commit reaches a green final HEAD.
+Final closure requires a green final HEAD and a clean Codex review on that same HEAD.
 
 ## 25. Status
 
 ```text
-Phase 23.2 COMPLETE
-Ready for Phase 23.3 — Media-tool Integration Harness
+Phase 23.2 implementation complete
+Final CI / Codex revalidation pending
+Ready for Phase 23.3 only after final gates
 ```
