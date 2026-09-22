@@ -240,12 +240,7 @@ pub fn collect_with_secrets(
     values: &BTreeMap<String, String>,
     configured_secrets: &BTreeMap<String, bool>,
 ) -> DiagnosticsSnapshot {
-    DiagnosticsSnapshot::from_items(collect_items(
-        backend,
-        database,
-        values,
-        configured_secrets,
-    ))
+    DiagnosticsSnapshot::from_items(collect_items(backend, database, values, configured_secrets))
 }
 
 fn collect_items(
@@ -717,7 +712,11 @@ fn provider_checks(
 }
 
 fn configured_label(value: bool) -> &'static str {
-    if value { "configured" } else { "not configured" }
+    if value {
+        "configured"
+    } else {
+        "not configured"
+    }
 }
 
 #[cfg(test)]
@@ -851,7 +850,10 @@ mod tests {
     fn provider_checks_never_include_secret_values() {
         let values = BTreeMap::from([
             ("SOOP_USERNAME".into(), "tester".into()),
-            ("CLOUDFLARE_WORKER_URL".into(), "https://example.invalid".into()),
+            (
+                "CLOUDFLARE_WORKER_URL".into(),
+                "https://example.invalid".into(),
+            ),
         ]);
         let secrets = BTreeMap::from([
             ("SOOP_PASSWORD".into(), true),
@@ -886,12 +888,7 @@ mod tests {
             },
         );
         assert!(!backup.exists());
-        assert!(
-            report
-                .items
-                .iter()
-                .any(|item| item.id == "storage.backup")
-        );
+        assert!(report.items.iter().any(|item| item.id == "storage.backup"));
     }
 
     #[test]
