@@ -372,6 +372,16 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ Phase 22.3에서 legacy browser/Web UI, Axum presentation, Web launcher/fallback 제거
 - Linux/macOS는 GUI를 복제하지 않고 Phase 20의 CLI/headless 인터페이스 유지
 
+### Phase 22 ✅ Runtime / Legacy Architecture Closure
+
+- ✅ legacy dependency / warning cleanup
+- ✅ browser/Web presentation 및 Axum application layer 제거
+- ✅ runtime/core compatibility boundary audit
+- ✅ shared runtime source path를 `rust-runtime/`로 통일
+- ✅ CI/release workflow 이름을 `rust-runtime-*`로 통일
+- ✅ final legacy/compatibility audit 및 CHZZK transient runtime path 정리
+- `stream-archive-server` package/headless binary 이름은 외부 호환성 경계로 의도적으로 유지
+
 ---
 
 **Stream Archive**는 Phase 20에서 Windows 런타임의 안정성을 유지하면서 Linux/macOS headless 기반을 완성하고, Phase 21부터 Windows 사용자 경험을 Slint native GUI로 전환하는 것을 목표로 합니다.

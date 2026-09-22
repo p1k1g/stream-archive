@@ -1203,6 +1203,10 @@ fn resolve_tool(configured: &str, candidates: &[PathBuf], names: &[&str]) -> Opt
 }
 
 fn vod_job_root(backend: &Path) -> PathBuf {
+    backend.join(".stream-archive").join("vod")
+}
+
+fn legacy_vod_job_root(backend: &Path) -> PathBuf {
     backend.join(".rust-web").join("vod")
 }
 
@@ -1226,12 +1230,16 @@ fn root_creation_lock(root: &Path) -> Result<File> {
 }
 
 fn cleanup_stale_job_dirs(backend: &Path) -> Result<()> {
-    let root = vod_job_root(backend);
+    cleanup_stale_job_dirs_in_root(&vod_job_root(backend))?;
+    cleanup_stale_job_dirs_in_root(&legacy_vod_job_root(backend))
+}
+
+fn cleanup_stale_job_dirs_in_root(root: &Path) -> Result<()> {
     if !root.is_dir() {
         return Ok(());
     }
-    let creation_lock = root_creation_lock(&root)?;
-    for entry in fs::read_dir(&root).with_context(|| {
+    let creation_lock = root_creation_lock(root)?;
+    for entry in fs::read_dir(root).with_context(|| {
         format!(
             "CHZZK VOD \u{c784}\u{c2dc} \u{d3f4}\u{b354} \u{c870}\u{d68c} \u{c2e4}\u{d328}: {}",
             root.display()
@@ -1962,6 +1970,30 @@ mod tests {
         cleanup_stale_job_dirs(temp.path()).unwrap();
         assert!(!root.join("chzzk-stale").exists());
         assert!(root.join("soop-keep").exists());
+    }
+
+    #[test]
+    fn job_root_uses_canonical_runtime_namespace() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            vod_job_root(temp.path()),
+            temp.path().join(".stream-archive").join("vod")
+        );
+    }
+
+    #[test]
+    fn legacy_stale_chzzk_job_dirs_are_scavenged_without_reuse() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy_root = legacy_vod_job_root(temp.path());
+        fs::create_dir_all(legacy_root.join("chzzk-stale")).unwrap();
+        fs::write(legacy_root.join("chzzk-stale").join("secret.txt"), "secret").unwrap();
+
+        cleanup_stale_job_dirs(temp.path()).unwrap();
+        assert!(!legacy_root.join("chzzk-stale").exists());
+
+        let guard = job_dir(temp.path()).unwrap();
+        assert!(guard.path().starts_with(vod_job_root(temp.path())));
+        assert!(!guard.path().starts_with(&legacy_root));
     }
 
     #[test]

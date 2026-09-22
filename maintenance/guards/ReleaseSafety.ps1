@@ -94,6 +94,8 @@ try {
     Assert-Match $releaseWorkflow 'workflow_dispatch' 'Canonical runtime release workflow must retain manual workflow_dispatch.'
     Assert-Match $gitignore '(?m)^rust-runtime/target/\r?$' 'Git ignore must cover the canonical rust-runtime Cargo target directory.'
     Assert-NotMatch $gitignore '(?m)^rust-web/target/\r?$' 'Git ignore must not retain the retired rust-web Cargo target directory.'
+    Assert-Match $gitignore '(?m)^backend/\.stream-archive/\r?$' 'Git ignore must cover the canonical runtime-private transient state directory.'
+    Assert-Match $gitignore '(?m)^backend/\.rust-web/\r?$' 'Legacy CHZZK temp state must remain ignored while bounded stale cleanup compatibility is retained.'
     Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
     Assert-NotMatch $workflow 'Test-Phase\d+|Test-ProcessLifecycle|Test-PublicReleaseSafety' 'CI must not call superseded guard entry points.'
     Assert-NotMatch $workflow 'runs-on:\s*\[?self-hosted' 'Public CI must not depend on a private self-hosted runner.'
