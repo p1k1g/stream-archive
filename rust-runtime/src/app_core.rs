@@ -168,11 +168,13 @@ impl StreamArchiveCore {
                     &format!("backup policy load failed: {error:#}"),
                 ),
             },
-            (Err(error), _) | (_, Err(error)) => crate::diagnostics::DiagnosticsSnapshot::unavailable(
-                Some(self.backend_dir()),
-                Some(self.store.path()),
-                &format!("{error:#}"),
-            ),
+            (Err(error), _) | (_, Err(error)) => {
+                crate::diagnostics::DiagnosticsSnapshot::unavailable(
+                    Some(self.backend_dir()),
+                    Some(self.store.path()),
+                    &format!("{error:#}"),
+                )
+            }
         }
     }
 
