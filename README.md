@@ -359,7 +359,7 @@ Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습
 
 Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 추가하지 않습니다. Unix 계열은 CLI/headless 경로를 명확히 하고, Windows GUI 교체는 Phase 21로 분리합니다.
 
-### Phase 21 🚧 Slint Native GUI
+### Phase 21 ✅ Slint Native GUI
 
 - ✅ Settings / native picker / diagnostics
 - ✅ Channels + LIVE watcher/recording
@@ -367,7 +367,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ VOD Queue + LIVE/VOD History
 - ✅ Native Backup/Restore + Diagnostics/Runtime Logs
 - ✅ Windows Native portable packaging / startup 전환
-- 🚧 Native UX polish: LIVE 저장공간, 설정 내부 일반/관리 정리 및 Backup 관리 통합, 내부 claim sidecar 노출 개선
+- ✅ Native UX polish: LIVE 저장공간, 설정 내부 일반/관리 정리 및 Backup 관리 통합, 내부 claim sidecar 노출 개선 — Phase 23.1에서 daily-use UX closure 완료
 - Slint GUI는 shared Rust core를 직접 호출하며 localhost HTTP, direct SQLite, direct process control을 사용하지 않음
 - ✅ Phase 22.3에서 legacy browser/Web UI, Axum presentation, Web launcher/fallback 제거
 - Linux/macOS는 GUI를 복제하지 않고 Phase 20의 CLI/headless 인터페이스 유지
@@ -381,6 +381,16 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ CI/release workflow 이름을 `rust-runtime-*`로 통일
 - ✅ final legacy/compatibility audit 및 CHZZK transient runtime path 정리
 - `stream-archive-server` package/headless binary 이름은 외부 호환성 경계로 의도적으로 유지
+
+### Phase 23 🚧 Product Readiness / Integration
+
+- ✅ 23.1 Native Daily-use UX Closure
+- ⏳ 23.2 Diagnostics / Runtime Preflight
+- ⏳ 23.3 Media-tool Integration Harness
+- ⏳ 23.4 Provider E2E Validation
+- ⏳ 23.5 Unix CLI Completion
+- ⏳ 23.6 Packaging / Release Readiness
+- ⏳ 23.7 Release Candidate / Final QA
 
 ---
 
