@@ -266,6 +266,20 @@ Phase 23.1 avoids a large cross-page component refactor; consistency is achieved
 
 ## 13. Long-content / resize behavior
 
+A manual Windows maximized-window pass after the first closure found one layout regression: list rows using only `min-height` plus `vertical-stretch: 0` could still consume unused vertical space because Slint stretches children when all stretch factors are zero.
+
+The affected scroll-list containers now use start alignment so rows remain content-sized while keeping the Phase 23.1 wrapping behavior:
+
+- Backup list
+- Diagnostics list
+- Runtime Logs
+- LIVE rows
+- VOD content cards
+- Queue rows
+- History rows
+
+This preserves long-text wrapping without returning to fixed-height clipping.
+
 The window contract remains:
 
 ```text
@@ -437,30 +451,27 @@ Phase 23.1 does not implement this engine.
 
 ## 21. Status
 
-Implementation, automated validation and final code review are complete.
+Phase 23.1 implementation includes the Windows manual-QA follow-up for oversized scroll-list rows.
+
+The final branch HEAD must pass the same PR gates before merge:
 
 ```text
-Final validated implementation HEAD: c4067df811d5feaac86c0d8f017878926a43af5e
-Final validation run: 35708567750
+core-check (linux)
+core-check (macos)
+core-check (windows)
+windows-check
 
-core-check (linux):   PASS
-core-check (macos):   PASS
-core-check (windows): PASS
-windows-check:        PASS
-
-Runtime contract guard:         PASS
-Source archive metadata smoke:  PASS
-Windows portable package smoke: PASS
-Verify portable package:        PASS
-
-Codex reviewed commit: c4067df811
-Codex result: Didn't find any major issues.
-Unresolved review threads: 0
+Runtime contract guard
+Source archive metadata smoke
+Windows portable package smoke
+Verify portable package
 ```
 
-This closure-status update is documentation-only and does not change the validated Native/runtime implementation.
+The final PR HEAD must also receive a Codex review with no unresolved material issues.
+
+The authoritative final HEAD/run/review result is recorded in PR #96 so this document does not become stale after documentation-only closure commits.
 
 ```text
-Phase 23.1 COMPLETE
+Phase 23.1 COMPLETE after final PR gates
 Ready for Phase 23.2 — Diagnostics / Runtime Preflight
 ```
