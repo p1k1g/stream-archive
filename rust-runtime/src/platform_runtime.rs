@@ -775,23 +775,22 @@ mod windows_tree {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub(crate) fn test_process_exists(pid: u32) -> bool {
-    #[cfg(windows)]
-    {
-        return windows_tree::test_process_exists(pid);
-    }
-    #[cfg(unix)]
-    {
-        return i32::try_from(pid)
-            .ok()
-            .is_some_and(unix_group::test_process_exists);
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        let _ = pid;
-        false
-    }
+    windows_tree::test_process_exists(pid)
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn test_process_exists(pid: u32) -> bool {
+    i32::try_from(pid)
+        .ok()
+        .is_some_and(unix_group::test_process_exists)
+}
+
+#[cfg(all(test, not(any(windows, unix))))]
+pub(crate) fn test_process_exists(pid: u32) -> bool {
+    let _ = pid;
+    false
 }
 
 #[cfg(windows)]
