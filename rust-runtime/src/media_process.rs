@@ -3,10 +3,7 @@
 //! This boundary owns only subprocess lifecycle. Provider network behavior and
 //! media command construction remain with the existing LIVE/VOD implementations.
 
-use crate::{
-    platform_runtime::spawn_owned,
-    tool_discovery::ToolKind,
-};
+use crate::{platform_runtime::spawn_owned, tool_discovery::ToolKind};
 use anyhow::{Context, Result};
 use std::{
     collections::BTreeMap,
@@ -353,7 +350,8 @@ async fn probe_tool_version_with_environment(
             exit_code: result.exit_code,
             stdout_truncated: result.stdout.truncated,
             stderr_truncated: result.stderr.truncated,
-            detail: "version probe exited successfully but produced no non-empty version line".into(),
+            detail: "version probe exited successfully but produced no non-empty version line"
+                .into(),
         });
     };
 
@@ -476,13 +474,9 @@ mod tests {
 
     #[tokio::test]
     async fn stdout_stderr_and_nonzero_exit_are_structured() {
-        let result = run_media_process(
-            spec("emit")
-                .args(["hello-out", "hello-err", "7"]),
-            None,
-        )
-        .await
-        .unwrap();
+        let result = run_media_process(spec("emit").args(["hello-out", "hello-err", "7"]), None)
+            .await
+            .unwrap();
         assert_eq!(result.outcome, MediaProcessOutcome::ProcessFailure);
         assert_eq!(result.exit_code, Some(7));
         assert!(result.stdout.text.contains("hello-out"));
@@ -492,8 +486,10 @@ mod tests {
     #[tokio::test]
     async fn missing_executable_is_structured_spawn_failure() {
         let result = run_media_process(
-            MediaProcessSpec::new(PathBuf::from("definitely-missing-stream-archive-media-tool"))
-                .timeout(Duration::from_secs(1)),
+            MediaProcessSpec::new(PathBuf::from(
+                "definitely-missing-stream-archive-media-tool",
+            ))
+            .timeout(Duration::from_secs(1)),
             None,
         )
         .await
@@ -504,14 +500,10 @@ mod tests {
 
     #[tokio::test]
     async fn large_concurrent_output_is_bounded_and_keeps_tail() {
-        let result = run_media_process(
-            spec("large-output")
-                .arg("131072")
-                .capture_limit(4096),
-            None,
-        )
-        .await
-        .unwrap();
+        let result =
+            run_media_process(spec("large-output").arg("131072").capture_limit(4096), None)
+                .await
+                .unwrap();
         assert_eq!(result.outcome, MediaProcessOutcome::Success);
         assert!(result.stdout.truncated);
         assert!(result.stderr.truncated);
@@ -523,9 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_utf8_is_lossy_not_fatal() {
-        let result = run_media_process(spec("invalid-utf8"), None)
-            .await
-            .unwrap();
+        let result = run_media_process(spec("invalid-utf8"), None).await.unwrap();
         assert_eq!(result.outcome, MediaProcessOutcome::Success);
         assert!(result.stdout.text.contains('\u{fffd}'));
         assert!(result.stderr.text.contains('\u{fffd}'));
@@ -544,7 +534,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.outcome, MediaProcessOutcome::Success);
-        assert!(result.stdout.text.contains(&dir.path().display().to_string()));
+        assert!(
+            result
+                .stdout
+                .text
+                .contains(&dir.path().display().to_string())
+        );
         assert!(result.stdout.text.contains("환경값-🎬"));
         assert!(result.stdout.text.contains("argument with spaces 한글"));
     }
@@ -554,11 +549,10 @@ mod tests {
         let dir = temp_unicode_dir();
         let output = dir.path().join("부분 출력 파일 [한글].part");
         let result = run_media_process(
-            spec("write-file")
-                .args(vec![
-                    output.as_os_str().to_owned(),
-                    OsString::from("fixture-output"),
-                ]),
+            spec("write-file").args(vec![
+                output.as_os_str().to_owned(),
+                OsString::from("fixture-output"),
+            ]),
             None,
         )
         .await
@@ -641,10 +635,9 @@ mod tests {
     #[tokio::test]
     async fn version_probe_supports_all_media_tools() {
         for kind in ToolKind::ALL {
-            let probe =
-                probe_tool_version(kind, &fixture_path(), Duration::from_secs(3))
-                    .await
-                    .unwrap();
+            let probe = probe_tool_version(kind, &fixture_path(), Duration::from_secs(3))
+                .await
+                .unwrap();
             assert_eq!(probe.status, MediaToolProbeStatus::Ok);
             assert_eq!(probe.version.as_deref(), Some("fixture-media-tool 1.2.3"));
         }
@@ -691,7 +684,10 @@ mod tests {
     #[test]
     fn fixture_build_path_is_unique_to_test_artifacts() {
         let path = fixture_path();
-        assert!(path.components().any(|part| part.as_os_str() == "test-fixtures"));
+        assert!(
+            path.components()
+                .any(|part| part.as_os_str() == "test-fixtures")
+        );
         assert!(path.is_file());
     }
 
