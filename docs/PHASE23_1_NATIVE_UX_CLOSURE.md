@@ -365,7 +365,24 @@ maintenance/Test-RuntimeContracts.ps1
 BUILD_PORTABLE.bat
 ```
 
-Final CI results are recorded on the Phase 23.1 PR after validation.
+First full PR validation completed successfully:
+
+```text
+GitHub Actions run: 35707712884
+
+core-check (linux):   PASS
+core-check (macos):   PASS
+core-check (windows): PASS
+windows-check:        PASS
+
+windows-check:
+- Runtime contract guard:         PASS
+- Source archive metadata smoke:  PASS
+- Windows portable package smoke: PASS
+- Verify portable package:        PASS
+```
+
+The final documentation-only HEAD is revalidated before closure.
 
 ## 18. Windows portable manual QA checklist
 
@@ -420,20 +437,17 @@ Phase 23.1 does not implement this engine.
 
 ## 21. Status
 
-The implementation is ready for CI/package validation.
-
-Final closure requires the Phase 23.1 PR to pass:
+Implementation and the first full CI/package validation are complete.
 
 ```text
-core-check (linux)
-core-check (macos)
-core-check (windows)
-windows-check
+Phase 23.1 implementation: COMPLETE
+Automated CI/package validation: PASS
+Codex review: PENDING FINAL REVIEW
 ```
 
-and a final Codex review with no unresolved material findings.
+The final documentation-only HEAD must pass the same CI contract and a final Codex review with no unresolved material findings.
 
-After those gates pass:
+After that final review gate:
 
 ```text
 Phase 23.1 COMPLETE
