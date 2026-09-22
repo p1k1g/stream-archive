@@ -555,7 +555,10 @@ mod tests {
         let child_pid = dir.path().join("child.pid");
         let result = run_media_process(
             spec("spawn-child")
-                .args(["30000", child_pid.as_os_str().to_owned()])
+                .args(vec![
+                    OsString::from("30000"),
+                    child_pid.as_os_str().to_owned(),
+                ])
                 .timeout(Duration::from_secs(3)),
             None,
         )
