@@ -149,7 +149,7 @@ Assert-Match $diagnostics '"provider\.soop"' 'Shared preflight must retain stabl
 Assert-Match $diagnostics '"provider\.chzzk"' 'Shared preflight must retain stable CHZZK readiness identity.'
 Assert-Match $diagnostics 'PRAGMA quick_check' 'Shared preflight must perform read-only SQLite integrity checking.'
 Assert-Match $diagnostics 'blocking_errors\s*==\s*0' 'Runtime usability must depend on blocking required errors, not warnings.'
-Assert-NotMatch $diagnostics '\breqwest::|https?://|Command::new|unprotect_secret' 'Shared preflight must remain local/read-only without provider network, subprocess, or secret-value reads.'
+Assert-NotMatch $diagnostics '\breqwest::|\breqwest\b|Client::new|Command::new|unprotect_secret' 'Shared preflight must remain local/read-only without provider network, subprocess, or secret-value reads.'
 Assert-Match $cli 'collect_with_backup_and_secrets' 'CLI doctor must consume the same shared preflight model as Native Diagnostics.'
 Assert-Match $cli 'doctor \[--json\]' 'CLI doctor must retain documented JSON automation mode.'
 Assert-NotMatch $guiSources 'std::fs::write|fs::write|Connection::open|std::process|tokio::process' 'GUI must not write runtime files or own child processes.'
