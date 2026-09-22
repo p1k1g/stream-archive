@@ -6,9 +6,7 @@
 //! providers, downloads media, mutates settings, or exposes secret values.
 use crate::{
     backup_service::{BackupManager, BackupPolicy},
-    media_process::{
-        DEFAULT_PROBE_TIMEOUT, MediaToolProbeStatus, probe_tool_version,
-    },
+    media_process::{DEFAULT_PROBE_TIMEOUT, MediaToolProbeStatus, probe_tool_version},
     store::Store,
     tool_discovery::{ToolKind, ToolResolution, resolve_tool},
 };
@@ -251,11 +249,7 @@ pub async fn collect_active_local_preflight(
             .map(|key| {
                 (
                     *key,
-                    input
-                        .values
-                        .get(*key)
-                        .map(String::as_str)
-                        .unwrap_or(""),
+                    input.values.get(*key).map(String::as_str).unwrap_or(""),
                 )
             })
             .collect();
@@ -289,12 +283,7 @@ pub async fn collect_active_local_preflight(
             Ok(probe) => {
                 item.status = DiagnosticStatus::Error;
                 item.summary = "Executable was discovered but active probe failed".into();
-                item.detail = format!(
-                    "{} [{}]; {}",
-                    path.display(),
-                    resolved.source,
-                    probe.detail
-                );
+                item.detail = format!("{} [{}]; {}", path.display(), resolved.source, probe.detail);
                 item.remediation =
                     "Verify the executable can run locally and is not blocked by permissions/security software."
                         .into();
