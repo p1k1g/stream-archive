@@ -4,6 +4,7 @@ pub mod backup_service;
 pub mod diagnostics;
 pub mod environment_settings;
 pub mod history_service;
+pub mod media_process;
 pub mod model;
 pub mod native_watcher;
 pub mod platform_runtime;
