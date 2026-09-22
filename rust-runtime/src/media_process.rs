@@ -550,6 +550,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_runner_does_not_delete_caller_owned_output() {
+        let dir = temp_unicode_dir();
+        let output = dir.path().join("부분 출력 파일 [한글].part");
+        let result = run_media_process(
+            spec("write-file")
+                .args(vec![
+                    output.as_os_str().to_owned(),
+                    OsString::from("fixture-output"),
+                ]),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.outcome, MediaProcessOutcome::Success);
+        assert_eq!(fs::read_to_string(&output).unwrap(), "fixture-output");
+    }
+
+    #[tokio::test]
     async fn timeout_terminates_owned_process_tree() {
         let dir = temp_unicode_dir();
         let child_pid = dir.path().join("child.pid");
