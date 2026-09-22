@@ -9,7 +9,9 @@ use std::{
     process::{Command, ExitCode},
 };
 use stream_archive_server::{
-    diagnostics::{DiagnosticsSnapshot, collect_read_only_preflight},
+    diagnostics::{
+        DiagnosticsSnapshot, collect_active_local_preflight, collect_read_only_preflight,
+    },
     tool_discovery::{ToolKind, ToolResolution, executable_file, find_command, resolve_tool},
 };
 
@@ -61,7 +63,7 @@ Unix/headless-oriented runtime helper for the shared Rust core.
 
 Usage:
   stream-archive-cli init
-  stream-archive-cli doctor [--json]
+  stream-archive-cli doctor [--json] [--active-tools]
   stream-archive-cli tools
   stream-archive-cli tools --json
   stream-archive-cli tools configure
@@ -70,7 +72,7 @@ Usage:
 
 Commands:
   init             Create the local backend/data layout and settings database.
-  doctor           Run the shared local runtime preflight (use --json for automation).
+  doctor           Run shared runtime preflight; --active-tools probes local tool versions.
   tools            Discover Streamlink, yt-dlp and FFmpeg without Windows-only names.
   tools configure  Persist discovered absolute tool paths into SQLite atomically.
   serve            Run the sibling headless runtime in the foreground.
@@ -103,18 +105,38 @@ fn command_init() -> Result<()> {
     Ok(())
 }
 
-fn command_doctor(args: &[String]) -> Result<()> {
-    let json_output = match args {
-        [] => false,
-        [flag] if flag == "--json" => true,
-        _ => bail!("usage: stream-archive-cli doctor [--json]"),
-    };
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DoctorOptions {
+    json: bool,
+    active_tools: bool,
+}
 
+fn parse_doctor_options(args: &[String]) -> Result<DoctorOptions> {
+    let mut options = DoctorOptions::default();
+    for arg in args {
+        match arg.as_str() {
+            "--json" if !options.json => options.json = true,
+            "--active-tools" if !options.active_tools => options.active_tools = true,
+            "--json" | "--active-tools" => bail!("duplicate doctor option: {arg}"),
+            _ => bail!("usage: stream-archive-cli doctor [--json] [--active-tools]"),
+        }
+    }
+    Ok(options)
+}
+
+fn command_doctor(args: &[String]) -> Result<()> {
+    let options = parse_doctor_options(args)?;
     let backend = backend_dir(false)?;
     let db = database_path(&backend)?;
-    let snapshot = doctor_snapshot(&backend, &db);
+    let snapshot = if options.active_tools {
+        let runtime = tokio::runtime::Runtime::new()
+            .context("failed to create local media-tool probe runtime")?;
+        runtime.block_on(collect_active_local_preflight(&backend, &db))
+    } else {
+        doctor_snapshot(&backend, &db)
+    };
 
-    if json_output {
+    if options.json {
         println!("{}", serde_json::to_string_pretty(&snapshot)?);
     } else {
         print_preflight(&snapshot);
@@ -460,6 +482,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = load_tool_settings(&dir.path().join("missing.db")).unwrap();
         assert!(settings.is_empty());
+    }
+
+    #[test]
+    fn doctor_options_support_passive_and_active_json_modes() {
+        assert_eq!(
+            parse_doctor_options(&[]).unwrap(),
+            DoctorOptions {
+                json: false,
+                active_tools: false,
+            }
+        );
+        assert_eq!(
+            parse_doctor_options(&["--active-tools".into(), "--json".into()]).unwrap(),
+            DoctorOptions {
+                json: true,
+                active_tools: true,
+            }
+        );
+        assert!(parse_doctor_options(&["--active-tools".into(), "--active-tools".into()]).is_err());
+        assert!(parse_doctor_options(&["--network".into()]).is_err());
     }
 
     #[test]
