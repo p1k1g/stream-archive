@@ -10,7 +10,7 @@ $recorder = Read-RepoFile 'rust-runtime/src/recorder.rs'
 $main = Read-RepoFile 'rust-runtime/src/main.rs'
 $core = Read-RepoFile 'rust-runtime/src/app_core.rs'
 $runtime = Read-RepoFile 'rust-runtime/src/platform_runtime.rs'
-$workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
+$workflow = Read-RepoFile '.github/workflows/rust-runtime-check.yml'
 
 # Platform registration / URL routing.
 Assert-Match $chzzk 'pub mod vod;' 'CHZZK VOD provider module is not registered.'

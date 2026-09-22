@@ -63,7 +63,8 @@ try {
         throw "Public release safety scan found $($violations.Count) potential secret/privacy issue(s). Rewrite or remove affected history before making the repository public."
     }
 
-    $workflow = Read-RepoFile '.github/workflows/rust-web-check.yml'
+    $workflow = Read-RepoFile '.github/workflows/rust-runtime-check.yml'
+    $releaseWorkflow = Read-RepoFile '.github/workflows/rust-runtime-release.yml'
     $package = Read-RepoFile 'BUILD_PORTABLE.bat'
     $gitignore = Read-RepoFile '.gitignore'
     $runDev = Read-RepoFile 'RUN_DEV.bat'
@@ -88,6 +89,9 @@ try {
     )) {
         Assert-NotMatch $activeRuntimePath.Text 'rust-web[\\/]' "Active runtime path must use rust-runtime, not rust-web: $($activeRuntimePath.Name)"
     }
+    if (Test-Path -LiteralPath (Join-Path $root '.github/workflows/rust-web-check.yml') -PathType Leaf) { throw 'Retired rust-web check workflow filename must not return.' }
+    if (Test-Path -LiteralPath (Join-Path $root '.github/workflows/rust-web-release.yml') -PathType Leaf) { throw 'Retired rust-web release workflow filename must not return.' }
+    Assert-Match $releaseWorkflow 'workflow_dispatch' 'Canonical runtime release workflow must retain manual workflow_dispatch.'
     Assert-Match $gitignore '(?m)^rust-runtime/target/\r?$' 'Git ignore must cover the canonical rust-runtime Cargo target directory.'
     Assert-NotMatch $gitignore '(?m)^rust-web/target/\r?$' 'Git ignore must not retain the retired rust-web Cargo target directory.'
     Assert-Match $workflow 'maintenance/Test-RuntimeContracts\.ps1' 'CI must call the single runtime-contract entry point.'
