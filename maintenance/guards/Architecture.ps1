@@ -83,7 +83,7 @@ Assert-Match $core 'storage_service::snapshot\(&self\.store\)' 'Shared core stor
 Assert-Match $core 'pub\s+async\s+fn\s+runtime_logs' 'Shared core bounded runtime log service is missing.'
 Assert-Match $backupService 'pub\s+struct\s+BackupManager' 'Reusable backup manager is missing from backup_service.rs.'
 Assert-Match $backupService 'pre_restore' 'Restore safety backup behavior is missing from shared backup service.'
-Assert-NotMatch $backupService '\baxum::|HeaderMap|StatusCode|State\(' 'Shared backup service must stay independent from Axum/Web presentation.'
+Assert-NotMatch $backupService '\baxum::|HeaderMap|StatusCode|(?-i:\bState)\s*\(' 'Shared backup service must stay independent from Axum/Web presentation.'
 
 # Phase 21.2 Windows Slint shell. The desktop UI is a presentation adapter over
 # StreamArchiveCore, not another HTTP client, persistence authority, or process owner.
