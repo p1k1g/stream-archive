@@ -84,23 +84,36 @@ stream-archive-cli tools configure
 
 This writes the canonical runtime keys with source `cli-tool-discovery`. It does not create an alternative config file or plaintext mirror.
 
-## Doctor
+## Doctor / shared runtime preflight
 
-Run the headless readiness check:
+Run the same shared local preflight model used by the Windows Native Diagnostics page:
 
 ```bash
 stream-archive-cli doctor
 ```
 
-It reports:
+Machine-readable output:
 
-- operating system / architecture
-- backend and SQLite paths
-- Streamlink / yt-dlp / FFmpeg discovery
-- Linux `secret-tool` availability for Secret Service
-- macOS Keychain or Windows DPAPI native secret boundary
+```bash
+stream-archive-cli doctor --json
+```
 
-A missing required tool causes a non-zero exit code so the command can also be used in scripts.
+The preflight reports stable check IDs/categories and separates required, optional and informational checks. It covers:
+
+- canonical backend/data/SQLite paths
+- read-only SQLite `PRAGMA quick_check`
+- Streamlink / yt-dlp / FFmpeg filesystem discovery
+- configured LIVE output path
+- native secret-store capability
+- SOOP/CHZZK local configuration readiness without exposing credential values
+- backup directory and policy
+
+Exit status is based on blocking required errors:
+
+- exit `0`: base runtime is usable; warnings/optional gaps may still need attention
+- non-zero: at least one required preflight check is in Error state
+
+The command is intentionally local/read-only. It does not contact SOOP/CHZZK, test logins, download media, create missing directories, rewrite settings or repair SQLite. Phase 23.2 also does not execute discovered media tools for version checks; bounded subprocess/media integration belongs to Phase 23.3.
 
 ## Start the headless runtime
 

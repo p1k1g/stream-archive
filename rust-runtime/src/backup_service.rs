@@ -17,6 +17,13 @@ const DEFAULT_INTERVAL_HOURS: u64 = 24;
 const DEFAULT_KEEP_COUNT: usize = 10;
 const DEFAULT_RETENTION_DAYS: i64 = 3;
 const AUTO_CHECK_INTERVAL: Duration = Duration::from_secs(600);
+const BACKUP_SETTING_KEYS: &[&str] = &[
+    "BACKUP_ENABLED",
+    "BACKUP_INTERVAL_HOURS",
+    "BACKUP_KEEP_COUNT",
+    "BACKUP_RETENTION_DAYS",
+    "BACKUP_DIR",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackupPolicy {
@@ -24,6 +31,12 @@ pub struct BackupPolicy {
     pub interval_hours: u64,
     pub keep_count: usize,
     pub retention_days: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupPreflightState {
+    pub directory: PathBuf,
+    pub policy: BackupPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,15 +98,31 @@ impl BackupManager {
     }
 
     pub fn backup_dir(&self) -> PathBuf {
-        if !self.env_override
-            && let Ok(Some(value)) = self.store.setting_value("BACKUP_DIR")
-        {
-            let value = value.trim();
-            if !value.is_empty() {
-                return PathBuf::from(value);
-            }
-        }
-        self.default_backup_dir.as_ref().clone()
+        let settings = self
+            .store
+            .settings_for_keys(&["BACKUP_DIR"])
+            .unwrap_or_default();
+        backup_directory_from_settings(
+            self.default_backup_dir.as_ref(),
+            self.env_override,
+            &settings,
+        )
+    }
+
+    /// Resolve backup policy and directory from already-loaded canonical
+    /// settings without creating directories or mutating persistence.
+    pub fn preflight_state(
+        backend_dir: &Path,
+        settings: &BTreeMap<String, String>,
+    ) -> Result<BackupPreflightState> {
+        let env_override = env::var("STREAM_ARCHIVE_BACKUP_DIR")
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty());
+        let default_backup_dir = resolve_backup_dir(backend_dir)?;
+        Ok(BackupPreflightState {
+            directory: backup_directory_from_settings(&default_backup_dir, env_override, settings),
+            policy: backup_policy_from_settings(settings),
+        })
     }
 
     pub fn backup_dir_editable(&self) -> bool {
@@ -120,31 +149,8 @@ impl BackupManager {
     }
 
     pub fn policy(&self) -> Result<BackupPolicy> {
-        let enabled = self
-            .store
-            .setting_value("BACKUP_ENABLED")?
-            .unwrap_or_else(|| "Y".into())
-            .eq_ignore_ascii_case("Y");
-        let interval_hours = parse_u64(
-            self.store.setting_value("BACKUP_INTERVAL_HOURS")?,
-            DEFAULT_INTERVAL_HOURS,
-        )
-        .max(1);
-        let keep_count = parse_u64(
-            self.store.setting_value("BACKUP_KEEP_COUNT")?,
-            DEFAULT_KEEP_COUNT as u64,
-        ) as usize;
-        let retention_days = parse_i64(
-            self.store.setting_value("BACKUP_RETENTION_DAYS")?,
-            DEFAULT_RETENTION_DAYS,
-        )
-        .max(0);
-        Ok(BackupPolicy {
-            enabled,
-            interval_hours,
-            keep_count,
-            retention_days,
-        })
+        let settings = self.store.settings_for_keys(BACKUP_SETTING_KEYS)?;
+        Ok(backup_policy_from_settings(&settings))
     }
 
     pub async fn snapshot(&self) -> Result<BackupSnapshot> {
@@ -498,6 +504,48 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn backup_directory_from_settings(
+    default_backup_dir: &Path,
+    env_override: bool,
+    settings: &BTreeMap<String, String>,
+) -> PathBuf {
+    if !env_override && let Some(value) = settings.get("BACKUP_DIR") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return PathBuf::from(value);
+        }
+    }
+    default_backup_dir.to_path_buf()
+}
+
+fn backup_policy_from_settings(settings: &BTreeMap<String, String>) -> BackupPolicy {
+    let enabled = settings
+        .get("BACKUP_ENABLED")
+        .map(String::as_str)
+        .unwrap_or("Y")
+        .eq_ignore_ascii_case("Y");
+    let interval_hours = parse_u64(
+        settings.get("BACKUP_INTERVAL_HOURS").cloned(),
+        DEFAULT_INTERVAL_HOURS,
+    )
+    .max(1);
+    let keep_count = parse_u64(
+        settings.get("BACKUP_KEEP_COUNT").cloned(),
+        DEFAULT_KEEP_COUNT as u64,
+    ) as usize;
+    let retention_days = parse_i64(
+        settings.get("BACKUP_RETENTION_DAYS").cloned(),
+        DEFAULT_RETENTION_DAYS,
+    )
+    .max(0);
+    BackupPolicy {
+        enabled,
+        interval_hours,
+        keep_count,
+        retention_days,
+    }
+}
+
 fn parse_u64(value: Option<String>, default: u64) -> u64 {
     value
         .and_then(|value| value.parse().ok())
@@ -536,6 +584,29 @@ mod tests {
         let (_dir, _app, backend, store) = setup();
         let manager = BackupManager::open(store, &backend).unwrap();
         assert_eq!(manager.policy().unwrap().retention_days, 3);
+    }
+
+    #[test]
+    fn preflight_state_reuses_backup_policy_and_directory_rules() {
+        let (dir, _app, backend, store) = setup();
+        let manager = BackupManager::open(store.clone(), &backend).unwrap();
+        let configured = dir.path().join("preflight-backups");
+        store
+            .sync_settings(
+                &BTreeMap::from([
+                    ("BACKUP_DIR".into(), configured.display().to_string()),
+                    ("BACKUP_INTERVAL_HOURS".into(), "12".into()),
+                    ("BACKUP_KEEP_COUNT".into(), "7".into()),
+                    ("BACKUP_RETENTION_DAYS".into(), "9".into()),
+                ]),
+                "test",
+            )
+            .unwrap();
+        let settings = store.settings_for_keys(BACKUP_SETTING_KEYS).unwrap();
+        let preflight = BackupManager::preflight_state(&backend, &settings).unwrap();
+
+        assert_eq!(preflight.directory, manager.backup_dir());
+        assert_eq!(preflight.policy, manager.policy().unwrap());
     }
 
     #[test]

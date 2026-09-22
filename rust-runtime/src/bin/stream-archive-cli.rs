@@ -8,8 +8,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
-use stream_archive_server::tool_discovery::{
-    ToolKind, ToolResolution, executable_file, find_command, resolve_tool,
+use stream_archive_server::{
+    diagnostics::{DiagnosticsSnapshot, collect_read_only_preflight},
+    tool_discovery::{ToolKind, ToolResolution, executable_file, find_command, resolve_tool},
 };
 
 const SETTINGS_SCHEMA: &str = r#"
@@ -44,7 +45,7 @@ fn run() -> Result<()> {
             println!("stream-archive-cli {}", env!("CARGO_PKG_VERSION"));
         }
         "init" => command_init()?,
-        "doctor" => command_doctor()?,
+        "doctor" => command_doctor(&args[1..])?,
         "tools" => command_tools(&args[1..])?,
         "serve" => command_serve(&args[1..])?,
         other => bail!("unknown command `{other}`; run `stream-archive-cli help`"),
@@ -60,7 +61,7 @@ Unix/headless-oriented runtime helper for the shared Rust core.
 
 Usage:
   stream-archive-cli init
-  stream-archive-cli doctor
+  stream-archive-cli doctor [--json]
   stream-archive-cli tools
   stream-archive-cli tools --json
   stream-archive-cli tools configure
@@ -69,7 +70,7 @@ Usage:
 
 Commands:
   init             Create the local backend/data layout and settings database.
-  doctor           Show paths, native secret-store readiness and media-tool status.
+  doctor           Run the shared local runtime preflight (use --json for automation).
   tools            Discover Streamlink, yt-dlp and FFmpeg without Windows-only names.
   tools configure  Persist discovered absolute tool paths into SQLite atomically.
   serve            Run the sibling headless runtime in the foreground.
@@ -102,71 +103,74 @@ fn command_init() -> Result<()> {
     Ok(())
 }
 
-fn command_doctor() -> Result<()> {
+fn command_doctor(args: &[String]) -> Result<()> {
+    let json_output = match args {
+        [] => false,
+        [flag] if flag == "--json" => true,
+        _ => bail!("usage: stream-archive-cli doctor [--json]"),
+    };
+
     let backend = backend_dir(false)?;
     let db = database_path(&backend)?;
-    let settings = load_tool_settings(&db)?;
-    let tools = resolve_all(&backend, &settings);
+    let snapshot = doctor_snapshot(&backend, &db);
 
-    println!("Stream Archive doctor");
-    println!("os       : {} / {}", env::consts::OS, env::consts::ARCH);
-    println!(
-        "backend  : {}{}",
-        backend.display(),
-        exists_marker(&backend)
-    );
-    println!("database : {}{}", db.display(), exists_marker(&db));
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+    } else {
+        print_preflight(&snapshot);
+    }
 
-    #[cfg(target_os = "linux")]
-    {
-        let secret_tool = find_command("secret-tool");
+    doctor_result(&snapshot)
+}
+
+fn doctor_snapshot(backend: &Path, db: &Path) -> DiagnosticsSnapshot {
+    collect_read_only_preflight(backend, db)
+}
+
+fn print_preflight(snapshot: &DiagnosticsSnapshot) {
+    println!("Stream Archive runtime preflight");
+    println!("os: {} / {}", env::consts::OS, env::consts::ARCH);
+    println!();
+
+    for item in &snapshot.items {
         println!(
-            "secrets  : Linux Secret Service {}",
-            secret_tool
-                .as_ref()
-                .map(|path| format!("ready ({})", path.display()))
-                .unwrap_or_else(|| "not ready (`secret-tool` missing)".into())
+            "[{:<7}] {:<10} {} / {}",
+            item.status.label().to_ascii_uppercase(),
+            item.requirement.label(),
+            item.category.label(),
+            item.name
         );
-    }
-    #[cfg(target_os = "macos")]
-    println!("secrets  : macOS Keychain Services (native)");
-    #[cfg(windows)]
-    println!("secrets  : Windows CurrentUser DPAPI (native)");
-    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-    println!("secrets  : unsupported on this operating system");
-
-    print_tools(&tools);
-
-    let mut problems = Vec::new();
-    if !backend.is_dir() {
-        problems.push("backend directory is missing; run `stream-archive-cli init`");
-    }
-    if !db.is_file() {
-        problems.push("database is missing; run `stream-archive-cli init`");
-    }
-    for tool in &tools {
-        if !tool.found() {
-            problems.push(match tool.kind {
-                ToolKind::Streamlink => "Streamlink is missing",
-                ToolKind::YtDlp => "yt-dlp is missing",
-                ToolKind::Ffmpeg => "FFmpeg is missing",
-            });
+        println!("  {}", item.summary);
+        if !item.detail.is_empty() {
+            println!("  detail: {}", item.detail);
+        }
+        if !item.remediation.is_empty() {
+            println!("  action: {}", item.remediation);
         }
     }
-    #[cfg(target_os = "linux")]
-    if find_command("secret-tool").is_none() {
-        problems.push("secret-tool/libsecret-tools is missing for persisted Linux secrets");
-    }
 
-    if problems.is_empty() {
-        println!("doctor   : OK");
+    println!();
+    println!(
+        "Summary: {} OK, {} Warning, {} Error ({} blocking)",
+        snapshot.summary.ok,
+        snapshot.summary.warning,
+        snapshot.summary.error,
+        snapshot.summary.blocking_errors
+    );
+    println!(
+        "Runtime usable: {}",
+        if snapshot.runtime_ready { "yes" } else { "no" }
+    );
+}
+
+fn doctor_result(snapshot: &DiagnosticsSnapshot) -> Result<()> {
+    if snapshot.runtime_ready {
         Ok(())
     } else {
-        println!("doctor   : needs attention");
-        for problem in &problems {
-            println!("  - {problem}");
-        }
-        bail!("doctor found {} issue(s)", problems.len())
+        bail!(
+            "doctor found {} blocking preflight error(s)",
+            snapshot.summary.blocking_errors
+        )
     }
 }
 
@@ -413,10 +417,6 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-fn exists_marker(path: &Path) -> &'static str {
-    if path.exists() { " [OK]" } else { " [missing]" }
-}
-
 fn server_binary() -> Option<PathBuf> {
     #[cfg(windows)]
     const NAMES: &[&str] = &["stream-archive-server.exe", "stream-archive-server"];
@@ -460,5 +460,91 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = load_tool_settings(&dir.path().join("missing.db")).unwrap();
         assert!(settings.is_empty());
+    }
+
+    #[test]
+    fn doctor_warning_only_is_successful() {
+        use stream_archive_server::diagnostics::{
+            DiagnosticCategory, DiagnosticItem, DiagnosticRequirement, DiagnosticStatus,
+            DiagnosticsSnapshot,
+        };
+        let snapshot = DiagnosticsSnapshot::from_items(vec![DiagnosticItem {
+            id: "provider.test".into(),
+            category: DiagnosticCategory::Providers,
+            requirement: DiagnosticRequirement::Optional,
+            name: "optional".into(),
+            status: DiagnosticStatus::Warning,
+            summary: "attention".into(),
+            detail: String::new(),
+            remediation: String::new(),
+        }]);
+        assert!(doctor_result(&snapshot).is_ok());
+    }
+
+    #[test]
+    fn doctor_blocking_error_is_failure() {
+        use stream_archive_server::diagnostics::{
+            DiagnosticCategory, DiagnosticItem, DiagnosticRequirement, DiagnosticStatus,
+            DiagnosticsSnapshot,
+        };
+        let snapshot = DiagnosticsSnapshot::from_items(vec![DiagnosticItem {
+            id: "database.test".into(),
+            category: DiagnosticCategory::Database,
+            requirement: DiagnosticRequirement::Required,
+            name: "required".into(),
+            status: DiagnosticStatus::Error,
+            summary: "failed".into(),
+            detail: String::new(),
+            remediation: String::new(),
+        }]);
+        assert!(doctor_result(&snapshot).is_err());
+    }
+
+    #[test]
+    fn doctor_preserves_settings_read_failure_as_blocking_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let db = dir.path().join("broken-settings.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY);")
+            .unwrap();
+        drop(conn);
+
+        let snapshot = doctor_snapshot(&backend, &db);
+        assert!(!snapshot.runtime_ready);
+        assert!(snapshot.summary.blocking_errors >= 1);
+        let settings = snapshot
+            .items
+            .iter()
+            .find(|item| item.id == "runtime.settings")
+            .expect("settings failure check");
+        assert_eq!(
+            settings.status,
+            stream_archive_server::diagnostics::DiagnosticStatus::Error
+        );
+        assert!(settings.detail.contains("settings load failed"));
+        assert!(doctor_result(&snapshot).is_err());
+    }
+
+    #[test]
+    fn doctor_snapshot_never_serializes_secret_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let db = dir.path().join("settings.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(SETTINGS_SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO settings(key,value,source,updated_at) VALUES('CHZZK_NID_AUT','top-secret','test','now')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let snapshot = doctor_snapshot(&backend, &db);
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(!json.contains("top-secret"));
+        assert!(json.contains("configured"));
     }
 }

@@ -247,6 +247,8 @@ cargo build --locked --release --manifest-path rust-runtime/Cargo.toml
 
 `tools configure`는 Streamlink/yt-dlp/FFmpeg를 기존 SQLite 설정 → backend layout → `PATH` → 일반적인 Unix 설치 경로 순서로 찾고, 발견된 절대 경로를 canonical SQLite 설정에 원자적으로 기록합니다. 별도 INI/TXT 설정 파일은 만들지 않습니다.
 
+`stream-archive-cli doctor`와 `doctor --json`은 Windows Native Diagnostics와 같은 shared runtime preflight를 사용합니다. Required Error만 실행 차단으로 취급하고 optional/provider warning은 별도 주의 상태로 표시하며, provider 네트워크 접속·실제 다운로드·설정 변경은 수행하지 않습니다.
+
 현재 CLI는 Phase 20의 headless/tool-discovery baseline이며 전체 채널·VOD·secret 관리 명령은 Linux/macOS 통합 검증과 함께 확장할 예정입니다. 자세한 내용은 `docs/UNIX_CLI.md`를 참고하세요.
 
 ## 백업 / 복구
@@ -322,6 +324,7 @@ Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습
 |---|---|
 | `docs/PHASE21_NATIVE_PORTABLE.md` | Phase 21.8 portable 구조 및 Windows manual QA |
 | `docs/PHASE23_1_NATIVE_UX_CLOSURE.md` | Phase 23.1 Windows Native daily-use UX closure 및 portable manual QA checklist |
+| `docs/PHASE23_2_RUNTIME_PREFLIGHT.md` | Phase 23.2 shared Diagnostics / CLI runtime preflight contract |
 | `docs/PHASE21_NATIVE_UX_POLISH.md` | Phase 21.9 Native storage/backup IA/claim sidecar UX 및 manual QA |
 | `docs/UNIX_CLI.md` | Linux/macOS headless CLI, tool discovery, first-run layout |
 | `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
@@ -386,7 +389,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 ### Phase 23 🚧 Product Readiness / Integration
 
 - ✅ 23.1 Native Daily-use UX Closure
-- ⏳ 23.2 Diagnostics / Runtime Preflight
+- ✅ 23.2 Diagnostics / Runtime Preflight
 - ⏳ 23.3 Media-tool Integration Harness
 - ⏳ 23.4 Provider E2E Validation
 - ⏳ 23.5 Unix CLI Completion

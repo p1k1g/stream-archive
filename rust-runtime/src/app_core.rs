@@ -151,12 +151,14 @@ impl StreamArchiveCore {
             values.extend(self.vod_tool_settings()?);
             Ok(values)
         });
-        match values {
-            Ok(values) => match self.backups.policy() {
-                Ok(policy) => crate::diagnostics::collect_with_backup(
+        let secrets = self.configured_secrets();
+        match (values, secrets) {
+            (Ok(values), Ok(secrets)) => match self.backups.policy() {
+                Ok(policy) => crate::diagnostics::collect_with_backup_and_secrets(
                     self.backend_dir(),
                     self.store.path(),
                     &values,
+                    &secrets,
                     &self.backups.backup_dir(),
                     &policy,
                 ),
@@ -166,11 +168,13 @@ impl StreamArchiveCore {
                     &format!("backup policy load failed: {error:#}"),
                 ),
             },
-            Err(error) => crate::diagnostics::DiagnosticsSnapshot::unavailable(
-                Some(self.backend_dir()),
-                Some(self.store.path()),
-                &format!("{error:#}"),
-            ),
+            (Err(error), _) | (_, Err(error)) => {
+                crate::diagnostics::DiagnosticsSnapshot::unavailable(
+                    Some(self.backend_dir()),
+                    Some(self.store.path()),
+                    &format!("{error:#}"),
+                )
+            }
         }
     }
 
