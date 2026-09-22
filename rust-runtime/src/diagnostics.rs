@@ -1,11 +1,14 @@
-//! Shared read-only runtime preflight.
+//! Shared runtime preflight.
 //!
-//! This service performs local filesystem/settings/SQLite inspection only.
-//! It does not contact providers, download media, create directories, mutate
-//! settings, or expose secret values. External executable execution remains a
-//! Phase 23.3 integration concern; tool checks here are deterministic discovery.
+//! The default snapshot is passive/read-only: local filesystem/settings/SQLite
+//! inspection only. Phase 23.3 adds an explicit opt-in local media-tool version
+//! probe that uses the shared owned-process runner. Neither mode contacts
+//! providers, downloads media, mutates settings, or exposes secret values.
 use crate::{
     backup_service::{BackupManager, BackupPolicy},
+    media_process::{
+        DEFAULT_PROBE_TIMEOUT, MediaToolProbeStatus, probe_tool_version,
+    },
     store::Store,
     tool_discovery::{ToolKind, ToolResolution, resolve_tool},
 };
@@ -223,6 +226,95 @@ pub fn collect_read_only_preflight(backend: &Path, database: &Path) -> Diagnosti
             DiagnosticsSnapshot::unavailable(Some(backend), Some(database), &format!("{error:#}"))
         }
     }
+}
+
+pub async fn collect_active_local_preflight(
+    backend: &Path,
+    database: &Path,
+) -> DiagnosticsSnapshot {
+    let input = match load_read_only_preflight_input(backend, database) {
+        Ok(input) => input,
+        Err(error) => {
+            return DiagnosticsSnapshot::unavailable(
+                Some(backend),
+                Some(database),
+                &format!("{error:#}"),
+            );
+        }
+    };
+    let mut snapshot = collect_preflight_input(backend, database, &input);
+
+    for kind in ToolKind::ALL {
+        let configured: Vec<_> = kind
+            .setting_keys()
+            .iter()
+            .map(|key| {
+                (
+                    *key,
+                    input
+                        .values
+                        .get(*key)
+                        .map(String::as_str)
+                        .unwrap_or(""),
+                )
+            })
+            .collect();
+        let resolved = resolve_tool(kind, backend, &configured);
+        let Some(path) = resolved.path.as_deref() else {
+            continue;
+        };
+        let Some(item) = snapshot
+            .items
+            .iter_mut()
+            .find(|item| item.id == tool_check_id(kind))
+        else {
+            continue;
+        };
+
+        match probe_tool_version(kind, path, DEFAULT_PROBE_TIMEOUT).await {
+            Ok(probe) if probe.status == MediaToolProbeStatus::Ok => {
+                let version = probe.version.as_deref().unwrap_or("unknown");
+                item.summary = format!("Executable probe passed ({version})");
+                item.detail = format!(
+                    "{} [{}]; active local version probe: {}",
+                    path.display(),
+                    resolved.source,
+                    probe.detail
+                );
+                if resolved.warnings.is_empty() {
+                    item.status = DiagnosticStatus::Ok;
+                    item.remediation.clear();
+                }
+            }
+            Ok(probe) => {
+                item.status = DiagnosticStatus::Error;
+                item.summary = "Executable was discovered but active probe failed".into();
+                item.detail = format!(
+                    "{} [{}]; {}",
+                    path.display(),
+                    resolved.source,
+                    probe.detail
+                );
+                item.remediation =
+                    "Verify the executable can run locally and is not blocked by permissions/security software."
+                        .into();
+            }
+            Err(error) => {
+                item.status = DiagnosticStatus::Error;
+                item.summary = "Executable probe could not complete".into();
+                item.detail = format!(
+                    "{} [{}]; active probe error: {error:#}",
+                    path.display(),
+                    resolved.source
+                );
+                item.remediation =
+                    "Verify the executable path and local process permissions, then retry the active probe."
+                        .into();
+            }
+        }
+    }
+
+    DiagnosticsSnapshot::from_items(snapshot.items)
 }
 
 pub fn collect_with_backup(
@@ -552,6 +644,14 @@ fn database_integrity_check(path: &Path) -> DiagnosticItem {
     }
 }
 
+fn tool_check_id(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::Streamlink => "tool.streamlink",
+        ToolKind::YtDlp => "tool.ytdlp",
+        ToolKind::Ffmpeg => "tool.ffmpeg",
+    }
+}
+
 fn tool_check(resolved: &ToolResolution) -> DiagnosticItem {
     let status = if !resolved.found() {
         DiagnosticStatus::Error
@@ -565,11 +665,7 @@ fn tool_check(resolved: &ToolResolution) -> DiagnosticItem {
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "not found".into());
-    let id = match resolved.kind {
-        ToolKind::Streamlink => "tool.streamlink",
-        ToolKind::YtDlp => "tool.ytdlp",
-        ToolKind::Ffmpeg => "tool.ffmpeg",
-    };
+    let id = tool_check_id(resolved.kind);
     check!(
         id,
         DiagnosticCategory::Tools,
@@ -582,7 +678,7 @@ fn tool_check(resolved: &ToolResolution) -> DiagnosticItem {
             "Required media executable was not found"
         },
         &format!(
-            "{path} [{}]; filesystem discovery only; executable/version probing is deferred to Phase 23.3. {}",
+            "{path} [{}]; passive filesystem discovery only; active local version probing is opt-in. {}",
             resolved.source,
             resolved.warnings.join("; ")
         ),
@@ -800,6 +896,13 @@ mod tests {
             .expect("settings failure check");
         assert_eq!(settings.status, DiagnosticStatus::Error);
         assert!(settings.detail.contains("settings load failed"));
+    }
+
+    #[test]
+    fn tool_check_ids_remain_stable() {
+        assert_eq!(tool_check_id(ToolKind::Streamlink), "tool.streamlink");
+        assert_eq!(tool_check_id(ToolKind::YtDlp), "tool.ytdlp");
+        assert_eq!(tool_check_id(ToolKind::Ffmpeg), "tool.ffmpeg");
     }
 
     #[test]
