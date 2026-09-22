@@ -4,6 +4,7 @@ $contracts = @(
     'Architecture.ps1',
     'Providers.ps1',
     'ProcessLifecycle.ps1',
+    'MediaProcess.ps1',
     'StorageOwnership.ps1',
     'Security.ps1',
     'ToolDiscovery.ps1',
