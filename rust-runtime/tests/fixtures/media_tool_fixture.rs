@@ -83,6 +83,16 @@ fn main() {
             println!("env={}", env::var(key.as_ref()).unwrap_or_default());
             println!("arg={}", args[1].to_string_lossy());
         }
+        "write-file" => {
+            if args.len() != 2 {
+                process::exit(2);
+            }
+            let path = Path::new(&args[0]);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, args[1].to_string_lossy().as_bytes()).unwrap();
+        }
         "sleep" => {
             if args.is_empty() {
                 process::exit(2);
