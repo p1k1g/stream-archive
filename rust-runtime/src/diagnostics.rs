@@ -189,12 +189,8 @@ impl DiagnosticsSnapshot {
     }
 }
 
-pub fn load_read_only_preflight_input(
-    backend: &Path,
-    database: &Path,
-) -> Result<PreflightInput> {
-    let store_input = Store::read_preflight_settings(database)
-        .context("settings load failed")?;
+pub fn load_read_only_preflight_input(backend: &Path, database: &Path) -> Result<PreflightInput> {
+    let store_input = Store::read_preflight_settings(database).context("settings load failed")?;
     let backup = BackupManager::preflight_state(backend, &store_input.values)
         .context("backup preflight load failed")?;
     Ok(PreflightInput {
@@ -223,11 +219,9 @@ pub fn collect_preflight_input(
 pub fn collect_read_only_preflight(backend: &Path, database: &Path) -> DiagnosticsSnapshot {
     match load_read_only_preflight_input(backend, database) {
         Ok(input) => collect_preflight_input(backend, database, &input),
-        Err(error) => DiagnosticsSnapshot::unavailable(
-            Some(backend),
-            Some(database),
-            &format!("{error:#}"),
-        ),
+        Err(error) => {
+            DiagnosticsSnapshot::unavailable(Some(backend), Some(database), &format!("{error:#}"))
+        }
     }
 }
 
