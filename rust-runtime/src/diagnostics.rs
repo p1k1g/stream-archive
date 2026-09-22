@@ -83,6 +83,21 @@ pub struct DiagnosticItem {
     pub remediation: String,
 }
 
+macro_rules! check {
+    ($id:expr, $category:expr, $requirement:expr, $name:expr, $status:expr, $summary:expr, $detail:expr, $remediation:expr $(,)?) => {
+        DiagnosticItem {
+            id: ($id).into(),
+            category: $category,
+            requirement: $requirement,
+            name: ($name).into(),
+            status: $status,
+            summary: ($summary).into(),
+            detail: ($detail).into(),
+            remediation: ($remediation).into(),
+        }
+    };
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagnosticsSummary {
     pub ok: usize,
@@ -107,7 +122,7 @@ impl DiagnosticsSnapshot {
     }
 
     pub fn unavailable(backend: Option<&Path>, database: Option<&Path>, error: &str) -> Self {
-        let mut items = vec![check(
+        let mut items = vec![check!(
             "runtime.settings",
             DiagnosticCategory::Runtime,
             DiagnosticRequirement::Required,
@@ -195,7 +210,7 @@ pub fn collect_with_backup_and_secrets(
         backup_directory,
     ));
     let valid_policy = backup_policy.interval_hours >= 1 && backup_policy.retention_days >= 0;
-    items.push(check(
+    items.push(check!(
         "backup.policy",
         DiagnosticCategory::Backup,
         DiagnosticRequirement::Optional,
@@ -259,7 +274,7 @@ fn collect_items(
         ),
         database_path_check(database),
         database_integrity_check(database),
-        check(
+        check!(
             "runtime.settings",
             DiagnosticCategory::Runtime,
             DiagnosticRequirement::Required,
@@ -298,7 +313,7 @@ fn collect_items(
             Path::new(value),
         ));
     } else {
-        items.push(check(
+        items.push(check!(
             "storage.live_output",
             DiagnosticCategory::Storage,
             DiagnosticRequirement::Informational,
@@ -321,7 +336,7 @@ fn collect_items(
 
     items.push(secret_store_check());
     items.extend(provider_checks(values, configured_secrets));
-    items.push(check(
+    items.push(check!(
         "runtime.resources",
         DiagnosticCategory::Runtime,
         DiagnosticRequirement::Required,
@@ -332,28 +347,6 @@ fn collect_items(
         "",
     ));
     items
-}
-
-fn check(
-    id: &str,
-    category: DiagnosticCategory,
-    requirement: DiagnosticRequirement,
-    name: &str,
-    status: DiagnosticStatus,
-    summary: &str,
-    detail: &str,
-    remediation: &str,
-) -> DiagnosticItem {
-    DiagnosticItem {
-        id: id.into(),
-        category,
-        requirement,
-        name: name.into(),
-        status,
-        summary: summary.into(),
-        detail: detail.into(),
-        remediation: remediation.into(),
-    }
 }
 
 fn directory_check(
@@ -370,7 +363,7 @@ fn directory_check(
     } else {
         DiagnosticStatus::Warning
     };
-    check(
+    check!(
         id,
         category,
         requirement,
@@ -412,7 +405,7 @@ fn optional_directory_check(
     } else {
         format!("{} — {missing_detail}", path.display())
     };
-    check(
+    check!(
         id,
         category,
         DiagnosticRequirement::Informational,
@@ -429,7 +422,7 @@ fn optional_directory_check(
 }
 
 fn database_path_check(path: &Path) -> DiagnosticItem {
-    check(
+    check!(
         "database.primary",
         DiagnosticCategory::Database,
         DiagnosticRequirement::Required,
@@ -463,7 +456,7 @@ fn database_path_check(path: &Path) -> DiagnosticItem {
 
 fn database_integrity_check(path: &Path) -> DiagnosticItem {
     if !path.is_file() {
-        return check(
+        return check!(
             "database.integrity",
             DiagnosticCategory::Database,
             DiagnosticRequirement::Required,
@@ -477,7 +470,7 @@ fn database_integrity_check(path: &Path) -> DiagnosticItem {
     let result = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .and_then(|conn| conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0)));
     match result {
-        Ok(value) if value.eq_ignore_ascii_case("ok") => check(
+        Ok(value) if value.eq_ignore_ascii_case("ok") => check!(
             "database.integrity",
             DiagnosticCategory::Database,
             DiagnosticRequirement::Required,
@@ -487,7 +480,7 @@ fn database_integrity_check(path: &Path) -> DiagnosticItem {
             "Read-only PRAGMA quick_check returned ok.",
             "",
         ),
-        Ok(value) => check(
+        Ok(value) => check!(
             "database.integrity",
             DiagnosticCategory::Database,
             DiagnosticRequirement::Required,
@@ -497,7 +490,7 @@ fn database_integrity_check(path: &Path) -> DiagnosticItem {
             &value,
             "Stop runtime work and restore from a known-good backup before further writes.",
         ),
-        Err(error) => check(
+        Err(error) => check!(
             "database.integrity",
             DiagnosticCategory::Database,
             DiagnosticRequirement::Required,
@@ -528,7 +521,7 @@ fn tool_check(resolved: &ToolResolution) -> DiagnosticItem {
         ToolKind::YtDlp => "tool.ytdlp",
         ToolKind::Ffmpeg => "tool.ffmpeg",
     };
-    check(
+    check!(
         id,
         DiagnosticCategory::Tools,
         DiagnosticRequirement::Required,
@@ -559,8 +552,8 @@ fn tool_check(resolved: &ToolResolution) -> DiagnosticItem {
 fn secret_store_check() -> DiagnosticItem {
     #[cfg(target_os = "linux")]
     {
-        return match crate::tool_discovery::find_command("secret-tool") {
-            Some(path) => check(
+        match crate::tool_discovery::find_command("secret-tool") {
+            Some(path) => check!(
                 "secret.native_store",
                 DiagnosticCategory::Secrets,
                 DiagnosticRequirement::Optional,
@@ -570,7 +563,7 @@ fn secret_store_check() -> DiagnosticItem {
                 &format!("{}; Secret Service session is not probed", path.display()),
                 "",
             ),
-            None => check(
+            None => check!(
                 "secret.native_store",
                 DiagnosticCategory::Secrets,
                 DiagnosticRequirement::Optional,
@@ -580,11 +573,11 @@ fn secret_store_check() -> DiagnosticItem {
                 "secret-tool is missing; persisted Linux secrets require Secret Service.",
                 "Install libsecret tools and provide a usable Secret Service session before saving provider secrets.",
             ),
-        };
+        }
     }
     #[cfg(target_os = "macos")]
     {
-        return check(
+        return check!(
             "secret.native_store",
             DiagnosticCategory::Secrets,
             DiagnosticRequirement::Optional,
@@ -597,7 +590,7 @@ fn secret_store_check() -> DiagnosticItem {
     }
     #[cfg(windows)]
     {
-        return check(
+        return check!(
             "secret.native_store",
             DiagnosticCategory::Secrets,
             DiagnosticRequirement::Optional,
@@ -610,7 +603,7 @@ fn secret_store_check() -> DiagnosticItem {
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
-        check(
+        check!(
             "secret.native_store",
             DiagnosticCategory::Secrets,
             DiagnosticRequirement::Optional,
@@ -654,7 +647,7 @@ fn provider_checks(
     let chzzk_ready = chzzk_aut && chzzk_ses;
 
     vec![
-        check(
+        check!(
             "provider.soop",
             DiagnosticCategory::Providers,
             DiagnosticRequirement::Optional,
@@ -682,7 +675,7 @@ fn provider_checks(
                 "Complete the SOOP/Worker fields in Settings before authenticated SOOP use."
             },
         ),
-        check(
+        check!(
             "provider.chzzk",
             DiagnosticCategory::Providers,
             DiagnosticRequirement::Optional,
@@ -725,7 +718,7 @@ mod tests {
     use rusqlite::Connection;
 
     fn ok_item() -> DiagnosticItem {
-        check(
+        check!(
             "test.ok",
             DiagnosticCategory::Runtime,
             DiagnosticRequirement::Required,
@@ -754,7 +747,7 @@ mod tests {
     fn optional_warning_does_not_block_runtime() {
         let report = DiagnosticsSnapshot::from_items(vec![
             ok_item(),
-            check(
+            check!(
                 "test.optional",
                 DiagnosticCategory::Providers,
                 DiagnosticRequirement::Optional,
@@ -773,7 +766,7 @@ mod tests {
 
     #[test]
     fn required_error_blocks_runtime() {
-        let report = DiagnosticsSnapshot::from_items(vec![check(
+        let report = DiagnosticsSnapshot::from_items(vec![check!(
             "test.required",
             DiagnosticCategory::Database,
             DiagnosticRequirement::Required,
