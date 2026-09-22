@@ -1137,9 +1137,13 @@ fn render_maintenance(
     let diagnostic_rows = maintenance_adapter::diagnostic_rows(&diagnostics)
         .into_iter()
         .map(|row| MaintenanceDiagnosticRow {
+            category: row.category.into(),
+            requirement: row.requirement.into(),
             name: row.name.into(),
             status: row.status.into(),
+            summary: row.summary.into(),
             detail: row.detail.into(),
+            remediation: row.remediation.into(),
             status_tone: row.status_tone.into(),
         })
         .collect::<Vec<_>>();
@@ -1152,6 +1156,17 @@ fn render_maintenance(
     state.set_backup_keep_count(snapshot.policy.keep_count.to_string().into());
     state.set_backup_retention_days(snapshot.policy.retention_days.to_string().into());
     state.set_backup_rows(ModelRc::new(VecModel::from(backup_rows)));
+    state.set_diagnostic_runtime_ready(diagnostics.runtime_ready);
+    state.set_diagnostic_summary(
+        format!(
+            "{} 정상 · {} 주의 · {} 오류 · 차단 {}",
+            diagnostics.summary.ok,
+            diagnostics.summary.warning,
+            diagnostics.summary.error,
+            diagnostics.summary.blocking_errors
+        )
+        .into(),
+    );
     state.set_diagnostic_rows(ModelRc::new(VecModel::from(diagnostic_rows)));
     state.set_loaded(true);
     drop(state);
@@ -1162,10 +1177,12 @@ pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
     let state = ui.global::<AppState>();
     state.set_runtime_ready(diagnostics.runtime_ready);
     state.set_runtime_status(
-        if diagnostics.runtime_ready {
-            "모든 구성요소가 준비되었습니다"
+        if diagnostics.runtime_ready && diagnostics.attention_required {
+            "실행 가능 · 주의 항목을 확인하세요"
+        } else if diagnostics.runtime_ready {
+            "모든 필수 구성요소가 준비되었습니다"
         } else {
-            "일부 구성요소를 확인하세요"
+            "차단 오류를 확인하세요"
         }
         .into(),
     );
