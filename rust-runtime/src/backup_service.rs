@@ -120,11 +120,7 @@ impl BackupManager {
             .is_some_and(|value| !value.trim().is_empty());
         let default_backup_dir = resolve_backup_dir(backend_dir)?;
         Ok(BackupPreflightState {
-            directory: backup_directory_from_settings(
-                &default_backup_dir,
-                env_override,
-                settings,
-            ),
+            directory: backup_directory_from_settings(&default_backup_dir, env_override, settings),
             policy: backup_policy_from_settings(settings),
         })
     }
@@ -513,9 +509,7 @@ fn backup_directory_from_settings(
     env_override: bool,
     settings: &BTreeMap<String, String>,
 ) -> PathBuf {
-    if !env_override
-        && let Some(value) = settings.get("BACKUP_DIR")
-    {
+    if !env_override && let Some(value) = settings.get("BACKUP_DIR") {
         let value = value.trim();
         if !value.is_empty() {
             return PathBuf::from(value);
