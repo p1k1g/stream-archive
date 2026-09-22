@@ -9,9 +9,7 @@ use std::{
     process::{Command, ExitCode},
 };
 use stream_archive_server::{
-    backend::HIDDEN_SETTING_KEYS,
-    backup_service::{BackupPolicy, resolve_backup_dir},
-    diagnostics::{DiagnosticsSnapshot, collect_with_backup_and_secrets},
+    diagnostics::{DiagnosticsSnapshot, collect_read_only_preflight},
     tool_discovery::{ToolKind, ToolResolution, executable_file, find_command, resolve_tool},
 };
 
@@ -126,35 +124,7 @@ fn command_doctor(args: &[String]) -> Result<()> {
 }
 
 fn doctor_snapshot(backend: &Path, db: &Path) -> DiagnosticsSnapshot {
-    let (settings, secrets) = match load_preflight_settings(db) {
-        Ok(loaded) => loaded,
-        Err(error) => {
-            return DiagnosticsSnapshot::unavailable(
-                Some(backend),
-                Some(db),
-                &format!("settings load failed: {error:#}"),
-            );
-        }
-    };
-    let backup_policy = backup_policy_from_settings(&settings);
-    let backup_dir = match backup_directory_from_settings(backend, &settings) {
-        Ok(path) => path,
-        Err(error) => {
-            return DiagnosticsSnapshot::unavailable(
-                Some(backend),
-                Some(db),
-                &format!("backup directory resolution failed: {error:#}"),
-            );
-        }
-    };
-    collect_with_backup_and_secrets(
-        backend,
-        db,
-        &settings,
-        &secrets,
-        &backup_dir,
-        &backup_policy,
-    )
+    collect_read_only_preflight(backend, db)
 }
 
 fn print_preflight(snapshot: &DiagnosticsSnapshot) {
@@ -202,87 +172,6 @@ fn doctor_result(snapshot: &DiagnosticsSnapshot) -> Result<()> {
             snapshot.summary.blocking_errors
         )
     }
-}
-
-fn backup_policy_from_settings(settings: &BTreeMap<String, String>) -> BackupPolicy {
-    let enabled = settings
-        .get("BACKUP_ENABLED")
-        .map(String::as_str)
-        .unwrap_or("Y")
-        .eq_ignore_ascii_case("Y");
-    let interval_hours = settings
-        .get("BACKUP_INTERVAL_HOURS")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(24)
-        .max(1);
-    let keep_count = settings
-        .get("BACKUP_KEEP_COUNT")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(10);
-    let retention_days = settings
-        .get("BACKUP_RETENTION_DAYS")
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(3)
-        .max(0);
-    BackupPolicy {
-        enabled,
-        interval_hours,
-        keep_count,
-        retention_days,
-    }
-}
-
-fn backup_directory_from_settings(
-    backend: &Path,
-    settings: &BTreeMap<String, String>,
-) -> Result<PathBuf> {
-    if env::var("STREAM_ARCHIVE_BACKUP_DIR")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        return resolve_backup_dir(backend);
-    }
-    if let Some(value) = settings
-        .get("BACKUP_DIR")
-        .filter(|value| !value.trim().is_empty())
-    {
-        return Ok(PathBuf::from(value));
-    }
-    resolve_backup_dir(backend)
-}
-
-fn load_preflight_settings(
-    db: &Path,
-) -> Result<(BTreeMap<String, String>, BTreeMap<String, bool>)> {
-    if !db.is_file() {
-        return Ok((BTreeMap::new(), BTreeMap::new()));
-    }
-    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("failed to open SQLite database {}", db.display()))?;
-    let table_exists: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings')",
-        [],
-        |row| row.get(0),
-    )?;
-    if !table_exists {
-        return Ok((BTreeMap::new(), BTreeMap::new()));
-    }
-
-    let mut values = BTreeMap::new();
-    let mut secrets = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    for row in rows {
-        let (key, value) = row?;
-        if HIDDEN_SETTING_KEYS.contains(&key.as_str()) {
-            secrets.insert(key, !value.trim().is_empty());
-        } else {
-            values.insert(key, value);
-        }
-    }
-    Ok((values, secrets))
 }
 
 fn command_tools(args: &[String]) -> Result<()> {
@@ -639,8 +528,10 @@ mod tests {
     }
 
     #[test]
-    fn preflight_loader_never_returns_secret_values_as_settings() {
+    fn doctor_snapshot_never_serializes_secret_values() {
         let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
         let db = dir.path().join("settings.db");
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(SETTINGS_SCHEMA).unwrap();
@@ -651,10 +542,9 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let (values, secrets) = load_preflight_settings(&db).unwrap();
-        assert!(!values.contains_key("CHZZK_NID_AUT"));
-        assert_eq!(secrets.get("CHZZK_NID_AUT"), Some(&true));
-        let json = serde_json::to_string(&(values, secrets)).unwrap();
+        let snapshot = doctor_snapshot(&backend, &db);
+        let json = serde_json::to_string(&snapshot).unwrap();
         assert!(!json.contains("top-secret"));
+        assert!(json.contains("configured"));
     }
 }
