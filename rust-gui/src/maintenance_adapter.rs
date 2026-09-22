@@ -1,6 +1,9 @@
 use stream_archive_server::{
     backup_service::{BackupInfo, BackupSnapshot},
-    diagnostics::{DiagnosticItem, DiagnosticStatus, DiagnosticsSnapshot},
+    diagnostics::{
+        DiagnosticCategory, DiagnosticItem, DiagnosticRequirement, DiagnosticStatus,
+        DiagnosticsSnapshot,
+    },
     history_service::format_history_timestamp_local,
 };
 
@@ -18,9 +21,13 @@ pub struct BackupRowView {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticRowView {
+    pub category: String,
+    pub requirement: String,
     pub name: String,
     pub status: String,
+    pub summary: String,
     pub detail: String,
+    pub remediation: String,
     pub status_tone: String,
 }
 
@@ -53,9 +60,13 @@ pub fn diagnostic_rows(snapshot: &DiagnosticsSnapshot) -> Vec<DiagnosticRowView>
 
 fn diagnostic_row(item: &DiagnosticItem) -> DiagnosticRowView {
     DiagnosticRowView {
+        category: diagnostic_category_label(item.category).into(),
+        requirement: diagnostic_requirement_label(item.requirement).into(),
         name: item.name.clone(),
         status: diagnostic_status_label(item.status).into(),
+        summary: item.summary.clone(),
         detail: item.detail.clone(),
+        remediation: item.remediation.clone(),
         status_tone: diagnostic_tone(item.status).into(),
     }
 }
@@ -86,6 +97,27 @@ fn diagnostic_status_label(status: DiagnosticStatus) -> &'static str {
         DiagnosticStatus::Ok => "정상",
         DiagnosticStatus::Warning => "주의",
         DiagnosticStatus::Error => "오류",
+    }
+}
+
+
+fn diagnostic_category_label(category: DiagnosticCategory) -> &'static str {
+    match category {
+        DiagnosticCategory::Runtime => "런타임",
+        DiagnosticCategory::Database => "데이터베이스",
+        DiagnosticCategory::Storage => "저장소",
+        DiagnosticCategory::Tools => "도구",
+        DiagnosticCategory::Secrets => "보안 저장소",
+        DiagnosticCategory::Providers => "공급자",
+        DiagnosticCategory::Backup => "백업",
+    }
+}
+
+fn diagnostic_requirement_label(requirement: DiagnosticRequirement) -> &'static str {
+    match requirement {
+        DiagnosticRequirement::Required => "필수",
+        DiagnosticRequirement::Optional => "선택",
+        DiagnosticRequirement::Informational => "정보",
     }
 }
 
