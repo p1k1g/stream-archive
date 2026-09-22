@@ -741,6 +741,11 @@ mod windows_tree {
     }
 
     #[cfg(test)]
+    pub(super) fn test_process_exists(pid: u32) -> bool {
+        query_identity(pid).ok().flatten().is_some()
+    }
+
+    #[cfg(test)]
     pub(super) fn snapshot_root_guard_rejects_absent_or_reused_identity() -> bool {
         let root = ProcessIdentity {
             pid: 7,
@@ -767,6 +772,25 @@ mod windows_tree {
             && absent_root_is_rejected
             && reused_root_is_rejected
             && missing_snapshot_root_is_rejected
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_process_exists(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        return windows_tree::test_process_exists(pid);
+    }
+    #[cfg(unix)]
+    {
+        return i32::try_from(pid)
+            .ok()
+            .is_some_and(unix_group::test_process_exists);
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        false
     }
 }
 
