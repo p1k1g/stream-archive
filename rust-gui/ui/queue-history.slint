@@ -137,6 +137,7 @@ export component QueuePage inherits VerticalLayout {
         VerticalLayout {
             padding: 2px;
             spacing: 9px;
+            alignment: start;
 
             if QueueHistoryState.queue-rows.length == 0: Rectangle {
                 height: 82px;
@@ -493,6 +494,7 @@ export component HistoryPage inherits VerticalLayout {
         VerticalLayout {
             padding: 2px;
             spacing: 9px;
+            alignment: start;
 
             if QueueHistoryState.history-rows.length == 0: Rectangle {
                 height: 82px;
