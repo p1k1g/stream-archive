@@ -359,6 +359,16 @@ mod tests {
     }
 
     #[test]
+    fn history_status_labels_cover_daily_use_filters() {
+        assert_eq!(history_state_label("STOPPED"), "중지됨");
+        assert_eq!(history_state_label("MERGING"), "병합 중");
+        assert_eq!(history_state_label("RUNNING"), "진행 중");
+        assert_eq!(history_state_label("CANCELLED"), "취소됨");
+        assert_eq!(history_state_label("RECORDING"), "녹화 중");
+        assert_eq!(history_state_label("COMPLETED"), "완료");
+    }
+
+    #[test]
     fn view_separates_live_and_vod_without_dropping_unknown_states() {
         let history = HistoryResponse {
             live: vec![LiveHistoryItem {

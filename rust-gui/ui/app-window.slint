@@ -470,6 +470,7 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 2px;
                             spacing: 10px;
+                            alignment: start;
                             if AppState.live-rows.length == 0: Rectangle {
                                 height: 82px;
                                 vertical-stretch: 0;
@@ -483,7 +484,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
-                                height: (row.suppressed || row.detail != "") ? 178px : 156px;
+                                min-height: (row.suppressed || row.detail != "") ? 178px : 156px;
                                 vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
@@ -499,13 +500,14 @@ export component MainWindow inherits Window {
                                         spacing: 5px;
 
                                         Text {
-                                            height: 24px;
+                                            min-height: 24px;
                                             vertical-stretch: 0;
                                             text: row.platform + " · " + (row.name != "" ? row.name : row.account);
                                             color: #0f172a;
                                             font-size: 16px;
                                             font-weight: 700;
                                             vertical-alignment: center;
+                                            wrap: word-wrap;
                                         }
                                         Text { text: row.account; color: #64748b; font-size: 11px; }
                                         if row.title != "": Text { text: row.title; color: #334155; wrap: word-wrap; }
@@ -890,8 +892,9 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 2px;
                             spacing: 10px;
+                            alignment: start;
                             Rectangle {
-                                height: 108px;
+                                min-height: 108px;
                                 vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
@@ -941,7 +944,7 @@ export component MainWindow inherits Window {
                             }
 
                             if AppState.vod-title != "" || AppState.vod-streamer != "": Rectangle {
-                                height: 82px;
+                                min-height: 82px;
                                 vertical-stretch: 0;
                                 background: #ffffff;
                                 border-radius: 10px;
