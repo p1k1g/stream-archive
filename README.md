@@ -391,7 +391,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 
 - ✅ 23.1 Native Daily-use UX Closure
 - ✅ 23.2 Diagnostics / Runtime Preflight
-- ⏳ 23.3 Media-tool Integration Harness
+- ✅ 23.3 Media-tool Integration Harness
 - ⏳ 23.4 Provider E2E Validation
 - ⏳ 23.5 Unix CLI Completion
 - ⏳ 23.6 Packaging / Release Readiness
