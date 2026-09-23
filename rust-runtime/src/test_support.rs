@@ -137,7 +137,10 @@ pub(crate) fn provider_fixture_path() -> &'static Path {
                 .arg(&output)
                 .status()
                 .expect("compile provider media-tool fixture");
-            assert!(status.success(), "failed to compile provider media-tool fixture");
+            assert!(
+                status.success(),
+                "failed to compile provider media-tool fixture"
+            );
             output
         })
         .as_path()
