@@ -1557,7 +1557,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod provider_e2e {
     use super::*;
