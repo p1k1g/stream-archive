@@ -169,15 +169,18 @@ stream-archive-cli status
 stream-archive-cli status --json
 ~~~
 
-The summary includes backend/database paths, runtime readiness, local watcher and
-VOD state, Queue counts, configured secret booleans, media-tool resolution and
+The summary includes backend/database paths, runtime readiness, watcher/VOD
+state, Queue counts, configured secret booleans, media-tool resolution and
 backup status.
 
-The active watcher/VOD objects are process-owned. Because Stream Archive does
-not add a cross-process HTTP or socket control service, a short-lived management
-CLI invocation does not introspect the in-memory watcher of another already
-running process. Persistent work should be owned by a foreground headless
-runtime.
+Only one foreground runtime owner may hold the canonical data directory at a
+time. Short-lived management commands open a non-recovering observer core, so
+they do not rewrite another process's active LIVE/VOD/Queue rows as interrupted.
+
+When a runtime owner is active, `status` obtains the in-memory watcher/VOD state
+through a local Unix-domain control socket. The socket is owner-only (`0600`),
+uses a short hashed path so macOS `sockaddr_un` limits are respected, and is not
+an HTTP/Web application API.
 
 ## Settings
 
@@ -284,25 +287,28 @@ stream-archive-cli serve --watch
 
 Stop it with Ctrl+C or SIGTERM from the service/container supervisor.
 
-The one-shot watcher status/stop commands use the current CLI process core:
+Watcher status and runtime actions are routed to the active runtime owner when
+one exists:
 
 ~~~bash
 stream-archive-cli watcher status --json
 stream-archive-cli watcher stop
-~~~
-
-Channel runtime actions are available when the watcher belongs to that process:
-
-~~~bash
 stream-archive-cli channels action soop example recheck
 ~~~
 
-Protected broadcast passwords use stdin and remain memory-only:
+Protected broadcast passwords use stdin and remain memory-only. The one-shot
+CLI forwards the secret over the owner-only Unix-domain socket to the running
+watcher's in-memory password path; it is not stored in SQLite and is not placed
+in argv:
 
 ~~~bash
 printf '%s' "$STREAM_PASSWORD" |
   stream-archive-cli channels password soop example --stdin
 ~~~
+
+Channel/settings writes remain canonical SQLite writes. A running watcher
+periodically refreshes its shared Store cache so updates made by one-shot CLI
+processes become visible without adding a second configuration authority.
 
 ## VOD
 
@@ -337,18 +343,22 @@ Useful options:
 ~~~
 
 Direct VOD stays attached to the CLI until the operation reaches a terminal
-state. Ctrl+C or SIGTERM calls the shared VOD cancel path and core shutdown
-rather than killing processes by executable name.
+state. It acquires the same exclusive runtime-owner lock as `serve`; therefore a
+direct `vod analyze` / `vod download` is intentionally rejected while another
+foreground Stream Archive runtime owns the same data directory. For unattended
+operation under `serve`, enqueue work with `queue add` instead.
 
-Status/cancel are also exposed through the shared core:
+Ctrl+C or SIGTERM calls the shared VOD cancel path and core shutdown rather than
+killing processes by executable name. Failed or cancelled analysis/download
+terminal states return a non-zero CLI exit status.
+
+A second terminal can inspect or cancel the active owner VOD through the local
+Unix-domain control socket:
 
 ~~~bash
 stream-archive-cli vod status --json
 stream-archive-cli vod cancel
 ~~~
-
-As with watcher state, there is no cross-process control plane. Use the signal
-path to stop a foreground VOD command from another terminal.
 
 ## Queue
 
@@ -390,8 +400,11 @@ Restore requires explicit confirmation:
 stream-archive-cli backup restore stream_archive_manual_YYYYMMDD_HHMMSS.db --yes
 ~~~
 
-The shared restore service still refuses restore while LIVE recording, VOD work
-or Queue work makes replacement unsafe.
+Restore additionally acquires the cross-process runtime-owner lock. It is
+refused while another Stream Archive runtime owns the canonical database, so a
+short-lived CLI process cannot overwrite SQLite underneath an active
+watcher/downloader/Queue worker. Existing LIVE/VOD/Queue safety checks still
+apply after exclusive ownership is obtained.
 
 ## Storage and logs
 
@@ -403,9 +416,10 @@ stream-archive-cli logs --tail 100 --json
 
 Storage uses the shared storage service.
 
-Runtime LogBuffer is process-local. The logs command therefore shows lines
-owned by the current CLI process; Phase 23.5 does not add a remote log/IPC
-service.
+Runtime LogBuffer remains process-local internally. When a foreground runtime
+owner is active, `logs` reads that owner's buffer through the same protected
+Unix-domain control socket; otherwise it shows the observer process's local
+buffer.
 
 ## JSON and exit behavior
 
@@ -417,7 +431,7 @@ General exit contract:
 - success: zero
 - invalid command/argument: non-zero
 - blocking doctor result: non-zero
-- failed runtime/provider operation: non-zero
+- failed runtime/provider operation, including failed VOD analysis: non-zero
 - foreground operation cancelled by signal: non-zero
 
 Secrets are represented only by configured/not-configured booleans.
@@ -452,6 +466,9 @@ The smoke covers:
 - settings/channel persistence
 - Queue/History/Backup/Storage reads
 - provider status redaction
+- one-shot observer commands preserving active runtime rows
+- restore rejection while another runtime owns the database
+- runtime-owner status/log routing through the Unix-domain socket
 - real SIGTERM against stream-archive-cli serve
 - real SIGTERM against stream-archive-server
 - unrelated runtime survival
