@@ -1836,3 +1836,173 @@ mod tests {
         assert_eq!(line, "file 'C:/tmp/a'\\''b.mp4'");
     }
 }
+
+
+#[cfg(test)]
+mod provider_e2e {
+    use super::*;
+    use crate::{
+        platform_runtime::test_process_running,
+        test_support::ProviderFixture,
+        tool_discovery::ToolKind,
+    };
+
+    fn request(output: &Path, yt_dlp: &Path, ffmpeg: &Path) -> VodDownloadRequest {
+        VodDownloadRequest {
+            vod_url: "https://vod.sooplive.com/player/123456789".into(),
+            output_directory: output.display().to_string(),
+            parts: vec![1],
+            quality: "best[height<=1080]".into(),
+            merge: true,
+            cookie_mode: "FILE".into(),
+            cookie_file: String::new(),
+            browser_name: "firefox".into(),
+            yt_dlp_path: yt_dlp.display().to_string(),
+            ffmpeg_path: ffmpeg.display().to_string(),
+            max_retries: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn soop_vod_provider_e2e_metadata_and_download_contract() {
+        let fixture = ProviderFixture::new();
+        let yt_dlp = fixture.tool(ToolKind::YtDlp);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let tools = Tools {
+            yt_dlp: yt_dlp.clone(),
+            ffmpeg: Some(ffmpeg.clone()),
+        };
+        let cookie = fixture.root().join("쿠키 fixture.txt");
+        fs::write(&cookie, "# fixture").unwrap();
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+
+        let metadata = get_metadata(
+            &tools,
+            "https://vod.sooplive.com/player/123456789",
+            &cookie,
+            &cancel,
+            &logs,
+        )
+        .await
+        .unwrap();
+        assert_eq!(metadata.streamer, "Fixture BJ");
+        assert_eq!(metadata.entries.len(), 1);
+
+        let output_dir = fixture.root().join("SOOP VOD 저장 한글 🎬");
+        fs::create_dir_all(&output_dir).unwrap();
+        let output = output_dir.join("PART 01 영상 😀.mp4");
+        let req = request(&output_dir, &yt_dlp, &ffmpeg);
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        download_part(
+            &tools,
+            &req,
+            &cookie,
+            "https://fixture.invalid/master.m3u8",
+            &output,
+            1,
+            1,
+            &status,
+            &cancel,
+            &logs,
+        )
+        .await
+        .unwrap();
+
+        assert!(output.is_file());
+        let invocation = fixture.invocations();
+        assert!(invocation.contains("tool=YtDlp"));
+        assert!(invocation.contains("--dump-single-json"));
+        assert!(invocation.contains("--referer"));
+        assert!(invocation.contains("Origin:https://vod.sooplive.com"));
+        assert!(invocation.contains("best[height<=1080]"));
+        assert!(invocation.contains("--ffmpeg-location"));
+        assert!(invocation.contains(&ffmpeg.display().to_string()));
+        assert!(invocation.contains("SOOP VOD 저장 한글 🎬"));
+    }
+
+    #[tokio::test]
+    async fn soop_vod_provider_e2e_maps_nonzero_spawn_failure_and_timeout() {
+        let fixture = ProviderFixture::new();
+        let yt_dlp = fixture.tool(ToolKind::YtDlp);
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+
+        fixture.set_mode(&yt_dlp, "run-fail");
+        let err = run_capture_with_timeout(
+            &yt_dlp,
+            &["--dump-single-json".into()],
+            &cancel,
+            &logs,
+            "SOOP fixture",
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("process failure"));
+        assert!(err.to_string().contains("exit=Some(7)"));
+
+        let err = run_capture_with_timeout(
+            &fixture.root().join("missing-yt-dlp"),
+            &[],
+            &cancel,
+            &logs,
+            "SOOP fixture",
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("spawn failure"));
+
+        fixture.set_mode(&yt_dlp, "run-hang");
+        let err = run_capture_with_timeout(
+            &yt_dlp,
+            &[],
+            &cancel,
+            &logs,
+            "SOOP fixture",
+            Duration::from_millis(250),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("timeout"));
+    }
+
+    #[tokio::test]
+    async fn soop_vod_provider_e2e_cancel_cleans_owned_tree_not_unrelated_process() {
+        let fixture = ProviderFixture::new();
+        let yt_dlp = fixture.tool(ToolKind::YtDlp);
+        fixture.set_mode(&yt_dlp, "run-spawn-child");
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+        let mut unrelated = fixture.spawn_unrelated();
+        fixture.wait_for_unrelated().await;
+
+        let run = run_capture_with_timeout(
+            &yt_dlp,
+            &[],
+            &cancel,
+            &logs,
+            "SOOP fixture",
+            Duration::from_secs(20),
+        );
+        let cancel_when_ready = async {
+            fixture
+                .wait_for_path(&fixture.child_ready_path(&yt_dlp))
+                .await;
+            cancel.store(true, Ordering::SeqCst);
+        };
+        let (result, ()) = tokio::join!(run, cancel_when_ready);
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("cancelled"));
+        fixture.assert_child_stopped(&yt_dlp).await;
+
+        let unrelated_pid = unrelated.id();
+        assert!(
+            test_process_running(unrelated_pid),
+            "unrelated process must survive SOOP VOD cancellation"
+        );
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+    }
+}
