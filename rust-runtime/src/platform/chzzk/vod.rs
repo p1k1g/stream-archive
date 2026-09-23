@@ -2211,7 +2211,7 @@ mod provider_e2e {
     }
 
     #[tokio::test]
-    async fn chzzk_vod_provider_e2e_streamlink_ffmpeg_contract_and_unicode_output() {
+    async fn chzzk_vod_provider_e2e_runs_prepared_download_to_completed_status() {
         let fixture = ProviderFixture::new();
         let streamlink = fixture.tool(ToolKind::Streamlink);
         let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
@@ -2232,9 +2232,11 @@ mod provider_e2e {
             streamlink: resolved_streamlink,
             ffmpeg: resolved_ffmpeg,
         };
+
         let output_dir = fixture.root().join("CHZZK VOD 저장 한글 🎬");
+        let job_dir = fixture.root().join("CHZZK job 한글");
         fs::create_dir_all(&output_dir).unwrap();
-        let output = output_dir.join("최종 영상 😀.ts");
+        fs::create_dir_all(&job_dir).unwrap();
         let cookie = fixture.root().join("synthetic-cookie.txt");
         fs::write(
             &cookie,
@@ -2242,15 +2244,42 @@ mod provider_e2e {
         )
         .unwrap();
         let req = request(&output_dir, &ffmpeg);
+        let metadata = Metadata {
+            title: "Fixture CHZZK VOD".into(),
+            streamer: "Fixture Channel".into(),
+            streamer_id: "fixture-channel".into(),
+            date: "260923".into(),
+            duration_seconds: 60,
+            qualities: vec![VodQualityOption {
+                value: "best".into(),
+                label: "최고 화질 (자동)".into(),
+            }],
+        };
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
         let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
 
-        download_video(&tools, &req, Some(&cookie), &output, 60, &status, &cancel)
-            .await
-            .unwrap();
+        run_download_prepared(
+            &tools,
+            &req,
+            Some(&cookie),
+            metadata,
+            &job_dir,
+            &output_dir,
+            &logs,
+            &status,
+            &cancel,
+        )
+        .await
+        .unwrap();
 
+        let completed = status.read().await.clone();
+        assert_eq!(completed.state, "COMPLETED");
+        assert_eq!(completed.percent, 100.0);
+        let output = PathBuf::from(completed.output_file.unwrap());
         assert!(output.is_file());
-        assert!(fs::metadata(&output).unwrap().len() > 0);
+        assert!(output.starts_with(&output_dir));
+
         let invocation = fixture.invocations();
         assert!(invocation.contains("tool=Streamlink"));
         assert!(invocation.contains("tool=Ffmpeg"));
@@ -2261,7 +2290,7 @@ mod provider_e2e {
         assert!(invocation.contains("synthetic-cookie.txt"));
         assert!(invocation.contains("--stream-sorting-excludes"));
         assert!(invocation.contains(">720p"));
-        assert!(invocation.contains("CHZZK VOD 저장 한글 🎬"));
+        assert!(invocation.contains("CHZZK job 한글"));
         assert!(invocation.contains("PYTHONUTF8=1"));
         assert!(invocation.contains("PYTHONIOENCODING=utf-8"));
         assert!(!invocation.contains("\tsynthetic\n"));
