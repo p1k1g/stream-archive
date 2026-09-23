@@ -54,8 +54,29 @@ async fn command_status(args: &[String]) -> Result<()> {
     let json_mode = only_json(args, "status")?;
     let core = open_core()?;
     let diagnostics = core.diagnostics();
-    let watcher = core.watcher_status().await?;
-    let vod = core.vod_status().await?;
+    let local_watcher = core.watcher_status().await?;
+    let local_vod = core.local_vod_status().await;
+    let remote = runtime_control(
+        &core,
+        RuntimeControlRequest {
+            command: "runtime.status".into(),
+            target: None,
+            action: None,
+            secret: None,
+            max_lines: None,
+        },
+    )
+    .await?;
+    let watcher_value = remote
+        .as_ref()
+        .and_then(|value| value.get("watcher"))
+        .cloned()
+        .unwrap_or(serde_json::to_value(&local_watcher)?);
+    let vod_value = remote
+        .as_ref()
+        .and_then(|value| value.get("vod"))
+        .cloned()
+        .unwrap_or(serde_json::to_value(&local_vod)?);
     let queue = core.queue_snapshot().await?;
     let backup = core.backup_snapshot().await?;
     let secrets = core.configured_secrets()?;
@@ -72,14 +93,16 @@ async fn command_status(args: &[String]) -> Result<()> {
             })
         })
         .collect::<Vec<_>>();
+    let runtime_owner_active = remote.is_some();
 
     let value = json!({
         "backend": core.backend_dir().display().to_string(),
         "database": core.store().path().display().to_string(),
         "runtime_ready": diagnostics.runtime_ready,
         "blocking_errors": diagnostics.summary.blocking_errors,
-        "watcher": watcher,
-        "vod": vod,
+        "runtime_owner_active": runtime_owner_active,
+        "watcher": watcher_value,
+        "vod": vod_value,
         "queue": {
             "active_id": queue.active_id,
             "queued_count": queue.queued_count,
@@ -87,7 +110,7 @@ async fn command_status(args: &[String]) -> Result<()> {
         "configured_secrets": secrets,
         "tools": tool_rows,
         "backup": backup,
-        "scope": "current-process",
+        "scope": if runtime_owner_active { "runtime-owner" } else { "observer" },
     });
 
     if json_mode {
@@ -98,9 +121,28 @@ async fn command_status(args: &[String]) -> Result<()> {
         println!("database      : {}", core.store().path().display());
         println!("runtime ready : {}", diagnostics.runtime_ready);
         println!("blocking      : {}", diagnostics.summary.blocking_errors);
-        println!("watcher       : {}", watcher.running);
-        println!("recordings    : {}", watcher.recording_count);
-        println!("VOD running   : {}", vod.running);
+        println!("runtime owner : {}", yes_no(runtime_owner_active));
+        println!(
+            "watcher       : {}",
+            watcher_value
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        );
+        println!(
+            "recordings    : {}",
+            watcher_value
+                .get("recording_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        );
+        println!(
+            "VOD running   : {}",
+            vod_value
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        );
         println!(
             "queue active  : {}",
             queue.active_id.as_deref().unwrap_or("-")
