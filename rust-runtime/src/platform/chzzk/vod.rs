@@ -394,16 +394,16 @@ async fn run_download_prepared(
         safe_name(&metadata.streamer, 60),
         safe_name(&metadata.title, 100)
     );
-    let mut destination = claim_collision_path(&output_dir, &base, "ts")?;
+    let mut destination = claim_collision_path(output_dir, &base, "ts")?;
     let staging_output = job_dir.join(MEDIA_FILE_NAME);
     let mut last_error = String::new();
     let attempts = req.max_retries.max(1);
     for attempt in 1..=attempts {
         if cancel.load(Ordering::SeqCst) {
-            cleanup_job_media(&job_dir);
+            cleanup_job_media(job_dir);
             return Ok(());
         }
-        cleanup_job_media(&job_dir);
+        cleanup_job_media(job_dir);
         {
             let mut current = status.write().await;
             current.state = "DOWNLOADING".into();
@@ -412,9 +412,9 @@ async fn run_download_prepared(
             current.part_count = 1;
         }
         match download_video(
-            &tools,
-            &req,
-            cookie_file.as_deref(),
+            tools,
+            req,
+            cookie_file,
             &staging_output,
             metadata.duration_seconds,
             status,
@@ -424,7 +424,7 @@ async fn run_download_prepared(
         {
             Ok(()) => {
                 if cancel.load(Ordering::SeqCst) {
-                    cleanup_job_media(&job_dir);
+                    cleanup_job_media(job_dir);
                     return Ok(());
                 }
                 let staged_file = find_finished_output(&staging_output)?;
@@ -432,7 +432,7 @@ async fn run_download_prepared(
                     match finalize_output(&staged_file, &destination, cancel)? {
                         PublishOutcome::Published => break,
                         PublishOutcome::Cancelled => {
-                            cleanup_job_media(&job_dir);
+                            cleanup_job_media(job_dir);
                             return Ok(());
                         }
                         PublishOutcome::Collision => {
@@ -442,7 +442,7 @@ async fn run_download_prepared(
                             ))
                             .await;
                             drop(destination);
-                            destination = claim_collision_path(&output_dir, &base, "ts")?;
+                            destination = claim_collision_path(output_dir, &base, "ts")?;
                         }
                     }
                 }
@@ -463,7 +463,7 @@ async fn run_download_prepared(
             }
             Err(err) => {
                 last_error = redact(&format!("{err:#}"));
-                cleanup_job_media(&job_dir);
+                cleanup_job_media(job_dir);
                 logs.push(format!(
                     "[VOD:CHZZK:WARN] download retry {attempt}/{attempts}: {last_error}"
                 ))
