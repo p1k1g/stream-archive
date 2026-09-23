@@ -1,9 +1,7 @@
 use crate::platform_runtime::spawn_owned;
 use crate::{
     backend::LogBuffer,
-    media_process::{
-        MediaProcessOutcome, MediaProcessSpec, run_media_process_with_atomic_cancel,
-    },
+    media_process::{MediaProcessOutcome, MediaProcessSpec, run_media_process_with_atomic_cancel},
     model::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
@@ -1240,15 +1238,7 @@ async fn run_capture(
     logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    run_capture_with_timeout(
-        program,
-        args,
-        cancel,
-        logs,
-        label,
-        Duration::from_secs(30),
-    )
-    .await
+    run_capture_with_timeout(program, args, cancel, logs, label, Duration::from_secs(30)).await
 }
 
 async fn run_capture_with_timeout(
@@ -1837,13 +1827,11 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod provider_e2e {
     use super::*;
     use crate::{
-        platform_runtime::test_process_running,
-        test_support::ProviderFixture,
+        platform_runtime::test_process_running, test_support::ProviderFixture,
         tool_discovery::ToolKind,
     };
 
