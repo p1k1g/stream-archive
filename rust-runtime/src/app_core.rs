@@ -73,8 +73,8 @@ impl StreamArchiveCore {
     pub fn open(backend_dir: impl AsRef<Path>) -> Result<CoreOpenResult> {
         let backend_dir = backend_dir.as_ref().to_path_buf();
         let db_path = Store::default_path(&backend_dir);
-        let migrated_legacy_db = Store::migrate_legacy_database(&db_path)?;
         let runtime_owner = Arc::new(RuntimeOwnerGuard::acquire(&db_path)?);
+        let migrated_legacy_db = Store::migrate_legacy_database(&db_path)?;
         let store = Store::open(db_path)?;
         store::init_global(store.clone())?;
         Ok(CoreOpenResult {
@@ -86,7 +86,11 @@ impl StreamArchiveCore {
     pub fn open_observer(backend_dir: impl AsRef<Path>) -> Result<CoreOpenResult> {
         let backend_dir = backend_dir.as_ref().to_path_buf();
         let db_path = Store::default_path(&backend_dir);
-        let migrated_legacy_db = Store::migrate_legacy_database(&db_path)?;
+        let migrated_legacy_db = if runtime_owner_active(&db_path)? {
+            false
+        } else {
+            Store::migrate_legacy_database(&db_path)?
+        };
         let store = Store::open_observer(db_path)?;
         store::init_global(store.clone())?;
         Ok(CoreOpenResult {
