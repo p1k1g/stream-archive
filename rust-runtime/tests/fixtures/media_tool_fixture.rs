@@ -1,3 +1,6 @@
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 use std::{
     env, fs,
     io::{self, Write},
@@ -102,6 +105,34 @@ fn main() {
                 write_marker(Path::new(ready));
             }
             thread::sleep(Duration::from_millis(millis));
+        }
+        "spawn-detached-output-holder" => {
+            #[cfg(unix)]
+            {
+                if args.len() != 2 {
+                    process::exit(2);
+                }
+                let pid_path = args[0].clone();
+                let ready_path = args[1].clone();
+                let mut child_command = Command::new(env::current_exe().unwrap());
+                child_command
+                    .arg("sleep")
+                    .arg("30000")
+                    .arg(&ready_path)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit());
+                child_command.process_group(0);
+                let child = child_command.spawn().unwrap();
+                fs::write(&pid_path, child.id().to_string()).unwrap();
+                wait_for_marker(Path::new(&ready_path));
+                thread::sleep(Duration::from_secs(30));
+            }
+            #[cfg(not(unix))]
+            {
+                eprintln!("spawn-detached-output-holder is Unix-only");
+                process::exit(2);
+            }
         }
         "spawn-child" | "spawn-child-ready" => {
             if args.len() < 2 {
