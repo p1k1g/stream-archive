@@ -99,6 +99,7 @@ impl StreamArchiveCore {
         })
     }
 
+    #[cfg(test)]
     fn assemble(backend_dir: PathBuf, store: Store) -> Result<Self> {
         Self::assemble_with_mode(backend_dir, store, None, true)
     }
