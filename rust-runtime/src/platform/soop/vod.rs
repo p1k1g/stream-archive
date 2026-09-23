@@ -1881,7 +1881,7 @@ mod provider_e2e {
         req.cookie_file = cookie.display().to_string();
         let manager = VodManager::new(backend, LogBuffer::new());
         let initial = manager.download(req).await.unwrap();
-        assert!(initial.running);
+        assert!(initial.job_id.is_some());
 
         let started = std::time::Instant::now();
         let completed = loop {
