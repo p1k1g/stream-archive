@@ -299,16 +299,24 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
 }
 
 fn run_ffmpeg_fixture(args: &[std::ffi::OsString], mode: &str) {
-    apply_run_mode(mode);
-
-    let mut input = Vec::new();
-    let _ = io::stdin().read_to_end(&mut input);
-
     let target = args
         .iter()
         .rev()
         .map(|value| value.to_string_lossy().into_owned())
         .find(|value| !value.starts_with('-') && !value.starts_with("pipe:"));
+
+    if mode == "run-partial-fail" {
+        if let Some(target) = target.as_deref() {
+            write_sized_file(Path::new(target), 64 * 1024);
+        }
+        eprintln!("fixture ffmpeg partial failure");
+        process::exit(7);
+    }
+
+    apply_run_mode(mode);
+
+    let mut input = Vec::new();
+    let _ = io::stdin().read_to_end(&mut input);
 
     if let Some(target) = target {
         write_sized_file(Path::new(&target), 2 * 1024 * 1024);
