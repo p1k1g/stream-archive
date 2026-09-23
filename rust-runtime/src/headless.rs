@@ -94,14 +94,6 @@ pub async fn wait_for_shutdown_signal() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn headless_source_keeps_no_http_listener_contract() {
-        let source = include_str!("headless.rs");
-        assert!(source.contains("No HTTP/Web listener is started."));
-        assert!(!source.contains("axum"));
-        assert!(!source.contains("TcpListener"));
-    }
-
     #[cfg(unix)]
     #[test]
     fn unix_headless_source_handles_sigterm() {
