@@ -2,7 +2,6 @@
 
 use rusqlite::{Connection, params};
 use serde_json::Value;
-use stream_archive_server::runtime_owner::runtime_control_socket_path;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -11,6 +10,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use stream_archive_server::runtime_owner::runtime_control_socket_path;
 use tempfile::TempDir;
 
 const CLI: &str = env!("CARGO_BIN_EXE_stream-archive-cli");
