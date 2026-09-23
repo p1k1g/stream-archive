@@ -35,9 +35,10 @@ Assert-Match $chzzkVod 'spawn_owned\(&mut ffmpeg_command\)' 'CHZZK VOD streaming
 
 Assert-Match $fixture 'enum ProviderTool' 'Provider-capable Rust media fixture is missing.'
 Assert-Match $fixture 'record_provider_invocation' 'Provider fixture invocation recording is missing.'
+Assert-Match $fixture 'write_all\(record\.as_bytes\(\)\)' 'Provider fixture invocation records must append atomically across concurrent tools.'
 Assert-Match $fixture '"run-spawn-child"' 'Provider fixture owned-descendant scenario is missing.'
 Assert-Match $fixture 'STREAM_ARCHIVE_FIXTURE_GENERIC' 'Provider fixture unrelated-process mode is missing.'
-Assert-Match $support 'Stream Archive provider 한글' 'Provider E2E Unicode temporary-path coverage is missing.'
+Assert-Match $support 'tempfile::Builder::new\(\)[\s\S]*?\.prefix\("[^"]*[^\x00-\x7F][^"]*"\)' 'Provider E2E Unicode temporary-path coverage is missing.'
 Assert-Match $support 'invocations\.log' 'Provider E2E invocation-log contract is missing.'
 Assert-NotMatch $fixture 'reqwest|https://sooplive\.com|https://chzzk\.naver\.com' 'Provider executable fixture must not perform provider network I/O.'
 
