@@ -2171,3 +2171,165 @@ mod tests {
         assert!(!staging.to_string_lossy().contains("테스트 VOD"));
     }
 }
+
+
+#[cfg(test)]
+mod provider_e2e {
+    use super::*;
+    use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
+
+    fn request(output: &Path, ffmpeg: &Path) -> VodDownloadRequest {
+        VodDownloadRequest {
+            vod_url: "https://chzzk.naver.com/video/1234567".into(),
+            output_directory: output.display().to_string(),
+            parts: vec![1],
+            quality: "best[height<=720]".into(),
+            merge: true,
+            cookie_mode: "SOOP_LOGIN".into(),
+            cookie_file: String::new(),
+            browser_name: "firefox".into(),
+            yt_dlp_path: String::new(),
+            ffmpeg_path: ffmpeg.display().to_string(),
+            max_retries: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn chzzk_vod_provider_e2e_streamlink_ffmpeg_contract_and_unicode_output() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let tools = ChzzkTools {
+            streamlink: streamlink.clone(),
+            ffmpeg: ffmpeg.clone(),
+        };
+        let output_dir = fixture.root().join("CHZZK VOD 저장 한글 🎬");
+        fs::create_dir_all(&output_dir).unwrap();
+        let output = output_dir.join("최종 영상 😀.ts");
+        let cookie = fixture.root().join("synthetic-cookie.txt");
+        fs::write(
+            &cookie,
+            "# Netscape HTTP Cookie File\n.naver.com\tTRUE\t/\tTRUE\t4102444800\tNID_AUT\tsynthetic\n",
+        )
+        .unwrap();
+        let req = request(&output_dir, &ffmpeg);
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+
+        download_video(
+            &tools,
+            &req,
+            Some(&cookie),
+            &output,
+            60,
+            &status,
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert!(output.is_file());
+        assert!(fs::metadata(&output).unwrap().len() > 0);
+        let invocation = fixture.invocations();
+        assert!(invocation.contains("tool=Streamlink"));
+        assert!(invocation.contains("tool=Ffmpeg"));
+        assert!(invocation.contains("--ffmpeg-ffmpeg"));
+        assert!(invocation.contains(&ffmpeg.display().to_string()));
+        assert!(invocation.contains("--ffmpeg-fout"));
+        assert!(invocation.contains("--http-cookies-file"));
+        assert!(invocation.contains("synthetic-cookie.txt"));
+        assert!(invocation.contains("--stream-sorting-excludes"));
+        assert!(invocation.contains(">720p"));
+        assert!(invocation.contains("CHZZK VOD 저장 한글 🎬"));
+        assert!(invocation.contains("PYTHONUTF8=1"));
+        assert!(invocation.contains("PYTHONIOENCODING=utf-8"));
+        assert!(!invocation.contains("\tsynthetic\n"));
+    }
+
+    #[tokio::test]
+    async fn chzzk_vod_provider_e2e_maps_nonzero_spawn_failure_and_timeout() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let output = fixture.root().join("failure.ts");
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+        let req = request(fixture.root(), &ffmpeg);
+
+        fixture.set_mode(&streamlink, "run-fail");
+        let err = download_video(
+            &ChzzkTools {
+                streamlink: streamlink.clone(),
+                ffmpeg: ffmpeg.clone(),
+            },
+            &req,
+            None,
+            &output,
+            60,
+            &status,
+            &cancel,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("Streamlink CHZZK 다운로드 실패"));
+        assert!(err.to_string().contains("7"));
+
+        let err = download_video(
+            &ChzzkTools {
+                streamlink: fixture.root().join("missing-streamlink"),
+                ffmpeg: ffmpeg.clone(),
+            },
+            &req,
+            None,
+            &output,
+            60,
+            &status,
+            &cancel,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("Streamlink start failed"));
+
+        fixture.set_mode(&streamlink, "run-hang");
+        let logs = LogBuffer::new();
+        let err = run_capture_with_timeout(
+            &streamlink,
+            &[],
+            &cancel,
+            &logs,
+            "CHZZK fixture",
+            Duration::from_millis(250),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("timeout"));
+    }
+
+    #[tokio::test]
+    async fn chzzk_vod_provider_e2e_cancel_cleans_streamlink_descendant() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        fixture.set_mode(&streamlink, "run-spawn-child");
+        let tools = ChzzkTools {
+            streamlink: streamlink.clone(),
+            ffmpeg: ffmpeg.clone(),
+        };
+        let req = request(fixture.root(), &ffmpeg);
+        let output = fixture.root().join("cancelled.ts");
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+
+        let run = download_video(&tools, &req, None, &output, 60, &status, &cancel);
+        let cancel_when_ready = async {
+            fixture
+                .wait_for_path(&fixture.child_ready_path(&streamlink))
+                .await;
+            cancel.store(true, Ordering::SeqCst);
+        };
+        let (result, ()) = tokio::join!(run, cancel_when_ready);
+        result.unwrap();
+        fixture.assert_child_stopped(&streamlink).await;
+        assert!(!output.exists());
+    }
+}
