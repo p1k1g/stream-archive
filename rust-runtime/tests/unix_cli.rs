@@ -227,6 +227,10 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
         layout.cli(&["queue", "retry", &queue_id, "--json"]),
     );
     json_output(
+        "queue recancel",
+        layout.cli(&["queue", "cancel", &queue_id, "--json"]),
+    );
+    json_output(
         "queue remove",
         layout.cli(&["queue", "remove", &queue_id, "--json"]),
     );
