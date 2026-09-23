@@ -1352,6 +1352,22 @@ mod tests {
     }
 
     #[test]
+    fn failed_or_cancelled_vod_status_returns_failure_for_cli_automation() {
+        let mut failed = VodJobStatus::default();
+        failed.state = "FAILED".into();
+        failed.message = "fixture failure".into();
+        assert!(ensure_vod_success(&failed).is_err());
+
+        let mut cancelled = VodJobStatus::default();
+        cancelled.state = "CANCELLED".into();
+        assert!(ensure_vod_success(&cancelled).is_err());
+
+        let mut analyzed = VodJobStatus::default();
+        analyzed.state = "ANALYZED".into();
+        assert!(ensure_vod_success(&analyzed).is_ok());
+    }
+
+    #[test]
     fn json_flag_contract_rejects_unknown_output_options() {
         assert!(!only_json(&[], "status").unwrap());
         assert!(only_json(&["--json".into()], "status").unwrap());
