@@ -634,7 +634,7 @@ mod provider_e2e {
         test_support::ProviderFixture, tool_discovery::ToolKind,
     };
 
-    fn config(streamlink: PathBuf) -> RecorderConfig {
+    fn recorder_config(streamlink: PathBuf) -> RecorderConfig {
         RecorderConfig {
             streamlink,
             quality: "best".into(),
@@ -669,7 +669,7 @@ mod provider_e2e {
         let fixture = ProviderFixture::new();
         let streamlink = fixture.tool(ToolKind::Streamlink);
         let manager = RecorderManager::new(LogBuffer::new());
-        let config = config(streamlink.clone());
+        let config = recorder_config(streamlink.clone());
         let requested = fixture.root().join("SOOP 방송 😀").join("테스트 녹화.ts");
         let mut recording = manager
             .start(
@@ -704,7 +704,7 @@ mod provider_e2e {
         let streamlink = fixture.tool(ToolKind::Streamlink);
         let _ffmpeg = fixture.tool(ToolKind::Ffmpeg);
         let manager = RecorderManager::new(LogBuffer::new());
-        let config = config(streamlink);
+        let config = recorder_config(streamlink);
         let requested = fixture
             .root()
             .join("CHZZK 방송 한글 🎬")
@@ -754,7 +754,7 @@ mod provider_e2e {
         let streamlink = fixture.tool(ToolKind::Streamlink);
         fixture.set_mode(&streamlink, "run-fail");
         let manager = RecorderManager::new(LogBuffer::new());
-        let config = config(streamlink);
+        let config = recorder_config(streamlink);
         let mut recording = manager
             .start(
                 &config,
@@ -773,7 +773,7 @@ mod provider_e2e {
             Some(7)
         );
 
-        let missing = config(fixture.root().join("missing-streamlink"));
+        let missing = recorder_config(fixture.root().join("missing-streamlink"));
         let err = match manager
             .start(
                 &missing,
@@ -802,7 +802,7 @@ mod provider_e2e {
         let streamlink = fixture.tool(ToolKind::Streamlink);
         fixture.set_mode(&streamlink, "run-spawn-child");
         let manager = RecorderManager::new(LogBuffer::new());
-        let config = config(streamlink.clone());
+        let config = recorder_config(streamlink.clone());
         let mut unrelated = fixture.spawn_unrelated();
         fixture.wait_for_unrelated().await;
 
