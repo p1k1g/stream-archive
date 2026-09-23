@@ -50,6 +50,9 @@ const COPY_BUFFER_SIZE: usize = 1024 * 1024;
 const CHZZK_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CHZZK_API_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const PROVIDER_CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
+const PROVIDER_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
+
 
 #[derive(Debug, Clone)]
 struct ChzzkTools {
@@ -1065,7 +1068,7 @@ async fn run_capture(
     logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    run_capture_with_timeout(program, args, cancel, logs, label, Duration::from_secs(30)).await
+    run_capture_with_timeout(program, args, cancel, logs, label, PROVIDER_CAPTURE_TIMEOUT).await
 }
 
 async fn run_capture_with_timeout(
