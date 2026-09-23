@@ -1084,7 +1084,8 @@ async fn run_capture_with_timeout(
             .args(args.iter().cloned())
             .env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
-            .timeout(timeout),
+            .timeout(timeout)
+            .capture_limit(PROVIDER_CAPTURE_LIMIT),
         cancel,
     )
     .await?;
