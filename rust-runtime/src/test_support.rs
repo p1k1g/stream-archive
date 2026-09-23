@@ -37,6 +37,12 @@ impl ProviderFixture {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
                 .expect("mark provider fixture executable");
+            if kind == ToolKind::Ffmpeg {
+                let windows_layout = self.root.path().join("ffmpeg.exe");
+                fs::copy(&target, &windows_layout).expect("stage Streamlink-layout FFmpeg fixture");
+                fs::set_permissions(&windows_layout, fs::Permissions::from_mode(0o755))
+                    .expect("mark Streamlink-layout FFmpeg fixture executable");
+            }
         }
         target
     }
