@@ -3,15 +3,30 @@ use std::os::unix::process::CommandExt;
 
 use std::{
     env, fs,
-    io::{self, Write},
-    path::Path,
+    fs::OpenOptions,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
     process::{self, Command, Stdio},
     thread,
     time::Duration,
 };
 
+#[derive(Debug, Clone, Copy)]
+enum ProviderTool {
+    Streamlink,
+    YtDlp,
+    Ffmpeg,
+}
+
 fn main() {
     let mut args = env::args_os().skip(1).collect::<Vec<_>>();
+
+    if let Some(tool) = provider_tool() {
+        record_provider_invocation(tool, &args);
+        run_provider_tool(tool, &args);
+        return;
+    }
+
     if args.first().is_some_and(|arg| arg == "--version" || arg == "-version") {
         match env::var("STREAM_ARCHIVE_FIXTURE_VERSION_MODE").as_deref() {
             Ok("fail") => {
@@ -168,6 +183,236 @@ fn main() {
             process::exit(2);
         }
     }
+}
+
+fn provider_tool() -> Option<ProviderTool> {
+    if env::var_os("STREAM_ARCHIVE_FIXTURE_GENERIC").is_some() {
+        return None;
+    }
+    let name = env::current_exe()
+        .ok()?
+        .file_name()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    if name.starts_with("streamlink") {
+        Some(ProviderTool::Streamlink)
+    } else if name.starts_with("yt-dlp") || name.starts_with("ytdlp") {
+        Some(ProviderTool::YtDlp)
+    } else if name.starts_with("ffmpeg") {
+        Some(ProviderTool::Ffmpeg)
+    } else {
+        None
+    }
+}
+
+fn run_provider_tool(tool: ProviderTool, args: &[std::ffi::OsString]) {
+    let mode = provider_mode();
+    match tool {
+        ProviderTool::Streamlink => run_streamlink_fixture(args, &mode),
+        ProviderTool::YtDlp => run_ytdlp_fixture(args, &mode),
+        ProviderTool::Ffmpeg => run_ffmpeg_fixture(args, &mode),
+    }
+}
+
+fn run_streamlink_fixture(args: &[std::ffi::OsString], mode: &str) {
+    let preflight = has_arg(args, "--can-handle-url") || has_arg(args, "--help");
+    if preflight {
+        match mode {
+            "preflight-fail" => {
+                eprintln!("fixture streamlink preflight failure");
+                process::exit(8);
+            }
+            "preflight-hang" => {
+                thread::sleep(Duration::from_secs(30));
+                return;
+            }
+            _ => {}
+        }
+        if has_arg(args, "--help") {
+            println!("fixture streamlink help --http-cookies-file --player --output");
+        }
+        return;
+    }
+
+    apply_run_mode(mode);
+
+    if has_arg(args, "--stdout") {
+        let mut out = io::stdout().lock();
+        let chunk = vec![b'M'; 8192];
+        for _ in 0..32 {
+            out.write_all(&chunk).unwrap();
+        }
+        out.flush().unwrap();
+        return;
+    }
+
+    if let Some(output) = arg_after(args, "--output") {
+        write_sized_file(Path::new(output), 64 * 1024);
+        return;
+    }
+
+    if let Some(player_args) = arg_after(args, "--player-args")
+        && let Some(output) = last_quoted_path(player_args)
+    {
+        write_sized_file(Path::new(&output), 64 * 1024);
+        return;
+    }
+
+    eprintln!("fixture streamlink could not determine output contract");
+    process::exit(2);
+}
+
+fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
+    apply_run_mode(mode);
+
+    if has_arg(args, "--cookies-from-browser")
+        && let Some(cookie_path) = arg_after(args, "--cookies")
+    {
+        if let Some(parent) = Path::new(cookie_path).parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(
+            cookie_path,
+            "# Netscape HTTP Cookie File\n.sooplive.com\tTRUE\t/\tTRUE\t2147483647\tfixture\tcookie\n",
+        )
+        .unwrap();
+        return;
+    }
+
+    if has_arg(args, "--dump-single-json") {
+        println!(
+            r#"{"title":"Fixture VOD","uploader":"Fixture BJ","uploader_id":"fixture","upload_date":"20260923","entries":[{"url":"https://fixture.invalid/master.m3u8","duration":60}]}"#
+        );
+        return;
+    }
+
+    if let Some(output) = arg_after(args, "-o") {
+        write_sized_file(Path::new(output), 128 * 1024);
+        println!("[download] 50.0%");
+        println!("[download] 100.0%");
+        return;
+    }
+
+    println!("fixture yt-dlp");
+}
+
+fn run_ffmpeg_fixture(args: &[std::ffi::OsString], mode: &str) {
+    apply_run_mode(mode);
+
+    let mut input = Vec::new();
+    let _ = io::stdin().read_to_end(&mut input);
+
+    let target = args
+        .iter()
+        .rev()
+        .map(|value| value.to_string_lossy().into_owned())
+        .find(|value| !value.starts_with('-') && !value.starts_with("pipe:"));
+
+    if let Some(target) = target {
+        write_sized_file(Path::new(&target), 2 * 1024 * 1024);
+    }
+
+    println!("out_time_us=1000000");
+    println!("progress=end");
+}
+
+fn apply_run_mode(mode: &str) {
+    match mode {
+        "run-fail" => {
+            eprintln!("fixture provider process failure");
+            process::exit(7);
+        }
+        "run-hang" => {
+            thread::sleep(Duration::from_secs(30));
+            process::exit(0);
+        }
+        "run-spawn-child" => spawn_provider_child_and_hang(),
+        _ => {}
+    }
+}
+
+fn spawn_provider_child_and_hang() -> ! {
+    let exe = env::current_exe().unwrap();
+    let parent = exe.parent().unwrap();
+    let name = exe.file_name().unwrap().to_string_lossy();
+    let pid_path = parent.join(format!("{name}.child.pid"));
+    let ready_path = parent.join(format!("{name}.child.ready"));
+    let child = Command::new(&exe)
+        .env("STREAM_ARCHIVE_FIXTURE_GENERIC", "1")
+        .arg("sleep")
+        .arg("30000")
+        .arg(&ready_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    fs::write(&pid_path, child.id().to_string()).unwrap();
+    wait_for_marker(&ready_path);
+    thread::sleep(Duration::from_secs(30));
+    process::exit(0);
+}
+
+fn provider_mode() -> String {
+    let Some(path) = provider_mode_path() else {
+        return "success".into();
+    };
+    fs::read_to_string(path)
+        .unwrap_or_else(|_| "success".into())
+        .trim()
+        .to_string()
+}
+
+fn provider_mode_path() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let name = exe.file_name()?.to_string_lossy();
+    Some(exe.parent()?.join(format!("{name}.mode")))
+}
+
+fn record_provider_invocation(tool: ProviderTool, args: &[std::ffi::OsString]) {
+    let Ok(exe) = env::current_exe() else {
+        return;
+    };
+    let Some(parent) = exe.parent() else {
+        return;
+    };
+    let path = parent.join("invocations.log");
+    let mut file = match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    let cwd = env::current_dir()
+        .map(|value| value.display().to_string())
+        .unwrap_or_default();
+    let utf8 = env::var("PYTHONUTF8").unwrap_or_default();
+    let io_encoding = env::var("PYTHONIOENCODING").unwrap_or_default();
+    let _ = writeln!(
+        file,
+        "tool={tool:?}\ncwd={cwd}\nPYTHONUTF8={utf8}\nPYTHONIOENCODING={io_encoding}\nargv={args:?}\n---"
+    );
+}
+
+fn has_arg(args: &[std::ffi::OsString], needle: &str) -> bool {
+    args.iter().any(|value| value == needle)
+}
+
+fn arg_after<'a>(args: &'a [std::ffi::OsString], needle: &str) -> Option<&'a str> {
+    let index = args.iter().position(|value| value == needle)?;
+    args.get(index + 1)?.to_str()
+}
+
+fn last_quoted_path(value: &str) -> Option<String> {
+    let end = value.rfind('"')?;
+    let start = value[..end].rfind('"')?;
+    Some(value[start + 1..end].replace("{{", "{").replace("}}", "}"))
+}
+
+fn write_sized_file(path: &Path, size: usize) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let bytes = vec![b'F'; size];
+    fs::write(path, bytes).unwrap();
 }
 
 fn parse_millis(value: &std::ffi::OsStr) -> u64 {
