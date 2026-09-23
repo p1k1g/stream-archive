@@ -657,7 +657,7 @@ mod provider_e2e {
             match manager.poll(recording, config).unwrap() {
                 RecordingPoll::Exited(code) => return code,
                 RecordingPoll::Running => {}
-                other => panic!("unexpected provider fixture poll: {other:?}"),
+                _ => panic!("unexpected provider fixture poll state"),
             }
             assert!(
                 started.elapsed() < Duration::from_secs(8),
@@ -777,7 +777,7 @@ mod provider_e2e {
         assert_eq!(wait_for_exit(&manager, &mut recording, &config).await, Some(7));
 
         let missing = config(fixture.root().join("missing-streamlink"));
-        let err = manager
+        let err = match manager
             .start(
                 &missing,
                 PlatformId::Soop,
@@ -789,7 +789,10 @@ mod provider_e2e {
                 "account",
             )
             .await
-            .unwrap_err();
+        {
+            Ok(_) => panic!("missing Streamlink unexpectedly started"),
+            Err(err) => err,
+        };
         assert!(err.to_string().contains("failed to start retained Streamlink"));
     }
 
