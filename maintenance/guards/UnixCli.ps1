@@ -37,7 +37,7 @@ Assert-Match $cli 'run_serve' 'CLI serve must use the shared headless lifecycle.
 
 Assert-Match $unixTest 'CARGO_BIN_EXE_stream-archive-cli' 'Unix CLI integration must execute the real CLI binary.'
 Assert-Match $unixTest 'CARGO_BIN_EXE_stream-archive-server' 'Unix compatibility-server integration is missing.'
-Assert-Match $unixTest 'libc::SIGTERM' 'Unix CLI lifecycle smoke must send real SIGTERM.'
+Assert-Match $unixTest 'const SIGTERM: i32 = 15' 'Unix CLI lifecycle smoke must send real SIGTERM.'
 Assert-Match $unixTest 'unrelated headless runtime must survive' 'Unix signal regression must protect unrelated processes.'
 Assert-Match $unixTest 'Stream Archive CLI 테스트' 'Unix CLI integration must cover Unicode/whitespace paths.'
 
