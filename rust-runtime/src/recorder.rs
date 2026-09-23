@@ -626,15 +626,12 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod provider_e2e {
     use super::*;
     use crate::{
-        platform_runtime::test_process_running,
-        support::platform::live::HttpCookie,
-        test_support::ProviderFixture,
-        tool_discovery::ToolKind,
+        platform_runtime::test_process_running, support::platform::live::HttpCookie,
+        test_support::ProviderFixture, tool_discovery::ToolKind,
     };
 
     fn config(streamlink: PathBuf) -> RecorderConfig {
@@ -673,10 +670,7 @@ mod provider_e2e {
         let streamlink = fixture.tool(ToolKind::Streamlink);
         let manager = RecorderManager::new(LogBuffer::new());
         let config = config(streamlink.clone());
-        let requested = fixture
-            .root()
-            .join("SOOP 방송 😀")
-            .join("테스트 녹화.ts");
+        let requested = fixture.root().join("SOOP 방송 😀").join("테스트 녹화.ts");
         let mut recording = manager
             .start(
                 &config,
@@ -774,7 +768,10 @@ mod provider_e2e {
             )
             .await
             .unwrap();
-        assert_eq!(wait_for_exit(&manager, &mut recording, &config).await, Some(7));
+        assert_eq!(
+            wait_for_exit(&manager, &mut recording, &config).await,
+            Some(7)
+        );
 
         let missing = config(fixture.root().join("missing-streamlink"));
         let err = match manager
@@ -793,7 +790,10 @@ mod provider_e2e {
             Ok(_) => panic!("missing Streamlink unexpectedly started"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("failed to start retained Streamlink"));
+        assert!(
+            err.to_string()
+                .contains("failed to start retained Streamlink")
+        );
     }
 
     #[tokio::test]
