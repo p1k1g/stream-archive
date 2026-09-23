@@ -2009,7 +2009,10 @@ mod provider_e2e {
             fs::read_dir(&output_dir)
                 .unwrap()
                 .filter_map(|entry| entry.ok())
-                .all(|entry| !entry.file_name().to_string_lossy().starts_with(".soop-vod-concat-"))
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".soop-vod-concat-"))
         );
     }
 
