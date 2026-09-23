@@ -39,6 +39,9 @@ use uuid::Uuid;
 
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36";
+const PROVIDER_CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
+const PROVIDER_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
+
 const CF_NAMES: &[&str] = &[
     "CloudFront-Key-Pair-Id",
     "CloudFront-Policy",
@@ -1238,7 +1241,7 @@ async fn run_capture(
     logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    run_capture_with_timeout(program, args, cancel, logs, label, Duration::from_secs(30)).await
+    run_capture_with_timeout(program, args, cancel, logs, label, PROVIDER_CAPTURE_TIMEOUT).await
 }
 
 async fn run_capture_with_timeout(
@@ -1252,7 +1255,8 @@ async fn run_capture_with_timeout(
     let result = run_media_process_with_atomic_cancel(
         MediaProcessSpec::new(program)
             .args(args.iter().cloned())
-            .timeout(timeout),
+            .timeout(timeout)
+            .capture_limit(PROVIDER_CAPTURE_LIMIT),
         cancel,
     )
     .await?;
