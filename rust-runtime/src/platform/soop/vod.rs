@@ -1129,9 +1129,12 @@ async fn merge_parts(
         "-n".into(),
         target.display().to_string(),
     ];
-    let result = run_capture(ffmpeg, &args, cancel, logs, "ffmpeg merge").await;
+    let result = run_capture_without_timeout(ffmpeg, &args, cancel, logs, "ffmpeg merge").await;
     let _ = fs::remove_file(&concat);
-    result?;
+    if let Err(err) = result {
+        let _ = fs::remove_file(&target);
+        return Err(err);
+    }
     if cancel.load(Ordering::SeqCst) {
         let _ = fs::remove_file(&target);
         bail!("cancelled");
@@ -1242,6 +1245,45 @@ async fn run_capture(
     label: &str,
 ) -> Result<String> {
     run_capture_with_timeout(program, args, cancel, logs, label, PROVIDER_CAPTURE_TIMEOUT).await
+}
+
+async fn run_capture_without_timeout(
+    program: &Path,
+    args: &[String],
+    cancel: &AtomicBool,
+    logs: &LogBuffer,
+    label: &str,
+) -> Result<String> {
+    let result = run_media_process_with_atomic_cancel(
+        MediaProcessSpec::new(program)
+            .args(args.iter().cloned())
+            .without_timeout()
+            .capture_limit(PROVIDER_CAPTURE_LIMIT),
+        cancel,
+    )
+    .await?;
+
+    match result.outcome {
+        MediaProcessOutcome::Success => {
+            logs.push(format!("[VOD] {label} OK")).await;
+            Ok(result.stdout.text)
+        }
+        MediaProcessOutcome::ProcessFailure => bail!(
+            "{label} process failure (exit={:?}): {}",
+            result.exit_code,
+            redact(result.stderr.text.trim())
+        ),
+        MediaProcessOutcome::Timeout => {
+            bail!("{label} unexpectedly timed out without a deadline")
+        }
+        MediaProcessOutcome::Cancelled => bail!("{label} cancelled"),
+        MediaProcessOutcome::SpawnFailure => bail!(
+            "{label} spawn failure: {}",
+            result
+                .spawn_error
+                .unwrap_or_else(|| "unknown spawn failure".into())
+        ),
+    }
 }
 
 async fn run_capture_with_timeout(
@@ -1916,6 +1958,59 @@ mod provider_e2e {
         assert!(invocation.contains(&ffmpeg.display().to_string()));
         assert!(invocation.contains("SOOP VOD 저장 한글 🎬"));
         assert!(invocation.contains(manifest.url()));
+    }
+
+    #[tokio::test]
+    async fn soop_vod_merge_is_cancel_only_and_removes_partial_target_on_failure() {
+        let fixture = ProviderFixture::new();
+        let yt_dlp = fixture.tool(ToolKind::YtDlp);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        fixture.set_mode(&ffmpeg, "run-partial-fail");
+
+        let output_dir = fixture.root().join("merge output 한글");
+        fs::create_dir_all(&output_dir).unwrap();
+        let part1 = output_dir.join("part1.mp4");
+        let part2 = output_dir.join("part2.mp4");
+        fs::write(&part1, vec![b'A'; 2048]).unwrap();
+        fs::write(&part2, vec![b'B'; 2048]).unwrap();
+
+        let tools = Tools {
+            yt_dlp,
+            ffmpeg: Some(ffmpeg),
+        };
+        let metadata = VodMetadata {
+            title: "Fixture".into(),
+            streamer: "FixtureBJ".into(),
+            streamer_id: "fixture".into(),
+            date: "260923".into(),
+            entries: Vec::new(),
+        };
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+
+        let err = merge_parts(
+            &tools,
+            &metadata,
+            &[part1.clone(), part2.clone()],
+            &output_dir,
+            &status,
+            &cancel,
+            &logs,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("process failure"));
+        assert!(part1.is_file());
+        assert!(part2.is_file());
+        assert!(!output_dir.join("260923_FixtureBJ.mp4").exists());
+        assert!(
+            fs::read_dir(&output_dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with(".soop-vod-concat-"))
+        );
     }
 
     #[tokio::test]
