@@ -39,6 +39,7 @@ Assert-Match $unixTest 'CARGO_BIN_EXE_stream-archive-cli' 'Unix CLI integration 
 Assert-Match $unixTest 'CARGO_BIN_EXE_stream-archive-server' 'Unix compatibility-server integration is missing.'
 Assert-Match $unixTest 'const SIGTERM: i32 = 15' 'Unix CLI lifecycle smoke must send real SIGTERM.'
 Assert-Match $unixTest 'unrelated headless runtime must survive' 'Unix signal regression must protect unrelated processes.'
-Assert-Match $unixTest 'Stream Archive CLI 테스트' 'Unix CLI integration must cover Unicode/whitespace paths.'
+Assert-Match $unixTest 'tempfile::Builder::new\(\)[\s\S]*?\.prefix\("[^"]*\s[^"]*"\)' 'Unix CLI integration must cover whitespace temporary paths.'
+Assert-Match $unixTest 'tempfile::Builder::new\(\)[\s\S]*?\.prefix\("[^"]*[^\x00-\x7F][^"]*"\)' 'Unix CLI integration must cover non-ASCII Unicode temporary paths.'
 
 Write-Host 'Unix CLI completion contracts passed.'
