@@ -61,13 +61,18 @@ impl RuntimeControlServer {
         }
         let path = runtime_control_socket_path(core.store().path())?;
         if path.exists() {
-            fs::remove_file(&path)
-                .with_context(|| format!("failed to remove stale runtime socket {}", path.display()))?;
+            fs::remove_file(&path).with_context(|| {
+                format!("failed to remove stale runtime socket {}", path.display())
+            })?;
         }
         let listener = UnixListener::bind(&path)
             .with_context(|| format!("failed to bind runtime control socket {}", path.display()))?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("failed to protect runtime control socket {}", path.display()))?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).with_context(|| {
+            format!(
+                "failed to protect runtime control socket {}",
+                path.display()
+            )
+        })?;
 
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         let task_path = path.clone();
@@ -149,7 +154,10 @@ async fn handle_connection(stream: UnixStream, core: &StreamArchiveCore) -> Resu
 }
 
 #[cfg(unix)]
-async fn execute_request(core: &StreamArchiveCore, request: RuntimeControlRequest) -> Result<Value> {
+async fn execute_request(
+    core: &StreamArchiveCore,
+    request: RuntimeControlRequest,
+) -> Result<Value> {
     match request.command.as_str() {
         "runtime.status" => Ok(json!({
             "watcher": core.watcher_status().await?,
