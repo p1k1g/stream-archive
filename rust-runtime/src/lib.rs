@@ -17,3 +17,6 @@ pub mod store;
 pub mod support;
 pub mod tool_discovery;
 pub mod vod;
+
+#[cfg(test)]
+pub(crate) mod test_support;
