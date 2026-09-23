@@ -78,12 +78,7 @@ impl StreamArchiveCore {
         let store = Store::open(db_path)?;
         store::init_global(store.clone())?;
         Ok(CoreOpenResult {
-            core: Self::assemble_with_mode(
-                backend_dir,
-                store,
-                Some(runtime_owner),
-                true,
-            )?,
+            core: Self::assemble_with_mode(backend_dir, store, Some(runtime_owner), true)?,
             migrated_legacy_db,
         })
     }
