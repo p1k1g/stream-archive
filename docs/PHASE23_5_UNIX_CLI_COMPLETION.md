@@ -29,7 +29,9 @@ The compatibility stream-archive-server binary remains supported. Its former
 entry logic is now a shared headless runner used by both the server binary and
 CLI serve path.
 
-No localhost HTTP, Axum, browser launcher or second GUI is restored.
+No localhost HTTP, Axum, browser launcher or second GUI is restored. Runtime
+coordination between one-shot CLI commands and the foreground Unix owner uses a
+small local Unix-domain control socket, not an application Web/API listener.
 
 ## CLI completion
 
@@ -62,7 +64,9 @@ The underlying security contract is unchanged:
 - native store unavailable: fail closed
 - plaintext fallback: none
 
-Protected LIVE broadcast passwords also use stdin and stay memory-only.
+Protected LIVE broadcast passwords also use stdin and stay memory-only. They
+are forwarded to the running watcher owner over a `0600` Unix-domain socket and
+are not persisted to SQLite or exposed in argv.
 
 ## Foreground lifecycle
 
@@ -78,9 +82,20 @@ Unix SIGINT and SIGTERM converge on shared cancellation/shutdown.
 
 The compatibility stream-archive-server uses the same signal path.
 
-Phase 23.5 deliberately does not add a cross-process HTTP/socket control plane.
-Therefore active watcher/VOD LogBuffer objects are process-local. Queue,
-settings, channels, history and backup state remain persistent in SQLite.
+A cross-process runtime-owner lock guarantees that only one foreground runtime
+may perform startup recovery and own LIVE/VOD/Queue workers for a canonical
+database. One-shot management commands open a non-recovering observer core and
+therefore cannot mark another runtime's active rows as interrupted.
+
+On Unix, the owner also exposes a minimal local control socket for runtime-only
+operations: watcher status/stop, channel action/password, VOD status/cancel and
+runtime logs. The socket is `0600` and uses a short hash-derived filename under
+the OS temporary directory so macOS Unix-socket path limits are respected.
+There is still no localhost HTTP/Web control plane.
+
+Direct foreground VOD analyze/download acquires the same owner lock. If
+`serve`/`watcher start` already owns the database, persistent VOD work should be
+submitted through the Queue instead.
 
 ## Unix integration harness
 
@@ -93,8 +108,10 @@ It uses isolated backend/data/tool paths containing:
 - non-ASCII emoji
 
 The smoke verifies initialization, tool configuration, JSON-only management
-reads, safe provider status, settings/channel persistence and persistent
-Queue/History/Backup/Storage access.
+reads, safe provider status, settings/channel persistence, persistent
+Queue/History/Backup/Storage access, non-recovering one-shot observation of an
+active owner, protected owner log/status routing and restore rejection while an
+owner is active.
 
 A lifecycle test sends real SIGTERM to both:
 
@@ -131,6 +148,9 @@ maintenance/guards/UnixCli.ps1 protects the Phase 23.5 boundaries:
 - StreamArchiveCore is used
 - shared settings/provider/channel/VOD/Queue/Backup/log services are used
 - secret stdin contract is retained
+- one-shot management uses a non-recovering observer core
+- a cross-process runtime-owner lock protects startup recovery and restore
+- Unix runtime control uses an owner-only local socket, not HTTP/Web
 - no provider/Web control plane is added
 - no direct provider-tool spawn is added to daily-use management
 - SIGTERM and shared shutdown remain present
