@@ -101,6 +101,8 @@ fn json_output(label: &str, output: Output) -> Value {
 #[test]
 fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
     let layout = Layout::new();
+    assert_success("help", &layout.cli(&["help"]));
+    assert_success("version", &layout.cli(&["version"]));
     layout.init();
     layout.stage_fake_tools();
 
@@ -113,6 +115,14 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
         layout.live.to_str().unwrap(),
     ]);
     assert_success("settings set", &settings);
+
+    let doctor = json_output("doctor", layout.cli(&["doctor", "--json"]));
+    assert_eq!(doctor["runtime_ready"], true);
+    let active_doctor = json_output(
+        "doctor active tools",
+        layout.cli(&["doctor", "--json", "--active-tools"]),
+    );
+    assert_eq!(active_doctor["runtime_ready"], true);
 
     let status = json_output("status", layout.cli(&["status", "--json"]));
     assert_eq!(status["backend"], layout.backend.display().to_string());
@@ -150,6 +160,19 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
     assert_eq!(channels.as_array().unwrap().len(), 1);
     assert_eq!(channels[0]["account"], "fixture-account");
 
+    assert_success(
+        "channels disable",
+        &layout.cli(&["channels", "disable", "soop", "fixture-account"]),
+    );
+    let channels = json_output("channels disabled", layout.cli(&["channels", "list", "--json"]));
+    assert_eq!(channels[0]["enabled"], false);
+    assert_success(
+        "channels enable",
+        &layout.cli(&["channels", "enable", "soop", "fixture-account"]),
+    );
+    let channels = json_output("channels enabled", layout.cli(&["channels", "list", "--json"]));
+    assert_eq!(channels[0]["enabled"], true);
+
     let watcher = json_output(
         "watcher status",
         layout.cli(&["watcher", "status", "--json"]),
@@ -159,12 +182,50 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
     let queue = json_output("queue list", layout.cli(&["queue", "list", "--json"]));
     assert_eq!(queue["queued_count"], 0);
 
+    let queued = json_output(
+        "queue add",
+        layout.cli(&[
+            "queue",
+            "add",
+            "https://vod.sooplive.com/player/123456789",
+            "--output",
+            layout.live.to_str().unwrap(),
+            "--json",
+        ]),
+    );
+    let queue_id = queued["id"].as_str().unwrap().to_string();
+    let queue = json_output("queue populated", layout.cli(&["queue", "list", "--json"]));
+    assert_eq!(queue["queued_count"], 1);
+    json_output(
+        "queue cancel",
+        layout.cli(&["queue", "cancel", &queue_id, "--json"]),
+    );
+    json_output(
+        "queue retry",
+        layout.cli(&["queue", "retry", &queue_id, "--json"]),
+    );
+    json_output(
+        "queue remove",
+        layout.cli(&["queue", "remove", &queue_id, "--json"]),
+    );
+    let queue = json_output("queue cleared", layout.cli(&["queue", "list", "--json"]));
+    assert_eq!(queue["queued_count"], 0);
+
     let history = json_output("history list", layout.cli(&["history", "list", "--json"]));
     assert!(history["live"].is_array());
     assert!(history["vod"].is_array());
 
     let backup = json_output("backup status", layout.cli(&["backup", "status", "--json"]));
     assert!(backup["policy"].is_object());
+    let backup = json_output("backup create", layout.cli(&["backup", "create", "--json"]));
+    assert!(!backup["backups"].as_array().unwrap().is_empty());
+
+    assert_success(
+        "channels remove",
+        &layout.cli(&["channels", "remove", "soop", "fixture-account"]),
+    );
+    let channels = json_output("channels removed", layout.cli(&["channels", "list", "--json"]));
+    assert!(channels.as_array().unwrap().is_empty());
 
     let storage = json_output("storage", layout.cli(&["storage", "--json"]));
     assert!(storage["volumes"].is_array());
