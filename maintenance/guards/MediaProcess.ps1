@@ -9,6 +9,8 @@ Assert-Match $media 'spawn_owned\(&mut command\)' 'Shared media runner must reus
 Assert-Match $media 'capture_bounded' 'Media output capture must remain bounded.'
 Assert-Match $media 'DEFAULT_CAPTURE_LIMIT' 'Media output capture limit is missing.'
 Assert-Match $media 'MediaCancellation' 'Media cancellation contract is missing.'
+Assert-Match $media 'without_timeout' 'Shared media runner cancellation-only mode is missing.'
+Assert-RustTest $media 'without_timeout_allows_completion_past_configured_deadline' 'Cancellation-only media-process regression test is missing.'
 Assert-Match $media 'probe_tool_version' 'Media tool version probe is missing.'
 Assert-Match $diagnostics 'collect_active_local_preflight' 'Opt-in active local preflight is missing.'
 Assert-Match $diagnostics 'probe_tool_version' 'Active preflight must delegate tool execution to the shared probe.'

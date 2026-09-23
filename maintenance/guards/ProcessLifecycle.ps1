@@ -15,7 +15,7 @@ Assert-Match $chzzkVod 'spawn_owned\(&mut streamlink_command\)' 'CHZZK VOD Strea
 Assert-Match $chzzkVod 'spawn_owned\(&mut ffmpeg_command\)' 'CHZZK VOD FFmpeg must enter retained ownership before execution.'
 Assert-Match $chzzkVod 'streamlink_tree\.terminate\(&mut streamlink_child\)' 'CHZZK VOD cancellation must terminate retained Streamlink ownership.'
 Assert-Match $chzzkVod 'ffmpeg_tree\.terminate\(&mut ffmpeg_child\)' 'CHZZK VOD cancellation must terminate retained FFmpeg ownership.'
-Assert-Match $chzzkVod 'spawn_owned\(&mut command\)' 'CHZZK VOD analyze commands must use retained ownership.'
+Assert-Match $chzzkVod 'run_media_process_with_atomic_cancel' 'CHZZK VOD one-shot capture commands must use the shared media-process runner.'
 Assert-NotMatch $chzzkVod 'terminate_owned\(&mut (?:streamlink_child|ffmpeg_child|child)\)' 'CHZZK VOD must not fall back to compatibility tree recapture for its external tools.'
 Assert-Match $chzzkVod 'abort_reader_tasks\(reader_tasks\)\.await' 'CHZZK VOD cancellation must reap line readers.'
 Assert-Match $chzzkVod 'drain_failed_reader_tasks\(' 'CHZZK VOD process failures must drain bounded stderr readers before reporting the error.'
@@ -113,11 +113,12 @@ Assert-NotMatch $allRuntime '(?i)(?:pkill|killall)[^\r\n]*' 'Process-name-wide U
 Assert-NotMatch ($recorder + $soopVod + $chzzkVod) 'taskkill\.exe' 'Provider/runtime callers must use the common process boundary.'
 
 $soopOwnedSpawns = [regex]::Matches($soopVod, 'spawn_owned\(&mut command\)').Count
-if ($soopOwnedSpawns -lt 2) { throw "SOOP VOD progress/capture commands must use retained owned spawn; found $soopOwnedSpawns call(s)." }
+if ($soopOwnedSpawns -lt 1) { throw "SOOP VOD streaming progress must use retained owned spawn; found $soopOwnedSpawns call(s)." }
+Assert-Match $soopVod 'run_media_process_with_atomic_cancel' 'SOOP VOD one-shot capture commands must use the shared media-process runner.'
 Assert-Match $soopVod 'owned_tree\.terminate\(&mut child\)\.await' 'SOOP VOD cancellation must terminate through retained ownership.'
 Assert-Match $soopVod 'owned_tree\.terminate_now\(\)' 'SOOP VOD root-exit handling must clean retained descendants.'
 Assert-NotMatch $soopVod 'terminate_owned\(&mut child\)' 'SOOP VOD must not use compatibility child-only termination.'
 Assert-NotMatch $soopVod '\.kill_on_drop\(false\)' 'SOOP VOD external tools must retain direct-child drop fallback.'
-Assert-Match $soopVod 'if !exit\.success\(\)' 'SOOP capture must reject non-zero exits.'
+Assert-Match $soopVod 'MediaProcessOutcome::ProcessFailure' 'SOOP capture must map shared-runner non-zero process failures.'
 Assert-Match $soopVod 'if exit\.success\(\)' 'SOOP progress must distinguish successful exits.'
 Write-Host 'Process lifecycle contracts passed.'

@@ -2,6 +2,7 @@ use super::auth::{ChzzkAuth, ChzzkAuthState};
 use crate::platform_runtime::{configure_utf8_cli, restrict_private_dir, spawn_owned};
 use crate::{
     backend::{LogBuffer, read_safe_settings, settings_path},
+    media_process::{MediaProcessOutcome, MediaProcessSpec, run_media_process_with_atomic_cancel},
     model::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
@@ -29,7 +30,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
     sync::{Mutex, RwLock, mpsc},
     task::JoinHandle,
@@ -49,6 +50,8 @@ const COPY_BUFFER_SIZE: usize = 1024 * 1024;
 const CHZZK_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CHZZK_API_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const PROVIDER_CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
+const PROVIDER_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct ChzzkTools {
@@ -350,6 +353,32 @@ async fn run_download(
     set_status(status, "ANALYZING", "CHZZK VOD 메타데이터 확인 중…").await;
     let metadata =
         load_chzzk_metadata(&tools, &req.vod_url, cookie_file.as_deref(), cancel, logs).await?;
+    run_download_prepared(
+        &tools,
+        &req,
+        cookie_file.as_deref(),
+        metadata,
+        &job_dir,
+        &output_dir,
+        logs,
+        status,
+        cancel,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_download_prepared(
+    tools: &ChzzkTools,
+    req: &VodDownloadRequest,
+    cookie_file: Option<&Path>,
+    metadata: Metadata,
+    job_dir: &Path,
+    output_dir: &Path,
+    logs: &LogBuffer,
+    status: &Arc<RwLock<VodJobStatus>>,
+    cancel: &AtomicBool,
+) -> Result<()> {
     let view = analysis_view(&req.vod_url, &metadata);
     {
         let mut current = status.write().await;
@@ -367,16 +396,16 @@ async fn run_download(
         safe_name(&metadata.streamer, 60),
         safe_name(&metadata.title, 100)
     );
-    let mut destination = claim_collision_path(&output_dir, &base, "ts")?;
+    let mut destination = claim_collision_path(output_dir, &base, "ts")?;
     let staging_output = job_dir.join(MEDIA_FILE_NAME);
     let mut last_error = String::new();
     let attempts = req.max_retries.max(1);
     for attempt in 1..=attempts {
         if cancel.load(Ordering::SeqCst) {
-            cleanup_job_media(&job_dir);
+            cleanup_job_media(job_dir);
             return Ok(());
         }
-        cleanup_job_media(&job_dir);
+        cleanup_job_media(job_dir);
         {
             let mut current = status.write().await;
             current.state = "DOWNLOADING".into();
@@ -385,9 +414,9 @@ async fn run_download(
             current.part_count = 1;
         }
         match download_video(
-            &tools,
-            &req,
-            cookie_file.as_deref(),
+            tools,
+            req,
+            cookie_file,
             &staging_output,
             metadata.duration_seconds,
             status,
@@ -397,7 +426,7 @@ async fn run_download(
         {
             Ok(()) => {
                 if cancel.load(Ordering::SeqCst) {
-                    cleanup_job_media(&job_dir);
+                    cleanup_job_media(job_dir);
                     return Ok(());
                 }
                 let staged_file = find_finished_output(&staging_output)?;
@@ -405,7 +434,7 @@ async fn run_download(
                     match finalize_output(&staged_file, &destination, cancel)? {
                         PublishOutcome::Published => break,
                         PublishOutcome::Cancelled => {
-                            cleanup_job_media(&job_dir);
+                            cleanup_job_media(job_dir);
                             return Ok(());
                         }
                         PublishOutcome::Collision => {
@@ -415,7 +444,7 @@ async fn run_download(
                             ))
                             .await;
                             drop(destination);
-                            destination = claim_collision_path(&output_dir, &base, "ts")?;
+                            destination = claim_collision_path(output_dir, &base, "ts")?;
                         }
                     }
                 }
@@ -436,7 +465,7 @@ async fn run_download(
             }
             Err(err) => {
                 last_error = redact(&format!("{err:#}"));
-                cleanup_job_media(&job_dir);
+                cleanup_job_media(job_dir);
                 logs.push(format!(
                     "[VOD:CHZZK:WARN] download retry {attempt}/{attempts}: {last_error}"
                 ))
@@ -1035,62 +1064,49 @@ async fn run_capture(
     program: &Path,
     args: &[String],
     cancel: &AtomicBool,
-    _logs: &LogBuffer,
+    logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    let mut command = Command::new(program);
-    configure_utf8_cli(&mut command);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let (mut child, mut owned_tree) = spawn_owned(&mut command)
-        .await
-        .with_context(|| format!("{label} process start failed: {}", program.display()))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("stdout unavailable"))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("stderr unavailable"))?;
-    let stdout_task = tokio::spawn(async move {
-        let mut data = Vec::new();
-        stdout.read_to_end(&mut data).await.map(|_| data)
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut data = Vec::new();
-        stderr.read_to_end(&mut data).await.map(|_| data)
-    });
+    run_capture_with_timeout(program, args, cancel, logs, label, PROVIDER_CAPTURE_TIMEOUT).await
+}
 
-    let exit = loop {
-        if cancel.load(Ordering::SeqCst) {
-            let _ = owned_tree.terminate(&mut child).await;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            bail!("{label} 취소됨");
+async fn run_capture_with_timeout(
+    program: &Path,
+    args: &[String],
+    cancel: &AtomicBool,
+    _logs: &LogBuffer,
+    label: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let result = run_media_process_with_atomic_cancel(
+        MediaProcessSpec::new(program)
+            .args(args.iter().cloned())
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
+            .timeout(timeout)
+            .capture_limit(PROVIDER_CAPTURE_LIMIT),
+        cancel,
+    )
+    .await?;
+
+    match result.outcome {
+        MediaProcessOutcome::Success => Ok(result.stdout.text),
+        MediaProcessOutcome::ProcessFailure => bail!(
+            "{label} process failure (exit={:?}): {}",
+            result.exit_code,
+            redact(result.stderr.text.trim())
+        ),
+        MediaProcessOutcome::Timeout => {
+            bail!("{label} timeout after {}ms", timeout.as_millis())
         }
-        if let Some(exit) = child
-            .try_wait()
-            .with_context(|| format!("{label} 상태 확인 실패"))?
-        {
-            break exit;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    let stdout = stdout_task.await.context("stdout task join failed")??;
-    let stderr = stderr_task.await.context("stderr task join failed")??;
-    if !exit.success() {
-        bail!(
-            "{label} 실패 (exit={}): {}",
-            exit_code(exit),
-            redact(&String::from_utf8_lossy(&stderr))
-        );
+        MediaProcessOutcome::Cancelled => bail!("{label} cancelled"),
+        MediaProcessOutcome::SpawnFailure => bail!(
+            "{label} spawn failure: {}",
+            result
+                .spawn_error
+                .unwrap_or_else(|| "unknown spawn failure".into())
+        ),
     }
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 fn chzzk_cookie_file(job_dir: &Path) -> Result<Option<PathBuf>> {
@@ -2172,5 +2188,200 @@ mod tests {
         let staging = temp.path().join(MEDIA_FILE_NAME);
         assert_eq!(staging.file_name().unwrap(), MEDIA_FILE_NAME);
         assert!(!staging.to_string_lossy().contains("테스트 VOD"));
+    }
+}
+
+#[cfg(test)]
+mod provider_e2e {
+    use super::*;
+    use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
+
+    fn request(output: &Path, ffmpeg: &Path) -> VodDownloadRequest {
+        VodDownloadRequest {
+            vod_url: "https://chzzk.naver.com/video/1234567".into(),
+            output_directory: output.display().to_string(),
+            parts: vec![1],
+            quality: "best[height<=720]".into(),
+            merge: true,
+            cookie_mode: "SOOP_LOGIN".into(),
+            cookie_file: String::new(),
+            browser_name: "firefox".into(),
+            yt_dlp_path: String::new(),
+            ffmpeg_path: ffmpeg.display().to_string(),
+            max_retries: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn chzzk_vod_provider_e2e_runs_prepared_download_to_completed_status() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let settings = std::collections::BTreeMap::from([(
+            "STREAMLINK_PATH".to_string(),
+            streamlink.display().to_string(),
+        )]);
+        let resolved_streamlink = resolve_streamlink_tool(fixture.root(), &settings).unwrap();
+        let resolved_ffmpeg = resolve_tool(
+            &ffmpeg.display().to_string(),
+            &[],
+            &["ffmpeg.exe", "ffmpeg"],
+        )
+        .unwrap();
+        assert_eq!(resolved_streamlink, streamlink);
+        assert_eq!(resolved_ffmpeg, ffmpeg);
+        let tools = ChzzkTools {
+            streamlink: resolved_streamlink,
+            ffmpeg: resolved_ffmpeg,
+        };
+
+        let output_dir = fixture.root().join("CHZZK VOD 저장 한글 🎬");
+        let job_dir = fixture.root().join("CHZZK job 한글");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::create_dir_all(&job_dir).unwrap();
+        let cookie = fixture.root().join("synthetic-cookie.txt");
+        fs::write(
+            &cookie,
+            "# Netscape HTTP Cookie File\n.naver.com\tTRUE\t/\tTRUE\t4102444800\tNID_AUT\tsynthetic\n",
+        )
+        .unwrap();
+        let req = request(&output_dir, &ffmpeg);
+        let metadata = Metadata {
+            title: "Fixture CHZZK VOD".into(),
+            streamer: "Fixture Channel".into(),
+            streamer_id: "fixture-channel".into(),
+            date: "260923".into(),
+            duration_seconds: 60,
+            qualities: vec![VodQualityOption {
+                value: "best".into(),
+                label: "최고 화질 (자동)".into(),
+            }],
+        };
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+
+        run_download_prepared(
+            &tools,
+            &req,
+            Some(&cookie),
+            metadata,
+            &job_dir,
+            &output_dir,
+            &logs,
+            &status,
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        let completed = status.read().await.clone();
+        assert_eq!(completed.state, "COMPLETED");
+        assert_eq!(completed.percent, 100.0);
+        let output = PathBuf::from(completed.output_file.unwrap());
+        assert!(output.is_file());
+        assert!(output.starts_with(&output_dir));
+
+        let invocation = fixture.invocations();
+        assert!(invocation.contains("tool=Streamlink"));
+        assert!(invocation.contains("tool=Ffmpeg"));
+        assert!(invocation.contains("--ffmpeg-ffmpeg"));
+        assert!(invocation.contains(&ffmpeg.display().to_string()));
+        assert!(invocation.contains("--ffmpeg-fout"));
+        assert!(invocation.contains("--http-cookies-file"));
+        assert!(invocation.contains("synthetic-cookie.txt"));
+        assert!(invocation.contains("--stream-sorting-excludes"));
+        assert!(invocation.contains(">720p"));
+        assert!(invocation.contains("CHZZK job 한글"));
+        assert!(invocation.contains("PYTHONUTF8=1"));
+        assert!(invocation.contains("PYTHONIOENCODING=utf-8"));
+        assert!(!invocation.contains("\tsynthetic\n"));
+    }
+
+    #[tokio::test]
+    async fn chzzk_vod_provider_e2e_maps_nonzero_spawn_failure_and_timeout() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let output = fixture.root().join("failure.ts");
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+        let req = request(fixture.root(), &ffmpeg);
+
+        fixture.set_mode(&streamlink, "run-fail");
+        let err = download_video(
+            &ChzzkTools {
+                streamlink: streamlink.clone(),
+                ffmpeg: ffmpeg.clone(),
+            },
+            &req,
+            None,
+            &output,
+            60,
+            &status,
+            &cancel,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("Streamlink CHZZK 다운로드 실패"));
+        assert!(err.to_string().contains("7"));
+
+        let err = download_video(
+            &ChzzkTools {
+                streamlink: fixture.root().join("missing-streamlink"),
+                ffmpeg: ffmpeg.clone(),
+            },
+            &req,
+            None,
+            &output,
+            60,
+            &status,
+            &cancel,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("Streamlink start failed"));
+
+        fixture.set_mode(&streamlink, "run-hang");
+        let logs = LogBuffer::new();
+        let err = run_capture_with_timeout(
+            &streamlink,
+            &[],
+            &cancel,
+            &logs,
+            "CHZZK fixture",
+            Duration::from_millis(250),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("timeout"));
+    }
+
+    #[tokio::test]
+    async fn chzzk_vod_provider_e2e_cancel_cleans_streamlink_descendant() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        fixture.set_mode(&streamlink, "run-spawn-child");
+        let tools = ChzzkTools {
+            streamlink: streamlink.clone(),
+            ffmpeg: ffmpeg.clone(),
+        };
+        let req = request(fixture.root(), &ffmpeg);
+        let output = fixture.root().join("cancelled.ts");
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+
+        let run = download_video(&tools, &req, None, &output, 60, &status, &cancel);
+        let cancel_when_ready = async {
+            fixture
+                .wait_for_path(&fixture.child_ready_path(&streamlink))
+                .await;
+            cancel.store(true, Ordering::SeqCst);
+        };
+        let (result, ()) = tokio::join!(run, cancel_when_ready);
+        result.unwrap();
+        fixture.assert_child_stopped(&streamlink).await;
+        assert!(!output.exists());
     }
 }

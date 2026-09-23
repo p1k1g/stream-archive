@@ -1,6 +1,7 @@
 use crate::platform_runtime::spawn_owned;
 use crate::{
     backend::LogBuffer,
+    media_process::{MediaProcessOutcome, MediaProcessSpec, run_media_process_with_atomic_cancel},
     model::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
@@ -28,7 +29,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::Command,
     sync::{Mutex, RwLock},
     task::JoinHandle,
@@ -38,6 +39,9 @@ use uuid::Uuid;
 
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36";
+const PROVIDER_CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
+const PROVIDER_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
+
 const CF_NAMES: &[&str] = &[
     "CloudFront-Key-Pair-Id",
     "CloudFront-Policy",
@@ -1125,9 +1129,12 @@ async fn merge_parts(
         "-n".into(),
         target.display().to_string(),
     ];
-    let result = run_capture(ffmpeg, &args, cancel, logs, "ffmpeg merge").await;
+    let result = run_capture_without_timeout(ffmpeg, &args, cancel, logs, "ffmpeg merge").await;
     let _ = fs::remove_file(&concat);
-    result?;
+    if let Err(err) = result {
+        let _ = fs::remove_file(&target);
+        return Err(err);
+    }
     if cancel.load(Ordering::SeqCst) {
         let _ = fs::remove_file(&target);
         bail!("cancelled");
@@ -1237,57 +1244,86 @@ async fn run_capture(
     logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let (mut child, mut owned_tree) = spawn_owned(&mut command)
-        .await
-        .with_context(|| format!("{label} 실행 실패"))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("{label} stdout 없음"))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("{label} stderr 없음"))?;
-    let stdout_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).await.map(|_| bytes)
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).await.map(|_| bytes)
-    });
-    let exit = loop {
-        if cancel.load(Ordering::SeqCst) {
-            owned_tree.terminate(&mut child).await?;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            bail!("cancelled");
+    run_capture_with_timeout(program, args, cancel, logs, label, PROVIDER_CAPTURE_TIMEOUT).await
+}
+
+async fn run_capture_without_timeout(
+    program: &Path,
+    args: &[String],
+    cancel: &AtomicBool,
+    logs: &LogBuffer,
+    label: &str,
+) -> Result<String> {
+    let result = run_media_process_with_atomic_cancel(
+        MediaProcessSpec::new(program)
+            .args(args.iter().cloned())
+            .without_timeout()
+            .capture_limit(PROVIDER_CAPTURE_LIMIT),
+        cancel,
+    )
+    .await?;
+
+    match result.outcome {
+        MediaProcessOutcome::Success => {
+            logs.push(format!("[VOD] {label} OK")).await;
+            Ok(result.stdout.text)
         }
-        if let Some(exit) = child.try_wait()? {
-            break exit;
+        MediaProcessOutcome::ProcessFailure => bail!(
+            "{label} process failure (exit={:?}): {}",
+            result.exit_code,
+            redact(result.stderr.text.trim())
+        ),
+        MediaProcessOutcome::Timeout => {
+            bail!("{label} unexpectedly timed out without a deadline")
         }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    };
-    owned_tree.terminate_now()?;
-    let stdout_bytes = stdout_task.await.context("stdout reader join failed")??;
-    let stderr_bytes = stderr_task.await.context("stderr reader join failed")??;
-    if !exit.success() {
-        bail!(
-            "{label} 실패 (exit={:?}): {}",
-            exit.code(),
-            redact(&String::from_utf8_lossy(&stderr_bytes))
-        );
+        MediaProcessOutcome::Cancelled => bail!("{label} cancelled"),
+        MediaProcessOutcome::SpawnFailure => bail!(
+            "{label} spawn failure: {}",
+            result
+                .spawn_error
+                .unwrap_or_else(|| "unknown spawn failure".into())
+        ),
     }
-    let text = String::from_utf8(stdout_bytes).context("외부 도구 stdout UTF-8 오류")?;
-    logs.push(format!("[VOD] {label} OK")).await;
-    Ok(text)
+}
+
+async fn run_capture_with_timeout(
+    program: &Path,
+    args: &[String],
+    cancel: &AtomicBool,
+    logs: &LogBuffer,
+    label: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let result = run_media_process_with_atomic_cancel(
+        MediaProcessSpec::new(program)
+            .args(args.iter().cloned())
+            .timeout(timeout)
+            .capture_limit(PROVIDER_CAPTURE_LIMIT),
+        cancel,
+    )
+    .await?;
+
+    match result.outcome {
+        MediaProcessOutcome::Success => {
+            logs.push(format!("[VOD] {label} OK")).await;
+            Ok(result.stdout.text)
+        }
+        MediaProcessOutcome::ProcessFailure => bail!(
+            "{label} process failure (exit={:?}): {}",
+            result.exit_code,
+            redact(result.stderr.text.trim())
+        ),
+        MediaProcessOutcome::Timeout => {
+            bail!("{label} timeout after {}ms", timeout.as_millis())
+        }
+        MediaProcessOutcome::Cancelled => bail!("{label} cancelled"),
+        MediaProcessOutcome::SpawnFailure => bail!(
+            "{label} spawn failure: {}",
+            result
+                .spawn_error
+                .unwrap_or_else(|| "unknown spawn failure".into())
+        ),
+    }
 }
 
 fn collect_set_cookies(jar: &mut CookieJar, response: &Response, default_domain: &str) {
@@ -1474,7 +1510,7 @@ fn title_no(url: &str) -> Result<String> {
 fn entry_url(value: &Value) -> String {
     for key in ["url", "manifest_url", "manifestUrl", "hls_url", "hlsUrl"] {
         if let Some(s) = value.get(key).and_then(Value::as_str)
-            && s.starts_with("https://")
+            && (s.starts_with("https://") || (cfg!(test) && s.starts_with("http://127.0.0.1:")))
             && !Url::parse(s)
                 .ok()
                 .is_some_and(|url| url.path().starts_with("/player/"))
@@ -1834,5 +1870,234 @@ mod tests {
     fn ffconcat_escapes_single_quote() {
         let line = ffconcat_line(Path::new("C:/tmp/a'b.mp4"));
         assert_eq!(line, "file 'C:/tmp/a'\\''b.mp4'");
+    }
+}
+
+#[cfg(test)]
+mod provider_e2e {
+    use super::*;
+    use crate::{
+        platform_runtime::test_process_running, test_support::ProviderFixture,
+        tool_discovery::ToolKind,
+    };
+
+    fn request(output: &Path, yt_dlp: &Path, ffmpeg: &Path) -> VodDownloadRequest {
+        VodDownloadRequest {
+            vod_url: "https://vod.sooplive.com/player/123456789".into(),
+            output_directory: output.display().to_string(),
+            parts: vec![1],
+            quality: "best[height<=1080]".into(),
+            merge: true,
+            cookie_mode: "FILE".into(),
+            cookie_file: String::new(),
+            browser_name: "firefox".into(),
+            yt_dlp_path: yt_dlp.display().to_string(),
+            ffmpeg_path: ffmpeg.display().to_string(),
+            max_retries: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn soop_vod_provider_e2e_runs_full_manager_pipeline_without_internet() {
+        use crate::test_support::LocalManifestServer;
+
+        let fixture = ProviderFixture::new();
+        let manifest = LocalManifestServer::start();
+        let yt_dlp = fixture.tool(ToolKind::YtDlp);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        fixture.set_manifest_url(&yt_dlp, manifest.url());
+
+        let backend = fixture.root().join("backend");
+        fs::create_dir_all(&backend).unwrap();
+        let output_dir = fixture.root().join("SOOP VOD 저장 한글 🎬");
+        fs::create_dir_all(&output_dir).unwrap();
+        let cookie = fixture.root().join("CloudFront fixture cookies.txt");
+        fs::write(
+            &cookie,
+            concat!(
+                "# Netscape HTTP Cookie File\n",
+                "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Key-Pair-Id\tkey\n",
+                "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Policy\tpolicy\n",
+                "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Signature\tsignature\n"
+            ),
+        )
+        .unwrap();
+
+        let mut req = request(&output_dir, &yt_dlp, &ffmpeg);
+        req.cookie_file = cookie.display().to_string();
+        let manager = VodManager::new(backend, LogBuffer::new());
+        let initial = manager.download(req).await.unwrap();
+        assert!(initial.job_id.is_some());
+
+        let started = std::time::Instant::now();
+        let completed = loop {
+            let current = manager.status().await;
+            if !current.running {
+                break current;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "SOOP VOD manager fixture did not complete"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+
+        assert_eq!(completed.state, "COMPLETED");
+        assert_eq!(completed.percent, 100.0);
+        let output = PathBuf::from(completed.output_file.unwrap());
+        assert!(output.is_file());
+        assert!(output.starts_with(&output_dir));
+
+        let invocation = fixture.invocations();
+        assert!(invocation.contains("tool=YtDlp"));
+        assert!(invocation.contains("--dump-single-json"));
+        assert!(invocation.contains("--referer"));
+        assert!(invocation.contains("Origin:https://vod.sooplive.com"));
+        assert!(invocation.contains("best[height<=1080]"));
+        assert!(invocation.contains("--ffmpeg-location"));
+        assert!(invocation.contains(&ffmpeg.display().to_string()));
+        assert!(invocation.contains("SOOP VOD 저장 한글 🎬"));
+        assert!(invocation.contains(manifest.url()));
+    }
+
+    #[tokio::test]
+    async fn soop_vod_merge_is_cancel_only_and_removes_partial_target_on_failure() {
+        let fixture = ProviderFixture::new();
+        let yt_dlp = fixture.tool(ToolKind::YtDlp);
+        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        fixture.set_mode(&ffmpeg, "run-partial-fail");
+
+        let output_dir = fixture.root().join("merge output 한글");
+        fs::create_dir_all(&output_dir).unwrap();
+        let part1 = output_dir.join("part1.mp4");
+        let part2 = output_dir.join("part2.mp4");
+        fs::write(&part1, vec![b'A'; 2048]).unwrap();
+        fs::write(&part2, vec![b'B'; 2048]).unwrap();
+
+        let tools = Tools {
+            yt_dlp,
+            ffmpeg: Some(ffmpeg),
+        };
+        let metadata = VodMetadata {
+            title: "Fixture".into(),
+            streamer: "FixtureBJ".into(),
+            streamer_id: "fixture".into(),
+            date: "260923".into(),
+            entries: Vec::new(),
+        };
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+
+        let err = merge_parts(
+            &tools,
+            &metadata,
+            &[part1.clone(), part2.clone()],
+            &output_dir,
+            &status,
+            &cancel,
+            &logs,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("process failure"));
+        assert!(part1.is_file());
+        assert!(part2.is_file());
+        assert!(!output_dir.join("260923_FixtureBJ.mp4").exists());
+        assert!(
+            fs::read_dir(&output_dir)
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".soop-vod-concat-"))
+        );
+    }
+
+    #[tokio::test]
+    async fn soop_vod_provider_e2e_maps_nonzero_spawn_failure_and_timeout() {
+        let fixture = ProviderFixture::new();
+        let yt_dlp = fixture.tool(ToolKind::YtDlp);
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+
+        fixture.set_mode(&yt_dlp, "run-fail");
+        let err = run_capture_with_timeout(
+            &yt_dlp,
+            &["--dump-single-json".into()],
+            &cancel,
+            &logs,
+            "SOOP fixture",
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("process failure"));
+        assert!(err.to_string().contains("exit=Some(7)"));
+
+        let err = run_capture_with_timeout(
+            &fixture.root().join("missing-yt-dlp"),
+            &[],
+            &cancel,
+            &logs,
+            "SOOP fixture",
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("spawn failure"));
+
+        fixture.set_mode(&yt_dlp, "run-hang");
+        let err = run_capture_with_timeout(
+            &yt_dlp,
+            &[],
+            &cancel,
+            &logs,
+            "SOOP fixture",
+            Duration::from_millis(250),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("timeout"));
+    }
+
+    #[tokio::test]
+    async fn soop_vod_provider_e2e_cancel_cleans_owned_tree_not_unrelated_process() {
+        let fixture = ProviderFixture::new();
+        let yt_dlp = fixture.tool(ToolKind::YtDlp);
+        fixture.set_mode(&yt_dlp, "run-spawn-child");
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+        let mut unrelated = fixture.spawn_unrelated();
+        fixture.wait_for_unrelated().await;
+
+        let run = run_capture_with_timeout(
+            &yt_dlp,
+            &[],
+            &cancel,
+            &logs,
+            "SOOP fixture",
+            Duration::from_secs(20),
+        );
+        let cancel_when_ready = async {
+            fixture
+                .wait_for_path(&fixture.child_ready_path(&yt_dlp))
+                .await;
+            cancel.store(true, Ordering::SeqCst);
+        };
+        let (result, ()) = tokio::join!(run, cancel_when_ready);
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("cancelled"));
+        fixture.assert_child_stopped(&yt_dlp).await;
+
+        let unrelated_pid = unrelated.id();
+        assert!(
+            test_process_running(unrelated_pid),
+            "unrelated process must survive SOOP VOD cancellation"
+        );
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
     }
 }

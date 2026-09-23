@@ -625,3 +625,220 @@ mod tests {
         assert!(!path.exists());
     }
 }
+
+#[cfg(test)]
+mod provider_e2e {
+    use super::*;
+    use crate::{
+        platform_runtime::test_process_running, support::platform::live::HttpCookie,
+        test_support::ProviderFixture, tool_discovery::ToolKind,
+    };
+
+    fn recorder_config(streamlink: PathBuf) -> RecorderConfig {
+        RecorderConfig {
+            streamlink,
+            quality: "best".into(),
+            stall_timeout: 10,
+            monitor_interval: 1,
+            min_free_space_gb: 0.0,
+        }
+    }
+
+    async fn wait_for_exit(
+        manager: &RecorderManager,
+        recording: &mut Recording,
+        config: &RecorderConfig,
+    ) -> Option<i32> {
+        let started = Instant::now();
+        loop {
+            match manager.poll(recording, config).unwrap() {
+                RecordingPoll::Exited(code) => return code,
+                RecordingPoll::Running => {}
+                _ => panic!("unexpected provider fixture poll state"),
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(8),
+                "provider LIVE fixture did not exit"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn soop_live_provider_e2e_preserves_unicode_argument_contract() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let manager = RecorderManager::new(LogBuffer::new());
+        let config = recorder_config(streamlink.clone());
+        let requested = fixture.root().join("SOOP 방송 😀").join("테스트 녹화.ts");
+        let mut recording = manager
+            .start(
+                &config,
+                PlatformId::Soop,
+                &StreamInput::DirectHls("https://fixture.invalid/soop/master.m3u8".into()),
+                requested,
+                "fixture-bno".into(),
+                "fixture title".into(),
+                "fixture channel",
+                "fixture-account",
+            )
+            .await
+            .unwrap();
+
+        let exit = wait_for_exit(&manager, &mut recording, &config).await;
+        assert_eq!(exit, Some(0));
+        assert!(recording.file.is_file());
+
+        let invocation = fixture.invocations();
+        assert!(invocation.contains("tool=Streamlink"));
+        assert!(invocation.contains("--output"));
+        assert!(invocation.contains("SOOP 방송 😀"));
+        assert!(invocation.contains("hls://https://fixture.invalid/soop/master.m3u8"));
+        assert!(
+            invocation
+                .lines()
+                .any(|line| line.starts_with("argv[") && line.ends_with("=best"))
+        );
+        assert!(invocation.contains(&streamlink.parent().unwrap().display().to_string()));
+    }
+
+    #[tokio::test]
+    async fn chzzk_live_provider_e2e_preserves_cookie_player_and_quality_contract() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let _ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let manager = RecorderManager::new(LogBuffer::new());
+        let config = recorder_config(streamlink);
+        let requested = fixture
+            .root()
+            .join("CHZZK 방송 한글 🎬")
+            .join("플러그인 녹화.ts");
+        let input = StreamInput::PluginUrl {
+            url: "https://chzzk.naver.com/live/fixture".into(),
+            cookies: vec![HttpCookie {
+                domain: ".naver.com".into(),
+                name: "NID_AUT".into(),
+                value: "synthetic-test-token".into(),
+                secure: true,
+            }],
+            start_at_zero: true,
+        };
+        let mut recording = manager
+            .start(
+                &config,
+                PlatformId::Chzzk,
+                &input,
+                requested,
+                "fixture-live-id".into(),
+                "fixture title".into(),
+                "fixture channel",
+                "fixture-channel-id",
+            )
+            .await
+            .unwrap();
+
+        let exit = wait_for_exit(&manager, &mut recording, &config).await;
+        assert_eq!(exit, Some(0));
+        assert!(recording.file.is_file());
+
+        let invocation = fixture.invocations();
+        assert!(invocation.contains("--can-handle-url"));
+        assert!(invocation.contains("--help"));
+        assert!(invocation.contains("--http-cookies-file"));
+        assert!(invocation.contains("--player"));
+        assert!(invocation.contains("--player-args"));
+        assert!(invocation.contains("CHZZK 방송 한글 🎬"));
+        assert!(
+            invocation
+                .lines()
+                .any(|line| line.starts_with("argv[") && line.ends_with("=best"))
+        );
+        assert!(!invocation.contains("synthetic-test-token"));
+    }
+
+    #[tokio::test]
+    async fn live_provider_e2e_maps_nonzero_and_spawn_failure() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        fixture.set_mode(&streamlink, "run-fail");
+        let manager = RecorderManager::new(LogBuffer::new());
+        let config = recorder_config(streamlink);
+        let mut recording = manager
+            .start(
+                &config,
+                PlatformId::Soop,
+                &StreamInput::DirectHls("https://fixture.invalid/fail.m3u8".into()),
+                fixture.root().join("fail.ts"),
+                "bno".into(),
+                "title".into(),
+                "channel",
+                "account",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            wait_for_exit(&manager, &mut recording, &config).await,
+            Some(7)
+        );
+
+        let missing = recorder_config(fixture.root().join("missing-streamlink"));
+        let err = match manager
+            .start(
+                &missing,
+                PlatformId::Soop,
+                &StreamInput::DirectHls("https://fixture.invalid/spawn.m3u8".into()),
+                fixture.root().join("spawn.ts"),
+                "bno".into(),
+                "title".into(),
+                "channel",
+                "account",
+            )
+            .await
+        {
+            Ok(_) => panic!("missing Streamlink unexpectedly started"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("failed to start retained Streamlink")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_provider_cancel_cleans_owned_descendant_not_unrelated_process() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        fixture.set_mode(&streamlink, "run-spawn-child");
+        let manager = RecorderManager::new(LogBuffer::new());
+        let config = recorder_config(streamlink.clone());
+        let mut unrelated = fixture.spawn_unrelated();
+        fixture.wait_for_unrelated().await;
+
+        let mut recording = manager
+            .start(
+                &config,
+                PlatformId::Soop,
+                &StreamInput::DirectHls("https://fixture.invalid/cancel.m3u8".into()),
+                fixture.root().join("cancel.ts"),
+                "bno".into(),
+                "title".into(),
+                "channel",
+                "account",
+            )
+            .await
+            .unwrap();
+        fixture
+            .wait_for_path(&fixture.child_ready_path(&streamlink))
+            .await;
+        manager.stop(&mut recording).await.unwrap();
+        fixture.assert_child_stopped(&streamlink).await;
+
+        let unrelated_pid = unrelated.id();
+        assert!(
+            test_process_running(unrelated_pid),
+            "unrelated process must survive LIVE owned cancellation"
+        );
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+    }
+}

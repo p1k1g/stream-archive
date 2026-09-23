@@ -3,6 +3,7 @@ $guardRoot = Join-Path $PSScriptRoot 'guards'
 $contracts = @(
     'Architecture.ps1',
     'Providers.ps1',
+    'ProviderE2E.ps1',
     'ProcessLifecycle.ps1',
     'MediaProcess.ps1',
     'StorageOwnership.ps1',
