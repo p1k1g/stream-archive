@@ -1856,10 +1856,14 @@ mod provider_e2e {
         let fixture = ProviderFixture::new();
         let yt_dlp = fixture.tool(ToolKind::YtDlp);
         let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
-        let tools = Tools {
-            yt_dlp: yt_dlp.clone(),
-            ffmpeg: Some(ffmpeg.clone()),
-        };
+        let tools = resolve_tools(
+            fixture.root(),
+            &yt_dlp.display().to_string(),
+            &ffmpeg.display().to_string(),
+        )
+        .unwrap();
+        assert_eq!(tools.yt_dlp, yt_dlp);
+        assert_eq!(tools.ffmpeg.as_deref(), Some(ffmpeg.as_path()));
         let cookie = fixture.root().join("쿠키 fixture.txt");
         fs::write(&cookie, "# fixture").unwrap();
         let cancel = AtomicBool::new(false);
