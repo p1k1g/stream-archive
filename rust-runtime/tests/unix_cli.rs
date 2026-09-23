@@ -164,13 +164,19 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
         "channels disable",
         &layout.cli(&["channels", "disable", "soop", "fixture-account"]),
     );
-    let channels = json_output("channels disabled", layout.cli(&["channels", "list", "--json"]));
+    let channels = json_output(
+        "channels disabled",
+        layout.cli(&["channels", "list", "--json"]),
+    );
     assert_eq!(channels[0]["enabled"], false);
     assert_success(
         "channels enable",
         &layout.cli(&["channels", "enable", "soop", "fixture-account"]),
     );
-    let channels = json_output("channels enabled", layout.cli(&["channels", "list", "--json"]));
+    let channels = json_output(
+        "channels enabled",
+        layout.cli(&["channels", "list", "--json"]),
+    );
     assert_eq!(channels[0]["enabled"], true);
 
     let watcher = json_output(
@@ -224,7 +230,10 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
         "channels remove",
         &layout.cli(&["channels", "remove", "soop", "fixture-account"]),
     );
-    let channels = json_output("channels removed", layout.cli(&["channels", "list", "--json"]));
+    let channels = json_output(
+        "channels removed",
+        layout.cli(&["channels", "list", "--json"]),
+    );
     assert!(channels.as_array().unwrap().is_empty());
 
     let storage = json_output("storage", layout.cli(&["storage", "--json"]));
