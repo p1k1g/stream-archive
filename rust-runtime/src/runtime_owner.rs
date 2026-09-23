@@ -31,7 +31,10 @@ impl RuntimeOwnerGuard {
         let path = runtime_lock_path(database_path)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create runtime lock directory {}", parent.display())
+                format!(
+                    "failed to create runtime lock directory {}",
+                    parent.display()
+                )
             })?;
         }
         let file = OpenOptions::new()
@@ -43,8 +46,9 @@ impl RuntimeOwnerGuard {
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(Self { file, path })),
             Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(error)
-                .with_context(|| format!("failed to acquire runtime owner lock {}", path.display())),
+            Err(error) => Err(error).with_context(|| {
+                format!("failed to acquire runtime owner lock {}", path.display())
+            }),
         }
     }
 
