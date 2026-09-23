@@ -375,6 +375,11 @@ impl Store {
             .map_err(|_| anyhow::anyhow!("SQLite connection mutex poisoned"))
     }
 
+    pub(crate) fn refresh_config_cache(&self) -> Result<()> {
+        let conn = self.conn()?;
+        self.refresh_config_cache_from_conn(&conn)
+    }
+
     fn refresh_config_cache_from_conn(&self, conn: &Connection) -> Result<()> {
         let settings = load_all_settings_from_conn(conn)?;
         let channels = load_channels_from_conn(conn)?;
