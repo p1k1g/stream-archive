@@ -52,8 +52,8 @@ fn run() -> Result<()> {
         "tools" => command_tools(&args[1..])?,
         "status" | "settings" | "providers" | "channels" | "watcher" | "vod" | "queue"
         | "history" | "backup" | "storage" | "logs" => {
-            let runtime = tokio::runtime::Runtime::new()
-                .context("failed to create Unix CLI runtime")?;
+            let runtime =
+                tokio::runtime::Runtime::new().context("failed to create Unix CLI runtime")?;
             runtime.block_on(run_management(command, &args[1..]))?;
         }
         "serve" => command_serve(&args[1..])?,
