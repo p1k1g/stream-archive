@@ -1,6 +1,9 @@
 use crate::platform_runtime::spawn_owned;
 use crate::{
     backend::LogBuffer,
+    media_process::{
+        MediaProcessOutcome, MediaProcessSpec, run_media_process_with_atomic_cancel,
+    },
     model::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
@@ -28,7 +31,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::Command,
     sync::{Mutex, RwLock},
     task::JoinHandle,
@@ -1237,57 +1240,54 @@ async fn run_capture(
     logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let (mut child, mut owned_tree) = spawn_owned(&mut command)
-        .await
-        .with_context(|| format!("{label} 실행 실패"))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("{label} stdout 없음"))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("{label} stderr 없음"))?;
-    let stdout_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).await.map(|_| bytes)
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).await.map(|_| bytes)
-    });
-    let exit = loop {
-        if cancel.load(Ordering::SeqCst) {
-            owned_tree.terminate(&mut child).await?;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            bail!("cancelled");
+    run_capture_with_timeout(
+        program,
+        args,
+        cancel,
+        logs,
+        label,
+        Duration::from_secs(30),
+    )
+    .await
+}
+
+async fn run_capture_with_timeout(
+    program: &Path,
+    args: &[String],
+    cancel: &AtomicBool,
+    logs: &LogBuffer,
+    label: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let result = run_media_process_with_atomic_cancel(
+        MediaProcessSpec::new(program)
+            .args(args.iter().cloned())
+            .timeout(timeout),
+        cancel,
+    )
+    .await?;
+
+    match result.outcome {
+        MediaProcessOutcome::Success => {
+            logs.push(format!("[VOD] {label} OK")).await;
+            Ok(result.stdout.text)
         }
-        if let Some(exit) = child.try_wait()? {
-            break exit;
+        MediaProcessOutcome::ProcessFailure => bail!(
+            "{label} process failure (exit={:?}): {}",
+            result.exit_code,
+            redact(result.stderr.text.trim())
+        ),
+        MediaProcessOutcome::Timeout => {
+            bail!("{label} timeout after {}ms", timeout.as_millis())
         }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    };
-    owned_tree.terminate_now()?;
-    let stdout_bytes = stdout_task.await.context("stdout reader join failed")??;
-    let stderr_bytes = stderr_task.await.context("stderr reader join failed")??;
-    if !exit.success() {
-        bail!(
-            "{label} 실패 (exit={:?}): {}",
-            exit.code(),
-            redact(&String::from_utf8_lossy(&stderr_bytes))
-        );
+        MediaProcessOutcome::Cancelled => bail!("{label} cancelled"),
+        MediaProcessOutcome::SpawnFailure => bail!(
+            "{label} spawn failure: {}",
+            result
+                .spawn_error
+                .unwrap_or_else(|| "unknown spawn failure".into())
+        ),
     }
-    let text = String::from_utf8(stdout_bytes).context("외부 도구 stdout UTF-8 오류")?;
-    logs.push(format!("[VOD] {label} OK")).await;
-    Ok(text)
 }
 
 fn collect_set_cookies(jar: &mut CookieJar, response: &Response, default_domain: &str) {
