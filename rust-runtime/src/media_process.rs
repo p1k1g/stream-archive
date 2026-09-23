@@ -199,29 +199,34 @@ pub async fn run_media_process(
     let deadline = started + spec.timeout;
     let mut outcome = MediaProcessOutcome::Success;
     let exit_code = loop {
-        if cancellation
+        let status = child.try_wait()?;
+        let cancelled = cancellation
             .as_ref()
-            .is_some_and(MediaCancellation::is_cancelled)
-        {
-            outcome = MediaProcessOutcome::Cancelled;
-            break owned_tree.terminate(&mut child).await?;
-        }
+            .is_some_and(MediaCancellation::is_cancelled);
+        let timed_out = Instant::now() >= deadline;
 
-        if let Some(status) = child.try_wait()? {
-            if !status.success() {
-                outcome = MediaProcessOutcome::ProcessFailure;
+        match poll_decision(status.is_some(), cancelled, timed_out) {
+            PollDecision::Exited => {
+                let status = status.expect("exit decision requires a completed child");
+                if !status.success() {
+                    outcome = MediaProcessOutcome::ProcessFailure;
+                }
+                owned_tree.terminate_now()?;
+                let _ = child.wait().await;
+                break status.code();
             }
-            owned_tree.terminate_now()?;
-            let _ = child.wait().await;
-            break status.code();
+            PollDecision::Cancelled => {
+                outcome = MediaProcessOutcome::Cancelled;
+                break owned_tree.terminate(&mut child).await?;
+            }
+            PollDecision::TimedOut => {
+                outcome = MediaProcessOutcome::Timeout;
+                break owned_tree.terminate(&mut child).await?;
+            }
+            PollDecision::Wait => {
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
         }
-
-        if Instant::now() >= deadline {
-            outcome = MediaProcessOutcome::Timeout;
-            break owned_tree.terminate(&mut child).await?;
-        }
-
-        tokio::time::sleep(POLL_INTERVAL).await;
     };
 
     let stdout = finish_capture(stdout_task, stdout_state, "stdout").await?;
@@ -249,6 +254,26 @@ impl CaptureState {
             text: String::from_utf8_lossy(&self.tail).into_owned(),
             truncated: self.truncated || incomplete,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollDecision {
+    Exited,
+    Cancelled,
+    TimedOut,
+    Wait,
+}
+
+fn poll_decision(exited: bool, cancelled: bool, timed_out: bool) -> PollDecision {
+    if exited {
+        PollDecision::Exited
+    } else if cancelled {
+        PollDecision::Cancelled
+    } else if timed_out {
+        PollDecision::TimedOut
+    } else {
+        PollDecision::Wait
     }
 }
 
@@ -754,6 +779,20 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(timeout.status, MediaToolProbeStatus::Timeout);
+    }
+
+    #[test]
+    fn completed_process_wins_over_late_cancel_and_timeout() {
+        assert_eq!(
+            poll_decision(true, true, true),
+            PollDecision::Exited,
+            "a terminal child result must not be overwritten by late cancellation"
+        );
+        assert_eq!(
+            poll_decision(false, true, true),
+            PollDecision::Cancelled,
+            "cancellation should win over timeout while the child is still running"
+        );
     }
 
     #[test]
