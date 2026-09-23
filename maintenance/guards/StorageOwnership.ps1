@@ -67,7 +67,7 @@ Assert-Match $chzzkVod 'api\.chzzk\.naver\.com/service/v3/videos/' 'CHZZK VOD me
 Assert-NotMatch $chzzkVod 'duration_seconds[\s\S]*?/ 1000;' 'CHZZK API duration is already seconds and must not be divided by 1000.'
 Assert-Match $chzzkVod 'chzzk_api_metadata_preserves_seconds' 'CHZZK API seconds regression test is missing.'
 Assert-Match $chzzkVod 'MEDIA_FILE_NAME:\s*&str\s*=\s*"media\.ts"' 'CHZZK VOD short MPEG-TS staging filename is missing.'
-Assert-Match $chzzkVod 'claim_collision_path\(&output_dir,\s*&base,\s*"ts"\)' 'CHZZK VOD final output is not MPEG-TS.'
+Assert-Match $chzzkVod 'claim_collision_path\((?:&)?output_dir,\s*&base,\s*"ts"\)' 'CHZZK VOD final output is not MPEG-TS.'
 Assert-Match $chzzkVod 'staging_output\s*=\s*job_dir\.join\(MEDIA_FILE_NAME\)' 'CHZZK VOD does not write into its private short staging path.'
 Assert-Match $chzzkVod 'finalize_output\(&staged_file,\s*&destination,\s*cancel\)' 'CHZZK VOD staging output is not finalized through the claimed destination.'
 Assert-Match $chzzkVod 'cleanup_job_media' 'CHZZK VOD retry/cancel cleanup is not scoped to the owned job directory.'
