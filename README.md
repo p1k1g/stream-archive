@@ -306,7 +306,7 @@ Pull Request runtime validation은 `.github/workflows/rust-runtime-check.yml`에
 주요 검증 항목:
 
 - Windows / Linux / macOS whole-crate `cargo fmt --check`
-- Windows / Linux / macOS Rust unit tests
+- Windows / Linux / macOS Rust unit tests, including deterministic media-tool subprocess harness coverage
 - Windows / Linux / macOS native compile check
 - Windows / Linux / macOS strict Clippy (`-D warnings`)
 - Windows Runtime contract guard
@@ -325,6 +325,7 @@ Phase 20의 Windows/Linux/macOS GitHub-hosted CI baseline은 구성되어 있습
 | `docs/PHASE21_NATIVE_PORTABLE.md` | Phase 21.8 portable 구조 및 Windows manual QA |
 | `docs/PHASE23_1_NATIVE_UX_CLOSURE.md` | Phase 23.1 Windows Native daily-use UX closure 및 portable manual QA checklist |
 | `docs/PHASE23_2_RUNTIME_PREFLIGHT.md` | Phase 23.2 shared Diagnostics / CLI runtime preflight contract |
+| `docs/PHASE23_3_MEDIA_TOOL_HARNESS.md` | Phase 23.3 deterministic media-tool subprocess integration harness |
 | `docs/PHASE21_NATIVE_UX_POLISH.md` | Phase 21.9 Native storage/backup IA/claim sidecar UX 및 manual QA |
 | `docs/UNIX_CLI.md` | Linux/macOS headless CLI, tool discovery, first-run layout |
 | `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
@@ -390,7 +391,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 
 - ✅ 23.1 Native Daily-use UX Closure
 - ✅ 23.2 Diagnostics / Runtime Preflight
-- ⏳ 23.3 Media-tool Integration Harness
+- ✅ 23.3 Media-tool Integration Harness
 - ⏳ 23.4 Provider E2E Validation
 - ⏳ 23.5 Unix CLI Completion
 - ⏳ 23.6 Packaging / Release Readiness

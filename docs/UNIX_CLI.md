@@ -98,6 +98,15 @@ Machine-readable output:
 stream-archive-cli doctor --json
 ```
 
+Phase 23.3 keeps those commands passive. To explicitly execute only local media-tool version probes:
+
+```bash
+stream-archive-cli doctor --active-tools
+stream-archive-cli doctor --json --active-tools
+```
+
+Active probing resolves the same Streamlink/yt-dlp/FFmpeg paths, runs only their local version command through the shared owned-process runner, applies a bounded timeout/output capture, and performs no provider/media network request.
+
 The preflight reports stable check IDs/categories and separates required, optional and informational checks. It covers:
 
 - canonical backend/data/SQLite paths
@@ -113,7 +122,7 @@ Exit status is based on blocking required errors:
 - exit `0`: base runtime is usable; warnings/optional gaps may still need attention
 - non-zero: at least one required preflight check is in Error state
 
-The command is intentionally local/read-only. It does not contact SOOP/CHZZK, test logins, download media, create missing directories, rewrite settings or repair SQLite. Phase 23.2 also does not execute discovered media tools for version checks; bounded subprocess/media integration belongs to Phase 23.3.
+The passive command is intentionally local/read-only. It does not contact SOOP/CHZZK, test logins, download media, create missing directories, rewrite settings or repair SQLite. The explicit `--active-tools` mode adds only bounded local version subprocesses; it still does not contact providers or media URLs.
 
 ## Start the headless runtime
 
