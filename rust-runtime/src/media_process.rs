@@ -295,12 +295,8 @@ where
         let mut state = state
             .lock()
             .map_err(|_| std::io::Error::other("capture state was poisoned"))?;
-        append_tail(
-            &mut state.tail,
-            &buffer[..count],
-            limit,
-            &mut state.truncated,
-        );
+        let CaptureState { tail, truncated } = &mut *state;
+        append_tail(tail, &buffer[..count], limit, truncated);
     }
 
     Ok(())
