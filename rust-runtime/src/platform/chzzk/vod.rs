@@ -475,7 +475,6 @@ async fn run_download_prepared(
         }
     }
     bail!("CHZZK VOD 다운로드 실패: {last_error}")
-
 }
 
 async fn load_chzzk_metadata(
