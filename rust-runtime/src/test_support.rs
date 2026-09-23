@@ -141,7 +141,9 @@ pub(crate) struct LocalManifestServer {
 impl LocalManifestServer {
     pub(crate) fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind local manifest fixture");
-        let address = listener.local_addr().expect("local manifest fixture address");
+        let address = listener
+            .local_addr()
+            .expect("local manifest fixture address");
         listener
             .set_nonblocking(true)
             .expect("configure local manifest fixture");
