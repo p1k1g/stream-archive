@@ -351,6 +351,32 @@ async fn run_download(
     set_status(status, "ANALYZING", "CHZZK VOD 메타데이터 확인 중…").await;
     let metadata =
         load_chzzk_metadata(&tools, &req.vod_url, cookie_file.as_deref(), cancel, logs).await?;
+    run_download_prepared(
+        &tools,
+        &req,
+        cookie_file.as_deref(),
+        metadata,
+        &job_dir,
+        &output_dir,
+        logs,
+        status,
+        cancel,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_download_prepared(
+    tools: &ChzzkTools,
+    req: &VodDownloadRequest,
+    cookie_file: Option<&Path>,
+    metadata: Metadata,
+    job_dir: &Path,
+    output_dir: &Path,
+    logs: &LogBuffer,
+    status: &Arc<RwLock<VodJobStatus>>,
+    cancel: &AtomicBool,
+) -> Result<()> {
     let view = analysis_view(&req.vod_url, &metadata);
     {
         let mut current = status.write().await;
@@ -449,6 +475,7 @@ async fn run_download(
         }
     }
     bail!("CHZZK VOD 다운로드 실패: {last_error}")
+
 }
 
 async fn load_chzzk_metadata(
