@@ -48,7 +48,7 @@ cargo clippy --locked --manifest-path rust-runtime/Cargo.toml --all-targets --al
 ```
 
 
-Phase 20 expands this policy to Windows/Linux/macOS CI. A change that claims cross-platform support should include tests or an explicit explanation of what remains platform-specific.
+Windows/Linux/macOS cross-platform CI is established, and Phase 23.5 adds real-binary Unix CLI integration/SIGTERM smoke on Linux and macOS. A change that claims cross-platform support should include tests or an explicit explanation of what remains platform-specific.
 
 ## AI-assisted contributions
 
