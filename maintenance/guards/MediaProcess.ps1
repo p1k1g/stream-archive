@@ -16,7 +16,9 @@ Assert-Match $cli '--active-tools' 'CLI must keep active media-tool probing expl
 Assert-RustTest $media 'spawn_preserves_argument_boundaries_and_unicode_output' 'Argument/Unicode media-process test is missing.'
 Assert-RustTest $media 'large_concurrent_output_is_bounded_and_keeps_tail' 'Bounded output integration test is missing.'
 Assert-RustTest $media 'timeout_terminates_owned_process_tree' 'Timeout ownership test is missing.'
+Assert-RustTest $media 'timeout_does_not_wait_forever_for_detached_pipe_holder' 'Detached pipe-holder bounded-drain test is missing.'
 Assert-RustTest $media 'cancellation_terminates_owned_tree_but_not_unrelated_process' 'Cancellation/unrelated-process test is missing.'
+Assert-RustTest $media 'completed_process_wins_over_late_cancel_and_timeout' 'Late-cancellation terminal-result regression test is missing.'
 Assert-RustTest $media 'version_probe_supports_all_media_tools' 'Version probe integration test is missing.'
 
 Write-Host 'Media process contracts passed.'
