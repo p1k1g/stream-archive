@@ -219,6 +219,14 @@ impl Store {
     }
 
     pub fn open(path: PathBuf) -> Result<Self> {
+        Self::open_with_recovery(path, true)
+    }
+
+    pub fn open_observer(path: PathBuf) -> Result<Self> {
+        Self::open_with_recovery(path, false)
+    }
+
+    fn open_with_recovery(path: PathBuf, recover_interrupted: bool) -> Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create data directory {}", parent.display()))?;
@@ -242,7 +250,9 @@ impl Store {
             channels_cache: Arc::new(RwLock::new(channels_cache)),
         };
         store.ensure_runtime_defaults()?;
-        store.recover_interrupted()?;
+        if recover_interrupted {
+            store.recover_interrupted()?;
+        }
         Ok(store)
     }
 
@@ -379,7 +389,7 @@ impl Store {
         Ok(())
     }
 
-    fn recover_interrupted(&self) -> Result<()> {
+    pub(crate) fn recover_interrupted(&self) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let conn = self.conn()?;
         conn.execute(
@@ -981,4 +991,58 @@ mod tests {
             .unwrap();
         assert_ne!(changed_at, "sentinel");
     }
+
+    #[test]
+    fn observer_open_preserves_active_runtime_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("observer.db");
+        let store = Store::open(path.clone()).unwrap();
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO live_recordings(id,platform,account,channel_name,started_at,status) VALUES('live-active','SOOP','fixture','Fixture','2026-09-23T00:00:00Z','RECORDING')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO vod_jobs(id,platform,kind,state,updated_at) VALUES('vod-active','SOOP','DOWNLOAD','DOWNLOADING','2026-09-23T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO vod_queue(id,platform,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at) VALUES('queue-active','SOOP','{}','https://fixture.invalid/vod','/tmp','RUNNING',0,'','2026-09-23T00:00:00Z','2026-09-23T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+        drop(store);
+
+        let observer = Store::open_observer(path).unwrap();
+        let conn = observer.conn().unwrap();
+        let live_status: String = conn
+            .query_row(
+                "SELECT status FROM live_recordings WHERE id='live-active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let vod_state: String = conn
+            .query_row(
+                "SELECT state FROM vod_jobs WHERE id='vod-active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let queue_state: String = conn
+            .query_row(
+                "SELECT state FROM vod_queue WHERE id='queue-active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(live_status, "RECORDING");
+        assert_eq!(vod_state, "DOWNLOADING");
+        assert_eq!(queue_state, "RUNNING");
+    }
+
 }
