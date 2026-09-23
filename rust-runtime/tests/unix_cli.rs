@@ -2,6 +2,7 @@
 
 use rusqlite::{Connection, params};
 use serde_json::Value;
+use stream_archive_server::runtime_owner::runtime_control_socket_path;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -273,7 +274,7 @@ fn one_shot_cli_observes_running_owner_without_recovering_active_rows() {
     layout.init();
     let mut owner = spawn_runtime(&layout, CLI, &["serve"]);
     wait_for_path(
-        &layout.data.join("stream-archive.runtime.sock"),
+        &runtime_control_socket_path(&layout.data.join("stream-archive.db")).unwrap(),
         Duration::from_secs(8),
     );
 
