@@ -167,10 +167,27 @@ pub(super) fn test_process_group(pid: i32) -> Result<i32, io::Error> {
 }
 
 #[cfg(test)]
-pub(super) fn test_process_exists(pid: i32) -> bool {
+pub(super) fn test_process_running(pid: i32) -> bool {
     let rc = unsafe { posix_kill(pid, 0) };
-    if rc == 0 {
-        return true;
+    if rc != 0 && io::Error::last_os_error().raw_os_error() == Some(ESRCH) {
+        return false;
     }
-    io::Error::last_os_error().raw_os_error() != Some(ESRCH)
+
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+        if let Ok(stat) = stat
+            && let Some(after_name) = stat.rsplit_once(')').map(|(_, rest)| rest.trim_start())
+            && let Some(state) = after_name.chars().next()
+        {
+            return !matches!(state, 'Z' | 'X');
+        }
+    }
+
+    true
+}
+
+#[cfg(test)]
+pub(super) fn test_kill_process(pid: i32) {
+    let _ = unsafe { posix_kill(pid, SIGKILL) };
 }
