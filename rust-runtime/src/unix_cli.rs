@@ -9,10 +9,11 @@ use crate::{
     },
     support::platform::PlatformId,
     tool_discovery::{ToolKind, ToolResolution, resolve_tool},
+    unix_control::{RuntimeControlRequest, RuntimeControlServer, send_runtime_control},
 };
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     io::{self, Read},
@@ -276,16 +277,34 @@ async fn command_channels(args: &[String]) -> Result<()> {
         }
         [action, platform, account, verb] if action == "action" => {
             let platform = platform.parse::<PlatformId>()?;
-            core.channel_action(format!("{platform}:{account}"), verb)
-                .await?;
-            println!("channel action sent: {platform}/{account} {verb}");
+            require_runtime_control(
+                &core,
+                RuntimeControlRequest {
+                    command: "channel.action".into(),
+                    target: Some(format!("{platform}:{account}")),
+                    action: Some(verb.clone()),
+                    secret: None,
+                    max_lines: None,
+                },
+            )
+            .await?;
+            println!("channel action sent to running watcher: {platform}/{account} {verb}");
         }
         [action, platform, account, source] if action == "password" && source == "--stdin" => {
             let platform = platform.parse::<PlatformId>()?;
             let secret = read_secret_stdin()?;
-            core.channel_password(format!("{platform}:{account}"), secret)
-                .await?;
-            println!("protected-stream password supplied for {platform}/{account}");
+            require_runtime_control(
+                &core,
+                RuntimeControlRequest {
+                    command: "channel.password".into(),
+                    target: Some(format!("{platform}:{account}")),
+                    action: None,
+                    secret: Some(secret),
+                    max_lines: None,
+                },
+            )
+            .await?;
+            println!("protected-stream password supplied to running watcher for {platform}/{account}");
         }
         _ => bail!(
             "usage: stream-archive-cli channels list [--json] | channels add <platform> <account> <name> <output-dir> [--disabled] | channels remove|enable|disable <platform> <account> | channels action <platform> <account> <stop|resume|recheck> | channels password <platform> <account> --stdin"
@@ -390,22 +409,62 @@ async fn command_watcher(args: &[String]) -> Result<()> {
         [action] if action == "start" => run_headless(true).await,
         [action] if action == "status" => {
             let core = open_core()?;
-            let status = core.watcher_status().await?;
-            print_watcher(&status, false)?;
+            if let Some(value) = runtime_control(
+                &core,
+                RuntimeControlRequest {
+                    command: "watcher.status".into(),
+                    target: None,
+                    action: None,
+                    secret: None,
+                    max_lines: None,
+                },
+            )
+            .await?
+            {
+                print_watcher_value(&value, false)?;
+            } else {
+                let status = core.watcher_status().await?;
+                print_watcher(&status, false)?;
+            }
             core.shutdown().await;
             Ok(())
         }
         [action, flag] if action == "status" && flag == "--json" => {
             let core = open_core()?;
-            let status = core.watcher_status().await?;
-            print_watcher(&status, true)?;
+            if let Some(value) = runtime_control(
+                &core,
+                RuntimeControlRequest {
+                    command: "watcher.status".into(),
+                    target: None,
+                    action: None,
+                    secret: None,
+                    max_lines: None,
+                },
+            )
+            .await?
+            {
+                print_json(&value)?;
+            } else {
+                let status = core.watcher_status().await?;
+                print_watcher(&status, true)?;
+            }
             core.shutdown().await;
             Ok(())
         }
         [action] if action == "stop" => {
             let core = open_core()?;
-            let status = core.stop_watcher().await?;
-            print_watcher(&status, false)?;
+            let value = require_runtime_control(
+                &core,
+                RuntimeControlRequest {
+                    command: "watcher.stop".into(),
+                    target: None,
+                    action: None,
+                    secret: None,
+                    max_lines: None,
+                },
+            )
+            .await?;
+            print_watcher_value(&value, false)?;
             core.shutdown().await;
             Ok(())
         }
@@ -413,6 +472,37 @@ async fn command_watcher(args: &[String]) -> Result<()> {
             "usage: stream-archive-cli watcher status [--json] | watcher start | watcher stop"
         ),
     }
+}
+
+fn print_watcher_value(value: &Value, json_mode: bool) -> Result<()> {
+    if json_mode {
+        return print_json(value);
+    }
+    println!("watcher");
+    println!(
+        "  running    : {}",
+        value.get("running").and_then(Value::as_bool).unwrap_or(false)
+    );
+    println!(
+        "  channels   : {}",
+        value.get("channel_count").and_then(Value::as_u64).unwrap_or(0)
+    );
+    println!(
+        "  recordings : {}",
+        value
+            .get("recording_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    );
+    println!(
+        "  offline    : {}",
+        value.get("offline_count").and_then(Value::as_u64).unwrap_or(0)
+    );
+    println!(
+        "  errors     : {}",
+        value.get("error_count").and_then(Value::as_u64).unwrap_or(0)
+    );
+    Ok(())
 }
 
 fn print_watcher(status: &NativeWatcherStatus, json_mode: bool) -> Result<()> {
@@ -443,31 +533,69 @@ async fn command_vod(args: &[String]) -> Result<()> {
         "status" => {
             let json_mode = only_json(&args[1..], "vod status")?;
             let core = open_core()?;
-            let status = core.vod_status().await?;
-            print_vod_status(&status, json_mode)?;
+            if let Some(value) = runtime_control(
+                &core,
+                RuntimeControlRequest {
+                    command: "vod.status".into(),
+                    target: None,
+                    action: None,
+                    secret: None,
+                    max_lines: None,
+                },
+            )
+            .await?
+            {
+                if json_mode {
+                    print_json(&value)?;
+                } else {
+                    print_vod_value(&value)?;
+                }
+            } else {
+                let status = core.local_vod_status().await;
+                print_vod_status(&status, json_mode)?;
+            }
             core.shutdown().await;
         }
         "cancel" => {
             let json_mode = only_json(&args[1..], "vod cancel")?;
             let core = open_core()?;
-            let status = core.cancel_vod().await?;
-            print_vod_status(&status, json_mode)?;
+            let value = require_runtime_control(
+                &core,
+                RuntimeControlRequest {
+                    command: "vod.cancel".into(),
+                    target: None,
+                    action: None,
+                    secret: None,
+                    max_lines: None,
+                },
+            )
+            .await?;
+            if json_mode {
+                print_json(&value)?;
+            } else {
+                print_vod_value(&value)?;
+            }
             core.shutdown().await;
         }
         "analyze" => {
             let parsed = parse_vod_analyze_args(&args[1..])?;
-            let core = open_core()?;
+            let core = open_owner_core()?;
+            let control = RuntimeControlServer::start(core.clone()).await?;
             let initial = core.analyze_vod(parsed.request).await?;
             let final_status = await_vod_foreground(&core, initial).await?;
             print_vod_status(&final_status, parsed.json)?;
+            control.shutdown().await;
             core.shutdown().await;
+            ensure_vod_success(&final_status)?;
         }
         "download" => {
             let parsed = parse_vod_download_args(&args[1..])?;
-            let core = open_core()?;
+            let core = open_owner_core()?;
+            let control = RuntimeControlServer::start(core.clone()).await?;
             let initial = core.download_vod(parsed.request).await?;
             let final_status = await_vod_foreground(&core, initial).await?;
             print_vod_status(&final_status, parsed.json)?;
+            control.shutdown().await;
             core.shutdown().await;
             ensure_vod_success(&final_status)?;
         }
@@ -518,6 +646,31 @@ fn ensure_vod_success(status: &VodJobStatus) -> Result<()> {
         }
         _ => Ok(()),
     }
+}
+
+fn print_vod_value(value: &Value) -> Result<()> {
+    println!("VOD");
+    println!(
+        "  state    : {}",
+        value.get("state").and_then(Value::as_str).unwrap_or("IDLE")
+    );
+    println!(
+        "  running  : {}",
+        value.get("running").and_then(Value::as_bool).unwrap_or(false)
+    );
+    println!(
+        "  progress : {:.1}%",
+        value.get("percent").and_then(Value::as_f64).unwrap_or(0.0)
+    );
+    if let Some(message) = value.get("message").and_then(Value::as_str)
+        && !message.trim().is_empty()
+    {
+        println!("  message  : {message}");
+    }
+    if let Some(output) = value.get("output_file").and_then(Value::as_str) {
+        println!("  output   : {output}");
+    }
+    Ok(())
 }
 
 fn print_vod_status(status: &VodJobStatus, json_mode: bool) -> Result<()> {
@@ -936,7 +1089,23 @@ async fn command_storage(args: &[String]) -> Result<()> {
 async fn command_logs(args: &[String]) -> Result<()> {
     let (tail, json_mode) = parse_logs_args(args)?;
     let core = open_core()?;
-    let logs = core.runtime_logs(tail).await;
+    let logs = if let Some(value) = runtime_control(
+        &core,
+        RuntimeControlRequest {
+            command: "logs".into(),
+            target: None,
+            action: None,
+            secret: None,
+            max_lines: Some(tail),
+        },
+    )
+    .await?
+    {
+        serde_json::from_value::<Vec<String>>(value)
+            .context("invalid runtime log response")?
+    } else {
+        core.runtime_logs(tail).await
+    };
     if json_mode {
         print_json(&logs)?;
     } else {
@@ -975,7 +1144,30 @@ fn parse_logs_args(args: &[String]) -> Result<(usize, bool)> {
 
 fn open_core() -> Result<StreamArchiveCore> {
     let backend = resolve_backend_dir()?;
+    Ok(StreamArchiveCore::open_observer(&backend)?.core)
+}
+
+fn open_owner_core() -> Result<StreamArchiveCore> {
+    let backend = resolve_backend_dir()?;
     Ok(StreamArchiveCore::open(&backend)?.core)
+}
+
+async fn runtime_control(
+    core: &StreamArchiveCore,
+    request: RuntimeControlRequest,
+) -> Result<Option<Value>> {
+    send_runtime_control(core.store().path(), request).await
+}
+
+async fn require_runtime_control(
+    core: &StreamArchiveCore,
+    request: RuntimeControlRequest,
+) -> Result<Value> {
+    runtime_control(core, request).await?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no running Stream Archive runtime owns this data directory; start `stream-archive-cli serve` or `watcher start` first"
+        )
+    })
 }
 
 fn environment_settings_map(core: &StreamArchiveCore) -> Result<BTreeMap<String, String>> {
