@@ -2,9 +2,15 @@ use crate::{platform_runtime::test_process_running, tool_discovery::ToolKind};
 use std::{
     ffi::OsString,
     fs,
+    io::{Read, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child as StdChild, Command as StdCommand, Stdio},
-    sync::OnceLock,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -49,6 +55,11 @@ impl ProviderFixture {
 
     pub(crate) fn set_mode(&self, executable: &Path, mode: &str) {
         fs::write(mode_path(executable), mode).expect("write provider fixture mode");
+    }
+
+    pub(crate) fn set_manifest_url(&self, executable: &Path, url: &str) {
+        fs::write(sidecar_path(executable, "manifest-url"), url)
+            .expect("write provider fixture manifest URL");
     }
 
     pub(crate) fn invocations(&self) -> String {
@@ -120,6 +131,68 @@ impl ProviderFixture {
     }
 }
 
+pub(crate) struct LocalManifestServer {
+    url: String,
+    address: std::net::SocketAddr,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl LocalManifestServer {
+    pub(crate) fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local manifest fixture");
+        let address = listener.local_addr().expect("local manifest fixture address");
+        listener
+            .set_nonblocking(true)
+            .expect("configure local manifest fixture");
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = stop.clone();
+        let thread = thread::spawn(move || {
+            let body =
+                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080\nfixture.ts\n";
+            while !thread_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut request = [0u8; 4096];
+                        let _ = stream.read(&mut request);
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            url: format!("http://{address}/master.m3u8"),
+            address,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    pub(crate) fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+impl Drop for LocalManifestServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = std::net::TcpStream::connect(self.address);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 pub(crate) fn provider_fixture_path() -> &'static Path {
     PROVIDER_FIXTURE
         .get_or_init(|| {
@@ -173,6 +246,10 @@ fn tool_name(kind: ToolKind) -> &'static str {
 }
 
 fn mode_path(executable: &Path) -> PathBuf {
+    sidecar_path(executable, "mode")
+}
+
+fn sidecar_path(executable: &Path, suffix: &str) -> PathBuf {
     let name = executable
         .file_name()
         .expect("fixture executable name")
@@ -180,5 +257,5 @@ fn mode_path(executable: &Path) -> PathBuf {
     executable
         .parent()
         .expect("fixture executable parent")
-        .join(format!("{name}.mode"))
+        .join(format!("{name}.{suffix}"))
 }
