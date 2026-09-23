@@ -346,7 +346,9 @@ async fn command_channels(args: &[String]) -> Result<()> {
                 },
             )
             .await?;
-            println!("protected-stream password supplied to running watcher for {platform}/{account}");
+            println!(
+                "protected-stream password supplied to running watcher for {platform}/{account}"
+            );
         }
         _ => bail!(
             "usage: stream-archive-cli channels list [--json] | channels add <platform> <account> <name> <output-dir> [--disabled] | channels remove|enable|disable <platform> <account> | channels action <platform> <account> <stop|resume|recheck> | channels password <platform> <account> --stdin"
@@ -523,11 +525,17 @@ fn print_watcher_value(value: &Value, json_mode: bool) -> Result<()> {
     println!("watcher");
     println!(
         "  running    : {}",
-        value.get("running").and_then(Value::as_bool).unwrap_or(false)
+        value
+            .get("running")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     );
     println!(
         "  channels   : {}",
-        value.get("channel_count").and_then(Value::as_u64).unwrap_or(0)
+        value
+            .get("channel_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
     );
     println!(
         "  recordings : {}",
@@ -538,11 +546,17 @@ fn print_watcher_value(value: &Value, json_mode: bool) -> Result<()> {
     );
     println!(
         "  offline    : {}",
-        value.get("offline_count").and_then(Value::as_u64).unwrap_or(0)
+        value
+            .get("offline_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
     );
     println!(
         "  errors     : {}",
-        value.get("error_count").and_then(Value::as_u64).unwrap_or(0)
+        value
+            .get("error_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
     );
     Ok(())
 }
@@ -698,7 +712,10 @@ fn print_vod_value(value: &Value) -> Result<()> {
     );
     println!(
         "  running  : {}",
-        value.get("running").and_then(Value::as_bool).unwrap_or(false)
+        value
+            .get("running")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     );
     println!(
         "  progress : {:.1}%",
@@ -1143,8 +1160,7 @@ async fn command_logs(args: &[String]) -> Result<()> {
     )
     .await?
     {
-        serde_json::from_value::<Vec<String>>(value)
-            .context("invalid runtime log response")?
+        serde_json::from_value::<Vec<String>>(value).context("invalid runtime log response")?
     } else {
         core.runtime_logs(tail).await
     };
