@@ -411,27 +411,52 @@ Phase 23.4 — Provider E2E Validation should use the now-tested local process l
 - real LIVE start/stop;
 - provider retry/network failure behavior.
 
-## 25. Status
+## 25. Review hardening
 
-Implementation is in validation.
+Codex review identified three process-lifecycle edge cases during Phase 23.3. All were fixed with regression coverage before closure:
 
-Closure requires:
+1. Unix zombie descendants are treated as terminated for harness liveness assertions on Linux rather than relying only on `kill(pid, 0)`.
+2. stdout/stderr capture draining is bounded after owned cleanup, so a detached descendant retaining inherited pipe handles cannot keep a timed probe waiting indefinitely.
+3. an already-completed child result takes precedence over late cancellation or timeout, preserving the terminal process result.
+
+The corresponding review threads are resolved.
+
+## 26. Validation closure
+
+Implementation validation completed on:
 
 ```text
-core-check (linux)
-core-check (macos)
-core-check (windows)
-windows-check
-runtime contract guard
-portable package smoke
-portable verification
-final Codex review on final HEAD
-unresolved review threads = 0
+implementation commit: e67d2fabc6c666d3f60f6d4bc5d76c05d983e74c
+GitHub Actions run: 35805245330
 ```
 
-After those gates:
+Results:
+
+- core-check (linux): PASS
+- core-check (macos): PASS
+- core-check (windows): PASS
+- windows-check: PASS
+- runtime contract guard: PASS
+- source archive metadata smoke: PASS
+- Windows portable package smoke: PASS
+- portable package verification: PASS
+
+Final implementation Codex review:
+
+```text
+Reviewed commit: e67d2fabc6
+Didn't find any major issues.
+```
+
+Unresolved review threads at implementation closure: 0.
+
+The documentation/roadmap completion commit remains subject to the same PR CI and final-head Codex gate before merge.
+
+## 27. Status
 
 ```text
 Phase 23.3 COMPLETE
 Ready for Phase 23.4 — Provider E2E Validation
 ```
+
+Phase 23.4 owns real SOOP/CHZZK provider authentication, network requests, LIVE/VOD E2E validation, retry behavior, and provider-network failure coverage. Phase 23.3 mandatory CI remains deterministic and offline with respect to media providers.
