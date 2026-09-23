@@ -2,6 +2,9 @@ use super::auth::{ChzzkAuth, ChzzkAuthState};
 use crate::platform_runtime::{configure_utf8_cli, restrict_private_dir, spawn_owned};
 use crate::{
     backend::{LogBuffer, read_safe_settings, settings_path},
+    media_process::{
+        MediaProcessOutcome, MediaProcessSpec, run_media_process_with_atomic_cancel,
+    },
     model::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
@@ -29,7 +32,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
     sync::{Mutex, RwLock, mpsc},
     task::JoinHandle,
@@ -1035,62 +1038,56 @@ async fn run_capture(
     program: &Path,
     args: &[String],
     cancel: &AtomicBool,
-    _logs: &LogBuffer,
+    logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    let mut command = Command::new(program);
-    configure_utf8_cli(&mut command);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let (mut child, mut owned_tree) = spawn_owned(&mut command)
-        .await
-        .with_context(|| format!("{label} process start failed: {}", program.display()))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("stdout unavailable"))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("stderr unavailable"))?;
-    let stdout_task = tokio::spawn(async move {
-        let mut data = Vec::new();
-        stdout.read_to_end(&mut data).await.map(|_| data)
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut data = Vec::new();
-        stderr.read_to_end(&mut data).await.map(|_| data)
-    });
+    run_capture_with_timeout(
+        program,
+        args,
+        cancel,
+        logs,
+        label,
+        Duration::from_secs(30),
+    )
+    .await
+}
 
-    let exit = loop {
-        if cancel.load(Ordering::SeqCst) {
-            let _ = owned_tree.terminate(&mut child).await;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            bail!("{label} 취소됨");
+async fn run_capture_with_timeout(
+    program: &Path,
+    args: &[String],
+    cancel: &AtomicBool,
+    _logs: &LogBuffer,
+    label: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let result = run_media_process_with_atomic_cancel(
+        MediaProcessSpec::new(program)
+            .args(args.iter().cloned())
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
+            .timeout(timeout),
+        cancel,
+    )
+    .await?;
+
+    match result.outcome {
+        MediaProcessOutcome::Success => Ok(result.stdout.text),
+        MediaProcessOutcome::ProcessFailure => bail!(
+            "{label} process failure (exit={:?}): {}",
+            result.exit_code,
+            redact(result.stderr.text.trim())
+        ),
+        MediaProcessOutcome::Timeout => {
+            bail!("{label} timeout after {}ms", timeout.as_millis())
         }
-        if let Some(exit) = child
-            .try_wait()
-            .with_context(|| format!("{label} 상태 확인 실패"))?
-        {
-            break exit;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    let stdout = stdout_task.await.context("stdout task join failed")??;
-    let stderr = stderr_task.await.context("stderr task join failed")??;
-    if !exit.success() {
-        bail!(
-            "{label} 실패 (exit={}): {}",
-            exit_code(exit),
-            redact(&String::from_utf8_lossy(&stderr))
-        );
+        MediaProcessOutcome::Cancelled => bail!("{label} cancelled"),
+        MediaProcessOutcome::SpawnFailure => bail!(
+            "{label} spawn failure: {}",
+            result
+                .spawn_error
+                .unwrap_or_else(|| "unknown spawn failure".into())
+        ),
     }
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 fn chzzk_cookie_file(job_dir: &Path) -> Result<Option<PathBuf>> {
