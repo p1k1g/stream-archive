@@ -41,7 +41,9 @@ pub async fn run_headless(watch: bool) -> Result<()> {
     println!("Backup  : SQLite online backup + retention");
     println!();
     println!("No HTTP/Web listener is started.");
-    println!("Press Ctrl+C (or send SIGTERM on Unix) to stop the runtime and owned LIVE/VOD processes.");
+    println!(
+        "Press Ctrl+C (or send SIGTERM on Unix) to stop the runtime and owned LIVE/VOD processes."
+    );
     println!();
 
     if watch {
