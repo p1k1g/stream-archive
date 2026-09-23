@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use rusqlite::{Connection, params};
 use serde_json::Value;
 use std::{
     fs,
@@ -267,6 +268,87 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
 }
 
 #[test]
+fn one_shot_cli_observes_running_owner_without_recovering_active_rows() {
+    let layout = Layout::new();
+    layout.init();
+    let mut owner = spawn_runtime(&layout, CLI, &["serve"]);
+    wait_for_path(
+        &layout.data.join("stream-archive.runtime.sock"),
+        Duration::from_secs(8),
+    );
+
+    let db = layout.data.join("stream-archive.db");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "INSERT INTO live_recordings(id,platform,account,channel_name,started_at,status) VALUES(?1,'SOOP','fixture','Fixture','2026-09-23T00:00:00Z','RECORDING')",
+        params!["live-owner-active"],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO vod_jobs(id,platform,kind,state,updated_at) VALUES(?1,'SOOP','DOWNLOAD','DOWNLOADING','2026-09-23T00:00:00Z')",
+        params!["vod-owner-active"],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO vod_queue(id,platform,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at) VALUES(?1,'SOOP','{}','https://fixture.invalid/vod','/tmp','RUNNING',0,'','2026-09-23T00:00:00Z','2026-09-23T00:00:00Z')",
+        params!["queue-owner-active"],
+    )
+    .unwrap();
+    drop(conn);
+
+    let status = json_output("status with owner", layout.cli(&["status", "--json"]));
+    assert_eq!(status["runtime_owner_active"], true);
+    assert_eq!(status["scope"], "runtime-owner");
+
+    let conn = Connection::open(&db).unwrap();
+    let live_status: String = conn
+        .query_row(
+            "SELECT status FROM live_recordings WHERE id='live-owner-active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let vod_state: String = conn
+        .query_row(
+            "SELECT state FROM vod_jobs WHERE id='vod-owner-active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let queue_state: String = conn
+        .query_row(
+            "SELECT state FROM vod_queue WHERE id='queue-owner-active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(live_status, "RECORDING");
+    assert_eq!(vod_state, "DOWNLOADING");
+    assert_eq!(queue_state, "RUNNING");
+
+    let restore = layout.cli(&["backup", "restore", "missing.db", "--yes"]);
+    assert!(!restore.status.success());
+    let stderr = String::from_utf8_lossy(&restore.stderr);
+    assert!(
+        stderr.contains("cannot restore while another Stream Archive runtime owns")
+            || stderr.contains("another Stream Archive runtime owns"),
+        "unexpected restore error: {stderr}"
+    );
+
+    let logs = json_output("remote runtime logs", layout.cli(&["logs", "--json"]));
+    assert!(
+        logs.as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line.as_str().is_some_and(|line| line.contains("headless runtime ready")))
+    );
+
+    send_sigterm(owner.id());
+    let status = wait_for_exit(&mut owner, Duration::from_secs(8));
+    assert!(status.success(), "runtime owner SIGTERM exit was {status}");
+}
+
+#[test]
 fn provider_secret_cli_rejects_secret_as_argv_value() {
     let layout = Layout::new();
     layout.init();
@@ -311,6 +393,18 @@ fn unix_cli_serve_sigterm_is_graceful_and_does_not_kill_unrelated_runtime() {
         status.success(),
         "compatibility server SIGTERM exit was {status}"
     );
+}
+
+fn wait_for_path(path: &std::path::Path, timeout: Duration) {
+    let started = Instant::now();
+    while !path.exists() {
+        assert!(
+            started.elapsed() < timeout,
+            "path did not appear within {timeout:?}: {}",
+            path.display()
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn spawn_runtime(layout: &Layout, binary: &str, args: &[&str]) -> Child {
