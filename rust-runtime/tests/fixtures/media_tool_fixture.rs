@@ -397,8 +397,12 @@ fn record_provider_invocation(tool: ProviderTool, args: &[std::ffi::OsString]) {
     let io_encoding = env::var("PYTHONIOENCODING").unwrap_or_default();
     let _ = writeln!(
         file,
-        "tool={tool:?}\ncwd={cwd}\nPYTHONUTF8={utf8}\nPYTHONIOENCODING={io_encoding}\nargv={args:?}\n---"
+        "tool={tool:?}\ncwd={cwd}\nPYTHONUTF8={utf8}\nPYTHONIOENCODING={io_encoding}"
     );
+    for (index, arg) in args.iter().enumerate() {
+        let _ = writeln!(file, "argv[{index}]={}", arg.to_string_lossy());
+    }
+    let _ = writeln!(file, "---");
 }
 
 fn has_arg(args: &[std::ffi::OsString], needle: &str) -> bool {
