@@ -1049,5 +1049,4 @@ mod tests {
         assert_eq!(vod_state, "DOWNLOADING");
         assert_eq!(queue_state, "RUNNING");
     }
-
 }
