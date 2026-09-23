@@ -1044,7 +1044,7 @@ fn parse_id_and_json<'a>(args: &'a [String], command: &str) -> Result<(&'a str, 
     }
 }
 
-fn print_json(value: &impl Serialize) -> Result<()> {
+fn print_json(value: &(impl Serialize + ?Sized)) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
