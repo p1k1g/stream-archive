@@ -1464,8 +1464,7 @@ fn title_no(url: &str) -> Result<String> {
 fn entry_url(value: &Value) -> String {
     for key in ["url", "manifest_url", "manifestUrl", "hls_url", "hlsUrl"] {
         if let Some(s) = value.get(key).and_then(Value::as_str)
-            && (s.starts_with("https://")
-                || (cfg!(test) && s.starts_with("http://127.0.0.1:")))
+            && (s.starts_with("https://") || (cfg!(test) && s.starts_with("http://127.0.0.1:")))
             && !Url::parse(s)
                 .ok()
                 .is_some_and(|url| url.path().starts_with("/player/"))
