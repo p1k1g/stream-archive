@@ -1,9 +1,12 @@
 use crate::{
     app_core::StreamArchiveCore,
     backend::resolve_backend_dir,
-    history_service::HistoryFilter,
     headless::{run_headless, wait_for_shutdown_signal},
-    model::{Channel, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodQueueSnapshot},
+    history_service::HistoryFilter,
+    model::{
+        Channel, NativeWatcherStatus, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus,
+        VodQueueSnapshot,
+    },
     support::platform::PlatformId,
     tool_discovery::{ToolKind, ToolResolution, resolve_tool},
 };
@@ -97,7 +100,10 @@ async fn command_status(args: &[String]) -> Result<()> {
         println!("watcher       : {}", watcher.running);
         println!("recordings    : {}", watcher.recording_count);
         println!("VOD running   : {}", vod.running);
-        println!("queue active  : {}", queue.active_id.as_deref().unwrap_or("-"));
+        println!(
+            "queue active  : {}",
+            queue.active_id.as_deref().unwrap_or("-")
+        );
         println!("queue queued  : {}", queue.queued_count);
         println!("backup dir    : {}", backup.directory);
         for tool in tools {
@@ -128,9 +134,7 @@ async fn command_settings(args: &[String]) -> Result<()> {
                 println!("{}={}", item.key, item.value);
             }
         }
-        _ => bail!(
-            "usage: stream-archive-cli settings show [--json] | settings set <KEY> <VALUE>"
-        ),
+        _ => bail!("usage: stream-archive-cli settings show [--json] | settings set <KEY> <VALUE>"),
     }
     core.shutdown().await;
     Ok(())
@@ -276,9 +280,7 @@ async fn command_channels(args: &[String]) -> Result<()> {
                 .await?;
             println!("channel action sent: {platform}/{account} {verb}");
         }
-        [action, platform, account, source]
-            if action == "password" && source == "--stdin" =>
-        {
+        [action, platform, account, source] if action == "password" && source == "--stdin" => {
             let platform = platform.parse::<PlatformId>()?;
             let secret = read_secret_stdin()?;
             core.channel_password(format!("{platform}:{account}"), secret)
@@ -303,10 +305,9 @@ async fn add_channel(
 ) -> Result<()> {
     let platform = platform.parse::<PlatformId>()?;
     let mut channels = core.channels()?;
-    if channels
-        .iter()
-        .any(|channel| channel.platform == platform && channel.account.eq_ignore_ascii_case(account))
-    {
+    if channels.iter().any(|channel| {
+        channel.platform == platform && channel.account.eq_ignore_ascii_case(account)
+    }) {
         bail!("channel already exists: {platform}/{account}");
     }
     channels.push(Channel {
@@ -881,10 +882,7 @@ fn parse_restore_args(args: &[String]) -> Result<(&str, bool)> {
     Ok((file_name, json_mode))
 }
 
-fn print_backup(
-    snapshot: &crate::backup_service::BackupSnapshot,
-    json_mode: bool,
-) -> Result<()> {
+fn print_backup(snapshot: &crate::backup_service::BackupSnapshot, json_mode: bool) -> Result<()> {
     if json_mode {
         print_json(snapshot)?;
     } else {
@@ -1063,7 +1061,10 @@ mod tests {
 
         let settings = BTreeMap::from([
             ("SOOP_USERNAME".into(), "private-user".into()),
-            ("CLOUDFLARE_WORKER_URL".into(), "https://worker.example".into()),
+            (
+                "CLOUDFLARE_WORKER_URL".into(),
+                "https://worker.example".into(),
+            ),
         ]);
         let secrets = BTreeMap::from([("SOOP_PASSWORD".into(), true)]);
         let value = json!({
