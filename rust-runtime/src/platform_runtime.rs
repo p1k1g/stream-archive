@@ -776,19 +776,26 @@ mod windows_tree {
 }
 
 #[cfg(all(test, windows))]
-pub(crate) fn test_process_exists(pid: u32) -> bool {
+pub(crate) fn test_process_running(pid: u32) -> bool {
     windows_tree::test_process_exists(pid)
 }
 
 #[cfg(all(test, unix))]
-pub(crate) fn test_process_exists(pid: u32) -> bool {
+pub(crate) fn test_process_running(pid: u32) -> bool {
     i32::try_from(pid)
         .ok()
-        .is_some_and(unix_group::test_process_exists)
+        .is_some_and(unix_group::test_process_running)
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn test_kill_process(pid: u32) {
+    if let Ok(pid) = i32::try_from(pid) {
+        unix_group::test_kill_process(pid);
+    }
 }
 
 #[cfg(all(test, not(any(windows, unix))))]
-pub(crate) fn test_process_exists(pid: u32) -> bool {
+pub(crate) fn test_process_running(pid: u32) -> bool {
     let _ = pid;
     false
 }
@@ -867,7 +874,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn unix_owned_spawn_retains_descendant_after_root_exit() {
-        use super::unix_group::{test_process_exists, test_process_group};
+        use super::unix_group::{test_process_group, test_process_running};
         use std::{
             env, fs,
             time::{Duration, Instant},
@@ -914,19 +921,19 @@ mod tests {
 
         root.wait().await.unwrap();
         assert!(
-            test_process_exists(descendant_pid),
+            test_process_running(descendant_pid),
             "descendant should remain alive after the short-lived root exits"
         );
 
         owner.terminate_now().unwrap();
         let cleanup_started = Instant::now();
-        while test_process_exists(descendant_pid)
+        while test_process_running(descendant_pid)
             && cleanup_started.elapsed() < Duration::from_secs(5)
         {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         assert!(
-            !test_process_exists(descendant_pid),
+            !test_process_running(descendant_pid),
             "owned Unix descendant must be gone after process-group cleanup"
         );
         let _ = fs::remove_file(&pid_file);
