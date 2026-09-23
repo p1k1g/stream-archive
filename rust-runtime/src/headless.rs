@@ -1,4 +1,7 @@
-use crate::{app_core::StreamArchiveCore, backend::resolve_backend_dir};
+use crate::{
+    app_core::StreamArchiveCore, backend::resolve_backend_dir,
+    unix_control::RuntimeControlServer,
+};
 use anyhow::Result;
 use std::env;
 
@@ -7,6 +10,7 @@ pub async fn run_headless(watch: bool) -> Result<()> {
     let opened = StreamArchiveCore::open(&backend_dir)?;
     let migrated_legacy_db = opened.migrated_legacy_db;
     let core = opened.core;
+    let control = RuntimeControlServer::start(core.clone()).await?;
 
     core.logs()
         .push(format!(
@@ -68,6 +72,7 @@ pub async fn run_headless(watch: bool) -> Result<()> {
     }
 
     wait_for_shutdown_signal().await?;
+    control.shutdown().await;
     core.shutdown().await;
     Ok(())
 }
