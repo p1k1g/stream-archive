@@ -51,16 +51,8 @@ impl ProviderFixture {
         fs::write(mode_path(executable), mode).expect("write provider fixture mode");
     }
 
-    pub(crate) fn clear_mode(&self, executable: &Path) {
-        let _ = fs::remove_file(mode_path(executable));
-    }
-
     pub(crate) fn invocations(&self) -> String {
         fs::read_to_string(self.root.path().join("invocations.log")).unwrap_or_default()
-    }
-
-    pub(crate) fn clear_invocations(&self) {
-        let _ = fs::remove_file(self.root.path().join("invocations.log"));
     }
 
     pub(crate) fn child_pid_path(&self, executable: &Path) -> PathBuf {
