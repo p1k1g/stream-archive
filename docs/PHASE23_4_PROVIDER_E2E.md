@@ -39,8 +39,11 @@ It can:
 - create an owned descendant for cancellation/tree-cleanup tests.
 
 The fixture performs no SOOP, CHZZK, YouTube, Streamlink-plugin, or yt-dlp
-remote request. Provider network discovery/authentication is deliberately
-outside the automatic subprocess E2E harness.
+remote request. The SOOP full-manager case serves its deterministic HLS master
+playlist from a test-owned `127.0.0.1` HTTP listener; test builds accept that
+loopback URL only for this fixture. CHZZK remote metadata/authentication remains
+outside the automatic harness, while the production post-metadata
+download/retry/publish path is shared directly with the E2E test.
 
 Synthetic cookie files are used only to verify cookie-file transport. Real
 \`SOOP_PASSWORD\`, \`worker_key\`, \`NID_AUT\`, and \`NID_SES\` values are not
@@ -53,9 +56,12 @@ The focused \`provider_e2e\` tests cover:
 - SOOP LIVE success, non-zero exit, spawn failure, cancellation, and unrelated
   process protection;
 - CHZZK LIVE plugin/cookie/FFmpeg-player invocation and Unicode output;
-- SOOP VOD metadata/download invocation, non-zero exit, spawn failure, timeout,
-  cancellation, descendant cleanup, and unrelated process protection;
-- CHZZK VOD Streamlink-to-FFmpeg invocation, Unicode output, non-zero exit,
+- SOOP VOD full-manager completion with configured tool resolution, local-only
+  manifest authorization, metadata/download invocation, non-zero exit, spawn
+  failure, timeout, cancellation, descendant cleanup, and unrelated process
+  protection;
+- CHZZK VOD production prepared-download completion with configured tool
+  resolution, Streamlink-to-FFmpeg invocation, Unicode output, non-zero exit,
   spawn failure, timeout, and cancellation cleanup.
 
 Phase 23.3 continues to own the lower-level generic runner tests for bounded
