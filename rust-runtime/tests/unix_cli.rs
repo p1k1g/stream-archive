@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
