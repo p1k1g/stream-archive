@@ -145,6 +145,28 @@ pub async fn run_media_process(
     spec: MediaProcessSpec,
     cancellation: Option<MediaCancellation>,
 ) -> Result<MediaProcessResult> {
+    run_media_process_with_cancel_check(spec, || {
+        cancellation
+            .as_ref()
+            .is_some_and(MediaCancellation::is_cancelled)
+    })
+    .await
+}
+
+pub async fn run_media_process_with_atomic_cancel(
+    spec: MediaProcessSpec,
+    cancellation: &AtomicBool,
+) -> Result<MediaProcessResult> {
+    run_media_process_with_cancel_check(spec, || cancellation.load(Ordering::Acquire)).await
+}
+
+async fn run_media_process_with_cancel_check<F>(
+    spec: MediaProcessSpec,
+    is_cancelled: F,
+) -> Result<MediaProcessResult>
+where
+    F: Fn() -> bool,
+{
     let started = Instant::now();
     let mut command = Command::new(&spec.program);
     command
@@ -200,9 +222,7 @@ pub async fn run_media_process(
     let mut outcome = MediaProcessOutcome::Success;
     let exit_code = loop {
         let status = child.try_wait()?;
-        let cancelled = cancellation
-            .as_ref()
-            .is_some_and(MediaCancellation::is_cancelled);
+        let cancelled = is_cancelled();
         let timed_out = Instant::now() >= deadline;
 
         match poll_decision(status.is_some(), cancelled, timed_out) {
