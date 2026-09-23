@@ -71,9 +71,22 @@ impl Layout {
     }
 
     fn stage_fake_tools(&self) {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/media_tool_fixture.rs");
+        let compiled = self._root.path().join("media-tool-fixture");
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let status = Command::new(rustc)
+            .arg("--edition=2024")
+            .arg(&source)
+            .arg("-o")
+            .arg(&compiled)
+            .status()
+            .unwrap();
+        assert!(status.success(), "failed to compile shared media-tool fixture");
+
         for name in ["streamlink", "yt-dlp", "ffmpeg"] {
             let target = self.fake_bin.join(name);
-            fs::copy(CLI, &target).unwrap();
+            fs::copy(&compiled, &target).unwrap();
             fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
