@@ -336,12 +336,10 @@ fn one_shot_cli_observes_running_owner_without_recovering_active_rows() {
     );
 
     let logs = json_output("remote runtime logs", layout.cli(&["logs", "--json"]));
-    assert!(
-        logs.as_array()
-            .unwrap()
-            .iter()
-            .any(|line| line.as_str().is_some_and(|line| line.contains("headless runtime ready")))
-    );
+    assert!(logs.as_array().unwrap().iter().any(|line| {
+        line.as_str()
+            .is_some_and(|line| line.contains("headless runtime ready"))
+    }));
 
     send_sigterm(owner.id());
     let status = wait_for_exit(&mut owner, Duration::from_secs(8));
