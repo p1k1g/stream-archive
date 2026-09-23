@@ -155,6 +155,9 @@ impl LocalManifestServer {
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        if thread_stop.load(Ordering::Acquire) {
+                            break;
+                        }
                         let mut request = [0u8; 4096];
                         let _ = stream.read(&mut request);
                         let response = format!(
