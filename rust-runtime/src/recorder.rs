@@ -694,7 +694,11 @@ mod provider_e2e {
         assert!(invocation.contains("--output"));
         assert!(invocation.contains("SOOP 방송 😀"));
         assert!(invocation.contains("hls://https://fixture.invalid/soop/master.m3u8"));
-        assert!(invocation.contains("\"best\""));
+        assert!(
+            invocation
+                .lines()
+                .any(|line| line.starts_with("argv[") && line.ends_with("=best"))
+        );
         assert!(invocation.contains(&streamlink.parent().unwrap().display().to_string()));
     }
 
@@ -744,7 +748,11 @@ mod provider_e2e {
         assert!(invocation.contains("--player"));
         assert!(invocation.contains("--player-args"));
         assert!(invocation.contains("CHZZK 방송 한글 🎬"));
-        assert!(invocation.contains("\"best\""));
+        assert!(
+            invocation
+                .lines()
+                .any(|line| line.starts_with("argv[") && line.ends_with("=best"))
+        );
         assert!(!invocation.contains("synthetic-test-token"));
     }
 
