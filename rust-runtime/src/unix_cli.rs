@@ -1123,5 +1123,4 @@ mod tests {
         assert!(only_json(&["--json".into()], "status").unwrap());
         assert!(only_json(&["--yaml".into()], "status").is_err());
     }
-
 }
