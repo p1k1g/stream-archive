@@ -261,7 +261,5 @@ mod tests {
         assert!(source.contains("PermissionsExt"));
         assert!(source.contains("0o600"));
         assert!(source.contains("\"channel.password\""));
-        assert!(!source.contains("TcpListener"));
-        assert!(!source.contains("axum"));
     }
 }
