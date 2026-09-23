@@ -2008,7 +2008,7 @@ mod provider_e2e {
         assert!(
             fs::read_dir(&output_dir)
                 .unwrap()
-                .filter_map(Result::ok)
+                .filter_map(|entry| entry.ok())
                 .all(|entry| !entry.file_name().to_string_lossy().starts_with(".soop-vod-concat-"))
         );
     }
