@@ -53,7 +53,6 @@ const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PROVIDER_CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
 const PROVIDER_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
 
-
 #[derive(Debug, Clone)]
 struct ChzzkTools {
     streamlink: PathBuf,
