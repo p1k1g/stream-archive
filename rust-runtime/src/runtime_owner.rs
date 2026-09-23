@@ -97,9 +97,7 @@ pub fn runtime_control_socket_path(database_path: &Path) -> Result<PathBuf> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    Ok(std::env::temp_dir().join(format!(
-        "{RUNTIME_CONTROL_SOCKET_PREFIX}{suffix}.sock"
-    )))
+    Ok(std::env::temp_dir().join(format!("{RUNTIME_CONTROL_SOCKET_PREFIX}{suffix}.sock")))
 }
 
 #[cfg(test)]
@@ -116,7 +114,13 @@ mod tests {
         let first = runtime_control_socket_path(&long).unwrap();
         let second = runtime_control_socket_path(&long).unwrap();
         assert_eq!(first, second);
-        assert!(first.file_name().unwrap().to_string_lossy().starts_with(RUNTIME_CONTROL_SOCKET_PREFIX));
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(RUNTIME_CONTROL_SOCKET_PREFIX)
+        );
         assert!(
             first.as_os_str().as_encoded_bytes().len() < 100,
             "Unix socket path must stay below conservative sockaddr_un limits: {}",
