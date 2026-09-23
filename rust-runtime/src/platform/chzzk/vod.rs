@@ -2188,9 +2188,22 @@ mod provider_e2e {
         let fixture = ProviderFixture::new();
         let streamlink = fixture.tool(ToolKind::Streamlink);
         let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let settings = std::collections::BTreeMap::from([(
+            "STREAMLINK_PATH".to_string(),
+            streamlink.display().to_string(),
+        )]);
+        let resolved_streamlink = resolve_streamlink_tool(fixture.root(), &settings).unwrap();
+        let resolved_ffmpeg = resolve_tool(
+            &ffmpeg.display().to_string(),
+            &[],
+            &["ffmpeg.exe", "ffmpeg"],
+        )
+        .unwrap();
+        assert_eq!(resolved_streamlink, streamlink);
+        assert_eq!(resolved_ffmpeg, ffmpeg);
         let tools = ChzzkTools {
-            streamlink: streamlink.clone(),
-            ffmpeg: ffmpeg.clone(),
+            streamlink: resolved_streamlink,
+            ffmpeg: resolved_ffmpeg,
         };
         let output_dir = fixture.root().join("CHZZK VOD 저장 한글 🎬");
         fs::create_dir_all(&output_dir).unwrap();
