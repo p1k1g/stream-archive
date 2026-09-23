@@ -31,7 +31,7 @@ pub struct MediaProcessSpec {
     pub args: Vec<OsString>,
     pub current_dir: Option<PathBuf>,
     pub environment: BTreeMap<OsString, OsString>,
-    pub timeout: Duration,
+    pub timeout: Option<Duration>,
     pub capture_limit: usize,
 }
 
@@ -42,7 +42,7 @@ impl MediaProcessSpec {
             args: Vec::new(),
             current_dir: None,
             environment: BTreeMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Some(Duration::from_secs(30)),
             capture_limit: DEFAULT_CAPTURE_LIMIT,
         }
     }
@@ -72,7 +72,12 @@ impl MediaProcessSpec {
     }
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn without_timeout(mut self) -> Self {
+        self.timeout = None;
         self
     }
 
@@ -218,12 +223,12 @@ where
         stderr_state.clone(),
     ));
 
-    let deadline = started + spec.timeout;
+    let deadline = spec.timeout.map(|timeout| started + timeout);
     let mut outcome = MediaProcessOutcome::Success;
     let exit_code = loop {
         let status = child.try_wait()?;
         let cancelled = is_cancelled();
-        let timed_out = Instant::now() >= deadline;
+        let timed_out = deadline.is_some_and(|deadline| Instant::now() >= deadline);
 
         match poll_decision(status.is_some(), cancelled, timed_out) {
             PollDecision::Exited => {
@@ -649,6 +654,22 @@ mod tests {
         .unwrap();
         assert_eq!(result.outcome, MediaProcessOutcome::Success);
         assert_eq!(fs::read_to_string(&output).unwrap(), "fixture-output");
+    }
+
+    #[tokio::test]
+    async fn without_timeout_allows_completion_past_configured_deadline() {
+        let result = run_media_process(
+            spec("sleep")
+                .arg("150")
+                .timeout(Duration::from_millis(1))
+                .without_timeout(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.outcome, MediaProcessOutcome::Success);
+        assert!(result.duration >= Duration::from_millis(100));
     }
 
     #[tokio::test]
