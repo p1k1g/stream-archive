@@ -7,19 +7,22 @@ $media = Read-RepoFile 'rust-runtime/src/media_process.rs'
 $fixture = Read-RepoFile 'rust-runtime/tests/fixtures/media_tool_fixture.rs'
 $support = Read-RepoFile 'rust-runtime/src/test_support.rs'
 
+$watcher = Read-RepoFile 'rust-runtime/src/native_watcher.rs'
+
 Assert-Match $recorder 'mod provider_e2e' 'LIVE provider E2E module is missing.'
+Assert-RustTest $watcher 'live_configured_streamlink_resolution_uses_explicit_tool_path' 'LIVE configured Streamlink resolution test is missing.'
 Assert-RustTest $recorder 'soop_live_provider_e2e_preserves_unicode_argument_contract' 'SOOP LIVE provider invocation E2E test is missing.'
 Assert-RustTest $recorder 'chzzk_live_provider_e2e_preserves_cookie_player_and_quality_contract' 'CHZZK LIVE provider invocation E2E test is missing.'
 Assert-RustTest $recorder 'live_provider_e2e_maps_nonzero_and_spawn_failure' 'LIVE provider failure-mapping E2E test is missing.'
 Assert-RustTest $recorder 'live_provider_cancel_cleans_owned_descendant_not_unrelated_process' 'LIVE provider owned-tree cancellation E2E test is missing.'
 
 Assert-Match $soopVod 'mod provider_e2e' 'SOOP VOD provider E2E module is missing.'
-Assert-RustTest $soopVod 'soop_vod_provider_e2e_metadata_and_download_contract' 'SOOP VOD invocation E2E test is missing.'
+Assert-RustTest $soopVod 'soop_vod_provider_e2e_runs_full_manager_pipeline_without_internet' 'SOOP VOD invocation E2E test is missing.'
 Assert-RustTest $soopVod 'soop_vod_provider_e2e_maps_nonzero_spawn_failure_and_timeout' 'SOOP VOD result-mapping E2E test is missing.'
 Assert-RustTest $soopVod 'soop_vod_provider_e2e_cancel_cleans_owned_tree_not_unrelated_process' 'SOOP VOD owned-tree cancellation E2E test is missing.'
 
 Assert-Match $chzzkVod 'mod provider_e2e' 'CHZZK VOD provider E2E module is missing.'
-Assert-RustTest $chzzkVod 'chzzk_vod_provider_e2e_streamlink_ffmpeg_contract_and_unicode_output' 'CHZZK VOD Streamlink/FFmpeg invocation E2E test is missing.'
+Assert-RustTest $chzzkVod 'chzzk_vod_provider_e2e_runs_prepared_download_to_completed_status' 'CHZZK VOD Streamlink/FFmpeg invocation E2E test is missing.'
 Assert-RustTest $chzzkVod 'chzzk_vod_provider_e2e_maps_nonzero_spawn_failure_and_timeout' 'CHZZK VOD result-mapping E2E test is missing.'
 Assert-RustTest $chzzkVod 'chzzk_vod_provider_e2e_cancel_cleans_streamlink_descendant' 'CHZZK VOD cancellation E2E test is missing.'
 
