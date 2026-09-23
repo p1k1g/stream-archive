@@ -254,7 +254,7 @@ cargo build --locked --release --manifest-path rust-runtime/Cargo.toml
 
 `stream-archive-cli doctor`와 `doctor --json`은 Windows Native Diagnostics와 같은 shared runtime preflight를 사용합니다. `--active-tools`는 로컬 media-tool version probe만 실행하며 provider/media 네트워크 요청은 하지 않습니다.
 
-Phase 23.5에서는 settings, provider/secret, channels, watcher, VOD, Queue, History, Backup, Storage, Runtime Logs 관리 명령과 JSON automation mode, Unix SIGINT/SIGTERM graceful shutdown을 추가했습니다. 자세한 전체 command tree와 운영 제약은 `docs/UNIX_CLI.md`를 참고하세요.
+Phase 23.5에서는 settings, provider/secret, channels, watcher, VOD, Queue, History, Backup, Storage, Runtime Logs 관리 명령과 JSON automation mode, Unix SIGINT/SIGTERM graceful shutdown을 추가했습니다. 하나의 foreground runtime만 canonical DB를 소유하도록 cross-process owner lock을 사용하며, one-shot CLI는 non-recovering observer로 열립니다. 실행 중 watcher/VOD의 status·cancel·password·logs 같은 runtime-only 제어는 HTTP가 아닌 owner-only Unix-domain socket으로 전달합니다. 자세한 전체 command tree와 운영 제약은 `docs/UNIX_CLI.md`를 참고하세요.
 
 ## 백업 / 복구
 
