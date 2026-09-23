@@ -234,8 +234,14 @@ fn spawn_runtime(layout: &Layout, binary: &str, args: &[&str]) -> Child {
         .unwrap()
 }
 
+unsafe extern "C" {
+    fn kill(pid: i32, signal: i32) -> i32;
+}
+
+const SIGTERM: i32 = 15;
+
 fn send_sigterm(pid: u32) {
-    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    let result = unsafe { kill(pid as i32, SIGTERM) };
     assert_eq!(result, 0, "failed to send SIGTERM to pid={pid}");
 }
 
