@@ -2,9 +2,7 @@ use super::auth::{ChzzkAuth, ChzzkAuthState};
 use crate::platform_runtime::{configure_utf8_cli, restrict_private_dir, spawn_owned};
 use crate::{
     backend::{LogBuffer, read_safe_settings, settings_path},
-    media_process::{
-        MediaProcessOutcome, MediaProcessSpec, run_media_process_with_atomic_cancel,
-    },
+    media_process::{MediaProcessOutcome, MediaProcessSpec, run_media_process_with_atomic_cancel},
     model::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
@@ -1041,15 +1039,7 @@ async fn run_capture(
     logs: &LogBuffer,
     label: &str,
 ) -> Result<String> {
-    run_capture_with_timeout(
-        program,
-        args,
-        cancel,
-        logs,
-        label,
-        Duration::from_secs(30),
-    )
-    .await
+    run_capture_with_timeout(program, args, cancel, logs, label, Duration::from_secs(30)).await
 }
 
 async fn run_capture_with_timeout(
@@ -2172,7 +2162,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod provider_e2e {
     use super::*;
@@ -2216,17 +2205,9 @@ mod provider_e2e {
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
         let cancel = AtomicBool::new(false);
 
-        download_video(
-            &tools,
-            &req,
-            Some(&cookie),
-            &output,
-            60,
-            &status,
-            &cancel,
-        )
-        .await
-        .unwrap();
+        download_video(&tools, &req, Some(&cookie), &output, 60, &status, &cancel)
+            .await
+            .unwrap();
 
         assert!(output.is_file());
         assert!(fs::metadata(&output).unwrap().len() > 0);
