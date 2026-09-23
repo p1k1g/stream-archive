@@ -1,6 +1,5 @@
 use crate::{
-    app_core::StreamArchiveCore, backend::resolve_backend_dir,
-    unix_control::RuntimeControlServer,
+    app_core::StreamArchiveCore, backend::resolve_backend_dir, unix_control::RuntimeControlServer,
 };
 use anyhow::Result;
 use std::env;
