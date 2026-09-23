@@ -5,10 +5,10 @@ use crate::{
 };
 #[cfg(unix)]
 use anyhow::{Context, Result, bail};
-#[cfg(unix)]
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 #[cfg(unix)]
-use serde_json::{Value, json};
+use serde_json::json;
 #[cfg(unix)]
 use std::{
     fs,
@@ -26,7 +26,6 @@ use tokio::{
 #[cfg(unix)]
 const MAX_CONTROL_MESSAGE_BYTES: usize = 64 * 1024;
 
-#[cfg(unix)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RuntimeControlRequest {
     pub command: String,
@@ -40,7 +39,6 @@ pub struct RuntimeControlRequest {
     pub max_lines: Option<usize>,
 }
 
-#[cfg(unix)]
 #[derive(Debug, Serialize, Deserialize)]
 struct RuntimeControlResponse {
     ok: bool,
@@ -222,6 +220,14 @@ pub async fn send_runtime_control(
                 .unwrap_or_else(|| "runtime control command failed".into())
         )
     }
+}
+
+#[cfg(not(unix))]
+pub async fn send_runtime_control(
+    _database_path: &std::path::Path,
+    _request: RuntimeControlRequest,
+) -> anyhow::Result<Option<Value>> {
+    Ok(None)
 }
 
 #[cfg(not(unix))]
