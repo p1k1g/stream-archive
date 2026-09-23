@@ -280,8 +280,10 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
     }
 
     if has_arg(args, "--dump-single-json") {
+        let manifest = provider_sidecar_value("manifest-url")
+            .unwrap_or_else(|| "https://fixture.invalid/master.m3u8".into());
         println!(
-            r#"{"title":"Fixture VOD","uploader":"Fixture BJ","uploader_id":"fixture","upload_date":"20260923","entries":[{"url":"https://fixture.invalid/master.m3u8","duration":60}]}"#
+            r#"{{"title":"Fixture VOD","uploader":"Fixture BJ","uploader_id":"fixture","upload_date":"20260923","entries":[{{"url":"{manifest}","duration":60}}]}}"#
         );
         return;
     }
@@ -367,6 +369,13 @@ fn provider_mode_path() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;
     let name = exe.file_name()?.to_string_lossy();
     Some(exe.parent()?.join(format!("{name}.mode")))
+}
+
+fn provider_sidecar_value(suffix: &str) -> Option<String> {
+    let exe = env::current_exe().ok()?;
+    let name = exe.file_name()?.to_string_lossy();
+    let path = exe.parent()?.join(format!("{name}.{suffix}"));
+    fs::read_to_string(path).ok().map(|value| value.trim().to_string())
 }
 
 fn record_provider_invocation(tool: ProviderTool, args: &[std::ffi::OsString]) {
