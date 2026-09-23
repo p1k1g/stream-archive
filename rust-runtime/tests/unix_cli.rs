@@ -48,7 +48,10 @@ impl Layout {
         command
             .env("STREAM_ARCHIVE_BACKEND_DIR", &self.backend)
             .env("STREAM_ARCHIVE_DATA_DIR", &self.data)
-            .env("STREAM_ARCHIVE_BACKUP_DIR", self._root.path().join("backups 한글"));
+            .env(
+                "STREAM_ARCHIVE_BACKUP_DIR",
+                self._root.path().join("backups 한글"),
+            );
         let existing = std::env::var_os("PATH").unwrap_or_default();
         let mut paths = vec![self.fake_bin.clone()];
         paths.extend(std::env::split_paths(&existing));
@@ -113,13 +116,13 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
 
     let status = json_output("status", layout.cli(&["status", "--json"]));
     assert_eq!(status["backend"], layout.backend.display().to_string());
-    assert_eq!(status["database"], layout.data.join("stream-archive.db").display().to_string());
+    assert_eq!(
+        status["database"],
+        layout.data.join("stream-archive.db").display().to_string()
+    );
     assert_eq!(status["tools"].as_array().unwrap().len(), 3);
 
-    let environment = json_output(
-        "settings show",
-        layout.cli(&["settings", "show", "--json"]),
-    );
+    let environment = json_output("settings show", layout.cli(&["settings", "show", "--json"]));
     assert!(environment.as_array().unwrap().iter().any(|item| {
         item["key"] == "OUTPUT_DIR" && item["value"] == layout.live.display().to_string()
     }));
@@ -143,10 +146,7 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
             layout.live.to_str().unwrap(),
         ]),
     );
-    let channels = json_output(
-        "channels list",
-        layout.cli(&["channels", "list", "--json"]),
-    );
+    let channels = json_output("channels list", layout.cli(&["channels", "list", "--json"]));
     assert_eq!(channels.as_array().unwrap().len(), 1);
     assert_eq!(channels[0]["account"], "fixture-account");
 
@@ -159,17 +159,11 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
     let queue = json_output("queue list", layout.cli(&["queue", "list", "--json"]));
     assert_eq!(queue["queued_count"], 0);
 
-    let history = json_output(
-        "history list",
-        layout.cli(&["history", "list", "--json"]),
-    );
+    let history = json_output("history list", layout.cli(&["history", "list", "--json"]));
     assert!(history["live"].is_array());
     assert!(history["vod"].is_array());
 
-    let backup = json_output(
-        "backup status",
-        layout.cli(&["backup", "status", "--json"]),
-    );
+    let backup = json_output("backup status", layout.cli(&["backup", "status", "--json"]));
     assert!(backup["policy"].is_object());
 
     let storage = json_output("storage", layout.cli(&["storage", "--json"]));
@@ -223,7 +217,10 @@ fn unix_cli_serve_sigterm_is_graceful_and_does_not_kill_unrelated_runtime() {
 
     send_sigterm(unrelated_child.id());
     let status = wait_for_exit(&mut unrelated_child, Duration::from_secs(8));
-    assert!(status.success(), "compatibility server SIGTERM exit was {status}");
+    assert!(
+        status.success(),
+        "compatibility server SIGTERM exit was {status}"
+    );
 }
 
 fn spawn_runtime(layout: &Layout, binary: &str, args: &[&str]) -> Child {
