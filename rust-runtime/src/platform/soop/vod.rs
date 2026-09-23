@@ -1464,7 +1464,8 @@ fn title_no(url: &str) -> Result<String> {
 fn entry_url(value: &Value) -> String {
     for key in ["url", "manifest_url", "manifestUrl", "hls_url", "hlsUrl"] {
         if let Some(s) = value.get(key).and_then(Value::as_str)
-            && s.starts_with("https://")
+            && (s.starts_with("https://")
+                || (cfg!(test) && s.starts_with("http://127.0.0.1:")))
             && !Url::parse(s)
                 .ok()
                 .is_some_and(|url| url.path().starts_with("/player/"))
@@ -1852,56 +1853,56 @@ mod provider_e2e {
     }
 
     #[tokio::test]
-    async fn soop_vod_provider_e2e_metadata_and_download_contract() {
+    async fn soop_vod_provider_e2e_runs_full_manager_pipeline_without_internet() {
+        use crate::test_support::LocalManifestServer;
+
         let fixture = ProviderFixture::new();
+        let manifest = LocalManifestServer::start();
         let yt_dlp = fixture.tool(ToolKind::YtDlp);
         let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
-        let tools = resolve_tools(
-            fixture.root(),
-            &yt_dlp.display().to_string(),
-            &ffmpeg.display().to_string(),
-        )
-        .unwrap();
-        assert_eq!(tools.yt_dlp, yt_dlp);
-        assert_eq!(tools.ffmpeg.as_deref(), Some(ffmpeg.as_path()));
-        let cookie = fixture.root().join("쿠키 fixture.txt");
-        fs::write(&cookie, "# fixture").unwrap();
-        let cancel = AtomicBool::new(false);
-        let logs = LogBuffer::new();
+        fixture.set_manifest_url(&yt_dlp, manifest.url());
 
-        let metadata = get_metadata(
-            &tools,
-            "https://vod.sooplive.com/player/123456789",
-            &cookie,
-            &cancel,
-            &logs,
-        )
-        .await
-        .unwrap();
-        assert_eq!(metadata.streamer, "Fixture BJ");
-        assert_eq!(metadata.entries.len(), 1);
-
+        let backend = fixture.root().join("backend");
+        fs::create_dir_all(&backend).unwrap();
         let output_dir = fixture.root().join("SOOP VOD 저장 한글 🎬");
         fs::create_dir_all(&output_dir).unwrap();
-        let output = output_dir.join("PART 01 영상 😀.mp4");
-        let req = request(&output_dir, &yt_dlp, &ffmpeg);
-        let status = Arc::new(RwLock::new(VodJobStatus::default()));
-        download_part(
-            &tools,
-            &req,
+        let cookie = fixture.root().join("CloudFront fixture cookies.txt");
+        fs::write(
             &cookie,
-            "https://fixture.invalid/master.m3u8",
-            &output,
-            1,
-            1,
-            &status,
-            &cancel,
-            &logs,
+            concat!(
+                "# Netscape HTTP Cookie File\n",
+                "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Key-Pair-Id\tkey\n",
+                "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Policy\tpolicy\n",
+                "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Signature\tsignature\n"
+            ),
         )
-        .await
         .unwrap();
 
+        let mut req = request(&output_dir, &yt_dlp, &ffmpeg);
+        req.cookie_file = cookie.display().to_string();
+        let manager = VodManager::new(backend, LogBuffer::new());
+        let initial = manager.download(req).await.unwrap();
+        assert!(initial.running);
+
+        let started = std::time::Instant::now();
+        let completed = loop {
+            let current = manager.status().await;
+            if !current.running {
+                break current;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "SOOP VOD manager fixture did not complete"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+
+        assert_eq!(completed.state, "COMPLETED");
+        assert_eq!(completed.percent, 100.0);
+        let output = PathBuf::from(completed.output_file.unwrap());
         assert!(output.is_file());
+        assert!(output.starts_with(&output_dir));
+
         let invocation = fixture.invocations();
         assert!(invocation.contains("tool=YtDlp"));
         assert!(invocation.contains("--dump-single-json"));
@@ -1911,6 +1912,7 @@ mod provider_e2e {
         assert!(invocation.contains("--ffmpeg-location"));
         assert!(invocation.contains(&ffmpeg.display().to_string()));
         assert!(invocation.contains("SOOP VOD 저장 한글 🎬"));
+        assert!(invocation.contains(manifest.url()));
     }
 
     #[tokio::test]
