@@ -1556,3 +1556,25 @@ mod tests {
         assert!(command_state_key(&states, account).is_err());
     }
 }
+
+
+#[cfg(test)]
+mod provider_e2e {
+    use super::*;
+    use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
+
+    #[test]
+    fn live_configured_streamlink_resolution_uses_explicit_tool_path() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let settings = BTreeMap::from([(
+            "STREAMLINK_PATH".to_string(),
+            streamlink.display().to_string(),
+        )]);
+
+        assert_eq!(
+            resolve_streamlink(fixture.root(), &settings).unwrap(),
+            streamlink
+        );
+    }
+}
