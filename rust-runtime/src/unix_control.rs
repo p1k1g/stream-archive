@@ -39,6 +39,7 @@ pub struct RuntimeControlRequest {
     pub max_lines: Option<usize>,
 }
 
+#[cfg(unix)]
 #[derive(Debug, Serialize, Deserialize)]
 struct RuntimeControlResponse {
     ok: bool,
