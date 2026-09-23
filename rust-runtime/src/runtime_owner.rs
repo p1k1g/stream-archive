@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use fs2::FileExt;
 use std::{
     fs::{self, File, OpenOptions},
@@ -17,10 +17,22 @@ pub struct RuntimeOwnerGuard {
 
 impl RuntimeOwnerGuard {
     pub fn acquire(database_path: &Path) -> Result<Self> {
+        Self::try_acquire(database_path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "another Stream Archive runtime owns {}",
+                runtime_lock_path(database_path)
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| "the canonical data directory".into())
+            )
+        })
+    }
+
+    pub fn try_acquire(database_path: &Path) -> Result<Option<Self>> {
         let path = runtime_lock_path(database_path)?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create runtime lock directory {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create runtime lock directory {}", parent.display())
+            })?;
         }
         let file = OpenOptions::new()
             .create(true)
@@ -29,10 +41,8 @@ impl RuntimeOwnerGuard {
             .open(&path)
             .with_context(|| format!("failed to open runtime owner lock {}", path.display()))?;
         match file.try_lock_exclusive() {
-            Ok(()) => Ok(Self { file, path }),
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                bail!("another Stream Archive runtime owns {}", path.display())
-            }
+            Ok(()) => Ok(Some(Self { file, path })),
+            Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(None),
             Err(error) => Err(error)
                 .with_context(|| format!("failed to acquire runtime owner lock {}", path.display())),
         }
@@ -50,16 +60,7 @@ impl Drop for RuntimeOwnerGuard {
 }
 
 pub fn runtime_owner_active(database_path: &Path) -> Result<bool> {
-    match RuntimeOwnerGuard::acquire(database_path) {
-        Ok(guard) => {
-            drop(guard);
-            Ok(false)
-        }
-        Err(error) if error.to_string().starts_with("another Stream Archive runtime owns ") => {
-            Ok(true)
-        }
-        Err(error) => Err(error),
-    }
+    Ok(RuntimeOwnerGuard::try_acquire(database_path)?.is_none())
 }
 
 pub fn runtime_lock_path(database_path: &Path) -> Result<PathBuf> {
