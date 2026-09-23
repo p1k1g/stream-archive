@@ -10,7 +10,7 @@ use std::{
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -22,6 +22,7 @@ use tokio::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const CAPTURE_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 pub const DEFAULT_CAPTURE_LIMIT: usize = 64 * 1024;
 pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -182,8 +183,18 @@ pub async fn run_media_process(
         .stderr
         .take()
         .context("owned media process stderr pipe is unavailable")?;
-    let stdout_task = tokio::spawn(capture_bounded(stdout, spec.capture_limit));
-    let stderr_task = tokio::spawn(capture_bounded(stderr, spec.capture_limit));
+    let stdout_state = Arc::new(Mutex::new(CaptureState::default()));
+    let stderr_state = Arc::new(Mutex::new(CaptureState::default()));
+    let stdout_task = tokio::spawn(capture_bounded(
+        stdout,
+        spec.capture_limit,
+        stdout_state.clone(),
+    ));
+    let stderr_task = tokio::spawn(capture_bounded(
+        stderr,
+        spec.capture_limit,
+        stderr_state.clone(),
+    ));
 
     let deadline = started + spec.timeout;
     let mut outcome = MediaProcessOutcome::Success;
@@ -213,8 +224,8 @@ pub async fn run_media_process(
         tokio::time::sleep(POLL_INTERVAL).await;
     };
 
-    let stdout = join_capture(stdout_task, "stdout").await?;
-    let stderr = join_capture(stderr_task, "stderr").await?;
+    let stdout = finish_capture(stdout_task, stdout_state, "stdout").await?;
+    let stderr = finish_capture(stderr_task, stderr_state, "stderr").await?;
 
     Ok(MediaProcessResult {
         outcome,
@@ -226,35 +237,73 @@ pub async fn run_media_process(
     })
 }
 
-async fn join_capture(
-    task: JoinHandle<std::io::Result<CapturedOutput>>,
-    stream: &str,
-) -> Result<CapturedOutput> {
-    task.await
-        .with_context(|| format!("{stream} capture task did not complete"))?
-        .with_context(|| format!("{stream} capture failed"))
+#[derive(Default)]
+struct CaptureState {
+    tail: Vec<u8>,
+    truncated: bool,
 }
 
-async fn capture_bounded<R>(mut reader: R, limit: usize) -> std::io::Result<CapturedOutput>
+impl CaptureState {
+    fn snapshot(&self, incomplete: bool) -> CapturedOutput {
+        CapturedOutput {
+            text: String::from_utf8_lossy(&self.tail).into_owned(),
+            truncated: self.truncated || incomplete,
+        }
+    }
+}
+
+async fn finish_capture(
+    mut task: JoinHandle<std::io::Result<()>>,
+    state: Arc<Mutex<CaptureState>>,
+    stream: &str,
+) -> Result<CapturedOutput> {
+    let incomplete = match tokio::time::timeout(CAPTURE_DRAIN_TIMEOUT, &mut task).await {
+        Ok(joined) => {
+            joined
+                .with_context(|| format!("{stream} capture task did not complete"))?
+                .with_context(|| format!("{stream} capture failed"))?;
+            false
+        }
+        Err(_) => {
+            task.abort();
+            let _ = task.await;
+            true
+        }
+    };
+
+    let state = state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("{stream} capture state was poisoned"))?;
+    Ok(state.snapshot(incomplete))
+}
+
+async fn capture_bounded<R>(
+    mut reader: R,
+    limit: usize,
+    state: Arc<Mutex<CaptureState>>,
+) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
 {
-    let mut tail = Vec::with_capacity(limit.min(8192));
     let mut buffer = [0u8; 8192];
-    let mut truncated = false;
 
     loop {
         let count = reader.read(&mut buffer).await?;
         if count == 0 {
             break;
         }
-        append_tail(&mut tail, &buffer[..count], limit, &mut truncated);
+        let mut state = state
+            .lock()
+            .map_err(|_| std::io::Error::other("capture state was poisoned"))?;
+        append_tail(
+            &mut state.tail,
+            &buffer[..count],
+            limit,
+            &mut state.truncated,
+        );
     }
 
-    Ok(CapturedOutput {
-        text: String::from_utf8_lossy(&tail).into_owned(),
-        truncated,
-    })
+    Ok(())
 }
 
 fn append_tail(tail: &mut Vec<u8>, input: &[u8], limit: usize, truncated: &mut bool) {
@@ -391,7 +440,7 @@ fn probe_failure_detail(result: &MediaProcessResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform_runtime::test_process_exists;
+    use crate::platform_runtime::test_process_running;
     use std::{
         fs,
         process::{Child as StdChild, Command as StdCommand, Stdio},
@@ -583,7 +632,7 @@ mod tests {
             .parse()
             .unwrap();
         assert!(
-            !test_process_exists(pid),
+            !test_process_running(pid),
             "owned descendant must be gone after timeout cleanup"
         );
     }
@@ -623,13 +672,52 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        assert!(!test_process_exists(pid));
+        assert!(!test_process_running(pid));
         assert!(
             unrelated.try_wait().unwrap().is_none(),
             "unrelated fixture process must survive owned cancellation"
         );
         let _ = unrelated.kill();
         let _ = unrelated.wait();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_does_not_wait_forever_for_detached_pipe_holder() {
+        use crate::platform_runtime::test_kill_process;
+
+        let dir = temp_unicode_dir();
+        let detached_pid = dir.path().join("detached.pid");
+        let detached_ready = dir.path().join("detached.ready");
+        let started = Instant::now();
+        let result = run_media_process(
+            spec("spawn-detached-output-holder")
+                .args(vec![
+                    detached_pid.as_os_str().to_owned(),
+                    detached_ready.as_os_str().to_owned(),
+                ])
+                .timeout(Duration::from_secs(2)),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.outcome, MediaProcessOutcome::Timeout);
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "capture drain must remain bounded after owned cleanup"
+        );
+        assert!(
+            result.stdout.truncated || result.stderr.truncated,
+            "aborted capture should report incomplete/truncated output"
+        );
+
+        let pid: u32 = fs::read_to_string(&detached_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        test_kill_process(pid);
     }
 
     #[tokio::test]
