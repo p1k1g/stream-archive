@@ -4,7 +4,7 @@
 
 ## Canonical runtime
 
-- `rust-runtime/src/main.rs`: HTTP/Web presentation이 없는 compatibility headless runtime entry. `StreamArchiveCore`를 열고 Queue/backup/history sync와 선택적 watcher를 구동하며 종료 시 shared runtime cleanup을 사용한다.
+- `rust-runtime/src/main.rs`: HTTP/Web presentation이 없는 compatibility headless runtime entry. 실제 bootstrap/lifecycle은 `rust-runtime/src/headless.rs`의 shared runner에 위임한다.
 - `rust-runtime/src/lib.rs`: shared Rust library boundary. source directory는 `rust-runtime`이고 Cargo package / Rust crate compatibility identity는 `stream-archive-server` / `stream_archive_server`로 유지한다.
 - `rust-runtime/src/app_core.rs`: `StreamArchiveCore` service facade. SQLite/settings/secrets/channels/LIVE watcher/VOD/Queue/History/Backup/Storage/process lifecycle의 canonical application boundary.
 - `rust-runtime/src/backup_service.rs`: reusable BackupManager/service boundary. managed backup policy/list/create/restore/integrity/retention을 presentation과 분리한다.
@@ -13,7 +13,7 @@
 - `rust-gui/ui/*.slint`: Windows native presentation/navigation. provider/storage/process 구현 로직을 넣지 않는다.
 - Native `설정` 내부는 `일반`과 `관리`로 나뉜다. `일반`은 provider/runtime 설정, `관리`는 backup policy + Backup/Restore/Diagnostics/Logs를 담당한다. 모든 작업은 shared services를 사용한다.
 - `rust-runtime/src/tool_discovery.rs`: cross-platform Streamlink/yt-dlp/FFmpeg discovery.
-- `rust-runtime/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI baseline. `serve`는 sibling `stream-archive-server` headless runtime을 실행하며 Web server를 시작하지 않는다.
+- `rust-runtime/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI entry. bootstrap(`init`/`tools`/`doctor`)과 Phase 23.5 daily-use management를 제공하며, management는 `rust-runtime/src/unix_cli.rs`를 통해 `StreamArchiveCore`를 사용한다. `serve`는 shared headless runner를 직접 사용하고 Web server를 시작하지 않는다.
 - `rust-runtime/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration.
 - `rust-runtime/src/recorder.rs`: Streamlink/FFmpeg process ownership/lifecycle.
 - `rust-runtime/src/platform/live.rs`: platform-neutral LIVE provider facade/session types.
@@ -37,7 +37,7 @@ Provider-specific network/authentication/stream mechanics live under `rust-runti
 
 Do not reintroduce runtime INI/TXT mirrors or one-off config-file readers. Product-wide runtime environment variables use the `STREAM_ARCHIVE_*` namespace. Provider-specific credentials such as `SOOP_USERNAME`, `SOOP_PASSWORD`, `CHZZK_NID_AUT`, and `CHZZK_NID_SES` remain provider-scoped settings.
 
-The Unix CLI may write canonical SQLite settings directly; it must not become a second configuration authority. Tool discovery persists only existing runtime keys such as `STREAMLINK_PATH`, `YT_DLP_PATH`, and `FFMPEG_PATH`.
+Unix CLI의 bootstrap `init`/`tools configure`는 기존 bounded SQLite bootstrap 경계를 유지한다. Phase 23.5 daily-use management는 `StreamArchiveCore`/shared services를 사용해야 하며 두 번째 configuration authority가 되어서는 안 된다. Tool discovery는 `STREAMLINK_PATH`, `YT_DLP_PATH`, `FFMPEG_PATH` 같은 기존 runtime key만 저장한다.
 
 Slint code must use `StreamArchiveCore`/shared library services rather than opening a second SQLite connection or reproducing settings/secret validation in UI callbacks.
 
@@ -74,7 +74,10 @@ Unix/headless flow:
 cargo build --locked --release --manifest-path rust-runtime/Cargo.toml
 ./rust-runtime/target/release/stream-archive-cli init
 ./rust-runtime/target/release/stream-archive-cli tools configure
-./rust-runtime/target/release/stream-archive-cli doctor
+./rust-runtime/target/release/stream-archive-cli doctor --active-tools
+./rust-runtime/target/release/stream-archive-cli status --json
+./rust-runtime/target/release/stream-archive-cli channels list --json
+./rust-runtime/target/release/stream-archive-cli queue list --json
 ./rust-runtime/target/release/stream-archive-cli serve --watch
 ```
 
