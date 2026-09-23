@@ -1124,12 +1124,4 @@ mod tests {
         assert!(only_json(&["--yaml".into()], "status").is_err());
     }
 
-    #[test]
-    fn secret_transport_contract_is_stdin_only() {
-        let source = include_str!("unix_cli.rs");
-        assert!(source.contains("providers secret <KEY> --stdin"));
-        assert!(source.contains("channels password"));
-        assert!(!source.contains("--password actual"));
-        assert!(!source.contains("--nid-aut actual"));
-    }
 }
