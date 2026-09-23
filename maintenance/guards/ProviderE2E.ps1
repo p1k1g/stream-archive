@@ -27,6 +27,9 @@ Assert-RustTest $chzzkVod 'chzzk_vod_provider_e2e_maps_nonzero_spawn_failure_and
 Assert-RustTest $chzzkVod 'chzzk_vod_provider_e2e_cancel_cleans_streamlink_descendant' 'CHZZK VOD cancellation E2E test is missing.'
 
 Assert-Match $media 'run_media_process_with_atomic_cancel' 'Provider capture bridge to the shared media runner is missing.'
+Assert-Match $media 'without_timeout' 'Cancellation-only media-process support is missing.'
+Assert-Match $soopVod 'run_capture_without_timeout\(ffmpeg' 'SOOP FFmpeg merge must remain cancellation-only without a fixed probe timeout.'
+Assert-RustTest $soopVod 'soop_vod_merge_is_cancel_only_and_removes_partial_target_on_failure' 'SOOP FFmpeg merge cleanup regression test is missing.'
 Assert-Match $soopVod 'run_media_process_with_atomic_cancel' 'SOOP VOD capture path is not connected to the shared media runner.'
 Assert-Match $chzzkVod 'run_media_process_with_atomic_cancel' 'CHZZK VOD capture path is not connected to the shared media runner.'
 Assert-Match $recorder 'spawn_owned\(&mut command\)' 'LIVE streaming must retain long-lived owned-process semantics.'
