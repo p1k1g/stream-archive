@@ -524,6 +524,62 @@ impl Store {
         Ok(())
     }
 
+    pub fn insert_channel(&self, channel: &Channel) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "INSERT INTO channels(platform,account,name,enabled,outdir,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(platform,account) DO NOTHING",
+            params![
+                channel.platform.as_str(),
+                channel.account,
+                channel.name,
+                i64::from(channel.enabled),
+                channel.outdir,
+                now
+            ],
+        )?;
+        if changed == 0 {
+            anyhow::bail!(
+                "duplicate channel identity: {}/{}",
+                channel.platform,
+                channel.account
+            );
+        }
+        self.refresh_config_cache_from_conn(&conn)
+    }
+
+    pub fn delete_channel(&self, platform: PlatformId, account: &str) -> Result<()> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "DELETE FROM channels WHERE platform=?1 AND account=?2",
+            params![platform.as_str(), account],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("channel not found: {platform}/{account}");
+        }
+        self.refresh_config_cache_from_conn(&conn)
+    }
+
+    pub fn set_channel_enabled(
+        &self,
+        platform: PlatformId,
+        account: &str,
+        enabled: bool,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE channels SET enabled=?3, updated_at=?4 WHERE platform=?1 AND account=?2",
+            params![platform.as_str(), account, i64::from(enabled), now],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("channel not found: {platform}/{account}");
+        }
+        self.refresh_config_cache_from_conn(&conn)
+    }
+
     pub fn start_live(&self, item: &LiveHistoryItem) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
