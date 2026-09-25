@@ -159,11 +159,11 @@ Windows:
 
 ```powershell
 .\BUILD_PORTABLE.bat
-powershell -ExecutionPolicy Bypass -File .\maintenance\Verify-WindowsPackage.ps1 -Root .\dist\stream-archive
+powershell -ExecutionPolicy Bypass -File .\maintenance\Verify-WindowsPackage.ps1 -Root .\dist\stream-archive -RequireCleanData
 powershell -ExecutionPolicy Bypass -File .\maintenance\New-WindowsReleaseArchive.ps1 -PackageRoot .\dist\stream-archive -OutputDir .\dist\release
 ```
 
-Official CI/release validation adds `-RequireCleanData` and verifies the generated ZIP plus its archive-level `.sha256`.
+`New-WindowsReleaseArchive.ps1` also enforces the same clean-data verifier internally before it opens the output ZIP. A local `BUILD_PORTABLE.bat` tree that preserved an existing database therefore cannot be turned into an official-looking release archive until runtime data is removed from the staging tree. CI/release validation also verifies the generated ZIP plus its archive-level `.sha256`.
 
 Linux/macOS:
 
