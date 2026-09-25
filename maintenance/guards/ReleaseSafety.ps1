@@ -125,7 +125,7 @@ try {
         throw 'Retired BUILD_RELEASE.bat wrapper must not exist; use BUILD_PORTABLE.bat or Cargo directly.'
     }
     Assert-Match $workflow 'BUILD_PORTABLE\.bat' 'Portable package smoke step is missing.'
-    Assert-Match $workflow 'Verify portable package' 'Portable package verification step is missing.'
+    Assert-Match $workflow 'Verify-WindowsPackage\.ps1' 'Reusable Windows portable package verification step is missing.'
     Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-runtime\\Cargo\.toml"' 'Portable package must perform the locked shared/headless runtime release build directly.'
     Assert-Match $package 'cargo build --locked --release --manifest-path "\.\\rust-gui\\Cargo\.toml"' 'Portable package must perform the locked native GUI release build directly.'
     Assert-Match $package 'StreamArchive\.exe' 'Portable package must include the native Stream Archive GUI.'
