@@ -53,8 +53,10 @@ try {
     Assert-Match $unixMetadata 'COMMIT="unknown"' 'Unix release metadata must support source archives without Git metadata.'
     Assert-Match $unixMetadata 'git status --porcelain --untracked-files=normal' 'Unix release metadata must detect dirty worktrees.'
     Assert-Match $unixMetadata '-dirty' 'Unix dirty release provenance marker is missing.'
-    Assert-Match $windowsMetadata 'git status --porcelain --untracked-files=normal' 'Windows release metadata must detect dirty worktrees.'
+    Assert-Match $windowsMetadata 'RepositoryRoot' 'Windows release metadata must support an explicit repository provenance root.'
+    Assert-Match $windowsMetadata 'git -C \$resolvedRepositoryRoot status --porcelain --untracked-files=normal' 'Windows release metadata must detect dirty worktrees from the explicit repository root.'
     Assert-Match $windowsMetadata '-dirty' 'Windows dirty release provenance marker is missing.'
+    Assert-Match $windowsBuild '-RepositoryRoot "\."' 'Windows portable packaging must anchor release provenance to the repository checkout.'
     Assert-Match $gitignore '(?m)^dist/\r?$' 'Generated release staging must be ignored so clean packaging does not self-mark provenance dirty.'
 
     Assert-Match $checkWorkflow 'BUILD_UNIX_PACKAGE\.sh' 'PR CI must smoke the canonical Unix package builder.'
@@ -62,6 +64,7 @@ try {
     Assert-Match $checkWorkflow 'New-WindowsReleaseArchive\.ps1' 'PR CI must verify the canonical Windows archive path.'
     Assert-Match $checkWorkflow 'Windows release archiver accepted non-empty runtime data' 'PR CI must regress the clean-data archive boundary.'
     Assert-Match $checkWorkflow 'dirty checkout metadata must include the -dirty provenance marker' 'PR CI must regress dirty release provenance.'
+    Assert-Match $checkWorkflow '-RepositoryRoot "\$env:GITHUB_WORKSPACE"' 'Windows dirty provenance regression must use the explicit checkout root.'
 
     Assert-Match $releaseWorkflow 'workflow_dispatch' 'Release artifact workflow must remain manual.'
     Assert-Match $releaseWorkflow 'release-contracts:' 'Manual release artifacts must be gated by a release contract job.'
