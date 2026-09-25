@@ -87,10 +87,18 @@ may perform startup recovery and own LIVE/VOD/Queue workers for a canonical
 database. One-shot management commands open a non-recovering observer core and
 therefore cannot mark another runtime's active rows as interrupted.
 
+Channel add/remove/enable/disable from one-shot CLI processes use row-level
+SQLite mutations rather than whole-table snapshot replacement. This keeps
+overlapping CLI writers atomic and prevents a later writer from silently
+discarding an earlier channel change.
+
 On Unix, the owner also exposes a minimal local control socket for runtime-only
-operations: watcher status/stop, channel action/password, VOD status/cancel and
-runtime logs. The socket is `0600` and uses a short hash-derived filename under
-the OS temporary directory so macOS Unix-socket path limits are respected.
+operations: watcher status/stop, channel action/password, VOD status/cancel,
+active Queue cancellation and runtime logs. The socket is `0600` and uses a
+short hash-derived filename under the OS temporary directory so macOS
+Unix-socket path limits are respected. Active Queue cancellation therefore
+executes against the owner process's canonical Queue/VOD lifecycle rather than
+an observer's empty process-local `active_id`.
 There is still no localhost HTTP/Web control plane.
 
 Direct foreground VOD analyze/download acquires the same owner lock. If
