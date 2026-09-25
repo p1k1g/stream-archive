@@ -126,9 +126,15 @@ jobs:
           printf 'dirty provenance probe\n' > "$probe"
           (
             cd "$GITHUB_WORKSPACE"
-            ./maintenance/Write-ReleaseMetadata.sh               "$dirty"               "$GITHUB_WORKSPACE/rust-runtime/Cargo.toml"
+            ./maintenance/Write-ReleaseMetadata.sh \
+              "$dirty" \
+              "$GITHUB_WORKSPACE/rust-runtime/Cargo.toml"
           )
-          grep -Eq '^commit=[0-9a-f]{12}-dirty
+          grep -Eq '^commit=[0-9a-f]{12}-dirty$' "$dirty"
+          rm -f "$probe"
+          trap - EXIT
+
+      - name: Native compile check
         shell: bash
         run: cargo check --locked --manifest-path rust-runtime/Cargo.toml
 
@@ -147,7 +153,6 @@ jobs:
         shell: bash
         run: cargo test --locked --manifest-path rust-gui/Cargo.toml
 
-      # Phase 22.2 treats project Clippy warnings as CI failures.
       - name: Rust clippy strict
         shell: bash
         run: cargo clippy --locked --manifest-path rust-runtime/Cargo.toml --all-targets --all-features -- -D warnings
@@ -252,7 +257,15 @@ jobs:
             $dirtyCommit = Get-Content -LiteralPath $dirtyOutput |
               Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
               Select-Object -First 1
-            if ($null -eq $dirtyCommit -or $dirtyCommit.TrimStart([char]0xFEFF).Trim() -notmatch '^commit=[0-9a-f]{12}-dirty
+            if ($null -eq $dirtyCommit -or $dirtyCommit.TrimStart([char]0xFEFF).Trim() -notmatch '^commit=[0-9a-f]{12}-dirty$') {
+              throw 'dirty checkout metadata must include the -dirty provenance marker'
+            }
+          }
+          finally {
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Windows portable package smoke
         shell: cmd
         run: BUILD_PORTABLE.bat
 
@@ -282,296 +295,6 @@ jobs:
           if (-not $rejected) {
             throw 'Windows release archiver accepted non-empty runtime data.'
           }
-
-      - name: Build Windows release archive
-        shell: powershell
-        run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
-
-      - name: Verify Windows release archive
-        shell: powershell
-        run: |
-          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
-          ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $archive.FullName -ArchiveChecksumPath "$($archive.FullName).sha256"
- "$dirty"
-          rm -f "$probe"
-          trap - EXIT
-
-      - name: Native compile check
-        shell: bash
-        run: cargo check --locked --manifest-path rust-runtime/Cargo.toml
-
-      - name: Slint shell Rust format check
-        if: ${{ always() && matrix.platform == 'windows' }}
-        shell: bash
-        run: cargo fmt --manifest-path rust-gui/Cargo.toml -- --check
-
-      - name: Slint shell compile check
-        if: ${{ matrix.platform == 'windows' }}
-        shell: bash
-        run: cargo check --locked --manifest-path rust-gui/Cargo.toml
-
-      - name: Native settings adapter tests
-        if: ${{ matrix.platform == 'windows' }}
-        shell: bash
-        run: cargo test --locked --manifest-path rust-gui/Cargo.toml
-
-      # Phase 22.2 treats project Clippy warnings as CI failures.
-      - name: Rust clippy strict
-        shell: bash
-        run: cargo clippy --locked --manifest-path rust-runtime/Cargo.toml --all-targets --all-features -- -D warnings
-
-      - name: Slint shell clippy strict
-        if: ${{ matrix.platform == 'windows' }}
-        shell: bash
-        run: cargo clippy --locked --manifest-path rust-gui/Cargo.toml --all-targets --all-features -- -D warnings
-
-      - name: Unix release package smoke
-        if: ${{ matrix.platform != 'windows' }}
-        shell: bash
-        run: ./BUILD_UNIX_PACKAGE.sh
-
-  windows-check:
-    name: windows-check
-    needs: core-check
-    if: ${{ always() }}
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - name: Enforce cross-platform core results
-        shell: powershell
-        run: |
-          if ('${{ needs.core-check.result }}' -ne 'success') {
-            throw 'One or more Windows/Linux/macOS core checks failed.'
-          }
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies and targets
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            rust-runtime -> target
-            rust-gui -> target
-          cache-on-failure: true
-
-      - name: Environment
-        shell: powershell
-        run: |
-          Write-Host "runner_arch=${{ runner.arch }}"
-          rustc --version
-          rustc -vV | Select-String '^host:'
-          cargo --version
-          git --version
-
-      - name: Runtime contract guard
-        shell: powershell
-        run: ./maintenance/Test-RuntimeContracts.ps1
-
-      - name: Source archive metadata smoke
-        shell: powershell
-        run: |
-          $scratch = Join-Path $env:RUNNER_TEMP 'stream-archive-no-git'
-          if (Test-Path -LiteralPath $scratch) {
-            Remove-Item -LiteralPath $scratch -Recurse -Force
-          }
-          New-Item -ItemType Directory -Path $scratch | Out-Null
-          $output = Join-Path $scratch 'RELEASE_INFO.txt'
-
-          Push-Location $scratch
-          try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $output -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
-            if ($LASTEXITCODE -ne 0) {
-              throw "Write-ReleaseMetadata.ps1 child process failed with exit code $LASTEXITCODE"
-            }
-          }
-          finally {
-            Pop-Location
-          }
-
-          if (-not (Test-Path -LiteralPath $output -PathType Leaf)) {
-            throw 'source-archive metadata file was not created'
-          }
-          $commitLine = Get-Content -LiteralPath $output |
-            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-            Select-Object -First 1
-          if ($null -eq $commitLine -or $commitLine.TrimStart([char]0xFEFF).Trim() -ne 'commit=unknown') {
-            throw 'source-archive metadata should use commit=unknown outside a Git checkout'
-          }
-
-      - name: Windows portable package smoke
-        shell: cmd
-        run: BUILD_PORTABLE.bat
-
-      - name: Verify Windows portable package
-        shell: powershell
-        run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
-
-      - name: Build Windows release archive
-        shell: powershell
-        run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
-
-      - name: Verify Windows release archive
-        shell: powershell
-        run: |
-          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
-          ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $archive.FullName -ArchiveChecksumPath "$($archive.FullName).sha256"
-) {
-              throw 'dirty checkout metadata must include the -dirty provenance marker'
-            }
-          }
-          finally {
-            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
-          }
-
-      - name: Windows portable package smoke
-        shell: cmd
-        run: BUILD_PORTABLE.bat
-
-      - name: Verify Windows portable package
-        shell: powershell
-        run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
-
-      - name: Build Windows release archive
-        shell: powershell
-        run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
-
-      - name: Verify Windows release archive
-        shell: powershell
-        run: |
-          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
-          ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $archive.FullName -ArchiveChecksumPath "$($archive.FullName).sha256"
- "$dirty"
-          rm -f "$probe"
-          trap - EXIT
-
-      - name: Native compile check
-        shell: bash
-        run: cargo check --locked --manifest-path rust-runtime/Cargo.toml
-
-      - name: Slint shell Rust format check
-        if: ${{ always() && matrix.platform == 'windows' }}
-        shell: bash
-        run: cargo fmt --manifest-path rust-gui/Cargo.toml -- --check
-
-      - name: Slint shell compile check
-        if: ${{ matrix.platform == 'windows' }}
-        shell: bash
-        run: cargo check --locked --manifest-path rust-gui/Cargo.toml
-
-      - name: Native settings adapter tests
-        if: ${{ matrix.platform == 'windows' }}
-        shell: bash
-        run: cargo test --locked --manifest-path rust-gui/Cargo.toml
-
-      # Phase 22.2 treats project Clippy warnings as CI failures.
-      - name: Rust clippy strict
-        shell: bash
-        run: cargo clippy --locked --manifest-path rust-runtime/Cargo.toml --all-targets --all-features -- -D warnings
-
-      - name: Slint shell clippy strict
-        if: ${{ matrix.platform == 'windows' }}
-        shell: bash
-        run: cargo clippy --locked --manifest-path rust-gui/Cargo.toml --all-targets --all-features -- -D warnings
-
-      - name: Unix release package smoke
-        if: ${{ matrix.platform != 'windows' }}
-        shell: bash
-        run: ./BUILD_UNIX_PACKAGE.sh
-
-  windows-check:
-    name: windows-check
-    needs: core-check
-    if: ${{ always() }}
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - name: Enforce cross-platform core results
-        shell: powershell
-        run: |
-          if ('${{ needs.core-check.result }}' -ne 'success') {
-            throw 'One or more Windows/Linux/macOS core checks failed.'
-          }
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies and targets
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            rust-runtime -> target
-            rust-gui -> target
-          cache-on-failure: true
-
-      - name: Environment
-        shell: powershell
-        run: |
-          Write-Host "runner_arch=${{ runner.arch }}"
-          rustc --version
-          rustc -vV | Select-String '^host:'
-          cargo --version
-          git --version
-
-      - name: Runtime contract guard
-        shell: powershell
-        run: ./maintenance/Test-RuntimeContracts.ps1
-
-      - name: Source archive metadata smoke
-        shell: powershell
-        run: |
-          $scratch = Join-Path $env:RUNNER_TEMP 'stream-archive-no-git'
-          if (Test-Path -LiteralPath $scratch) {
-            Remove-Item -LiteralPath $scratch -Recurse -Force
-          }
-          New-Item -ItemType Directory -Path $scratch | Out-Null
-          $output = Join-Path $scratch 'RELEASE_INFO.txt'
-
-          Push-Location $scratch
-          try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $output -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
-            if ($LASTEXITCODE -ne 0) {
-              throw "Write-ReleaseMetadata.ps1 child process failed with exit code $LASTEXITCODE"
-            }
-          }
-          finally {
-            Pop-Location
-          }
-
-          if (-not (Test-Path -LiteralPath $output -PathType Leaf)) {
-            throw 'source-archive metadata file was not created'
-          }
-          $commitLine = Get-Content -LiteralPath $output |
-            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-            Select-Object -First 1
-          if ($null -eq $commitLine -or $commitLine.TrimStart([char]0xFEFF).Trim() -ne 'commit=unknown') {
-            throw 'source-archive metadata should use commit=unknown outside a Git checkout'
-          }
-
-      - name: Windows portable package smoke
-        shell: cmd
-        run: BUILD_PORTABLE.bat
-
-      - name: Verify Windows portable package
-        shell: powershell
-        run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
 
       - name: Build Windows release archive
         shell: powershell
