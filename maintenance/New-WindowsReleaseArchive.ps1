@@ -8,6 +8,16 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $root = (Resolve-Path -LiteralPath $PackageRoot).Path
+
+# A release archive must never inherit local runtime state preserved by
+# BUILD_PORTABLE.bat. Validate the clean-data package contract before opening
+# the output ZIP so a failed check cannot leave an official-looking archive.
+$verifier = Join-Path $PSScriptRoot 'Verify-WindowsPackage.ps1'
+& $verifier -Root $root -RequireCleanData
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows release package verification failed with exit code $LASTEXITCODE"
+}
+
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDir).Path
 
