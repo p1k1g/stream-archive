@@ -7,6 +7,7 @@ on:
       - "rust-gui/**"
       - "RUN_DEV.bat"
       - "BUILD_PORTABLE.bat"
+      - "BUILD_UNIX_PACKAGE.sh"
       - "maintenance/**"
       - "docs/**"
       - "README.md"
@@ -23,6 +24,7 @@ on:
       - "rust-gui/**"
       - "RUN_DEV.bat"
       - "BUILD_PORTABLE.bat"
+      - "BUILD_UNIX_PACKAGE.sh"
       - "maintenance/**"
       - "docs/**"
       - "README.md"
@@ -51,12 +53,11 @@ jobs:
           - platform: macos
             os: macos-latest
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -75,11 +76,12 @@ jobs:
         shell: bash
         run: |
           echo "platform=${{ matrix.platform }}"
+          echo "runner_arch=${{ runner.arch }}"
           rustc --version
+          rustc -vV | grep '^host:'
           cargo --version
           cargo clippy --version
           git --version
-
 
       - name: Rust format check
         shell: bash
@@ -102,6 +104,21 @@ jobs:
         if: ${{ matrix.platform != 'windows' }}
         shell: bash
         run: cargo test --locked --manifest-path rust-runtime/Cargo.toml --test unix_cli -- --test-threads=1
+
+      - name: Unix source archive metadata smoke
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: |
+          scratch="$RUNNER_TEMP/stream-archive-no-git-unix"
+          rm -rf "$scratch"
+          mkdir -p "$scratch"
+          (
+            cd "$scratch"
+            "$GITHUB_WORKSPACE/maintenance/Write-ReleaseMetadata.sh" \
+              "$scratch/RELEASE_INFO.txt" \
+              "$GITHUB_WORKSPACE/rust-runtime/Cargo.toml"
+          )
+          grep -qx 'commit=unknown' "$scratch/RELEASE_INFO.txt"
 
       - name: Native compile check
         shell: bash
@@ -131,6 +148,11 @@ jobs:
         if: ${{ matrix.platform == 'windows' }}
         shell: bash
         run: cargo clippy --locked --manifest-path rust-gui/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Unix release package smoke
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: ./BUILD_UNIX_PACKAGE.sh
 
   windows-check:
     name: windows-check
@@ -164,7 +186,9 @@ jobs:
       - name: Environment
         shell: powershell
         run: |
+          Write-Host "runner_arch=${{ runner.arch }}"
           rustc --version
+          rustc -vV | Select-String '^host:'
           cargo --version
           git --version
 
@@ -184,9 +208,9 @@ jobs:
 
           Push-Location $scratch
           try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-              "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" `
-              -OutputPath $output `
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
+              "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" \
+              -OutputPath $output \
               -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
             if ($LASTEXITCODE -ne 0) {
               throw "Write-ReleaseMetadata.ps1 child process failed with exit code $LASTEXITCODE"
@@ -210,60 +234,23 @@ jobs:
         shell: cmd
         run: BUILD_PORTABLE.bat
 
-      - name: Verify portable package
+      - name: Verify Windows portable package
+        shell: powershell
+        run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
+
+      - name: Build Windows release archive
+        shell: powershell
+        run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
+
+      - name: Verify Windows release archive
         shell: powershell
         run: |
-          $root = './dist/stream-archive'
-          $required = @(
-            "$root/StreamArchive.exe",
-            "$root/stream-archive-server.exe",
-            "$root/RUN.bat",
-            "$root/RUN_HEADLESS.bat",
-            "$root/BACKUP_DATA.bat",
-            "$root/RESTORE_DATA.bat",
-            "$root/LICENSE",
-            "$root/THIRD_PARTY_NOTICES.md",
-            "$root/RELEASE_INFO.txt",
-            "$root/SHA256SUMS.txt",
-            "$root/maintenance/Backup-StreamArchiveData.ps1",
-            "$root/maintenance/Restore-StreamArchiveData.ps1",
-            "$root/docs/OPERATIONS.md"
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
-          }
-          foreach ($forbidden in @(
-            "$root/stream-archive-launcher.exe",
-            "$root/RUN_WEB.bat",
-            "$root/RUN_SERVER_CONSOLE.bat",
-            "$root/Caddyfile.example",
-            "$root/docs/REVERSE_PROXY.md",
-            "$root/docs/LOCAL_LAUNCHER.md"
-          )) {
-            if (Test-Path -LiteralPath $forbidden) { throw "Retired Web package file returned: $forbidden" }
-          }
-          foreach ($dir in @("$root/backend", "$root/data")) {
-            if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Missing package directory: $dir" }
-          }
-
-          $expected = @{}
-          foreach ($line in Get-Content "$root/SHA256SUMS.txt") {
-            if ($line -match '^([0-9a-fA-F]{64})\s+(.+)$') {
-              $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
-            }
-          }
-          foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe')) {
-            if (-not $expected.ContainsKey($name)) { throw "checksum missing: $name" }
-            $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $root $name)).Hash.ToLowerInvariant()
-            if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
-          }
-
-          $run = Get-Content "$root/RUN.bat" -Raw
-          if ($run -notmatch 'StreamArchive\.exe') { throw 'RUN.bat does not use StreamArchive.exe' }
-          if ($run -match 'launcher|RUN_WEB|127\.0\.0\.1|http') { throw 'RUN.bat must remain native-only' }
-
-          $headless = Get-Content "$root/RUN_HEADLESS.bat" -Raw
-          if ($headless -notmatch 'stream-archive-server\.exe') { throw 'RUN_HEADLESS.bat does not use the headless runtime' }
-
-          $releaseInfo = Get-Content "$root/RELEASE_INFO.txt" -Raw
-          if ($releaseInfo -notmatch 'version=') { throw 'release metadata version missing' }
+          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
+          ./maintenance/Verify-WindowsPackage.ps1 \
+            -Root './dist/stream-archive' \
+            -RequireCleanData \
+            -ArchivePath $archive.FullName \
+            -ArchiveChecksumPath "$($archive.FullName).sha256"
