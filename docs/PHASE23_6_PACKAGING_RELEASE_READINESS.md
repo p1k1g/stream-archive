@@ -115,6 +115,11 @@ Windows archive creation:
 powershell -ExecutionPolicy Bypass -File .\maintenance\New-WindowsReleaseArchive.ps1 -PackageRoot .\dist\stream-archive -OutputDir .\dist\release
 ~~~
 
+The archiver itself invokes the canonical Windows verifier with
+`-RequireCleanData` before creating the ZIP. Preserved local SQLite/runtime
+data therefore blocks archive creation even if the caller skipped a separate
+pre-verification command.
+
 Unix tree/archive:
 
 ~~~bash
@@ -139,12 +144,16 @@ built_at=<UTC/offset timestamp>
 The canonical release version source is the Cargo package version for
 `stream-archive-server`. The packaging runtime contract also reads
 `rust-gui/Cargo.toml` through Cargo metadata and fails when the runtime and GUI
-versions differ.
+versions differ. The manual release-artifact workflow is gated by the same
+runtime-contract entrypoint before any platform artifact job can run.
 
 Current Phase 23.6 version: `0.5.2`.
 
 Git metadata is optional. Source archives without `.git` use
-`commit=unknown`.
+`commit=unknown`. A checkout with tracked or untracked non-ignored changes
+records `<commit>-dirty` so a locally generated artifact is not falsely
+attributed to a reviewed clean commit. Generated `dist/` staging is ignored
+and therefore does not mark a clean package build dirty.
 
 ## Checksums
 
@@ -235,14 +244,16 @@ No provider credential is needed by automated package smoke.
 `.github/workflows/rust-runtime-release.yml` remains manual
 `workflow_dispatch`.
 
-It contains native jobs for:
+It contains a required `release-contracts` gate followed by native jobs for:
 
 - Windows package
 - Linux package
 - macOS package
 
-The jobs build, verify, archive, verify again, and upload GitHub Actions
-artifacts with a 7-day retention period.
+The contract gate runs `maintenance/Test-RuntimeContracts.ps1`, including
+runtime/gui version parity and packaging/release-safety checks. Only after that
+passes do the platform jobs build, verify, archive, verify again, and upload
+GitHub Actions artifacts with a 7-day retention period.
 
 The workflow has `contents: read` permission and does not:
 
@@ -291,12 +302,15 @@ Phase 23.6 does not publish those artifacts as GitHub Release assets.
 - CLI/server inclusion in Unix archives;
 - license and third-party notices;
 - metadata/checksum generation;
+- dirty-worktree provenance;
 - archive-level checksum generation;
+- clean-data enforcement inside the Windows archiver;
 - reusable package verification;
 - empty-data official package contract;
 - media-tool non-bundling;
 - native release workflow runners;
 - manual workflow dispatch;
+- release-contract gate before platform artifact jobs;
 - no automatic tag/GitHub Release publishing;
 - runtime/gui Cargo version equality.
 
