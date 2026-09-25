@@ -276,6 +276,17 @@ fn queue_cancel_reaches_active_runtime_owner() {
     assert_success("tools configure", &layout.cli(&["tools", "configure"]));
 
     fs::write(layout.fake_bin.join("yt-dlp.mode"), "run-hang").unwrap();
+    let cookie = layout._root.path().join("CloudFront fixture cookies.txt");
+    fs::write(
+        &cookie,
+        concat!(
+            "# Netscape HTTP Cookie File\n",
+            "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Key-Pair-Id\tkey\n",
+            "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Policy\tpolicy\n",
+            "fixture.invalid\tTRUE\t/\tFALSE\t4102444800\tCloudFront-Signature\tsignature\n"
+        ),
+    )
+    .unwrap();
     let queued = json_output(
         "queue add active-cancel",
         layout.cli(&[
@@ -284,6 +295,10 @@ fn queue_cancel_reaches_active_runtime_owner() {
             "https://vod.sooplive.com/player/987654321",
             "--output",
             layout.live.to_str().unwrap(),
+            "--cookie-mode",
+            "FILE",
+            "--cookie-file",
+            cookie.to_str().unwrap(),
             "--json",
         ]),
     );
