@@ -1054,6 +1054,29 @@ mod tests {
     }
 
     #[test]
+    fn atomic_channel_inserts_preserve_changes_from_stale_observers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("channels-atomic.db");
+        let first = Store::open_observer(path.clone()).unwrap();
+        let second = Store::open_observer(path.clone()).unwrap();
+
+        let alpha = channel("Alpha", "alpha");
+        let beta = channel("Beta", "beta");
+
+        first.insert_channel(&alpha).unwrap();
+        second.insert_channel(&beta).unwrap();
+
+        let reopened = Store::open_observer(path).unwrap();
+        let accounts = reopened
+            .channels()
+            .unwrap()
+            .into_iter()
+            .map(|channel| channel.account)
+            .collect::<Vec<_>>();
+        assert_eq!(accounts, vec!["alpha", "beta"]);
+    }
+
+    #[test]
     fn observer_open_preserves_active_runtime_rows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("observer.db");
