@@ -936,9 +936,7 @@ async fn command_queue(args: &[String]) -> Result<()> {
             )
             .await?
             {
-                let snapshot: VodQueueSnapshot =
-                    serde_json::from_value(value).context("invalid Queue cancel response")?;
-                print_queue(&snapshot, json_mode)?;
+                print_queue_value(&value, json_mode)?;
             } else {
                 let snapshot = core.cancel_queue_item(id).await?;
                 print_queue(&snapshot, json_mode)?;
@@ -970,6 +968,40 @@ fn print_queue(snapshot: &VodQueueSnapshot, json_mode: bool) -> Result<()> {
             println!(
                 "{} {:<10} {:>6.1}% {}",
                 item.id, item.state, item.percent, item.vod_url
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_queue_value(value: &Value, json_mode: bool) -> Result<()> {
+    if json_mode {
+        return print_json(value);
+    }
+
+    println!("VOD queue");
+    println!(
+        "active : {}",
+        value
+            .get("active_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+    );
+    println!(
+        "queued : {}",
+        value
+            .get("queued_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    );
+    if let Some(items) = value.get("items").and_then(Value::as_array) {
+        for item in items {
+            println!(
+                "{} {:<10} {:>6.1}% {}",
+                item.get("id").and_then(Value::as_str).unwrap_or("-"),
+                item.get("state").and_then(Value::as_str).unwrap_or("-"),
+                item.get("percent").and_then(Value::as_f64).unwrap_or(0.0),
+                item.get("vod_url").and_then(Value::as_str).unwrap_or("-")
             );
         }
     }
