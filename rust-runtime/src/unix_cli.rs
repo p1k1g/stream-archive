@@ -367,20 +367,15 @@ async fn add_channel(
     enabled: bool,
 ) -> Result<()> {
     let platform = platform.parse::<PlatformId>()?;
-    let mut channels = core.channels()?;
-    if channels.iter().any(|channel| {
-        channel.platform == platform && channel.account.eq_ignore_ascii_case(account)
-    }) {
-        bail!("channel already exists: {platform}/{account}");
-    }
-    channels.push(Channel {
-        platform,
-        enabled,
-        name: name.to_string(),
-        account: account.to_string(),
-        outdir: outdir.to_string(),
-    });
-    let saved = core.update_channels(&channels).await?;
+    let saved = core
+        .add_channel(Channel {
+            platform,
+            enabled,
+            name: name.to_string(),
+            account: account.to_string(),
+            outdir: outdir.to_string(),
+        })
+        .await?;
     println!(
         "channel added: {platform}/{account} ({} total)",
         saved.len()
@@ -400,28 +395,14 @@ async fn mutate_channel(
     mutation: ChannelMutation,
 ) -> Result<()> {
     let platform = platform.parse::<PlatformId>()?;
-    let mut channels = core.channels()?;
-    let before = channels.len();
     match mutation {
         ChannelMutation::Remove => {
-            channels.retain(|channel| {
-                !(channel.platform == platform && channel.account.eq_ignore_ascii_case(account))
-            });
-            if channels.len() == before {
-                bail!("channel not found: {platform}/{account}");
-            }
+            core.remove_channel(platform, account).await?;
         }
         ChannelMutation::Enabled(enabled) => {
-            let channel = channels
-                .iter_mut()
-                .find(|channel| {
-                    channel.platform == platform && channel.account.eq_ignore_ascii_case(account)
-                })
-                .ok_or_else(|| anyhow::anyhow!("channel not found: {platform}/{account}"))?;
-            channel.enabled = enabled;
+            core.set_channel_enabled(platform, account, enabled).await?;
         }
     }
-    core.update_channels(&channels).await?;
     println!("channel updated: {platform}/{account}");
     Ok(())
 }
