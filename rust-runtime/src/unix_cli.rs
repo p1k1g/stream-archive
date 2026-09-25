@@ -941,10 +941,31 @@ async fn command_queue(args: &[String]) -> Result<()> {
                 println!("queued VOD: {} {}", item.id, item.vod_url);
             }
         }
-        "cancel" | "retry" | "remove" => {
+        "cancel" => {
+            let (id, json_mode) = parse_id_and_json(&args[1..], "queue cancel")?;
+            if let Some(value) = runtime_control(
+                &core,
+                RuntimeControlRequest {
+                    command: "queue.cancel".into(),
+                    target: Some(id.to_string()),
+                    action: None,
+                    secret: None,
+                    max_lines: None,
+                },
+            )
+            .await?
+            {
+                let snapshot: VodQueueSnapshot =
+                    serde_json::from_value(value).context("invalid Queue cancel response")?;
+                print_queue(&snapshot, json_mode)?;
+            } else {
+                let snapshot = core.cancel_queue_item(id).await?;
+                print_queue(&snapshot, json_mode)?;
+            }
+        }
+        "retry" | "remove" => {
             let (id, json_mode) = parse_id_and_json(&args[1..], &format!("queue {action}"))?;
             let snapshot = match action {
-                "cancel" => core.cancel_queue_item(id).await?,
                 "retry" => core.retry_queue_item(id).await?,
                 "remove" => core.remove_queue_item(id).await?,
                 _ => unreachable!(),
