@@ -1,14 +1,20 @@
-name: Stream Archive portable release
+name: Stream Archive release artifacts
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  windows-portable:
+  windows-package:
+    name: windows-package
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -24,87 +30,113 @@ jobs:
       - name: Environment
         shell: powershell
         run: |
+          Write-Host "runner_os=${{ runner.os }}"
+          Write-Host "runner_arch=${{ runner.arch }}"
           rustc --version
+          rustc -vV | Select-String '^host:'
           cargo --version
           git --version
 
       - name: Shared runtime unit tests
         shell: powershell
-        # Match PR CI: the Windows Job Object regression launches real child
-        # processes, so serialize the harness to avoid scheduler/AV false negatives.
         run: cargo test --locked --manifest-path ./rust-runtime/Cargo.toml -- --test-threads=1
 
       - name: Native GUI unit tests
         shell: powershell
         run: cargo test --locked --manifest-path ./rust-gui/Cargo.toml
 
-      - name: Build and assemble portable package
+      - name: Build Windows portable package
         shell: cmd
         run: BUILD_PORTABLE.bat
 
-      - name: Verify package checksum metadata
+      - name: Verify Windows portable package
+        shell: powershell
+        run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
+
+      - name: Build Windows release archive
+        shell: powershell
+        run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
+
+      - name: Verify Windows release archive
+        id: package
         shell: powershell
         run: |
-          $root = './dist/stream-archive'
-          $required = @(
-            "$root/StreamArchive.exe",
-            "$root/stream-archive-server.exe",
-            "$root/RUN.bat",
-            "$root/RUN_HEADLESS.bat",
-            "$root/LICENSE",
-            "$root/THIRD_PARTY_NOTICES.md",
-            "$root/docs/OPERATIONS.md"
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
-          }
-          foreach ($forbidden in @(
-            "$root/stream-archive-launcher.exe",
-            "$root/RUN_WEB.bat",
-            "$root/RUN_SERVER_CONSOLE.bat",
-            "$root/Caddyfile.example",
-            "$root/docs/REVERSE_PROXY.md",
-            "$root/docs/LOCAL_LAUNCHER.md"
-          )) {
-            if (Test-Path -LiteralPath $forbidden) { throw "Retired Web package file returned: $forbidden" }
-          }
-
-          $expected = @{}
-          foreach ($line in Get-Content "$root/SHA256SUMS.txt") {
-            if ($line -match '^([0-9a-fA-F]{64})\s+(.+)$') {
-              $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
-            }
-          }
-          foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe')) {
-            if (-not $expected.ContainsKey($name)) { throw "checksum missing: $name" }
-            $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $root $name)).Hash.ToLowerInvariant()
-            if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
-          }
-          $run = Get-Content "$root/RUN.bat" -Raw
-          if ($run -notmatch 'StreamArchive\.exe') { throw 'RUN.bat does not use StreamArchive.exe' }
-          if ($run -match 'launcher|RUN_WEB|127\.0\.0\.1|http') { throw 'RUN.bat must remain native-only' }
-          $headless = Get-Content "$root/RUN_HEADLESS.bat" -Raw
-          if ($headless -notmatch 'stream-archive-server\.exe') { throw 'RUN_HEADLESS.bat does not use the headless runtime' }
-          foreach ($dir in @("$root/backend", "$root/data")) {
-            if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Missing package directory: $dir" }
-          }
-          if ((Get-Content "$root/LICENSE" -Raw) -notmatch 'GNU AFFERO GENERAL PUBLIC LICENSE') { throw 'AGPL license text missing from package' }
-          Get-Content "$root/RELEASE_INFO.txt"
-
-      - name: Archive portable package
-        shell: powershell
-        run: Compress-Archive -Path ./dist/stream-archive/* -DestinationPath ./stream-archive-windows-x64.zip -Force
-
-      - name: Write archive checksum
-        shell: powershell
-        run: |
-          $h=(Get-FileHash -Algorithm SHA256 ./stream-archive-windows-x64.zip).Hash.ToLowerInvariant()
-          "$h  stream-archive-windows-x64.zip" | Set-Content ./stream-archive-windows-x64.zip.sha256 -Encoding ascii
+          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
+          ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $archive.FullName -ArchiveChecksumPath "$($archive.FullName).sha256"
+          $artifact = [System.IO.Path]::GetFileNameWithoutExtension($archive.Name)
+          "artifact=$artifact" >> $env:GITHUB_OUTPUT
 
       - uses: actions/upload-artifact@v4
         with:
-          name: stream-archive-windows-x64
+          name: ${{ steps.package.outputs.artifact }}
           path: |
-            ./stream-archive-windows-x64.zip
-            ./stream-archive-windows-x64.zip.sha256
-          retention-days: 1
+            dist/release/*.zip
+            dist/release/*.zip.sha256
+          retention-days: 7
+
+  unix-package:
+    name: unix-package (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+          - platform: macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies and targets
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust-runtime -> target
+          cache-on-failure: true
+
+      - name: Environment
+        shell: bash
+        run: |
+          echo "runner_os=${{ runner.os }}"
+          echo "runner_arch=${{ runner.arch }}"
+          rustc --version
+          rustc -vV | grep '^host:'
+          cargo --version
+          git --version
+
+      - name: Shared runtime unit tests
+        shell: bash
+        run: cargo test --locked --manifest-path ./rust-runtime/Cargo.toml
+
+      - name: Unix CLI integration smoke
+        shell: bash
+        run: cargo test --locked --manifest-path ./rust-runtime/Cargo.toml --test unix_cli -- --test-threads=1
+
+      - name: Build and verify Unix release package
+        shell: bash
+        run: ./BUILD_UNIX_PACKAGE.sh
+
+      - name: Resolve release artifact
+        id: package
+        shell: bash
+        run: |
+          archive="$(find dist/release -maxdepth 1 -type f -name 'stream-archive-*.tar.gz' -print -quit)"
+          [[ -n "$archive" ]] || { echo 'Unix release archive was not created.' >&2; exit 1; }
+          artifact="$(basename "$archive" .tar.gz)"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact }}
+          path: |
+            dist/release/*.tar.gz
+            dist/release/*.tar.gz.sha256
+          retention-days: 7
