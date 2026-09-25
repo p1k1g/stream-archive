@@ -69,6 +69,10 @@ try {
     $gitignore = Read-RepoFile '.gitignore'
     $runDev = Read-RepoFile 'RUN_DEV.bat'
     $releaseMetadata = Read-RepoFile 'maintenance/Write-ReleaseMetadata.ps1'
+    $unixPackage = Read-RepoFile 'BUILD_UNIX_PACKAGE.sh'
+    $unixPackageVerifier = Read-RepoFile 'maintenance/Verify-UnixPackage.sh'
+    $windowsPackageVerifier = Read-RepoFile 'maintenance/Verify-WindowsPackage.ps1'
+    $windowsArchive = Read-RepoFile 'maintenance/New-WindowsReleaseArchive.ps1'
     $readme = Read-RepoFile 'README.md'
     $agents = Read-RepoFile 'AGENTS.md'
     $contributing = Read-RepoFile 'CONTRIBUTING.md'
@@ -81,6 +85,10 @@ try {
         @{ Name = 'portable build'; Text = $package },
         @{ Name = 'developer runner'; Text = $runDev },
         @{ Name = 'release metadata'; Text = $releaseMetadata },
+        @{ Name = 'Unix package builder'; Text = $unixPackage },
+        @{ Name = 'Unix package verifier'; Text = $unixPackageVerifier },
+        @{ Name = 'Windows package verifier'; Text = $windowsPackageVerifier },
+        @{ Name = 'Windows release archiver'; Text = $windowsArchive },
         @{ Name = 'README'; Text = $readme },
         @{ Name = 'AGENTS'; Text = $agents },
         @{ Name = 'CONTRIBUTING'; Text = $contributing },
@@ -92,6 +100,7 @@ try {
     if (Test-Path -LiteralPath (Join-Path $root '.github/workflows/rust-web-check.yml') -PathType Leaf) { throw 'Retired rust-web check workflow filename must not return.' }
     if (Test-Path -LiteralPath (Join-Path $root '.github/workflows/rust-web-release.yml') -PathType Leaf) { throw 'Retired rust-web release workflow filename must not return.' }
     Assert-Match $releaseWorkflow 'workflow_dispatch' 'Canonical runtime release workflow must retain manual workflow_dispatch.'
+    Assert-NotMatch $releaseWorkflow 'softprops/action-gh-release|gh\s+release|git\s+tag|create-release|upload-release-asset' 'Phase 23.6 release workflow must not publish releases or tags.'
     Assert-Match $gitignore '(?m)^rust-runtime/target/\r?$' 'Git ignore must cover the canonical rust-runtime Cargo target directory.'
     Assert-NotMatch $gitignore '(?m)^rust-web/target/\r?$' 'Git ignore must not retain the retired rust-web Cargo target directory.'
     Assert-Match $gitignore '(?m)^backend/\.stream-archive/\r?$' 'Git ignore must cover the canonical runtime-private transient state directory.'
@@ -105,6 +114,7 @@ try {
         'rust-gui/\*\*',
         'RUN_DEV\.bat',
         'BUILD_PORTABLE\.bat',
+        'BUILD_UNIX_PACKAGE\.sh',
         'maintenance/\*\*',
         'docs/\*\*'
     )) {
