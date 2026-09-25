@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
-    [string]$ManifestPath = ".\rust-runtime\Cargo.toml"
+    [string]$ManifestPath = ".\rust-runtime\Cargo.toml",
+    [string]$RepositoryRoot = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,22 +18,31 @@ if ($null -eq $package -or [string]::IsNullOrWhiteSpace([string]$package.version
     throw 'Unable to resolve stream-archive-server package version from cargo metadata'
 }
 
-# Source archives downloaded from GitHub do not contain a .git directory.
-# Release metadata must still be generated successfully in that case; the
-# commit field is informational and may remain "unknown" outside a checkout.
+# Git provenance is optional so GitHub source archives without .git still build.
+# Package builders pass RepositoryRoot explicitly so a real checkout records
+# either <commit> or <commit>-dirty instead of accidentally reporting unknown.
 $commit = 'unknown'
-if (Get-Command git -ErrorAction SilentlyContinue) {
+$resolvedRepositoryRoot = $null
+if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    if (-not (Test-Path -LiteralPath $RepositoryRoot -PathType Container)) {
+        throw "RepositoryRoot does not exist: $RepositoryRoot"
+    }
+    $resolvedRepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+}
+
+if ($null -ne $resolvedRepositoryRoot -and (Get-Command git -ErrorAction SilentlyContinue)) {
     $previousErrorActionPreference = $ErrorActionPreference
     try {
-        # Windows PowerShell can promote native stderr to a terminating
-        # NativeCommandError while ErrorActionPreference is Stop. Suppress that
-        # probe-only error so a non-Git source tree is a supported build input.
+        # Windows PowerShell can promote native stderr to NativeCommandError
+        # while ErrorActionPreference is Stop. Git probes are bounded and their
+        # exit codes are checked explicitly.
         $ErrorActionPreference = 'SilentlyContinue'
-        $candidate = (& git rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
+        $candidate = (& git -C $resolvedRepositoryRoot rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
         $gitExitCode = $LASTEXITCODE
+
         $dirtyState = @()
         if ($gitExitCode -eq 0) {
-            $dirtyState = @(& git status --porcelain --untracked-files=normal 2>$null)
+            $dirtyState = @(& git -C $resolvedRepositoryRoot status --porcelain --untracked-files=normal 2>$null)
             $dirtyExitCode = $LASTEXITCODE
         }
         else {
