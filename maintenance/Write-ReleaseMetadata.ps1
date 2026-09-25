@@ -30,6 +30,14 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
         $ErrorActionPreference = 'SilentlyContinue'
         $candidate = (& git rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
         $gitExitCode = $LASTEXITCODE
+        $dirtyState = @()
+        if ($gitExitCode -eq 0) {
+            $dirtyState = @(& git status --porcelain --untracked-files=normal 2>$null)
+            $dirtyExitCode = $LASTEXITCODE
+        }
+        else {
+            $dirtyExitCode = $gitExitCode
+        }
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -37,6 +45,9 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 
     if ($gitExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($candidate)) {
         $commit = $candidate.Trim()
+        if ($dirtyExitCode -eq 0 -and $dirtyState.Count -gt 0) {
+            $commit += '-dirty'
+        }
     }
 }
 
