@@ -269,6 +269,51 @@ fn unix_cli_binary_daily_use_smoke_is_json_clean_and_unicode_safe() {
 }
 
 #[test]
+fn queue_cancel_reaches_active_runtime_owner() {
+    let layout = Layout::new();
+    layout.init();
+    layout.stage_fake_tools();
+    assert_success("tools configure", &layout.cli(&["tools", "configure"]));
+
+    fs::write(layout.fake_bin.join("yt-dlp.mode"), "run-hang").unwrap();
+    let queued = json_output(
+        "queue add active-cancel",
+        layout.cli(&[
+            "queue",
+            "add",
+            "https://vod.sooplive.com/player/987654321",
+            "--output",
+            layout.live.to_str().unwrap(),
+            "--json",
+        ]),
+    );
+    let queue_id = queued["id"].as_str().unwrap().to_string();
+
+    let mut owner = spawn_runtime(&layout, CLI, &["serve"]);
+    wait_for_path(
+        &runtime_control_socket_path(&layout.data.join("stream-archive.db")).unwrap(),
+        Duration::from_secs(8),
+    );
+    wait_for_queue_state(&layout.data.join("stream-archive.db"), &queue_id, "RUNNING");
+
+    let cancelled = json_output(
+        "active queue cancel",
+        layout.cli(&["queue", "cancel", &queue_id, "--json"]),
+    );
+    let item = cancelled["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == queue_id)
+        .expect("cancelled Queue item missing from snapshot");
+    assert_eq!(item["state"], "CANCELLED");
+
+    send_sigterm(owner.id());
+    let status = wait_for_exit(&mut owner, Duration::from_secs(8));
+    assert!(status.success(), "runtime owner SIGTERM exit was {status}");
+}
+
+#[test]
 fn one_shot_cli_observes_running_owner_without_recovering_active_rows() {
     let layout = Layout::new();
     layout.init();
@@ -392,6 +437,30 @@ fn unix_cli_serve_sigterm_is_graceful_and_does_not_kill_unrelated_runtime() {
         status.success(),
         "compatibility server SIGTERM exit was {status}"
     );
+}
+
+fn wait_for_queue_state(db: &std::path::Path, id: &str, expected: &str) {
+    let started = Instant::now();
+    loop {
+        let state = Connection::open(db)
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    "SELECT state FROM vod_queue WHERE id=?1",
+                    params![id],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            });
+        if state.as_deref() == Some(expected) {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "Queue item {id} did not reach {expected}; last state={state:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn wait_for_path(path: &std::path::Path, timeout: Duration) {
