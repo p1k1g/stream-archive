@@ -374,6 +374,52 @@ impl StreamArchiveCore {
         Ok(saved)
     }
 
+    pub async fn add_channel(&self, channel: Channel) -> Result<Vec<Channel>> {
+        validate_channels(std::slice::from_ref(&channel))?;
+        let _guard = self.config_write_lock.lock().await;
+        self.store.insert_channel(&channel)?;
+        let saved = self.store.channels()?;
+        self.logs
+            .push(format!(
+                "[CORE] channel added {}/{}",
+                channel.platform, channel.account
+            ))
+            .await;
+        Ok(saved)
+    }
+
+    pub async fn remove_channel(
+        &self,
+        platform: PlatformId,
+        account: &str,
+    ) -> Result<Vec<Channel>> {
+        let _guard = self.config_write_lock.lock().await;
+        self.store.delete_channel(platform, account)?;
+        let saved = self.store.channels()?;
+        self.logs
+            .push(format!("[CORE] channel removed {platform}/{account}"))
+            .await;
+        Ok(saved)
+    }
+
+    pub async fn set_channel_enabled(
+        &self,
+        platform: PlatformId,
+        account: &str,
+        enabled: bool,
+    ) -> Result<Vec<Channel>> {
+        let _guard = self.config_write_lock.lock().await;
+        self.store.set_channel_enabled(platform, account, enabled)?;
+        let saved = self.store.channels()?;
+        self.logs
+            .push(format!(
+                "[CORE] channel {} {platform}/{account}",
+                if enabled { "enabled" } else { "disabled" }
+            ))
+            .await;
+        Ok(saved)
+    }
+
     pub async fn watcher_status(&self) -> Result<NativeWatcherStatus> {
         self.watcher.status().await
     }
