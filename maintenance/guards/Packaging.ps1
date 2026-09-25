@@ -55,54 +55,18 @@ try {
     Assert-Match $unixMetadata '-dirty' 'Unix dirty release provenance marker is missing.'
     Assert-Match $windowsMetadata 'git status --porcelain --untracked-files=normal' 'Windows release metadata must detect dirty worktrees.'
     Assert-Match $windowsMetadata '-dirty' 'Windows dirty release provenance marker is missing.'
-    Assert-Match $gitignore '(?m)^dist/\r?
+    Assert-Match $gitignore '(?m)^dist/\r?$' 'Generated release staging must be ignored so clean packaging does not self-mark provenance dirty.'
 
     Assert-Match $checkWorkflow 'BUILD_UNIX_PACKAGE\.sh' 'PR CI must smoke the canonical Unix package builder.'
     Assert-Match $checkWorkflow 'Verify-WindowsPackage\.ps1' 'PR CI must use the reusable Windows package verifier.'
     Assert-Match $checkWorkflow 'New-WindowsReleaseArchive\.ps1' 'PR CI must verify the canonical Windows archive path.'
+    Assert-Match $checkWorkflow 'Windows release archiver accepted non-empty runtime data' 'PR CI must regress the clean-data archive boundary.'
+    Assert-Match $checkWorkflow 'dirty checkout metadata must include the -dirty provenance marker' 'PR CI must regress dirty release provenance.'
 
     Assert-Match $releaseWorkflow 'workflow_dispatch' 'Release artifact workflow must remain manual.'
     Assert-Match $releaseWorkflow 'release-contracts:' 'Manual release artifacts must be gated by a release contract job.'
     Assert-Match $releaseWorkflow 'Test-RuntimeContracts\.ps1' 'Manual release workflow must enforce the canonical runtime/packaging contracts.'
     Assert-Match $releaseWorkflow 'needs: release-contracts' 'Artifact jobs must wait for release contract validation.'
-    Assert-Match $releaseWorkflow 'windows-latest' 'Release artifact workflow must build Windows natively.'
-    Assert-Match $releaseWorkflow 'ubuntu-latest' 'Release artifact workflow must build Linux natively.'
-    Assert-Match $releaseWorkflow 'macos-latest' 'Release artifact workflow must build macOS natively.'
-    Assert-Match $releaseWorkflow 'BUILD_UNIX_PACKAGE\.sh' 'Release workflow must reuse the Unix package builder.'
-    Assert-Match $releaseWorkflow 'Verify-WindowsPackage\.ps1' 'Release workflow must reuse the Windows verifier.'
-    Assert-Match $releaseWorkflow 'New-WindowsReleaseArchive\.ps1' 'Release workflow must reuse the Windows archiver.'
-    Assert-Match $releaseWorkflow 'actions/upload-artifact@v4' 'Release workflow must upload verified workflow artifacts.'
-    Assert-NotMatch $releaseWorkflow 'softprops/action-gh-release|gh\s+release|git\s+tag|create-release|upload-release-asset' 'Phase 23.6 must not publish a GitHub Release or create tags.'
-
-    $runtimeMetadataJson = & cargo metadata --locked --no-deps --format-version 1 --manifest-path '.\rust-runtime\Cargo.toml'
-    if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed for rust-runtime' }
-    $runtimeMetadata = $runtimeMetadataJson | ConvertFrom-Json
-    $runtimeVersion = ($runtimeMetadata.packages | Where-Object { $_.name -eq 'stream-archive-server' } | Select-Object -First 1).version
-
-    $guiMetadataJson = & cargo metadata --locked --no-deps --format-version 1 --manifest-path '.\rust-gui\Cargo.toml'
-    if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed for rust-gui' }
-    $guiMetadata = $guiMetadataJson | ConvertFrom-Json
-    $guiVersion = ($guiMetadata.packages | Where-Object { $_.name -eq 'stream-archive-gui' } | Select-Object -First 1).version
-
-    if ([string]::IsNullOrWhiteSpace([string]$runtimeVersion) -or [string]::IsNullOrWhiteSpace([string]$guiVersion)) {
-        throw 'Unable to resolve release versions from Cargo metadata.'
-    }
-    if ([string]$runtimeVersion -ne [string]$guiVersion) {
-        throw "Release version mismatch: runtime=$runtimeVersion gui=$guiVersion"
-    }
-
-    Write-Host "Packaging contracts passed for release version $runtimeVersion."
-}
-finally {
-    Pop-Location
-}
- 'Generated release staging must be ignored so clean packaging does not self-mark provenance dirty.'
-
-    Assert-Match $checkWorkflow 'BUILD_UNIX_PACKAGE\.sh' 'PR CI must smoke the canonical Unix package builder.'
-    Assert-Match $checkWorkflow 'Verify-WindowsPackage\.ps1' 'PR CI must use the reusable Windows package verifier.'
-    Assert-Match $checkWorkflow 'New-WindowsReleaseArchive\.ps1' 'PR CI must verify the canonical Windows archive path.'
-
-    Assert-Match $releaseWorkflow 'workflow_dispatch' 'Release artifact workflow must remain manual.'
     Assert-Match $releaseWorkflow 'windows-latest' 'Release artifact workflow must build Windows natively.'
     Assert-Match $releaseWorkflow 'ubuntu-latest' 'Release artifact workflow must build Linux natively.'
     Assert-Match $releaseWorkflow 'macos-latest' 'Release artifact workflow must build macOS natively.'
