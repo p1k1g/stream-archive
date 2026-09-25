@@ -8,6 +8,7 @@ $queueService = Read-RepoFile 'rust-runtime/src/queue_service.rs'
 $auth = Read-RepoFile 'rust-runtime/src/platform/chzzk/auth.rs'
 $recorder = Read-RepoFile 'rust-runtime/src/recorder.rs'
 $main = Read-RepoFile 'rust-runtime/src/main.rs'
+$headless = Read-RepoFile 'rust-runtime/src/headless.rs'
 $core = Read-RepoFile 'rust-runtime/src/app_core.rs'
 $runtime = Read-RepoFile 'rust-runtime/src/platform_runtime.rs'
 $workflow = Read-RepoFile '.github/workflows/rust-runtime-check.yml'
@@ -48,9 +49,10 @@ Assert-Match $auth 'CHZZK_NID_SES' 'Shared CHZZK auth key disappeared.'
 # Phase 22.3 removes the Web listener. Runtime startup must go through the
 # shared core, while per-job/destination OS locks remain the source of truth for
 # active CHZZK ownership and cleanup safety.
-Assert-Match $main 'StreamArchiveCore::open\(&backend_dir\)' 'Headless runtime must initialize ownership-sensitive services through StreamArchiveCore.'
+Assert-Match $main 'run_headless\(' 'Compatibility server entrypoint must delegate ownership-sensitive startup to the shared headless lifecycle.'
+Assert-Match $headless 'StreamArchiveCore::open\(&backend_dir\)' 'Headless runtime must initialize ownership-sensitive services through StreamArchiveCore.'
 Assert-Match $core 'VodManager::new\(backend_dir\.clone\(\), logs\.clone\(\)\)' 'Shared core must construct the canonical VOD manager.'
-Assert-NotMatch $main 'TcpListener::bind|STREAM_ARCHIVE_BIND' 'Retired Web listener ownership must not return.'
+Assert-NotMatch ($main + $headless) 'TcpListener::bind|STREAM_ARCHIVE_BIND' 'Retired Web listener ownership must not return.'
 
 # Per-job OS locking is the source of truth for active CHZZK temp ownership.
 Assert-Match $chzzkVod 'use fs2::FileExt;' 'CHZZK VOD per-job OS locking is missing.'

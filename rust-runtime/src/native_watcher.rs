@@ -457,6 +457,9 @@ async fn run_native_watcher(
 
                 if now >= next_setting_check {
                     next_setting_check = now + Duration::from_secs(1);
+                    if let Err(err) = store::global().and_then(|db| db.refresh_config_cache()) {
+                        logs.push(format!("[RUST:WARN] SQLite config cache refresh failed: {err:#}")).await;
+                    }
                     match store::global().and_then(|db| db.live_settings_with_secrets()) {
                         Ok(values) if values != last_settings => {
                             let require_soop = states.values().any(|state| {

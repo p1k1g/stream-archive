@@ -6,13 +6,14 @@ use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, ExitCode},
+    process::ExitCode,
 };
 use stream_archive_server::{
     diagnostics::{
         DiagnosticsSnapshot, collect_active_local_preflight, collect_read_only_preflight,
     },
-    tool_discovery::{ToolKind, ToolResolution, executable_file, find_command, resolve_tool},
+    tool_discovery::{ToolKind, ToolResolution, resolve_tool},
+    unix_cli::{run_management, run_serve},
 };
 
 const SETTINGS_SCHEMA: &str = r#"
@@ -49,6 +50,12 @@ fn run() -> Result<()> {
         "init" => command_init()?,
         "doctor" => command_doctor(&args[1..])?,
         "tools" => command_tools(&args[1..])?,
+        "status" | "settings" | "providers" | "channels" | "watcher" | "vod" | "queue"
+        | "history" | "backup" | "storage" | "logs" => {
+            let runtime =
+                tokio::runtime::Runtime::new().context("failed to create Unix CLI runtime")?;
+            runtime.block_on(run_management(command, &args[1..]))?;
+        }
         "serve" => command_serve(&args[1..])?,
         other => bail!("unknown command `{other}`; run `stream-archive-cli help`"),
     }
@@ -63,26 +70,67 @@ Unix/headless-oriented runtime helper for the shared Rust core.
 
 Usage:
   stream-archive-cli init
+  stream-archive-cli status [--json]
+  stream-archive-cli settings show [--json]
+  stream-archive-cli settings set <KEY> <VALUE>
+  stream-archive-cli providers status [--json]
+  stream-archive-cli providers set <KEY> <VALUE>
+  stream-archive-cli providers secret <KEY> --stdin
+  stream-archive-cli providers test-soop
+  stream-archive-cli tools [--json|configure]
   stream-archive-cli doctor [--json] [--active-tools]
-  stream-archive-cli tools
-  stream-archive-cli tools --json
-  stream-archive-cli tools configure
+  stream-archive-cli channels list [--json]
+  stream-archive-cli channels add <platform> <account> <name> <output-dir> [--disabled]
+  stream-archive-cli channels remove|enable|disable <platform> <account>
+  stream-archive-cli channels action <platform> <account> <stop|resume|recheck>
+  stream-archive-cli channels password <platform> <account> --stdin
+  stream-archive-cli watcher status [--json]
+  stream-archive-cli watcher start
+  stream-archive-cli watcher stop
+  stream-archive-cli vod analyze <URL> [--json] [options]
+  stream-archive-cli vod download <URL> --output <DIR> [--json] [options]
+  stream-archive-cli vod status [--json]
+  stream-archive-cli vod cancel [--json]
+  stream-archive-cli queue list [--json]
+  stream-archive-cli queue add <URL> --output <DIR> [options]
+  stream-archive-cli queue cancel|retry|remove <ID> [--json]
+  stream-archive-cli history list [--json] [filters]
+  stream-archive-cli backup status [--json]
+  stream-archive-cli backup create [--json]
+  stream-archive-cli backup restore <FILE-NAME> --yes [--json]
+  stream-archive-cli storage [--json]
+  stream-archive-cli logs [--tail N] [--json]
   stream-archive-cli serve [--watch]
   stream-archive-cli version
 
 Commands:
-  init             Create the local backend/data layout and settings database.
-  doctor           Run shared runtime preflight; --active-tools probes local tool versions.
-  tools            Discover Streamlink, yt-dlp and FFmpeg without Windows-only names.
-  tools configure  Persist discovered absolute tool paths into SQLite atomically.
-  serve            Run the sibling headless runtime in the foreground.
-  serve --watch    Run the headless runtime and auto-start the LIVE watcher.
+  init       Create the local backend/data layout and settings database.
+  status     Show shared runtime readiness and persistent/local operation state.
+  settings   Read or update validated non-secret runtime settings.
+  providers  Read provider readiness or update provider settings/secrets.
+  tools      Discover or persist Streamlink, yt-dlp and FFmpeg paths.
+  doctor     Run shared runtime preflight; --active-tools executes local version probes.
+  channels   Manage the canonical LIVE channel list through StreamArchiveCore.
+  watcher    Inspect or run the shared LIVE watcher.
+  vod        Analyze, download, inspect or cancel foreground VOD work.
+  queue      Manage the persistent VOD queue.
+  history    Read LIVE/VOD history through the shared service.
+  backup     Inspect, create or explicitly restore managed backups.
+  storage    Show shared storage/free-space state.
+  logs       Show the current process runtime log buffer.
+  serve      Run the shared headless runtime in the foreground.
+
+Secret input:
+  Provider secrets and protected-stream passwords are accepted from stdin only.
+  Secret values are not accepted as ordinary command-line arguments.
 
 Environment:
   STREAM_ARCHIVE_BACKEND_DIR  Explicit backend directory.
   STREAM_ARCHIVE_DATA_DIR     Explicit data directory containing stream-archive.db.
+  STREAM_ARCHIVE_BACKUP_DIR   Explicit managed backup directory.
 
-The CLI remains the Linux/macOS headless interface; Windows uses the Slint Native UI by default.
+Long-running commands remain attached to the CLI process. Ctrl+C and Unix SIGTERM
+use the shared shutdown path; no HTTP/Web control plane is started.
 "#
     );
 }
@@ -217,28 +265,15 @@ fn command_serve(args: &[String]) -> Result<()> {
         [flag] if flag == "--watch" => true,
         _ => bail!("usage: stream-archive-cli serve [--watch]"),
     };
-    let backend = backend_dir(false)?;
+    let backend = backend_dir(true)?;
     if !backend.is_dir() {
         bail!(
             "backend directory does not exist: {}; run `stream-archive-cli init`",
             backend.display()
         );
     }
-    let server = server_binary().context(
-        "stream-archive-server headless runtime was not found next to the CLI or in PATH; build/install both binaries",
-    )?;
-    let mut command = Command::new(&server);
-    command.env("STREAM_ARCHIVE_BACKEND_DIR", &backend);
-    if watch {
-        command.env("STREAM_ARCHIVE_START_WATCHER", "1");
-    }
-    let status = command
-        .status()
-        .with_context(|| format!("failed to start {}", server.display()))?;
-    if !status.success() {
-        bail!("stream-archive-server headless runtime exited with {status}");
-    }
-    Ok(())
+    let runtime = tokio::runtime::Runtime::new().context("failed to create headless runtime")?;
+    runtime.block_on(run_serve(watch))
 }
 
 fn configure_tools(backend: &Path, db: &Path, tools: Vec<ToolResolution>) -> Result<()> {
@@ -437,30 +472,6 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
             .context("cannot resolve current directory")?
             .join(path))
     }
-}
-
-fn server_binary() -> Option<PathBuf> {
-    #[cfg(windows)]
-    const NAMES: &[&str] = &["stream-archive-server.exe", "stream-archive-server"];
-    #[cfg(not(windows))]
-    const NAMES: &[&str] = &["stream-archive-server", "stream-archive-server.exe"];
-
-    if let Ok(exe) = env::current_exe()
-        && let Some(parent) = exe.parent()
-    {
-        for name in NAMES {
-            let candidate = parent.join(name);
-            if executable_file(&candidate) {
-                return Some(candidate);
-            }
-        }
-    }
-    for name in NAMES {
-        if let Some(path) = find_command(name) {
-            return Some(path);
-        }
-    }
-    None
 }
 
 #[cfg(test)]

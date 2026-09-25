@@ -46,6 +46,25 @@ impl VodQueueManager {
         logs: LogBuffer,
         lifecycle_lock: Arc<Mutex<()>>,
     ) -> Result<Self> {
+        Self::new_with_recovery(store, vod, logs, lifecycle_lock, true)
+    }
+
+    pub fn new_observer(
+        store: Store,
+        vod: Arc<VodManager>,
+        logs: LogBuffer,
+        lifecycle_lock: Arc<Mutex<()>>,
+    ) -> Result<Self> {
+        Self::new_with_recovery(store, vod, logs, lifecycle_lock, false)
+    }
+
+    fn new_with_recovery(
+        store: Store,
+        vod: Arc<VodManager>,
+        logs: LogBuffer,
+        lifecycle_lock: Arc<Mutex<()>>,
+        recover_interrupted: bool,
+    ) -> Result<Self> {
         let manager = Self {
             store,
             vod,
@@ -55,7 +74,9 @@ impl VodQueueManager {
             worker_started: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
         };
-        manager.mark_interrupted()?;
+        if recover_interrupted {
+            manager.mark_interrupted()?;
+        }
         Ok(manager)
     }
 

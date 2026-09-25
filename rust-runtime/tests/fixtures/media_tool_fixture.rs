@@ -215,6 +215,11 @@ fn run_provider_tool(tool: ProviderTool, args: &[std::ffi::OsString]) {
 }
 
 fn run_streamlink_fixture(args: &[std::ffi::OsString], mode: &str) {
+    if has_arg(args, "--version") {
+        println!("fixture-streamlink 1.2.3");
+        return;
+    }
+
     let preflight = has_arg(args, "--can-handle-url") || has_arg(args, "--help");
     if preflight {
         match mode {
@@ -263,6 +268,11 @@ fn run_streamlink_fixture(args: &[std::ffi::OsString], mode: &str) {
 }
 
 fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
+    if has_arg(args, "--version") {
+        println!("fixture-yt-dlp 1.2.3");
+        return;
+    }
+
     apply_run_mode(mode);
 
     if has_arg(args, "--cookies-from-browser")
@@ -299,6 +309,11 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
 }
 
 fn run_ffmpeg_fixture(args: &[std::ffi::OsString], mode: &str) {
+    if has_arg(args, "-version") {
+        println!("ffmpeg version fixture-1.2.3");
+        return;
+    }
+
     let target = args
         .iter()
         .rev()

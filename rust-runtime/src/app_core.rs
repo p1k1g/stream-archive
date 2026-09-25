@@ -19,6 +19,7 @@ use crate::{
         validate_setting_updates,
     },
     queue_service::VodQueueManager,
+    runtime_owner::{RuntimeOwnerGuard, runtime_owner_active},
     security::{protect_secret, unprotect_secret},
     store::{self, Store},
     support::{
@@ -27,7 +28,7 @@ use crate::{
     },
     vod::VodManager,
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -55,6 +56,7 @@ pub struct StreamArchiveCore {
     backups: BackupManager,
     config_write_lock: Arc<Mutex<()>>,
     lifecycle_lock: Arc<Mutex<()>>,
+    runtime_owner: Option<Arc<RuntimeOwnerGuard>>,
 }
 
 pub struct CoreOpenResult {
@@ -71,28 +73,64 @@ impl StreamArchiveCore {
     pub fn open(backend_dir: impl AsRef<Path>) -> Result<CoreOpenResult> {
         let backend_dir = backend_dir.as_ref().to_path_buf();
         let db_path = Store::default_path(&backend_dir);
+        let runtime_owner = Arc::new(RuntimeOwnerGuard::acquire(&db_path)?);
         let migrated_legacy_db = Store::migrate_legacy_database(&db_path)?;
         let store = Store::open(db_path)?;
         store::init_global(store.clone())?;
         Ok(CoreOpenResult {
-            core: Self::assemble(backend_dir, store)?,
+            core: Self::assemble_with_mode(backend_dir, store, Some(runtime_owner), true)?,
             migrated_legacy_db,
         })
     }
 
+    pub fn open_observer(backend_dir: impl AsRef<Path>) -> Result<CoreOpenResult> {
+        let backend_dir = backend_dir.as_ref().to_path_buf();
+        let db_path = Store::default_path(&backend_dir);
+        let migrated_legacy_db = if runtime_owner_active(&db_path)? {
+            false
+        } else {
+            Store::migrate_legacy_database(&db_path)?
+        };
+        let store = Store::open_observer(db_path)?;
+        store::init_global(store.clone())?;
+        Ok(CoreOpenResult {
+            core: Self::assemble_with_mode(backend_dir, store, None, false)?,
+            migrated_legacy_db,
+        })
+    }
+
+    #[cfg(test)]
     fn assemble(backend_dir: PathBuf, store: Store) -> Result<Self> {
+        Self::assemble_with_mode(backend_dir, store, None, true)
+    }
+
+    fn assemble_with_mode(
+        backend_dir: PathBuf,
+        store: Store,
+        runtime_owner: Option<Arc<RuntimeOwnerGuard>>,
+        recover_queue: bool,
+    ) -> Result<Self> {
         let logs = LogBuffer::new();
         let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
         let vod = Arc::new(VodManager::new(backend_dir.clone(), logs.clone()));
         let config_write_lock = Arc::new(Mutex::new(()));
         let lifecycle_lock = Arc::new(Mutex::new(()));
         let backups = BackupManager::open(store.clone(), &backend_dir)?;
-        let queue = Arc::new(VodQueueManager::new(
-            store.clone(),
-            vod.clone(),
-            logs.clone(),
-            lifecycle_lock.clone(),
-        )?);
+        let queue = Arc::new(if recover_queue {
+            VodQueueManager::new(
+                store.clone(),
+                vod.clone(),
+                logs.clone(),
+                lifecycle_lock.clone(),
+            )?
+        } else {
+            VodQueueManager::new_observer(
+                store.clone(),
+                vod.clone(),
+                logs.clone(),
+                lifecycle_lock.clone(),
+            )?
+        });
         Ok(Self {
             backend_dir: Arc::new(backend_dir),
             store,
@@ -103,6 +141,7 @@ impl StreamArchiveCore {
             backups,
             config_write_lock,
             lifecycle_lock,
+            runtime_owner,
         })
     }
 
@@ -116,6 +155,18 @@ impl StreamArchiveCore {
 
     pub fn logs(&self) -> &LogBuffer {
         &self.logs
+    }
+
+    pub fn owns_runtime(&self) -> bool {
+        self.runtime_owner.is_some()
+    }
+
+    pub fn another_runtime_active(&self) -> Result<bool> {
+        if self.owns_runtime() {
+            Ok(false)
+        } else {
+            runtime_owner_active(self.store.path())
+        }
     }
 
     pub fn is_first_run_unconfigured(&self) -> Result<bool> {
@@ -323,6 +374,52 @@ impl StreamArchiveCore {
         Ok(saved)
     }
 
+    pub async fn add_channel(&self, channel: Channel) -> Result<Vec<Channel>> {
+        validate_channels(std::slice::from_ref(&channel))?;
+        let _guard = self.config_write_lock.lock().await;
+        self.store.insert_channel(&channel)?;
+        let saved = self.store.channels()?;
+        self.logs
+            .push(format!(
+                "[CORE] channel added {}/{}",
+                channel.platform, channel.account
+            ))
+            .await;
+        Ok(saved)
+    }
+
+    pub async fn remove_channel(
+        &self,
+        platform: PlatformId,
+        account: &str,
+    ) -> Result<Vec<Channel>> {
+        let _guard = self.config_write_lock.lock().await;
+        self.store.delete_channel(platform, account)?;
+        let saved = self.store.channels()?;
+        self.logs
+            .push(format!("[CORE] channel removed {platform}/{account}"))
+            .await;
+        Ok(saved)
+    }
+
+    pub async fn set_channel_enabled(
+        &self,
+        platform: PlatformId,
+        account: &str,
+        enabled: bool,
+    ) -> Result<Vec<Channel>> {
+        let _guard = self.config_write_lock.lock().await;
+        self.store.set_channel_enabled(platform, account, enabled)?;
+        let saved = self.store.channels()?;
+        self.logs
+            .push(format!(
+                "[CORE] channel {} {platform}/{account}",
+                if enabled { "enabled" } else { "disabled" }
+            ))
+            .await;
+        Ok(saved)
+    }
+
     pub async fn watcher_status(&self) -> Result<NativeWatcherStatus> {
         self.watcher.status().await
     }
@@ -352,6 +449,10 @@ impl StreamArchiveCore {
         let status = self.vod.status().await;
         self.store.upsert_vod(&status)?;
         Ok(status)
+    }
+
+    pub async fn local_vod_status(&self) -> VodJobStatus {
+        self.vod.status().await
     }
 
     pub async fn analyze_vod(&self, mut req: VodAnalyzeRequest) -> Result<VodJobStatus> {
@@ -458,6 +559,16 @@ impl StreamArchiveCore {
     pub async fn restore_backup(&self, file_name: &str) -> Result<RestoreOutcome> {
         let _lifecycle_guard = self.lifecycle_lock.lock().await;
         let _config_guard = self.config_write_lock.lock().await;
+        let _cross_process_owner = if self.runtime_owner.is_none() {
+            Some(RuntimeOwnerGuard::acquire(self.store.path()).context(
+                "cannot restore while another Stream Archive runtime owns the canonical database",
+            )?)
+        } else {
+            None
+        };
+        if self.runtime_owner.is_none() {
+            self.store.recover_interrupted()?;
+        }
 
         let watcher = self.watcher.status().await?;
         if watcher.running || watcher.recording_count > 0 {

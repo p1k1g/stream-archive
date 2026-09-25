@@ -219,6 +219,14 @@ impl Store {
     }
 
     pub fn open(path: PathBuf) -> Result<Self> {
+        Self::open_with_recovery(path, true)
+    }
+
+    pub fn open_observer(path: PathBuf) -> Result<Self> {
+        Self::open_with_recovery(path, false)
+    }
+
+    fn open_with_recovery(path: PathBuf, recover_interrupted: bool) -> Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create data directory {}", parent.display()))?;
@@ -242,7 +250,9 @@ impl Store {
             channels_cache: Arc::new(RwLock::new(channels_cache)),
         };
         store.ensure_runtime_defaults()?;
-        store.recover_interrupted()?;
+        if recover_interrupted {
+            store.recover_interrupted()?;
+        }
         Ok(store)
     }
 
@@ -365,6 +375,11 @@ impl Store {
             .map_err(|_| anyhow::anyhow!("SQLite connection mutex poisoned"))
     }
 
+    pub(crate) fn refresh_config_cache(&self) -> Result<()> {
+        let conn = self.conn()?;
+        self.refresh_config_cache_from_conn(&conn)
+    }
+
     fn refresh_config_cache_from_conn(&self, conn: &Connection) -> Result<()> {
         let settings = load_all_settings_from_conn(conn)?;
         let channels = load_channels_from_conn(conn)?;
@@ -379,7 +394,7 @@ impl Store {
         Ok(())
     }
 
-    fn recover_interrupted(&self) -> Result<()> {
+    pub(crate) fn recover_interrupted(&self) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let conn = self.conn()?;
         conn.execute(
@@ -507,6 +522,62 @@ impl Store {
             .write()
             .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))? = sorted_channels;
         Ok(())
+    }
+
+    pub fn insert_channel(&self, channel: &Channel) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "INSERT INTO channels(platform,account,name,enabled,outdir,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(platform,account) DO NOTHING",
+            params![
+                channel.platform.as_str(),
+                channel.account,
+                channel.name,
+                i64::from(channel.enabled),
+                channel.outdir,
+                now
+            ],
+        )?;
+        if changed == 0 {
+            anyhow::bail!(
+                "duplicate channel identity: {}/{}",
+                channel.platform,
+                channel.account
+            );
+        }
+        self.refresh_config_cache_from_conn(&conn)
+    }
+
+    pub fn delete_channel(&self, platform: PlatformId, account: &str) -> Result<()> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "DELETE FROM channels WHERE platform=?1 AND account=?2",
+            params![platform.as_str(), account],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("channel not found: {platform}/{account}");
+        }
+        self.refresh_config_cache_from_conn(&conn)
+    }
+
+    pub fn set_channel_enabled(
+        &self,
+        platform: PlatformId,
+        account: &str,
+        enabled: bool,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE channels SET enabled=?3, updated_at=?4 WHERE platform=?1 AND account=?2",
+            params![platform.as_str(), account, i64::from(enabled), now],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("channel not found: {platform}/{account}");
+        }
+        self.refresh_config_cache_from_conn(&conn)
     }
 
     pub fn start_live(&self, item: &LiveHistoryItem) -> Result<()> {
@@ -980,5 +1051,81 @@ mod tests {
             )
             .unwrap();
         assert_ne!(changed_at, "sentinel");
+    }
+
+    #[test]
+    fn atomic_channel_inserts_preserve_changes_from_stale_observers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("channels-atomic.db");
+        let first = Store::open_observer(path.clone()).unwrap();
+        let second = Store::open_observer(path.clone()).unwrap();
+
+        let alpha = channel("Alpha", "alpha");
+        let beta = channel("Beta", "beta");
+
+        first.insert_channel(&alpha).unwrap();
+        second.insert_channel(&beta).unwrap();
+
+        let reopened = Store::open_observer(path).unwrap();
+        let accounts = reopened
+            .channels()
+            .unwrap()
+            .into_iter()
+            .map(|channel| channel.account)
+            .collect::<Vec<_>>();
+        assert_eq!(accounts, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn observer_open_preserves_active_runtime_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("observer.db");
+        let store = Store::open(path.clone()).unwrap();
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO live_recordings(id,platform,account,channel_name,started_at,status) VALUES('live-active','SOOP','fixture','Fixture','2026-09-23T00:00:00Z','RECORDING')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO vod_jobs(id,platform,kind,state,updated_at) VALUES('vod-active','SOOP','DOWNLOAD','DOWNLOADING','2026-09-23T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO vod_queue(id,platform,request_json,vod_url,output_directory,state,attempts,message,created_at,updated_at) VALUES('queue-active','SOOP','{}','https://fixture.invalid/vod','/tmp','RUNNING',0,'','2026-09-23T00:00:00Z','2026-09-23T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+        drop(store);
+
+        let observer = Store::open_observer(path).unwrap();
+        let conn = observer.conn().unwrap();
+        let live_status: String = conn
+            .query_row(
+                "SELECT status FROM live_recordings WHERE id='live-active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let vod_state: String = conn
+            .query_row(
+                "SELECT state FROM vod_jobs WHERE id='vod-active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let queue_state: String = conn
+            .query_row(
+                "SELECT state FROM vod_queue WHERE id='queue-active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(live_status, "RECORDING");
+        assert_eq!(vod_state, "DOWNLOADING");
+        assert_eq!(queue_state, "RUNNING");
     }
 }

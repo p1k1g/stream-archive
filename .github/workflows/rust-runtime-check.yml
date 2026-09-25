@@ -98,6 +98,11 @@ jobs:
             cargo test --locked --manifest-path rust-runtime/Cargo.toml
           fi
 
+      - name: Unix CLI integration smoke
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: cargo test --locked --manifest-path rust-runtime/Cargo.toml --test unix_cli -- --test-threads=1
+
       - name: Native compile check
         shell: bash
         run: cargo check --locked --manifest-path rust-runtime/Cargo.toml
