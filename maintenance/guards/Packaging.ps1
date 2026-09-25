@@ -37,7 +37,8 @@ try {
     Assert-Match $unixVerify 'stream-archive-cli" help' 'Unix verifier must execute packaged CLI help.'
     Assert-Match $unixVerify 'stream-archive-cli" init' 'Unix archive smoke must initialize from the extracted package.'
     Assert-Match $unixVerify 'status --json' 'Unix archive smoke must execute packaged status JSON.'
-    Assert-Match $unixVerify 'Release 테스트' 'Unix archive smoke must exercise a non-ASCII path.'
+    Assert-Match $unixVerify 'mktemp -d "[^"]*\s[^"]*\.XXXXXX"' 'Unix archive smoke must exercise a whitespace path.'
+    Assert-Match $unixVerify 'mktemp -d "[^"]*[^\x00-\x7F][^"]*\.XXXXXX"' 'Unix archive smoke must exercise a non-ASCII path.'
     Assert-Match $unixVerify 'Release package data directory must be empty' 'Unix verifier must reject bundled runtime data.'
     foreach ($tool in @('streamlink','yt-dlp','ffmpeg')) {
         Assert-Match $unixVerify $tool "Unix package verifier must reject bundled media tool: $tool"
