@@ -442,16 +442,14 @@ fn unix_cli_serve_sigterm_is_graceful_and_does_not_kill_unrelated_runtime() {
 fn wait_for_queue_state(db: &std::path::Path, id: &str, expected: &str) {
     let started = Instant::now();
     loop {
-        let state = Connection::open(db)
+        let state = Connection::open(db).ok().and_then(|conn| {
+            conn.query_row(
+                "SELECT state FROM vod_queue WHERE id=?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
             .ok()
-            .and_then(|conn| {
-                conn.query_row(
-                    "SELECT state FROM vod_queue WHERE id=?1",
-                    params![id],
-                    |row| row.get::<_, String>(0),
-                )
-                .ok()
-            });
+        });
         if state.as_deref() == Some(expected) {
             return;
         }
