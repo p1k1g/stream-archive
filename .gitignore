@@ -8,6 +8,7 @@ obj/
 # Rust build output
 rust-runtime/target/
 rust-gui/target/
+dist/
 
 # Local archives, diagnostics, and runtime state
 *.zip
