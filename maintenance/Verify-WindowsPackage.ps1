@@ -166,7 +166,13 @@ if (-not [string]::IsNullOrWhiteSpace($ArchivePath)) {
         throw 'Archive checksum mismatch'
     }
 
-    $scratch = Join-Path $env:RUNNER_TEMP ("Stream Archive Release 테스트-" + [guid]::NewGuid().ToString('N'))
+    $tempRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+        [System.IO.Path]::GetTempPath()
+    }
+    else {
+        $env:RUNNER_TEMP
+    }
+    $scratch = Join-Path $tempRoot ("Stream Archive Release 테스트-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $scratch -Force | Out-Null
     try {
         Expand-Archive -LiteralPath $ArchivePath -DestinationPath $scratch -Force
