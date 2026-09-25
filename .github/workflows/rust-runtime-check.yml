@@ -246,7 +246,7 @@ jobs:
             Set-Content -LiteralPath $probe -Value 'dirty provenance probe' -Encoding ASCII
             Push-Location $env:GITHUB_WORKSPACE
             try {
-              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $dirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $dirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
               if ($LASTEXITCODE -ne 0) {
                 throw "dirty release metadata probe failed with exit code $LASTEXITCODE"
               }
