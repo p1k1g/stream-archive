@@ -316,7 +316,7 @@ Pull Request runtime validation은 `.github/workflows/rust-runtime-check.yml`에
 - Windows portable package + ZIP archive build/verification
 - Linux/macOS TAR.GZ package build, package-local checksum, archive checksum, fresh-extract CLI smoke
 
-Release workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식이며 GitHub Release/tag를 만들지 않고 검증된 Actions artifact만 업로드하도록 구성되어 있습니다. artifact retention은 7일입니다.
+Release workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식이며 GitHub Release/tag를 만들지 않고 검증된 Actions artifact만 업로드하도록 구성되어 있습니다. artifact job 전에 canonical runtime/packaging contract gate가 먼저 통과해야 하며 artifact retention은 7일입니다.
 
 PR CI는 native GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-arm64` package를 실제 조립하고 checksum/fresh-extract smoke까지 검증합니다. 실제 provider credential이 필요한 로그인/session smoke와 공개 release 판정은 자동 CI 범위 밖이며 Phase 23.7 수동 QA로 남깁니다.
 
