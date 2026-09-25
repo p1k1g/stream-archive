@@ -7,8 +7,25 @@ permissions:
   contents: read
 
 jobs:
+  release-contracts:
+    name: release-contracts
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate release/runtime contracts
+        shell: powershell
+        run: ./maintenance/Test-RuntimeContracts.ps1
+
   windows-package:
     name: windows-package
+    needs: release-contracts
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -77,6 +94,7 @@ jobs:
 
   unix-package:
     name: unix-package (${{ matrix.platform }})
+    needs: release-contracts
     strategy:
       fail-fast: false
       matrix:
