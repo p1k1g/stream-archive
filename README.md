@@ -365,7 +365,7 @@ PR CI는 native GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-ar
 - ✅ Unix/headless CLI + cross-platform Streamlink/yt-dlp/FFmpeg discovery baseline
 - ✅ Linux/macOS CLI runtime/configuration commands 확장 — Phase 23.5에서 완료
 - ✅ deterministic Linux/macOS real-binary CLI/tool integration coverage — Phase 23.5에서 완료
-- Unix packaging / install guidance는 Phase 23.6으로 이관
+- ✅ Unix portable archive packaging / install guidance — Phase 23.6에서 완료
 
 Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 추가하지 않습니다. Unix 계열은 CLI/headless 경로를 명확히 하고, Windows GUI 교체는 Phase 21로 분리합니다.
 
@@ -400,7 +400,6 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ 23.4 Provider E2E Validation
 - ✅ 23.5 Unix CLI Completion
 - ✅ 23.6 Packaging / Release Readiness
-- ⏳ 23.7 Release Candidate / Final QA
 - ⏳ 23.7 Release Candidate / Final QA
 
 ---
