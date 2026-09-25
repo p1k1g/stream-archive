@@ -180,6 +180,10 @@ async fn execute_request(
         }
         "vod.status" => Ok(serde_json::to_value(core.vod_status().await?)?),
         "vod.cancel" => Ok(serde_json::to_value(core.cancel_vod().await?)?),
+        "queue.cancel" => {
+            let id = request.target.context("queue item id is required")?;
+            Ok(serde_json::to_value(core.cancel_queue_item(&id).await?)?)
+        }
         "logs" => Ok(serde_json::to_value(
             core.runtime_logs(request.max_lines.unwrap_or(100)).await,
         )?),
