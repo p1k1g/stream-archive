@@ -208,10 +208,7 @@ jobs:
 
           Push-Location $scratch
           try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
-              "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" \
-              -OutputPath $output \
-              -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $output -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
             if ($LASTEXITCODE -ne 0) {
               throw "Write-ReleaseMetadata.ps1 child process failed with exit code $LASTEXITCODE"
             }
@@ -249,8 +246,4 @@ jobs:
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
           if ($null -eq $archive) { throw 'Windows release archive was not created.' }
-          ./maintenance/Verify-WindowsPackage.ps1 \
-            -Root './dist/stream-archive' \
-            -RequireCleanData \
-            -ArchivePath $archive.FullName \
-            -ArchiveChecksumPath "$($archive.FullName).sha256"
+          ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $archive.FullName -ArchiveChecksumPath "$($archive.FullName).sha256"
