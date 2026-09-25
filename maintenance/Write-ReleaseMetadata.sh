@@ -20,6 +20,9 @@ COMMIT="unknown"
 if command -v git >/dev/null 2>&1; then
   if CANDIDATE="$(git rev-parse --short=12 HEAD 2>/dev/null)" && [[ -n "$CANDIDATE" ]]; then
     COMMIT="$CANDIDATE"
+    if [[ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
+      COMMIT="${COMMIT}-dirty"
+    fi
   fi
 fi
 
