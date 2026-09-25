@@ -306,9 +306,12 @@ printf '%s' "$STREAM_PASSWORD" |
   stream-archive-cli channels password soop example --stdin
 ~~~
 
-Channel/settings writes remain canonical SQLite writes. A running watcher
-periodically refreshes its shared Store cache so updates made by one-shot CLI
-processes become visible without adding a second configuration authority.
+Channel/settings writes remain canonical SQLite writes. CLI channel
+add/remove/enable/disable use row-level SQLite mutations rather than replacing
+the full channel snapshot, so overlapping one-shot CLI writers cannot silently
+discard each other's channel changes. A running watcher periodically refreshes
+its shared Store cache so committed updates become visible without adding a
+second configuration authority.
 
 ## VOD
 
@@ -375,6 +378,12 @@ stream-archive-cli queue remove <ID>
 queue add persists work. The Queue worker is owned by the long-running headless
 runtime, so normal unattended operation should keep stream-archive-cli serve
 running.
+
+When a foreground runtime owns an active Queue item, queue cancel is routed
+through the protected Unix-domain control socket so the owner process can
+cancel its process-local VOD job and finish the canonical Queue lifecycle.
+Queued-only cancellation still works directly against SQLite when no runtime
+owner is active.
 
 ## History
 
