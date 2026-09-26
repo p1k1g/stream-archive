@@ -11,6 +11,7 @@ $contracts = @(
     'Security.ps1',
     'ToolDiscovery.ps1',
     'Packaging.ps1',
+    'ReleaseCandidate.ps1',
     'ReleaseSafety.ps1'
 )
 
