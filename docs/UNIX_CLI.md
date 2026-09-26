@@ -18,24 +18,86 @@ stream-archive-server
 
 No localhost HTTP/Web application API is started.
 
-## Build
+## Build and package
 
-From the repository root:
+Source build:
 
 ~~~bash
 cargo build --locked --release --manifest-path rust-runtime/Cargo.toml
 ~~~
 
-Relevant binaries:
+Relevant raw build outputs:
 
 ~~~text
 rust-runtime/target/release/stream-archive-cli
 rust-runtime/target/release/stream-archive-server
 ~~~
 
-## First run
+Phase 23.6 adds the canonical portable archive builder:
 
-Create the backend/data layout:
+~~~bash
+./BUILD_UNIX_PACKAGE.sh
+~~~
+
+It performs a locked release build, assembles a clean package tree, writes `RELEASE_INFO.txt` and package-local `SHA256SUMS.txt`, verifies the package, creates the TAR.GZ plus archive-level `.sha256`, then extracts it to a fresh whitespace/non-ASCII path and runs packaged CLI smoke.
+
+CI has verified these native artifact names:
+
+~~~text
+stream-archive-linux-x64.tar.gz
+stream-archive-macos-arm64.tar.gz
+~~~
+
+No cross-compiled architecture is advertised.
+
+## Packaged first run
+
+Extract the archive and enter the package root:
+
+~~~bash
+tar -xzf stream-archive-linux-x64.tar.gz
+cd stream-archive
+
+./bin/stream-archive-cli init
+./bin/stream-archive-cli tools
+./bin/stream-archive-cli tools configure
+./bin/stream-archive-cli doctor --active-tools
+~~~
+
+macOS uses the same package layout and commands after extracting `stream-archive-macos-arm64.tar.gz`.
+
+Package layout:
+
+~~~text
+stream-archive/
+├─ bin/
+│  ├─ stream-archive-cli
+│  └─ stream-archive-server
+├─ backend/
+│  └─ vod/
+├─ data/
+├─ docs/
+│  ├─ UNIX_CLI.md
+│  └─ OPERATIONS.md
+├─ LICENSE
+├─ THIRD_PARTY_NOTICES.md
+├─ RELEASE_INFO.txt
+└─ SHA256SUMS.txt
+~~~
+
+The bundled `data/` directory is empty by design. Run from the package root when using package-local defaults, or explicitly set:
+
+~~~bash
+export STREAM_ARCHIVE_BACKEND_DIR=/srv/stream-archive/backend
+export STREAM_ARCHIVE_DATA_DIR=/srv/stream-archive/data
+export STREAM_ARCHIVE_BACKUP_DIR=/srv/stream-archive/backups
+~~~
+
+Paths may contain whitespace and normal Unix Unicode characters.
+
+## Source-tree first run
+
+When running directly from a source checkout instead of a Phase 23.6 archive:
 
 ~~~bash
 ./rust-runtime/target/release/stream-archive-cli init
@@ -49,16 +111,6 @@ Default layout:
 ./data/
   stream-archive.db
 ~~~
-
-Overrides:
-
-~~~bash
-export STREAM_ARCHIVE_BACKEND_DIR=/srv/stream-archive/backend
-export STREAM_ARCHIVE_DATA_DIR=/srv/stream-archive/data
-export STREAM_ARCHIVE_BACKUP_DIR=/srv/stream-archive/backups
-~~~
-
-Paths may contain whitespace and normal Unix Unicode characters.
 
 ## Command tree
 
@@ -465,7 +517,10 @@ There is no process-name-wide kill.
 ## Automated Unix validation
 
 Linux/macOS CI runs the real binaries against isolated temporary backend/data
-directories with whitespace and Unicode paths.
+directories with whitespace and Unicode paths. Phase 23.6 additionally builds
+the real release archive, validates package-local and archive checksums, extracts
+the archive into a new whitespace/non-ASCII directory, then executes the packaged
+CLI from that extraction.
 
 The smoke covers:
 
@@ -509,7 +564,15 @@ screenshots or CI configuration.
 
 ## Phase boundary
 
-Phase 23.5 completes the Unix CLI/headless management surface and lifecycle.
-Unix installation bundles, Homebrew/deb/rpm/pkg packaging, service installers,
-signing/notarization and release publishing remain Phase 23.6 Packaging /
-Release Readiness.
+Phase 23.6 completes portable archive readiness for the currently CI-verified
+native Unix targets. It does not add a Linux/macOS GUI, package-manager package,
+service installer, code signing, notarization, auto updater, Git tag, or public
+GitHub Release.
+
+The archives are checksum-verified but unsigned. On Linux the native secret
+contract still requires `secret-tool` and a usable Secret Service session.
+macOS continues to use Keychain. Missing native secret storage never enables a
+plaintext fallback.
+
+Public release/version/tag decisions and real provider/session QA remain Phase
+23.7 Release Candidate / Final QA.

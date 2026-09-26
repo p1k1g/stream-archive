@@ -74,9 +74,9 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 
 | 운영체제 | 상태 |
 |---|---|
-| Windows | ✅ 현재 지원 |
-| Linux | ✅ Phase 23.5 — headless CLI daily-use management, process-group ownership, Secret Service 경계, Unix integration/SIGTERM CI 완료. 배포 패키징은 Phase 23.6 |
-| macOS | ✅ Phase 23.5 — headless CLI daily-use management, process-group ownership, Keychain 경계, Unix integration/SIGTERM CI 완료. 배포 패키징은 Phase 23.6 |
+| Windows | ✅ Native portable ZIP package 검증 완료 (`windows-x64`) |
+| Linux | ✅ CLI/headless TAR.GZ package 검증 완료 (`linux-x64`), Secret Service 경계 유지 |
+| macOS | ✅ CLI/headless TAR.GZ package 검증 완료 (`macos-arm64`), Keychain 경계 유지 |
 
 ## 빠른 시작
 
@@ -88,7 +88,7 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 - `yt-dlp`
 - `ffmpeg`
 
-Windows portable package에는 외부 미디어 도구가 포함되지 않습니다. Native UI의 설정 화면에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요. Linux/macOS에서는 Phase 23.5의 `stream-archive-cli tools` / `tools configure`로 Unix 이름과 `PATH`를 기준으로 탐색하고 SQLite에 절대 경로를 저장할 수 있습니다.
+Windows/Linux/macOS release package에는 외부 미디어 도구가 포함되지 않습니다. Windows Native UI의 설정 화면에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요. Linux/macOS에서는 `stream-archive-cli tools` / `tools configure`로 Unix 이름과 `PATH`를 기준으로 탐색하고 SQLite에 절대 경로를 저장할 수 있습니다.
 
 각 외부 도구는 각 프로젝트의 라이선스와 배포 조건을 따릅니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참고하세요.
 
@@ -232,29 +232,26 @@ cargo build --locked --release --manifest-path .\rust-gui\Cargo.toml
 
 각 Cargo `target\release` 디렉터리는 raw build output이며 배포 패키지 기준이 아닙니다. 실제 실행·배포 검증은 `dist\stream-archive`를 기준으로 합니다.
 
-### Linux / macOS CLI
+### Linux / macOS package
 
-Phase 23.5의 Unix 경로는 GUI launcher가 아니라 `stream-archive-cli`를 사용하며, bootstrap뿐 아니라 daily-use management까지 shared `StreamArchiveCore`를 통해 제공합니다.
+Phase 23.6의 Unix release artifact는 source checkout 없이 사용할 수 있는 portable TAR.GZ입니다. PR CI에서 현재 검증된 native artifact는 `stream-archive-linux-x64.tar.gz`와 `stream-archive-macos-arm64.tar.gz`입니다.
 
 ```bash
-cargo build --locked --release --manifest-path rust-runtime/Cargo.toml
+tar -xzf stream-archive-linux-x64.tar.gz
+cd stream-archive
 
-./rust-runtime/target/release/stream-archive-cli init
-./rust-runtime/target/release/stream-archive-cli tools configure
-./rust-runtime/target/release/stream-archive-cli doctor --active-tools
-./rust-runtime/target/release/stream-archive-cli status --json
-./rust-runtime/target/release/stream-archive-cli providers status --json
-./rust-runtime/target/release/stream-archive-cli channels list --json
-./rust-runtime/target/release/stream-archive-cli queue list --json
-./rust-runtime/target/release/stream-archive-cli history list --json
-./rust-runtime/target/release/stream-archive-cli serve --watch
+./bin/stream-archive-cli init
+./bin/stream-archive-cli tools
+./bin/stream-archive-cli tools configure
+./bin/stream-archive-cli doctor --active-tools
+./bin/stream-archive-cli status --json
 ```
 
-`tools configure`는 Streamlink/yt-dlp/FFmpeg를 기존 SQLite 설정 → backend layout → `PATH` → 일반적인 Unix 설치 경로 순서로 찾고, 발견된 절대 경로를 canonical SQLite 설정에 원자적으로 기록합니다. 별도 INI/TXT 설정 파일은 만들지 않습니다.
+macOS도 archive 이름만 `stream-archive-macos-arm64.tar.gz`로 바꾸고 같은 package-local `./bin/stream-archive-cli` 경로를 사용합니다. package root의 `backend/`와 `data/`를 기본 layout으로 사용하므로 archive root에서 실행하거나 `STREAM_ARCHIVE_BACKEND_DIR` / `STREAM_ARCHIVE_DATA_DIR`를 명시하세요.
 
-`stream-archive-cli doctor`와 `doctor --json`은 Windows Native Diagnostics와 같은 shared runtime preflight를 사용합니다. `--active-tools`는 로컬 media-tool version probe만 실행하며 provider/media 네트워크 요청은 하지 않습니다.
+개발/source build가 필요하면 `./BUILD_UNIX_PACKAGE.sh`가 locked release build → clean staging → metadata/checksum → package verify → archive/checksum → fresh-extract smoke를 한 흐름으로 수행합니다. `tools configure`는 Streamlink/yt-dlp/FFmpeg를 SQLite 설정 → backend layout → `PATH` → 일반적인 Unix 설치 경로 순서로 찾습니다. 외부 media tool은 archive에 포함되지 않습니다.
 
-Phase 23.5에서는 settings, provider/secret, channels, watcher, VOD, Queue, History, Backup, Storage, Runtime Logs 관리 명령과 JSON automation mode, Unix SIGINT/SIGTERM graceful shutdown을 추가했습니다. 하나의 foreground runtime만 canonical DB를 소유하도록 cross-process owner lock을 사용하며, one-shot CLI는 non-recovering observer로 열립니다. 실행 중 watcher/VOD의 status·cancel·password·logs 같은 runtime-only 제어는 HTTP가 아닌 owner-only Unix-domain socket으로 전달합니다. 자세한 전체 command tree와 운영 제약은 `docs/UNIX_CLI.md`를 참고하세요.
+Phase 23.5의 daily-use CLI, runtime owner lock, non-recovering observer, Unix-domain runtime control, SIGINT/SIGTERM semantics는 그대로 유지됩니다. 자세한 command tree와 운영 제약은 `docs/UNIX_CLI.md`를 참고하세요.
 
 ## 백업 / 복구
 
@@ -315,13 +312,13 @@ Pull Request runtime validation은 `.github/workflows/rust-runtime-check.yml`에
 - Windows / Linux / macOS native compile check
 - Windows / Linux / macOS strict Clippy (`-D warnings`)
 - Windows Runtime contract guard
-- Source archive release-metadata smoke test
-- Windows portable package smoke test
-- Windows portable package verification
+- Source archive release-metadata smoke test (Windows/Linux/macOS)
+- Windows portable package + ZIP archive build/verification
+- Linux/macOS TAR.GZ package build, package-local checksum, archive checksum, fresh-extract CLI smoke
 
-Release workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식입니다.
+Release workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식이며 GitHub Release/tag를 만들지 않고 검증된 Actions artifact만 업로드하도록 구성되어 있습니다. artifact job 전에 canonical runtime/packaging contract gate가 먼저 통과해야 하며 artifact retention은 7일입니다.
 
-Windows/Linux/macOS GitHub-hosted CI baseline을 유지하며, Linux/macOS는 Phase 23.5에서 실제 built `stream-archive-cli` / compatibility server를 실행하는 deterministic integration smoke와 SIGTERM lifecycle 검증까지 수행합니다. 실제 provider credential이 필요한 로그인/session smoke는 자동 CI 범위 밖이며 수동 검증으로 남깁니다.
+PR CI는 native GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-arm64` package를 실제 조립하고 checksum/fresh-extract smoke까지 검증합니다. 실제 provider credential이 필요한 로그인/session smoke와 공개 release 판정은 자동 CI 범위 밖이며 Phase 23.7 수동 QA로 남깁니다.
 
 ## 문서
 
@@ -333,6 +330,7 @@ Windows/Linux/macOS GitHub-hosted CI baseline을 유지하며, Linux/macOS는 Ph
 | `docs/PHASE23_3_MEDIA_TOOL_HARNESS.md` | Phase 23.3 deterministic media-tool subprocess integration harness |
 | `docs/PHASE23_4_PROVIDER_E2E.md` | Phase 23.4 deterministic SOOP/CHZZK provider E2E validation |
 | `docs/PHASE23_5_UNIX_CLI_COMPLETION.md` | Phase 23.5 Unix CLI daily-use completion, signal lifecycle 및 CI |
+| `docs/PHASE23_6_PACKAGING_RELEASE_READINESS.md` | Phase 23.6 Windows/Linux/macOS portable artifact layout, checksum, CI/release readiness |
 | `docs/PHASE21_NATIVE_UX_POLISH.md` | Phase 21.9 Native storage/backup IA/claim sidecar UX 및 manual QA |
 | `docs/UNIX_CLI.md` | Linux/macOS headless CLI command reference, secrets, lifecycle 및 smoke |
 | `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
@@ -367,7 +365,7 @@ Windows/Linux/macOS GitHub-hosted CI baseline을 유지하며, Linux/macOS는 Ph
 - ✅ Unix/headless CLI + cross-platform Streamlink/yt-dlp/FFmpeg discovery baseline
 - ✅ Linux/macOS CLI runtime/configuration commands 확장 — Phase 23.5에서 완료
 - ✅ deterministic Linux/macOS real-binary CLI/tool integration coverage — Phase 23.5에서 완료
-- Unix packaging / install guidance는 Phase 23.6으로 이관
+- ✅ Unix portable archive packaging / install guidance — Phase 23.6에서 완료
 
 Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 추가하지 않습니다. Unix 계열은 CLI/headless 경로를 명확히 하고, Windows GUI 교체는 Phase 21로 분리합니다.
 
@@ -401,7 +399,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ 23.3 Media-tool Integration Harness
 - ✅ 23.4 Provider E2E Validation
 - ✅ 23.5 Unix CLI Completion
-- ⏳ 23.6 Packaging / Release Readiness
+- ✅ 23.6 Packaging / Release Readiness
 - ⏳ 23.7 Release Candidate / Final QA
 
 ---

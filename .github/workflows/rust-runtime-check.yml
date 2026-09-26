@@ -7,6 +7,8 @@ on:
       - "rust-gui/**"
       - "RUN_DEV.bat"
       - "BUILD_PORTABLE.bat"
+      - "BUILD_UNIX_PACKAGE.sh"
+      - ".gitignore"
       - "maintenance/**"
       - "docs/**"
       - "README.md"
@@ -23,6 +25,8 @@ on:
       - "rust-gui/**"
       - "RUN_DEV.bat"
       - "BUILD_PORTABLE.bat"
+      - "BUILD_UNIX_PACKAGE.sh"
+      - ".gitignore"
       - "maintenance/**"
       - "docs/**"
       - "README.md"
@@ -51,12 +55,11 @@ jobs:
           - platform: macos
             os: macos-latest
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -75,11 +78,12 @@ jobs:
         shell: bash
         run: |
           echo "platform=${{ matrix.platform }}"
+          echo "runner_arch=${{ runner.arch }}"
           rustc --version
+          rustc -vV | grep '^host:'
           cargo --version
           cargo clippy --version
           git --version
-
 
       - name: Rust format check
         shell: bash
@@ -103,6 +107,53 @@ jobs:
         shell: bash
         run: cargo test --locked --manifest-path rust-runtime/Cargo.toml --test unix_cli -- --test-threads=1
 
+      - name: Unix source archive metadata smoke
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: |
+          scratch="$RUNNER_TEMP/stream-archive-no-git-unix"
+          rm -rf "$scratch"
+          mkdir -p "$scratch"
+          (
+            cd "$scratch"
+            "$GITHUB_WORKSPACE/maintenance/Write-ReleaseMetadata.sh" \
+              "$scratch/RELEASE_INFO.txt" \
+              "$GITHUB_WORKSPACE/rust-runtime/Cargo.toml"
+          )
+          grep -qx 'commit=unknown' "$scratch/RELEASE_INFO.txt"
+
+          probe="$GITHUB_WORKSPACE/phase23-release-dirty-probe.tmp"
+          dirty="$scratch/RELEASE_INFO_DIRTY.txt"
+          trap 'rm -f "$probe"' EXIT
+          printf 'dirty provenance probe\n' > "$probe"
+          (
+            cd "$GITHUB_WORKSPACE"
+            ./maintenance/Write-ReleaseMetadata.sh \
+              "$dirty" \
+              "$GITHUB_WORKSPACE/rust-runtime/Cargo.toml"
+          )
+          grep -Eq '^commit=[0-9a-f]{12}-dirty$' "$dirty"
+          rm -f "$probe"
+          trap - EXIT
+
+          fake_git_dir="$scratch/fake-git"
+          status_failure="$scratch/RELEASE_INFO_STATUS_FAILURE.txt"
+          real_git="$(command -v git)"
+          mkdir -p "$fake_git_dir"
+          cat > "$fake_git_dir/git" <<'EOF'
+          #!/usr/bin/env bash
+          if [[ "${1:-}" == "status" ]]; then
+            exit 42
+          fi
+          exec "$REAL_GIT" "$@"
+          EOF
+          chmod +x "$fake_git_dir/git"
+          (
+            cd "$GITHUB_WORKSPACE"
+            REAL_GIT="$real_git" PATH="$fake_git_dir:$PATH"               ./maintenance/Write-ReleaseMetadata.sh               "$status_failure"               "$GITHUB_WORKSPACE/rust-runtime/Cargo.toml"
+          )
+          grep -qx 'commit=unknown' "$status_failure"
+
       - name: Native compile check
         shell: bash
         run: cargo check --locked --manifest-path rust-runtime/Cargo.toml
@@ -122,7 +173,6 @@ jobs:
         shell: bash
         run: cargo test --locked --manifest-path rust-gui/Cargo.toml
 
-      # Phase 22.2 treats project Clippy warnings as CI failures.
       - name: Rust clippy strict
         shell: bash
         run: cargo clippy --locked --manifest-path rust-runtime/Cargo.toml --all-targets --all-features -- -D warnings
@@ -131,6 +181,11 @@ jobs:
         if: ${{ matrix.platform == 'windows' }}
         shell: bash
         run: cargo clippy --locked --manifest-path rust-gui/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Unix release package smoke
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: ./BUILD_UNIX_PACKAGE.sh
 
   windows-check:
     name: windows-check
@@ -164,7 +219,9 @@ jobs:
       - name: Environment
         shell: powershell
         run: |
+          Write-Host "runner_arch=${{ runner.arch }}"
           rustc --version
+          rustc -vV | Select-String '^host:'
           cargo --version
           git --version
 
@@ -184,10 +241,7 @@ jobs:
 
           Push-Location $scratch
           try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-              "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" `
-              -OutputPath $output `
-              -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $output -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
             if ($LASTEXITCODE -ne 0) {
               throw "Write-ReleaseMetadata.ps1 child process failed with exit code $LASTEXITCODE"
             }
@@ -206,64 +260,139 @@ jobs:
             throw 'source-archive metadata should use commit=unknown outside a Git checkout'
           }
 
+          $explicitRootOutput = Join-Path $scratch 'RELEASE_INFO_EXPLICIT_ROOT.txt'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $explicitRootOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $scratch
+          if ($LASTEXITCODE -ne 0) {
+            throw "explicit non-Git RepositoryRoot probe failed with exit code $LASTEXITCODE"
+          }
+          $explicitRootCommit = Get-Content -LiteralPath $explicitRootOutput |
+            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+            Select-Object -First 1
+          if ($null -eq $explicitRootCommit -or $explicitRootCommit.TrimStart([char]0xFEFF).Trim() -ne 'commit=unknown') {
+            throw 'explicit non-Git RepositoryRoot must use commit=unknown even when GITHUB_SHA is present'
+          }
+
+          $checkoutOutput = Join-Path $scratch 'RELEASE_INFO_CHECKOUT.txt'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $checkoutOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
+          if ($LASTEXITCODE -ne 0) {
+            throw "checkout release metadata probe failed with exit code $LASTEXITCODE"
+          }
+          $checkoutCommit = Get-Content -LiteralPath $checkoutOutput |
+            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+            Select-Object -First 1
+          $expectedCommit = 'commit=' + $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
+          if ($null -eq $checkoutCommit -or $checkoutCommit.TrimStart([char]0xFEFF).Trim() -ne $expectedCommit) {
+            throw "checkout metadata must match GITHUB_SHA: expected $expectedCommit"
+          }
+
+          $workspaceDirtyProbe = Join-Path $env:GITHUB_WORKSPACE 'phase23-workspace-dirty-probe.tmp'
+          $workspaceDirtyOutput = Join-Path $scratch 'RELEASE_INFO_WORKSPACE_DIRTY.txt'
+          try {
+            Set-Content -LiteralPath $workspaceDirtyProbe -Value 'dirty GitHub workspace provenance probe' -Encoding ASCII
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $workspaceDirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
+            if ($LASTEXITCODE -ne 0) {
+              throw "dirty GitHub workspace release metadata probe failed with exit code $LASTEXITCODE"
+            }
+            $workspaceDirtyCommit = Get-Content -LiteralPath $workspaceDirtyOutput |
+              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+              Select-Object -First 1
+            if ($null -eq $workspaceDirtyCommit -or $workspaceDirtyCommit.TrimStart([char]0xFEFF).Trim() -ne ($expectedCommit + '-dirty')) {
+              throw "trusted GitHub checkout dirty metadata must include the -dirty provenance marker"
+            }
+          }
+          finally {
+            Remove-Item -LiteralPath $workspaceDirtyProbe -Force -ErrorAction SilentlyContinue
+          }
+
+          $worktreeRoot = Join-Path $env:RUNNER_TEMP 'stream-archive-linked-worktree'
+          $worktreeBranch = 'phase23-ci-linked-worktree'
+          $worktreeOutput = Join-Path $scratch 'RELEASE_INFO_WORKTREE.txt'
+          $worktreeDirtyOutput = Join-Path $scratch 'RELEASE_INFO_WORKTREE_DIRTY.txt'
+          if (Test-Path -LiteralPath $worktreeRoot) {
+            Remove-Item -LiteralPath $worktreeRoot -Recurse -Force
+          }
+          if (git branch --list $worktreeBranch) {
+            git branch -D $worktreeBranch | Out-Null
+          }
+          try {
+            git worktree add -b $worktreeBranch $worktreeRoot HEAD
+            if ($LASTEXITCODE -ne 0) {
+              throw "linked worktree creation failed with exit code $LASTEXITCODE"
+            }
+
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $worktreeOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $worktreeRoot
+            if ($LASTEXITCODE -ne 0) {
+              throw "linked worktree release metadata probe failed with exit code $LASTEXITCODE"
+            }
+            $worktreeCommit = Get-Content -LiteralPath $worktreeOutput |
+              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+              Select-Object -First 1
+            $expectedWorktreeCommit = 'commit=' + ((git -C $worktreeRoot rev-parse --short=12 HEAD).Trim().ToLowerInvariant())
+            if ($null -eq $worktreeCommit -or $worktreeCommit.TrimStart([char]0xFEFF).Trim() -ne $expectedWorktreeCommit) {
+              throw "linked worktree metadata must resolve commondir refs: expected $expectedWorktreeCommit"
+            }
+
+            Set-Content -LiteralPath (Join-Path $worktreeRoot 'phase23-worktree-dirty-probe.tmp') -Value 'dirty linked worktree provenance probe' -Encoding ASCII
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $worktreeDirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $worktreeRoot
+            if ($LASTEXITCODE -ne 0) {
+              throw "dirty linked worktree release metadata probe failed with exit code $LASTEXITCODE"
+            }
+            $worktreeDirtyCommit = Get-Content -LiteralPath $worktreeDirtyOutput |
+              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+              Select-Object -First 1
+            if ($null -eq $worktreeDirtyCommit -or $worktreeDirtyCommit.TrimStart([char]0xFEFF).Trim() -ne ($expectedWorktreeCommit + '-dirty')) {
+              throw "linked worktree dirty metadata must include the -dirty provenance marker"
+            }
+          }
+          finally {
+            if (Test-Path -LiteralPath $worktreeRoot) {
+              git worktree remove --force $worktreeRoot | Out-Null
+            }
+            if (git branch --list $worktreeBranch) {
+              git branch -D $worktreeBranch | Out-Null
+            }
+          }
+
       - name: Windows portable package smoke
         shell: cmd
         run: BUILD_PORTABLE.bat
 
-      - name: Verify portable package
+      - name: Verify Windows portable package
+        shell: powershell
+        run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
+
+      - name: Reject runtime data from Windows release archives
         shell: powershell
         run: |
-          $root = './dist/stream-archive'
-          $required = @(
-            "$root/StreamArchive.exe",
-            "$root/stream-archive-server.exe",
-            "$root/RUN.bat",
-            "$root/RUN_HEADLESS.bat",
-            "$root/BACKUP_DATA.bat",
-            "$root/RESTORE_DATA.bat",
-            "$root/LICENSE",
-            "$root/THIRD_PARTY_NOTICES.md",
-            "$root/RELEASE_INFO.txt",
-            "$root/SHA256SUMS.txt",
-            "$root/maintenance/Backup-StreamArchiveData.ps1",
-            "$root/maintenance/Restore-StreamArchiveData.ps1",
-            "$root/docs/OPERATIONS.md"
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
-          }
-          foreach ($forbidden in @(
-            "$root/stream-archive-launcher.exe",
-            "$root/RUN_WEB.bat",
-            "$root/RUN_SERVER_CONSOLE.bat",
-            "$root/Caddyfile.example",
-            "$root/docs/REVERSE_PROXY.md",
-            "$root/docs/LOCAL_LAUNCHER.md"
-          )) {
-            if (Test-Path -LiteralPath $forbidden) { throw "Retired Web package file returned: $forbidden" }
-          }
-          foreach ($dir in @("$root/backend", "$root/data")) {
-            if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Missing package directory: $dir" }
-          }
-
-          $expected = @{}
-          foreach ($line in Get-Content "$root/SHA256SUMS.txt") {
-            if ($line -match '^([0-9a-fA-F]{64})\s+(.+)$') {
-              $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
+          $ErrorActionPreference = 'Stop'
+          $probe = './dist/stream-archive/data/release-leak-probe.db'
+          $rejected = $false
+          try {
+            Set-Content -LiteralPath $probe -Value 'runtime state must never be archived' -Encoding ASCII
+            try {
+              ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/reject-probe'
+            }
+            catch {
+              $rejected = $true
             }
           }
-          foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe')) {
-            if (-not $expected.ContainsKey($name)) { throw "checksum missing: $name" }
-            $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $root $name)).Hash.ToLowerInvariant()
-            if ($expected[$name] -ne $actual) { throw "$name checksum mismatch" }
+          finally {
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath './dist/reject-probe' -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          if (-not $rejected) {
+            throw 'Windows release archiver accepted non-empty runtime data.'
           }
 
-          $run = Get-Content "$root/RUN.bat" -Raw
-          if ($run -notmatch 'StreamArchive\.exe') { throw 'RUN.bat does not use StreamArchive.exe' }
-          if ($run -match 'launcher|RUN_WEB|127\.0\.0\.1|http') { throw 'RUN.bat must remain native-only' }
+      - name: Build Windows release archive
+        shell: powershell
+        run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
 
-          $headless = Get-Content "$root/RUN_HEADLESS.bat" -Raw
-          if ($headless -notmatch 'stream-archive-server\.exe') { throw 'RUN_HEADLESS.bat does not use the headless runtime' }
-
-          $releaseInfo = Get-Content "$root/RELEASE_INFO.txt" -Raw
-          if ($releaseInfo -notmatch 'version=') { throw 'release metadata version missing' }
+      - name: Verify Windows release archive
+        shell: powershell
+        run: |
+          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
+          ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $archive.FullName -ArchiveChecksumPath "$($archive.FullName).sha256"

@@ -1,6 +1,6 @@
 # Third-party notices
 
-Stream Archive uses external media tools but does not bundle them in the portable package. Users install or configure these tools separately, and each tool remains governed by its own license and distribution terms.
+Stream Archive uses external media tools but does not bundle them in the Windows, Linux, or macOS release packages. Users install or configure these tools separately, and each tool remains governed by its own license and distribution terms.
 
 ## Streamlink
 
@@ -37,4 +37,4 @@ Product names, service names, trademarks, and logos belong to their respective o
 
 ## Redistribution policy
 
-The Stream Archive portable package intentionally does not redistribute Streamlink, FFmpeg, or yt-dlp binaries. If a future release begins bundling any third-party executable or library, the release process must be updated to include the applicable license texts, attribution notices, source-offer obligations, and artifact-specific compliance checks before distribution.
+Stream Archive release packages intentionally do not redistribute Streamlink, FFmpeg, or yt-dlp binaries. If a future release begins bundling any third-party executable or library, the release process must be updated to include the applicable license texts, attribution notices, source-offer obligations, and artifact-specific compliance checks before distribution.

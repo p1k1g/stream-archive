@@ -100,13 +100,46 @@ After restore, launch `StreamArchive.exe` and verify settings, channels, LIVE hi
 
 ## Upgrade procedure
 
-1. Close the native application and stop any optional headless runtime.
+Before replacing any package:
+
+1. Stop the foreground watcher/runtime cleanly.
 2. Create a database backup.
-3. Keep the previous portable package until the new version has been exercised.
-4. Replace executable/package files while preserving the existing `data` directory.
-5. Start `StreamArchive.exe` or `RUN.bat` and verify Settings (including the nested 관리 view), Channels, LIVE start/stop, VOD analyze/download, and Queue/History.
-6. If headless operation is used, verify `RUN_HEADLESS.bat` separately.
-7. Roll back by closing the new application, restoring the previous package, and restoring the pre-upgrade database backup if necessary.
+3. Keep the previous package/archive until the new version has been exercised.
+4. Verify the new archive checksum before extraction.
+5. Keep the existing runtime data directory separate from the replacement package files.
+6. Start the new package and run diagnostics before resuming unattended work.
+
+### Windows portable upgrade
+
+Official Windows release ZIPs are clean packages. They contain an empty `data\` directory and must not be extracted over the only copy of a live database.
+
+1. Stop `StreamArchive.exe` and any optional `stream-archive-server.exe`.
+2. Back up `data\stream-archive.db`.
+3. Extract the new ZIP to a new package directory.
+4. Preserve or explicitly point `STREAM_ARCHIVE_DATA_DIR` at the existing data directory.
+5. Launch `StreamArchive.exe` / `RUN.bat`.
+6. Verify Diagnostics, Channels, LIVE start/stop, VOD analyze/download, Queue and History.
+7. If headless operation is used, verify `RUN_HEADLESS.bat` separately.
+
+Local developer `BUILD_PORTABLE.bat` rebuilds may preserve an existing `dist\stream-archive\data` directory. This convenience is distinct from the official CI/release artifact contract, which requires clean runtime data.
+
+### Linux/macOS portable upgrade
+
+The Phase 23.6 Unix archives contain `bin/`, `backend/`, `data/`, docs, release metadata and checksums. The bundled `data/` directory is intentionally empty.
+
+1. Stop `stream-archive-cli serve --watch` or `stream-archive-server`.
+2. Back up the canonical SQLite database.
+3. Verify the archive-level `.sha256` file.
+4. Extract the new archive to a new directory instead of overwriting the current package in place.
+5. Reuse the existing data directory with `STREAM_ARCHIVE_DATA_DIR`, or copy only after a verified backup.
+6. Run `./bin/stream-archive-cli doctor --active-tools`.
+7. Start the runtime and verify status/Queue/History before unattended operation.
+
+When using package-local defaults, run commands from the extracted `stream-archive/` root so `backend/` and `data/` resolve to that package. For long-lived installs, explicitly separating package binaries, runtime data and backup directories with environment overrides is safer.
+
+### Rollback
+
+Close the new runtime before rollback. Restore the previous package first. Restore a pre-upgrade database backup only when required by the actual database state; do not assume arbitrary schema downgrades are supported.
 
 ## Portable package replacement
 
@@ -114,7 +147,34 @@ After restore, launch `StreamArchive.exe` and verify settings, channels, LIVE hi
 
 Direct Explorer launch is supported: backend resolution prefers the `backend` directory beside `StreamArchive.exe`, and the default SQLite path is the sibling `data\stream-archive.db`. Environment overrides still take precedence where defined.
 
+Linux/macOS release archives are built with `BUILD_UNIX_PACKAGE.sh` and contain `bin/stream-archive-cli` plus `bin/stream-archive-server`. They do not install systemd/launchd services or package-manager entries.
+
 Do not copy old INI/TXT configuration files into a new package. SQLite is the only runtime configuration source.
+
+## Release package verification
+
+Phase 23.6 keeps package verification separate from package assembly.
+
+Windows:
+
+```powershell
+.\BUILD_PORTABLE.bat
+powershell -ExecutionPolicy Bypass -File .\maintenance\Verify-WindowsPackage.ps1 -Root .\dist\stream-archive -RequireCleanData
+powershell -ExecutionPolicy Bypass -File .\maintenance\New-WindowsReleaseArchive.ps1 -PackageRoot .\dist\stream-archive -OutputDir .\dist\release
+```
+
+`New-WindowsReleaseArchive.ps1` also enforces the same clean-data verifier internally before it opens the output ZIP. A local `BUILD_PORTABLE.bat` tree that preserved an existing database therefore cannot be turned into an official-looking release archive until runtime data is removed from the staging tree. CI/release validation also verifies the generated ZIP plus its archive-level `.sha256`.
+
+Linux/macOS:
+
+```bash
+./BUILD_UNIX_PACKAGE.sh
+./maintenance/Verify-UnixPackage.sh ./dist/unix-<platform>-<arch>/stream-archive ./dist/release/stream-archive-<platform>-<arch>.tar.gz
+```
+
+The verifier checks required files, executable bits, clean runtime data, package-local `SHA256SUMS.txt`, archive checksum, forbidden legacy/runtime artifacts, and executes the CLI from a fresh extraction path containing whitespace and non-ASCII characters.
+
+Streamlink, yt-dlp and FFmpeg remain external dependencies and are not redistributed in any Phase 23.6 package.
 
 ## Runtime environment overrides
 
