@@ -55,6 +55,7 @@ try {
     Assert-Match $unixMetadata '-dirty' 'Unix dirty release provenance marker is missing.'
     Assert-Match $windowsMetadata 'RepositoryRoot' 'Windows release metadata must support an explicit repository provenance root.'
     Assert-Match $windowsMetadata 'Get-GitHeadCommitFromMetadata' 'Windows release metadata must resolve HEAD from the explicit root Git metadata.'
+    Assert-Match $windowsMetadata 'commondir' 'Windows release metadata must resolve linked-worktree refs through the shared Git commondir.'
     Assert-Match $windowsMetadata 'GITHUB_WORKSPACE' 'Windows CI release provenance must bind the explicit root to the workflow checkout.'
     Assert-Match $windowsMetadata '\$gitHeadCommit -eq \$env:GITHUB_SHA\.ToLowerInvariant\(\)' 'Windows release metadata must match the checkout HEAD to GITHUB_SHA before trusting it.'
     Assert-Match $windowsMetadata 'safe\.directory=\$resolvedRepositoryRoot' 'Local Windows Git status checks must scope safe-directory trust to the explicit repository root.'
@@ -63,6 +64,8 @@ try {
     Assert-Match $windowsBuild '-RepositoryRoot "\."' 'Windows portable packaging must anchor release provenance to the repository checkout.'
     Assert-Match $gitignore '(?m)^dist/\r?$' 'Generated release staging must be ignored so clean packaging does not self-mark provenance dirty.'
 
+    Assert-Match $checkWorkflow '(?s)pull_request:\s+paths:.*?\.gitignore' 'PR packaging checks must trigger when the root .gitignore changes.'
+    Assert-Match $checkWorkflow '(?s)push:.*?paths:.*?\.gitignore' 'Main-branch packaging checks must trigger when the root .gitignore changes.'
     Assert-Match $checkWorkflow 'BUILD_UNIX_PACKAGE\.sh' 'PR CI must smoke the canonical Unix package builder.'
     Assert-Match $checkWorkflow 'Verify-WindowsPackage\.ps1' 'PR CI must use the reusable Windows package verifier.'
     Assert-Match $checkWorkflow 'New-WindowsReleaseArchive\.ps1' 'PR CI must verify the canonical Windows archive path.'
@@ -71,6 +74,9 @@ try {
     Assert-Match $checkWorkflow 'explicit non-Git RepositoryRoot must use commit=unknown' 'Windows PR CI must reject ambient GITHUB_SHA provenance for an explicit non-Git source root.'
     Assert-Match $checkWorkflow '-RepositoryRoot \$scratch' 'Windows source-archive regression must pass an explicit non-Git repository root.'
     Assert-Match $checkWorkflow 'checkout metadata must match GITHUB_SHA' 'Windows PR CI must verify checkout provenance against the workflow commit.'
+    Assert-Match $checkWorkflow 'git worktree add -b' 'Windows PR CI must exercise a branch-attached linked Git worktree.'
+    Assert-Match $checkWorkflow 'linked worktree metadata must resolve commondir refs' 'Windows PR CI must regress linked-worktree commit provenance.'
+    Assert-Match $checkWorkflow 'linked worktree dirty metadata must include the -dirty provenance marker' 'Windows PR CI must regress dirty linked-worktree provenance.'
     Assert-Match $checkWorkflow '-RepositoryRoot "\$env:GITHUB_WORKSPACE"' 'Windows checkout provenance regression must use the explicit repository root.'
 
     Assert-Match $releaseWorkflow 'workflow_dispatch' 'Release artifact workflow must remain manual.'
