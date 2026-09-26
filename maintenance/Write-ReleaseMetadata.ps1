@@ -43,6 +43,22 @@ function Get-GitHeadCommitFromMetadata {
         return $null
     }
 
+    # Linked worktrees keep HEAD under .git/worktrees/<name>, while branch refs
+    # and packed-refs live in the shared directory referenced by commondir.
+    $commonGitDirectory = $gitDirectory
+    $commonDirPath = Join-Path $gitDirectory 'commondir'
+    if (Test-Path -LiteralPath $commonDirPath -PathType Leaf) {
+        $commonDirValue = (Get-Content -LiteralPath $commonDirPath -TotalCount 1).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($commonDirValue)) {
+            if ([System.IO.Path]::IsPathRooted($commonDirValue)) {
+                $commonGitDirectory = [System.IO.Path]::GetFullPath($commonDirValue)
+            }
+            else {
+                $commonGitDirectory = [System.IO.Path]::GetFullPath((Join-Path $gitDirectory $commonDirValue))
+            }
+        }
+    }
+
     $headPath = Join-Path $gitDirectory 'HEAD'
     if (-not (Test-Path -LiteralPath $headPath -PathType Leaf)) {
         return $null
@@ -55,15 +71,23 @@ function Get-GitHeadCommitFromMetadata {
 
     if ($head -match '^ref:\s*(.+)$') {
         $refName = $Matches[1].Trim()
-        $refPath = Join-Path $gitDirectory ($refName -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-        if (Test-Path -LiteralPath $refPath -PathType Leaf) {
-            $refValue = (Get-Content -LiteralPath $refPath -TotalCount 1).Trim()
-            if ($refValue -match '^[0-9a-fA-F]{40}$') {
-                return $refValue.ToLowerInvariant()
+        $refRelativePath = $refName -replace '/', [System.IO.Path]::DirectorySeparatorChar
+        $refRoots = @($gitDirectory)
+        if ($commonGitDirectory -ne $gitDirectory) {
+            $refRoots += $commonGitDirectory
+        }
+
+        foreach ($refRoot in $refRoots) {
+            $refPath = Join-Path $refRoot $refRelativePath
+            if (Test-Path -LiteralPath $refPath -PathType Leaf) {
+                $refValue = (Get-Content -LiteralPath $refPath -TotalCount 1).Trim()
+                if ($refValue -match '^[0-9a-fA-F]{40}$') {
+                    return $refValue.ToLowerInvariant()
+                }
             }
         }
 
-        $packedRefsPath = Join-Path $gitDirectory 'packed-refs'
+        $packedRefsPath = Join-Path $commonGitDirectory 'packed-refs'
         if (Test-Path -LiteralPath $packedRefsPath -PathType Leaf) {
             foreach ($line in Get-Content -LiteralPath $packedRefsPath) {
                 if ($line -match '^([0-9a-fA-F]{40})\s+(.+)$' -and $Matches[2] -eq $refName) {
