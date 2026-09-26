@@ -8,6 +8,7 @@ on:
       - "RUN_DEV.bat"
       - "BUILD_PORTABLE.bat"
       - "BUILD_UNIX_PACKAGE.sh"
+      - ".gitignore"
       - "maintenance/**"
       - "docs/**"
       - "README.md"
@@ -25,6 +26,7 @@ on:
       - "RUN_DEV.bat"
       - "BUILD_PORTABLE.bat"
       - "BUILD_UNIX_PACKAGE.sh"
+      - ".gitignore"
       - "maintenance/**"
       - "docs/**"
       - "README.md"
@@ -263,6 +265,49 @@ jobs:
           $expectedCommit = 'commit=' + $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
           if ($null -eq $checkoutCommit -or $checkoutCommit.TrimStart([char]0xFEFF).Trim() -ne $expectedCommit) {
             throw "checkout metadata must match GITHUB_SHA: expected $expectedCommit"
+          }
+
+          $worktreeRoot = Join-Path $env:RUNNER_TEMP 'stream-archive-linked-worktree'
+          $worktreeBranch = 'phase23-ci-linked-worktree'
+          $worktreeOutput = Join-Path $scratch 'RELEASE_INFO_WORKTREE.txt'
+          $worktreeDirtyOutput = Join-Path $scratch 'RELEASE_INFO_WORKTREE_DIRTY.txt'
+          if (Test-Path -LiteralPath $worktreeRoot) {
+            Remove-Item -LiteralPath $worktreeRoot -Recurse -Force
+          }
+          git branch -D $worktreeBranch 2>$null
+          try {
+            git worktree add -b $worktreeBranch $worktreeRoot HEAD
+            if ($LASTEXITCODE -ne 0) {
+              throw "linked worktree creation failed with exit code $LASTEXITCODE"
+            }
+
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $worktreeOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $worktreeRoot
+            if ($LASTEXITCODE -ne 0) {
+              throw "linked worktree release metadata probe failed with exit code $LASTEXITCODE"
+            }
+            $worktreeCommit = Get-Content -LiteralPath $worktreeOutput |
+              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+              Select-Object -First 1
+            $expectedWorktreeCommit = 'commit=' + ((git -C $worktreeRoot rev-parse --short=12 HEAD).Trim().ToLowerInvariant())
+            if ($null -eq $worktreeCommit -or $worktreeCommit.TrimStart([char]0xFEFF).Trim() -ne $expectedWorktreeCommit) {
+              throw "linked worktree metadata must resolve commondir refs: expected $expectedWorktreeCommit"
+            }
+
+            Set-Content -LiteralPath (Join-Path $worktreeRoot 'phase23-worktree-dirty-probe.tmp') -Value 'dirty linked worktree provenance probe' -Encoding ASCII
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $worktreeDirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $worktreeRoot
+            if ($LASTEXITCODE -ne 0) {
+              throw "dirty linked worktree release metadata probe failed with exit code $LASTEXITCODE"
+            }
+            $worktreeDirtyCommit = Get-Content -LiteralPath $worktreeDirtyOutput |
+              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+              Select-Object -First 1
+            if ($null -eq $worktreeDirtyCommit -or $worktreeDirtyCommit.TrimStart([char]0xFEFF).Trim() -ne ($expectedWorktreeCommit + '-dirty')) {
+              throw "linked worktree dirty metadata must include the -dirty provenance marker"
+            }
+          }
+          finally {
+            git worktree remove --force $worktreeRoot 2>$null
+            git branch -D $worktreeBranch 2>$null
           }
 
       - name: Windows portable package smoke
