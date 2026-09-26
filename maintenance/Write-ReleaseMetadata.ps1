@@ -18,10 +18,68 @@ if ($null -eq $package -or [string]::IsNullOrWhiteSpace([string]$package.version
     throw 'Unable to resolve stream-archive-server package version from cargo metadata'
 }
 
+function Get-GitHeadCommitFromMetadata {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $gitEntry = Join-Path $Root '.git'
+    $gitDirectory = $null
+    if (Test-Path -LiteralPath $gitEntry -PathType Container) {
+        $gitDirectory = (Resolve-Path -LiteralPath $gitEntry).Path
+    }
+    elseif (Test-Path -LiteralPath $gitEntry -PathType Leaf) {
+        $gitDirLine = (Get-Content -LiteralPath $gitEntry -TotalCount 1).Trim()
+        if ($gitDirLine -match '^gitdir:\s*(.+)$') {
+            $gitDirValue = $Matches[1].Trim()
+            if ([System.IO.Path]::IsPathRooted($gitDirValue)) {
+                $gitDirectory = [System.IO.Path]::GetFullPath($gitDirValue)
+            }
+            else {
+                $gitDirectory = [System.IO.Path]::GetFullPath((Join-Path $Root $gitDirValue))
+            }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($gitDirectory)) {
+        return $null
+    }
+
+    $headPath = Join-Path $gitDirectory 'HEAD'
+    if (-not (Test-Path -LiteralPath $headPath -PathType Leaf)) {
+        return $null
+    }
+
+    $head = (Get-Content -LiteralPath $headPath -TotalCount 1).Trim()
+    if ($head -match '^[0-9a-fA-F]{40}$') {
+        return $head.ToLowerInvariant()
+    }
+
+    if ($head -match '^ref:\s*(.+)$') {
+        $refName = $Matches[1].Trim()
+        $refPath = Join-Path $gitDirectory ($refName -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        if (Test-Path -LiteralPath $refPath -PathType Leaf) {
+            $refValue = (Get-Content -LiteralPath $refPath -TotalCount 1).Trim()
+            if ($refValue -match '^[0-9a-fA-F]{40}$') {
+                return $refValue.ToLowerInvariant()
+            }
+        }
+
+        $packedRefsPath = Join-Path $gitDirectory 'packed-refs'
+        if (Test-Path -LiteralPath $packedRefsPath -PathType Leaf) {
+            foreach ($line in Get-Content -LiteralPath $packedRefsPath) {
+                if ($line -match '^([0-9a-fA-F]{40})\s+(.+)$' -and $Matches[2] -eq $refName) {
+                    return $Matches[1].ToLowerInvariant()
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
 # Git provenance is optional so GitHub source archives without .git still build.
-# An ambient GITHUB_SHA is trusted only when RepositoryRoot is the actual Git
-# checkout root and its HEAD matches that workflow SHA. This prevents extracted
-# source archives from inheriting provenance from the calling workflow.
+# In GitHub Actions, GITHUB_SHA is trusted only when RepositoryRoot is exactly
+# GITHUB_WORKSPACE and the root's own .git/HEAD resolves to that SHA. Extracted
+# source archives therefore cannot inherit provenance from the calling workflow.
 $commit = 'unknown'
 $resolvedRepositoryRoot = $null
 if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) {
@@ -31,15 +89,41 @@ if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) {
     $resolvedRepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 }
 
-if ($null -ne $resolvedRepositoryRoot -and (Get-Command git -ErrorAction SilentlyContinue)) {
+$gitHeadCommit = $null
+if ($null -ne $resolvedRepositoryRoot) {
+    $gitHeadCommit = Get-GitHeadCommitFromMetadata -Root $resolvedRepositoryRoot
+}
+
+$trustedGitHubCheckout = $false
+if (
+    $null -ne $resolvedRepositoryRoot -and
+    $env:GITHUB_ACTIONS -eq 'true' -and
+    -not [string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE) -and
+    (Test-Path -LiteralPath $env:GITHUB_WORKSPACE -PathType Container) -and
+    -not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA) -and
+    $env:GITHUB_SHA -match '^[0-9a-fA-F]{40}$' -and
+    $gitHeadCommit -match '^[0-9a-fA-F]{40}$'
+) {
+    $resolvedGitHubWorkspace = (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).Path
+    if (
+        $resolvedGitHubWorkspace -eq $resolvedRepositoryRoot -and
+        $gitHeadCommit -eq $env:GITHUB_SHA.ToLowerInvariant()
+    ) {
+        $commit = $gitHeadCommit.Substring(0, 12)
+        $trustedGitHubCheckout = $true
+    }
+}
+
+if (
+    -not $trustedGitHubCheckout -and
+    $null -ne $resolvedRepositoryRoot -and
+    $gitHeadCommit -match '^[0-9a-fA-F]{40}$' -and
+    (Get-Command git -ErrorAction SilentlyContinue)
+) {
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'SilentlyContinue'
         $safeDirectoryArgument = "safe.directory=$resolvedRepositoryRoot"
-        $candidateTopLevel = (& git -c $safeDirectoryArgument -C $resolvedRepositoryRoot rev-parse --show-toplevel 2>$null | Select-Object -First 1)
-        $topLevelExitCode = $LASTEXITCODE
-        $candidateHead = (& git -c $safeDirectoryArgument -C $resolvedRepositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
-        $headExitCode = $LASTEXITCODE
         $dirtyState = @(& git -c $safeDirectoryArgument -C $resolvedRepositoryRoot status --porcelain --untracked-files=normal 2>$null)
         $dirtyExitCode = $LASTEXITCODE
     }
@@ -47,35 +131,9 @@ if ($null -ne $resolvedRepositoryRoot -and (Get-Command git -ErrorAction Silentl
         $ErrorActionPreference = $previousErrorActionPreference
     }
 
-    $resolvedTopLevel = $null
-    if ($topLevelExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($candidateTopLevel)) {
-        try {
-            $resolvedTopLevel = (Resolve-Path -LiteralPath $candidateTopLevel.Trim() -ErrorAction Stop).Path
-        }
-        catch {
-            $resolvedTopLevel = $null
-        }
-    }
-
-    if (
-        $null -ne $resolvedTopLevel -and
-        $resolvedTopLevel -eq $resolvedRepositoryRoot -and
-        $headExitCode -eq 0 -and
-        $candidateHead -match '^[0-9a-fA-F]{40}$'
-    ) {
-        $headCommit = $candidateHead.Trim().ToLowerInvariant()
-        if (
-            -not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA) -and
-            $env:GITHUB_SHA -match '^[0-9a-fA-F]{40}$' -and
-            $env:GITHUB_SHA.ToLowerInvariant() -eq $headCommit
-        ) {
-            $commit = $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
-        }
-        else {
-            $commit = $headCommit.Substring(0, 12)
-        }
-
-        if ($dirtyExitCode -eq 0 -and $dirtyState.Count -gt 0) {
+    if ($dirtyExitCode -eq 0) {
+        $commit = $gitHeadCommit.Substring(0, 12)
+        if ($dirtyState.Count -gt 0) {
             $commit += '-dirty'
         }
     }
