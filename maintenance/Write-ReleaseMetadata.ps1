@@ -61,46 +61,12 @@ if ($null -ne $resolvedRepositoryRoot -and (Get-Command git -ErrorAction Silentl
         $null -ne $resolvedTopLevel -and
         $resolvedTopLevel -eq $resolvedRepositoryRoot -and
         $headExitCode -eq 0 -and
-        $candidateHead -match '^[0-9a-fA-F]{40}
-$parent = Split-Path -Parent $OutputPath
-if ($parent) {
-    New-Item -ItemType Directory -Force -Path $parent | Out-Null
-}
-
-$lines = [string[]]@(
-    'product=Stream Archive',
-    ('version=' + $package.version),
-    ('commit=' + $commit),
-    ('built_at=' + (Get-Date).ToString('o'))
-)
-
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllLines($OutputPath, $lines, $utf8NoBom)
-
-Write-Host "Release metadata written: version=$($package.version) commit=$commit"
-
+        $candidateHead -match '^[0-9a-fA-F]{40}$'
     ) {
         $headCommit = $candidateHead.Trim().ToLowerInvariant()
         if (
             -not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA) -and
-            $env:GITHUB_SHA -match '^[0-9a-fA-F]{40}
-$parent = Split-Path -Parent $OutputPath
-if ($parent) {
-    New-Item -ItemType Directory -Force -Path $parent | Out-Null
-}
-
-$lines = [string[]]@(
-    'product=Stream Archive',
-    ('version=' + $package.version),
-    ('commit=' + $commit),
-    ('built_at=' + (Get-Date).ToString('o'))
-)
-
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllLines($OutputPath, $lines, $utf8NoBom)
-
-Write-Host "Release metadata written: version=$($package.version) commit=$commit"
- -and
+            $env:GITHUB_SHA -match '^[0-9a-fA-F]{40}$' -and
             $env:GITHUB_SHA.ToLowerInvariant() -eq $headCommit
         ) {
             $commit = $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
