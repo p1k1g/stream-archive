@@ -28,7 +28,7 @@ try {
 
     $releaseNotesPath = 'docs/RELEASE_NOTES_' + ([string]$runtimeVersion).Replace('.', '_') + '.md'
     if (-not (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf)) {
-        throw "Release notes are missing for RC version $runtimeVersion: $releaseNotesPath"
+        throw "Release notes are missing for RC version ${runtimeVersion}: $releaseNotesPath"
     }
     $releaseNotes = Read-RepoFile $releaseNotesPath
 
