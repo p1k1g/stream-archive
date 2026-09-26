@@ -19,8 +19,8 @@ if ($null -eq $package -or [string]::IsNullOrWhiteSpace([string]$package.version
 }
 
 # Git provenance is optional so GitHub source archives without .git still build.
-# Package builders pass RepositoryRoot explicitly so a real checkout records
-# either <commit> or <commit>-dirty instead of accidentally reporting unknown.
+# CI release/package jobs use GITHUB_SHA when a repository root is explicitly
+# supplied. Local package builds fall back to Git and mark dirty worktrees.
 $commit = 'unknown'
 $resolvedRepositoryRoot = $null
 if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) {
@@ -30,34 +30,34 @@ if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) {
     $resolvedRepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 }
 
-if ($null -ne $resolvedRepositoryRoot -and (Get-Command git -ErrorAction SilentlyContinue)) {
-    $previousErrorActionPreference = $ErrorActionPreference
-    try {
-        # Windows PowerShell can promote native stderr to NativeCommandError
-        # while ErrorActionPreference is Stop. Git probes are bounded and their
-        # exit codes are checked explicitly.
-        $ErrorActionPreference = 'SilentlyContinue'
-        $safeDirectoryArgument = "safe.directory=$resolvedRepositoryRoot"
-        $candidate = (& git -c $safeDirectoryArgument -C $resolvedRepositoryRoot rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
-        $gitExitCode = $LASTEXITCODE
-
-        $dirtyState = @()
-        if ($gitExitCode -eq 0) {
-            $dirtyState = @(& git -c $safeDirectoryArgument -C $resolvedRepositoryRoot status --porcelain --untracked-files=normal 2>$null)
-            $dirtyExitCode = $LASTEXITCODE
-        }
-        else {
-            $dirtyExitCode = $gitExitCode
-        }
+if ($null -ne $resolvedRepositoryRoot) {
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA) -and $env:GITHUB_SHA -match '^[0-9a-fA-F]{40}$') {
+        $commit = $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
     }
-    finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
+    elseif (Get-Command git -ErrorAction SilentlyContinue) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'SilentlyContinue'
+            $candidate = (& git -C $resolvedRepositoryRoot rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
+            $gitExitCode = $LASTEXITCODE
+            $dirtyState = @()
+            if ($gitExitCode -eq 0) {
+                $dirtyState = @(& git -C $resolvedRepositoryRoot status --porcelain --untracked-files=normal 2>$null)
+                $dirtyExitCode = $LASTEXITCODE
+            }
+            else {
+                $dirtyExitCode = $gitExitCode
+            }
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
 
-    if ($gitExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($candidate)) {
-        $commit = $candidate.Trim()
-        if ($dirtyExitCode -eq 0 -and $dirtyState.Count -gt 0) {
-            $commit += '-dirty'
+        if ($gitExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($candidate)) {
+            $commit = $candidate.Trim()
+            if ($dirtyExitCode -eq 0 -and $dirtyState.Count -gt 0) {
+                $commit += '-dirty'
+            }
         }
     }
 }
