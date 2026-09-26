@@ -59,7 +59,7 @@ try {
     Assert-Match $unixVerify 'backup restore' 'Unix RC archive smoke must restore a managed backup.'
     Assert-Match $unixVerify 'replacement package' 'Unix RC archive smoke must re-extract a replacement package.'
     Assert-Match $unixVerify 'rc-fixture' 'Unix RC archive smoke must verify persisted channel data across restore/replacement.'
-    Assert-Match $unixVerify 'runtime data 한글' 'Unix RC archive smoke must retain Unicode runtime-data path coverage.'
+    Assert-Match $unixVerify 'runtime_data="\$scratch/runtime data' 'Unix RC archive smoke must retain an external whitespace runtime-data path.'
     Assert-Match $windowsVerify 'Archive checksum mismatch' 'Windows verifier must reject archive checksum mismatches.'
 
     Assert-Match $checkWorkflow 'Reject corrupted Unix release archive' 'PR CI must reject corrupted Unix RC archives.'
