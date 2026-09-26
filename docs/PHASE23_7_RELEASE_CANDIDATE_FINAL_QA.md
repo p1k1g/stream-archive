@@ -49,7 +49,7 @@ requires the package verifier to reject the checksum mismatch.
 
 ## Automated RC validation
 
-Status: **PENDING** until the Phase 23.7 PR workflow completes.
+Status: **PASS** on Stream Archive check #220 for implementation commit `76db66424f221490ac55916d64092baa2d7ff564`.
 
 The automated RC gate includes the retained Phase 23.6 coverage plus the
 following Phase 23.7 artifact-level checks:
@@ -79,10 +79,10 @@ following Phase 23.7 artifact-level checks:
 
 ### Fresh install result
 
-- Linux: **PENDING CI** — extracted artifact initializes an external fresh
-  backend/data/backup layout.
-- macOS: **PENDING CI** — same artifact-level flow as Linux.
-- Windows package structure/checksum/fresh extraction: **PENDING CI**.
+- Linux: **PASS** — extracted artifact initializes an external fresh
+  backend/data/backup layout, persists the exact `OUTPUT_DIR` value and channel state, creates/restores a managed backup, and reuses the preserved external data from a second extraction.
+- macOS: **PASS** — the same extracted-artifact fresh install, exact setting persistence, backup/restore and replacement-package data reuse flow passes.
+- Windows package structure/checksum/fresh extraction: **PASS**.
 - Windows Native GUI first interactive startup: **MANUAL TEST REQUIRED**.
 
 The Unix smoke intentionally keeps mutable runtime data outside the extracted
@@ -137,10 +137,10 @@ Manual Native UI backup/restore interaction remains **MANUAL TEST REQUIRED**.
 
 | Provider path | Offline automated regression | Real provider/session RC |
 |---|---|---|
-| SOOP LIVE | PENDING CI | MANUAL TEST REQUIRED |
-| SOOP VOD | PENDING CI | MANUAL TEST REQUIRED |
-| CHZZK LIVE | PENDING CI | MANUAL TEST REQUIRED |
-| CHZZK VOD | PENDING CI | MANUAL TEST REQUIRED |
+| SOOP LIVE | PASS | MANUAL TEST REQUIRED |
+| SOOP VOD | PASS | MANUAL TEST REQUIRED |
+| CHZZK LIVE | PASS | MANUAL TEST REQUIRED |
+| CHZZK VOD | PASS | MANUAL TEST REQUIRED |
 
 Offline provider tests use fake local media executables and do not require
 provider credentials or Internet access. They retain invocation, timeout,
@@ -322,18 +322,28 @@ Phase 23.6 baseline:
 
 Phase 23.7:
 
-- Tested implementation commit: **PENDING**
-- Stream Archive check: **PENDING**
-- Windows core: **PENDING**
-- Linux core: **PENDING**
-- macOS core: **PENDING**
-- final Windows package/archive job: **PENDING**
+- Tested implementation commit: `76db66424f221490ac55916d64092baa2d7ff564`
+- Stream Archive check #220: **PASS**
+- Windows core: **PASS**
+- Linux core: **PASS**
+- macOS core: **PASS**
+- Linux Unix release package smoke: **PASS**
+- Linux corrupted archive rejection: **PASS**
+- macOS Unix release package smoke: **PASS**
+- macOS corrupted archive rejection: **PASS**
+- ReleaseCandidate/runtime contract guard: **PASS**
+- source archive / provenance metadata smoke: **PASS**
+- Windows portable package build/verification: **PASS**
+- Windows offline backup/restore + corrupted-backup rejection: **PASS**
+- Windows runtime-data archive rejection: **PASS**
+- Windows corrupted archive rejection: **PASS**
+- Windows final release archive verification: **PASS**
 
 ## Final RC readiness summary
 
 ### Automated RC validation
 
-**PENDING**
+**PASS**
 
 ### Manual RC validation
 
