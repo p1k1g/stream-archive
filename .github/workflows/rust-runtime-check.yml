@@ -240,29 +240,17 @@ jobs:
             throw 'source-archive metadata should use commit=unknown outside a Git checkout'
           }
 
-          $probe = Join-Path $env:GITHUB_WORKSPACE 'phase23-release-dirty-probe.tmp'
-          $dirtyOutput = Join-Path $scratch 'RELEASE_INFO_DIRTY.txt'
-          try {
-            Set-Content -LiteralPath $probe -Value 'dirty provenance probe' -Encoding ASCII
-            Push-Location $env:GITHUB_WORKSPACE
-            try {
-              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $dirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
-              if ($LASTEXITCODE -ne 0) {
-                throw "dirty release metadata probe failed with exit code $LASTEXITCODE"
-              }
-            }
-            finally {
-              Pop-Location
-            }
-            $dirtyCommit = Get-Content -LiteralPath $dirtyOutput |
-              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-              Select-Object -First 1
-            if ($null -eq $dirtyCommit -or $dirtyCommit.TrimStart([char]0xFEFF).Trim() -notmatch '^commit=[0-9a-f]{12}-dirty$') {
-              throw 'dirty checkout metadata must include the -dirty provenance marker'
-            }
+          $checkoutOutput = Join-Path $scratch 'RELEASE_INFO_CHECKOUT.txt'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $checkoutOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
+          if ($LASTEXITCODE -ne 0) {
+            throw "checkout release metadata probe failed with exit code $LASTEXITCODE"
           }
-          finally {
-            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+          $checkoutCommit = Get-Content -LiteralPath $checkoutOutput |
+            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+            Select-Object -First 1
+          $expectedCommit = 'commit=' + $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
+          if ($null -eq $checkoutCommit -or $checkoutCommit.TrimStart([char]0xFEFF).Trim() -ne $expectedCommit) {
+            throw "checkout metadata must match GITHUB_SHA: expected $expectedCommit"
           }
 
       - name: Windows portable package smoke
