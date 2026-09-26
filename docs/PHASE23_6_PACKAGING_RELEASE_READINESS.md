@@ -150,10 +150,14 @@ runtime-contract entrypoint before any platform artifact job can run.
 Current Phase 23.6 version: `0.5.2`.
 
 Git metadata is optional. Source archives without `.git` use
-`commit=unknown`. A checkout with tracked or untracked non-ignored changes
-records `<commit>-dirty` so a locally generated artifact is not falsely
-attributed to a reviewed clean commit. Generated `dist/` staging is ignored
-and therefore does not mark a clean package build dirty.
+`commit=unknown`. On Windows, an ambient GitHub Actions `GITHUB_SHA` is
+accepted only when the explicit `RepositoryRoot` resolves to the actual Git
+checkout top level and that checkout's `HEAD` matches the workflow SHA.
+Passing an extracted/non-Git source directory as `RepositoryRoot` therefore
+still records `commit=unknown`. A checkout with tracked or untracked
+non-ignored changes records `<commit>-dirty` so a locally generated artifact
+is not falsely attributed to a reviewed clean commit. Generated `dist/`
+staging is ignored and therefore does not mark a clean package build dirty.
 
 ## Checksums
 
