@@ -274,7 +274,9 @@ jobs:
           if (Test-Path -LiteralPath $worktreeRoot) {
             Remove-Item -LiteralPath $worktreeRoot -Recurse -Force
           }
-          git branch -D $worktreeBranch 2>$null
+          if (git branch --list $worktreeBranch) {
+            git branch -D $worktreeBranch | Out-Null
+          }
           try {
             git worktree add -b $worktreeBranch $worktreeRoot HEAD
             if ($LASTEXITCODE -ne 0) {
@@ -306,8 +308,12 @@ jobs:
             }
           }
           finally {
-            git worktree remove --force $worktreeRoot 2>$null
-            git branch -D $worktreeBranch 2>$null
+            if (Test-Path -LiteralPath $worktreeRoot) {
+              git worktree remove --force $worktreeRoot | Out-Null
+            }
+            if (git branch --list $worktreeBranch) {
+              git branch -D $worktreeBranch | Out-Null
+            }
           }
 
       - name: Windows portable package smoke
