@@ -151,13 +151,18 @@ Current Phase 23.6 version: `0.5.2`.
 
 Git metadata is optional. Source archives without `.git` use
 `commit=unknown`. On Windows, an ambient GitHub Actions `GITHUB_SHA` is
-accepted only when the explicit `RepositoryRoot` resolves to the actual Git
-checkout top level and that checkout's `HEAD` matches the workflow SHA.
-Passing an extracted/non-Git source directory as `RepositoryRoot` therefore
-still records `commit=unknown`. A checkout with tracked or untracked
-non-ignored changes records `<commit>-dirty` so a locally generated artifact
-is not falsely attributed to a reviewed clean commit. Generated `dist/`
-staging is ignored and therefore does not mark a clean package build dirty.
+accepted only when the explicit `RepositoryRoot` resolves to the actual
+`GITHUB_WORKSPACE` checkout and that checkout's own Git `HEAD` matches the
+workflow SHA. Linked Git worktrees are supported: the worktree-local `HEAD`
+is resolved together with refs and `packed-refs` from the shared Git
+`commondir`. Passing an extracted/non-Git source directory as
+`RepositoryRoot` therefore still records `commit=unknown`. A checkout or
+linked worktree with tracked or untracked non-ignored changes records
+`<commit>-dirty` so a locally generated artifact is not falsely attributed
+to a reviewed clean commit. Generated `dist/` staging is ignored and
+therefore does not mark a clean package build dirty. The PR/push packaging
+workflow explicitly watches the root `.gitignore` so removing that exclusion
+cannot silently bypass the packaging contract.
 
 ## Checksums
 
