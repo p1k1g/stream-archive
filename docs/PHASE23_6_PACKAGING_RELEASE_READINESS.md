@@ -159,7 +159,10 @@ recorded as `<commit>-dirty`, and a failed status check does not emit a bare
 reviewed SHA. Linked Git worktrees are supported: the worktree-local `HEAD`
 is resolved together with refs and `packed-refs` from the shared Git
 `commondir`. Passing an extracted/non-Git source directory as
-`RepositoryRoot` therefore still records `commit=unknown`. A checkout or
+`RepositoryRoot` therefore still records `commit=unknown`. On both Windows
+and Unix, commit provenance is emitted only after the dirty-state query itself
+succeeds; if `git status` cannot establish the worktree state, metadata stays
+at `commit=unknown` rather than assuming the checkout is clean. A checkout or
 linked worktree with tracked or untracked non-ignored changes records
 `<commit>-dirty` so a locally generated artifact is not falsely attributed
 to a reviewed clean commit. Generated `dist/` staging is ignored and
