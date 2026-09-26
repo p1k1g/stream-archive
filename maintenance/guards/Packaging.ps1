@@ -75,7 +75,7 @@ try {
     Assert-Match $checkWorkflow 'RELEASE_INFO_DIRTY\.txt' 'Unix PR CI must regress dirty release provenance.'
     Assert-Match $checkWorkflow 'RELEASE_INFO_STATUS_FAILURE\.txt' 'Unix PR CI must regress git-status provenance failures.'
     Assert-Match $checkWorkflow 'exit 42' 'Unix PR CI must force git status to fail while leaving rev-parse available.'
-    Assert-Match $checkWorkflow "grep -qx 'commit=unknown' \"\$status_failure\"" 'Unix PR CI must retain unknown provenance when git status fails.'
+    Assert-Match $checkWorkflow 'grep -qx ''commit=unknown'' "\$status_failure"' 'Unix PR CI must retain unknown provenance when git status fails.'
     Assert-Match $checkWorkflow 'explicit non-Git RepositoryRoot must use commit=unknown' 'Windows PR CI must reject ambient GITHUB_SHA provenance for an explicit non-Git source root.'
     Assert-Match $checkWorkflow '-RepositoryRoot \$scratch' 'Windows source-archive regression must pass an explicit non-Git repository root.'
     Assert-Match $checkWorkflow 'checkout metadata must match GITHUB_SHA' 'Windows PR CI must verify checkout provenance against the workflow commit.'
