@@ -136,6 +136,24 @@ jobs:
           rm -f "$probe"
           trap - EXIT
 
+          fake_git_dir="$scratch/fake-git"
+          status_failure="$scratch/RELEASE_INFO_STATUS_FAILURE.txt"
+          real_git="$(command -v git)"
+          mkdir -p "$fake_git_dir"
+          cat > "$fake_git_dir/git" <<'EOF'
+          #!/usr/bin/env bash
+          if [[ "${1:-}" == "status" ]]; then
+            exit 42
+          fi
+          exec "$REAL_GIT" "$@"
+          EOF
+          chmod +x "$fake_git_dir/git"
+          (
+            cd "$GITHUB_WORKSPACE"
+            REAL_GIT="$real_git" PATH="$fake_git_dir:$PATH"               ./maintenance/Write-ReleaseMetadata.sh               "$status_failure"               "$GITHUB_WORKSPACE/rust-runtime/Cargo.toml"
+          )
+          grep -qx 'commit=unknown' "$status_failure"
+
       - name: Native compile check
         shell: bash
         run: cargo check --locked --manifest-path rust-runtime/Cargo.toml
