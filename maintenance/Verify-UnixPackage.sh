@@ -9,6 +9,21 @@ fail() {
   exit 1
 }
 
+assert_output_dir() {
+  local cli="$1"
+  local expected="$2"
+  "$cli" settings show --json | python3 -c '
+import json
+import sys
+
+expected = sys.argv[1]
+items = json.load(sys.stdin)
+actual = next((item.get("value") for item in items if item.get("key") == "OUTPUT_DIR"), None)
+if actual != expected:
+    raise SystemExit(f"OUTPUT_DIR mismatch: expected {expected!r}, got {actual!r}")
+' "$expected"
+}
+
 verify_tree() {
   local root="$1"
   [[ -d "$root" ]] || fail "Package root does not exist: $root"
@@ -105,7 +120,7 @@ if [[ -n "$ARCHIVE_PATH" ]]; then
 
     status_json="$("$extracted/bin/stream-archive-cli" status --json)"
     printf '%s\n' "$status_json" | grep -q '"runtime_ready"'
-    "$extracted/bin/stream-archive-cli" settings show --json | grep -q '"OUTPUT_DIR"'
+    assert_output_dir "$extracted/bin/stream-archive-cli" "$runtime_output"
     "$extracted/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
 
     "$extracted/bin/stream-archive-cli" backup create --json >/dev/null
@@ -119,7 +134,7 @@ if [[ -n "$ARCHIVE_PATH" ]]; then
 
     "$extracted/bin/stream-archive-cli" backup restore "$(basename "$backup_file")" --yes --json >/dev/null
     "$extracted/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
-    "$extracted/bin/stream-archive-cli" settings show --json | grep -q '"OUTPUT_DIR"'
+    assert_output_dir "$extracted/bin/stream-archive-cli" "$runtime_output"
   )
 
   replacement_parent="$scratch/replacement package 한글"
@@ -135,7 +150,7 @@ if [[ -n "$ARCHIVE_PATH" ]]; then
     export STREAM_ARCHIVE_BACKUP_DIR="$runtime_backup"
 
     "$replacement/bin/stream-archive-cli" status --json | grep -q '"runtime_ready"'
-    "$replacement/bin/stream-archive-cli" settings show --json | grep -q '"OUTPUT_DIR"'
+    assert_output_dir "$replacement/bin/stream-archive-cli" "$runtime_output"
     "$replacement/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
   )
 
