@@ -240,6 +240,18 @@ jobs:
             throw 'source-archive metadata should use commit=unknown outside a Git checkout'
           }
 
+          $explicitRootOutput = Join-Path $scratch 'RELEASE_INFO_EXPLICIT_ROOT.txt'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $explicitRootOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $scratch
+          if ($LASTEXITCODE -ne 0) {
+            throw "explicit non-Git RepositoryRoot probe failed with exit code $LASTEXITCODE"
+          }
+          $explicitRootCommit = Get-Content -LiteralPath $explicitRootOutput |
+            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+            Select-Object -First 1
+          if ($null -eq $explicitRootCommit -or $explicitRootCommit.TrimStart([char]0xFEFF).Trim() -ne 'commit=unknown') {
+            throw 'explicit non-Git RepositoryRoot must use commit=unknown even when GITHUB_SHA is present'
+          }
+
           $checkoutOutput = Join-Path $scratch 'RELEASE_INFO_CHECKOUT.txt'
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $checkoutOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
           if ($LASTEXITCODE -ne 0) {
