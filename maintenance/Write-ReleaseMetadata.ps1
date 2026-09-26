@@ -37,12 +37,13 @@ if ($null -ne $resolvedRepositoryRoot -and (Get-Command git -ErrorAction Silentl
         # while ErrorActionPreference is Stop. Git probes are bounded and their
         # exit codes are checked explicitly.
         $ErrorActionPreference = 'SilentlyContinue'
-        $candidate = (& git -C $resolvedRepositoryRoot rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
+        $safeDirectoryArgument = "safe.directory=$resolvedRepositoryRoot"
+        $candidate = (& git -c $safeDirectoryArgument -C $resolvedRepositoryRoot rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
         $gitExitCode = $LASTEXITCODE
 
         $dirtyState = @()
         if ($gitExitCode -eq 0) {
-            $dirtyState = @(& git -C $resolvedRepositoryRoot status --porcelain --untracked-files=normal 2>$null)
+            $dirtyState = @(& git -c $safeDirectoryArgument -C $resolvedRepositoryRoot status --porcelain --untracked-files=normal 2>$null)
             $dirtyExitCode = $LASTEXITCODE
         }
         else {
