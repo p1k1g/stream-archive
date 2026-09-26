@@ -267,6 +267,25 @@ jobs:
             throw "checkout metadata must match GITHUB_SHA: expected $expectedCommit"
           }
 
+          $workspaceDirtyProbe = Join-Path $env:GITHUB_WORKSPACE 'phase23-workspace-dirty-probe.tmp'
+          $workspaceDirtyOutput = Join-Path $scratch 'RELEASE_INFO_WORKSPACE_DIRTY.txt'
+          try {
+            Set-Content -LiteralPath $workspaceDirtyProbe -Value 'dirty GitHub workspace provenance probe' -Encoding ASCII
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $workspaceDirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
+            if ($LASTEXITCODE -ne 0) {
+              throw "dirty GitHub workspace release metadata probe failed with exit code $LASTEXITCODE"
+            }
+            $workspaceDirtyCommit = Get-Content -LiteralPath $workspaceDirtyOutput |
+              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
+              Select-Object -First 1
+            if ($null -eq $workspaceDirtyCommit -or $workspaceDirtyCommit.TrimStart([char]0xFEFF).Trim() -ne ($expectedCommit + '-dirty')) {
+              throw "trusted GitHub checkout dirty metadata must include the -dirty provenance marker"
+            }
+          }
+          finally {
+            Remove-Item -LiteralPath $workspaceDirtyProbe -Force -ErrorAction SilentlyContinue
+          }
+
           $worktreeRoot = Join-Path $env:RUNNER_TEMP 'stream-archive-linked-worktree'
           $worktreeBranch = 'phase23-ci-linked-worktree'
           $worktreeOutput = Join-Path $scratch 'RELEASE_INFO_WORKTREE.txt'
