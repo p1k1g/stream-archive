@@ -118,30 +118,34 @@ if ($null -ne $resolvedRepositoryRoot) {
     $gitHeadCommit = Get-GitHeadCommitFromMetadata -Root $resolvedRepositoryRoot
 }
 
-$trustedGitHubCheckout = $false
+$provenanceCommit = $null
+if ($gitHeadCommit -match '^[0-9a-fA-F]{40}$') {
+    $provenanceCommit = $gitHeadCommit
+}
+
 if (
     $null -ne $resolvedRepositoryRoot -and
     $env:GITHUB_ACTIONS -eq 'true' -and
     -not [string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE) -and
-    (Test-Path -LiteralPath $env:GITHUB_WORKSPACE -PathType Container) -and
-    -not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA) -and
-    $env:GITHUB_SHA -match '^[0-9a-fA-F]{40}$' -and
-    $gitHeadCommit -match '^[0-9a-fA-F]{40}$'
+    (Test-Path -LiteralPath $env:GITHUB_WORKSPACE -PathType Container)
 ) {
     $resolvedGitHubWorkspace = (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).Path
-    if (
-        $resolvedGitHubWorkspace -eq $resolvedRepositoryRoot -and
-        $gitHeadCommit -eq $env:GITHUB_SHA.ToLowerInvariant()
-    ) {
-        $commit = $gitHeadCommit.Substring(0, 12)
-        $trustedGitHubCheckout = $true
+    if ($resolvedGitHubWorkspace -eq $resolvedRepositoryRoot) {
+        if (
+            [string]::IsNullOrWhiteSpace($env:GITHUB_SHA) -or
+            $env:GITHUB_SHA -notmatch '^[0-9a-fA-F]{40}$' -or
+            $gitHeadCommit -ne $env:GITHUB_SHA.ToLowerInvariant()
+        ) {
+            $provenanceCommit = $null
+        }
     }
 }
 
+# A validated commit is not enough by itself: always inspect the worktree state
+# before attributing an artifact to that commit, including GITHUB_WORKSPACE.
 if (
-    -not $trustedGitHubCheckout -and
     $null -ne $resolvedRepositoryRoot -and
-    $gitHeadCommit -match '^[0-9a-fA-F]{40}$' -and
+    $provenanceCommit -match '^[0-9a-fA-F]{40}$' -and
     (Get-Command git -ErrorAction SilentlyContinue)
 ) {
     $previousErrorActionPreference = $ErrorActionPreference
@@ -156,7 +160,7 @@ if (
     }
 
     if ($dirtyExitCode -eq 0) {
-        $commit = $gitHeadCommit.Substring(0, 12)
+        $commit = $provenanceCommit.Substring(0, 12)
         if ($dirtyState.Count -gt 0) {
             $commit += '-dirty'
         }
