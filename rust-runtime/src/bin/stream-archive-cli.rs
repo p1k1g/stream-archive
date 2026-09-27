@@ -12,7 +12,7 @@ use stream_archive_server::{
     diagnostics::{
         DiagnosticsSnapshot, collect_active_local_preflight, collect_read_only_preflight,
     },
-    tool_discovery::{ToolKind, ToolResolution, resolve_tool},
+    tool_discovery::{ToolKind, ToolResolution, resolve_all_tools},
     unix_cli::{run_management, run_serve},
 };
 
@@ -181,7 +181,7 @@ fn command_doctor(args: &[String]) -> Result<()> {
             .context("failed to create local media-tool probe runtime")?;
         runtime.block_on(collect_active_local_preflight(&backend, &db))
     } else {
-        doctor_snapshot(&backend, &db)
+        collect_read_only_preflight(&backend, &db)
     };
 
     if options.json {
@@ -193,9 +193,6 @@ fn command_doctor(args: &[String]) -> Result<()> {
     doctor_result(&snapshot)
 }
 
-fn doctor_snapshot(backend: &Path, db: &Path) -> DiagnosticsSnapshot {
-    collect_read_only_preflight(backend, db)
-}
 
 fn print_preflight(snapshot: &DiagnosticsSnapshot) {
     println!("Stream Archive runtime preflight");
@@ -248,7 +245,7 @@ fn command_tools(args: &[String]) -> Result<()> {
     let backend = backend_dir(false)?;
     let db = database_path(&backend)?;
     let settings = load_tool_settings(&db)?;
-    let tools = resolve_all(&backend, &settings);
+    let tools = resolve_all_tools(&backend, &settings);
 
     match args {
         [] => print_tools(&tools),
@@ -319,20 +316,6 @@ fn configure_tools(backend: &Path, db: &Path, tools: Vec<ToolResolution>) -> Res
     print_tools(&tools);
     println!("source   : cli-tool-discovery");
     Ok(())
-}
-
-fn resolve_all(backend: &Path, settings: &BTreeMap<String, String>) -> Vec<ToolResolution> {
-    ToolKind::ALL
-        .into_iter()
-        .map(|kind| {
-            let configured = kind
-                .setting_keys()
-                .iter()
-                .map(|key| (*key, settings.get(*key).map(String::as_str).unwrap_or("")))
-                .collect::<Vec<_>>();
-            resolve_tool(kind, backend, &configured)
-        })
-        .collect()
 }
 
 fn print_tools(tools: &[ToolResolution]) {
@@ -564,7 +547,7 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let snapshot = doctor_snapshot(&backend, &db);
+        let snapshot = collect_read_only_preflight(&backend, &db);
         assert!(!snapshot.runtime_ready);
         assert!(snapshot.summary.blocking_errors >= 1);
         let settings = snapshot
