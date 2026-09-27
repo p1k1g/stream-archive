@@ -268,6 +268,16 @@ mod tests {
     }
 
     #[test]
+    fn resolve_all_tools_preserves_kind_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let resolved = resolve_all_tools(temp.path(), &BTreeMap::new());
+        assert_eq!(resolved.len(), ToolKind::ALL.len());
+        assert_eq!(resolved[0].kind, ToolKind::Streamlink);
+        assert_eq!(resolved[1].kind, ToolKind::YtDlp);
+        assert_eq!(resolved[2].kind, ToolKind::Ffmpeg);
+    }
+
+    #[test]
     fn invalid_explicit_path_is_reported_without_becoming_a_result() {
         let temp = tempfile::tempdir().unwrap();
         let resolved = resolve_tool(
