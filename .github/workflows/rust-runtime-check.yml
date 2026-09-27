@@ -187,6 +187,22 @@ jobs:
         shell: bash
         run: ./BUILD_UNIX_PACKAGE.sh
 
+      - name: Reject corrupted Unix release archive
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: |
+          package_root="$(find dist -type d -path '*/unix-*/stream-archive' -print -quit)"
+          archive="$(find dist/release -maxdepth 1 -type f -name 'stream-archive-*.tar.gz' -print -quit)"
+          [[ -n "$package_root" && -n "$archive" ]] || { echo 'Unix RC artifact not found.' >&2; exit 1; }
+          probe="$RUNNER_TEMP/$(basename "$archive")"
+          cp "$archive" "$probe"
+          cp "$archive.sha256" "$probe.sha256"
+          printf '\nphase23.7 checksum corruption probe\n' >> "$probe"
+          if ./maintenance/Verify-UnixPackage.sh "$package_root" "$probe"; then
+            echo 'Corrupted Unix release archive was accepted.' >&2
+            exit 1
+          fi
+
   windows-check:
     name: windows-check
     needs: core-check
@@ -361,6 +377,57 @@ jobs:
         shell: powershell
         run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
 
+      - name: Windows offline backup restore smoke
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scratch = Join-Path $env:RUNNER_TEMP 'Stream Archive RC backup 테스트'
+          $data = Join-Path $scratch 'data 한글'
+          $backups = Join-Path $scratch 'backups 한글'
+          $packageSafety = './dist/stream-archive-backups'
+          Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $packageSafety -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $data -Force | Out-Null
+          New-Item -ItemType Directory -Path $backups -Force | Out-Null
+          try {
+            $db = Join-Path $data 'stream-archive.db'
+            $header = [System.Text.Encoding]::ASCII.GetBytes('SQLite format 3' + [char]0)
+            $bytes = New-Object byte[] 4096
+            [Array]::Copy($header, 0, $bytes, 0, $header.Length)
+            [System.IO.File]::WriteAllBytes($db, $bytes)
+
+            & './dist/stream-archive/maintenance/Backup-StreamArchiveData.ps1' -DataDir $data -BackupDir $backups -Keep 5 -RetentionDays 30
+            $backup = Get-ChildItem -LiteralPath $backups -Filter 'stream_archive_*.db' -File | Select-Object -First 1
+            if ($null -eq $backup -or -not (Test-Path -LiteralPath "$($backup.FullName).json" -PathType Leaf)) {
+              throw 'Windows RC backup smoke did not create backup metadata.'
+            }
+            $backupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $backup.FullName).Hash
+
+            $bytes[32] = 1
+            [System.IO.File]::WriteAllBytes($db, $bytes)
+            & './dist/stream-archive/maintenance/Restore-StreamArchiveData.ps1' -BackupFile $backup.FullName -DataDir $data
+            $restoredHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $db).Hash
+            if ($restoredHash -ne $backupHash) {
+              throw 'Windows RC restore did not restore the backed-up database bytes.'
+            }
+
+            [System.IO.File]::AppendAllText($backup.FullName, 'corruption')
+            $rejected = $false
+            try {
+              & './dist/stream-archive/maintenance/Restore-StreamArchiveData.ps1' -BackupFile $backup.FullName -DataDir $data
+            }
+            catch {
+              $rejected = $true
+            }
+            if (-not $rejected) {
+              throw 'Windows restore accepted a backup whose SHA256 no longer matched metadata.'
+            }
+          }
+          finally {
+            Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $packageSafety -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Reject runtime data from Windows release archives
         shell: powershell
         run: |
@@ -387,6 +454,33 @@ jobs:
       - name: Build Windows release archive
         shell: powershell
         run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
+
+      - name: Reject corrupted Windows release archive
+        shell: powershell
+        run: |
+          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
+          $probe = Join-Path $env:RUNNER_TEMP $archive.Name
+          $probeChecksum = "$probe.sha256"
+          Copy-Item -LiteralPath $archive.FullName -Destination $probe -Force
+          Copy-Item -LiteralPath "$($archive.FullName).sha256" -Destination $probeChecksum -Force
+          [System.IO.File]::AppendAllText($probe, 'phase23.7 checksum corruption probe')
+          $rejected = $false
+          try {
+            ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $probe -ArchiveChecksumPath $probeChecksum
+          }
+          catch {
+            $rejected = $true
+          }
+          finally {
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $probeChecksum -Force -ErrorAction SilentlyContinue
+          }
+          if (-not $rejected) {
+            throw 'Corrupted Windows release archive was accepted.'
+          }
 
       - name: Verify Windows release archive
         shell: powershell

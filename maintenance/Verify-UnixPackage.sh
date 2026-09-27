@@ -9,6 +9,21 @@ fail() {
   exit 1
 }
 
+assert_output_dir() {
+  local cli="$1"
+  local expected="$2"
+  "$cli" settings show --json | python3 -c '
+import json
+import sys
+
+expected = sys.argv[1]
+items = json.load(sys.stdin)
+actual = next((item.get("value") for item in items if item.get("key") == "OUTPUT_DIR"), None)
+if actual != expected:
+    raise SystemExit(f"OUTPUT_DIR mismatch: expected {expected!r}, got {actual!r}")
+' "$expected"
+}
+
 verify_tree() {
   local root="$1"
   [[ -d "$root" ]] || fail "Package root does not exist: $root"
@@ -87,13 +102,56 @@ if [[ -n "$ARCHIVE_PATH" ]]; then
   extracted="$scratch/stream-archive"
   verify_tree "$extracted"
 
+  runtime_backend="$scratch/runtime backend 한글"
+  runtime_data="$scratch/runtime data 한글"
+  runtime_backup="$scratch/runtime backups 한글"
+  runtime_output="$scratch/output 저장 🎬"
+  mkdir -p "$runtime_output"
+
   (
     cd "$extracted"
-    export STREAM_ARCHIVE_BACKEND_DIR="$extracted/backend"
-    export STREAM_ARCHIVE_DATA_DIR="$extracted/data"
+    export STREAM_ARCHIVE_BACKEND_DIR="$runtime_backend"
+    export STREAM_ARCHIVE_DATA_DIR="$runtime_data"
+    export STREAM_ARCHIVE_BACKUP_DIR="$runtime_backup"
+
     "$extracted/bin/stream-archive-cli" init >/dev/null
+    "$extracted/bin/stream-archive-cli" settings set OUTPUT_DIR "$runtime_output" >/dev/null
+    "$extracted/bin/stream-archive-cli" channels add soop rc-fixture "RC Fixture" "$runtime_output" >/dev/null
+
     status_json="$("$extracted/bin/stream-archive-cli" status --json)"
     printf '%s\n' "$status_json" | grep -q '"runtime_ready"'
+    assert_output_dir "$extracted/bin/stream-archive-cli" "$runtime_output"
+    "$extracted/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
+
+    "$extracted/bin/stream-archive-cli" backup create --json >/dev/null
+    backup_file="$(find "$runtime_backup" -maxdepth 1 -type f -name 'stream_archive_*.db' -print -quit)"
+    [[ -n "$backup_file" ]] || fail "RC backup smoke did not create a managed backup"
+
+    "$extracted/bin/stream-archive-cli" channels remove soop rc-fixture >/dev/null
+    if "$extracted/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'; then
+      fail "RC backup smoke could not mutate state before restore"
+    fi
+
+    "$extracted/bin/stream-archive-cli" backup restore "$(basename "$backup_file")" --yes --json >/dev/null
+    "$extracted/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
+    assert_output_dir "$extracted/bin/stream-archive-cli" "$runtime_output"
+  )
+
+  replacement_parent="$scratch/replacement package 한글"
+  mkdir -p "$replacement_parent"
+  tar -C "$replacement_parent" -xzf "$ARCHIVE_PATH"
+  replacement="$replacement_parent/stream-archive"
+  verify_tree "$replacement"
+
+  (
+    cd "$replacement"
+    export STREAM_ARCHIVE_BACKEND_DIR="$runtime_backend"
+    export STREAM_ARCHIVE_DATA_DIR="$runtime_data"
+    export STREAM_ARCHIVE_BACKUP_DIR="$runtime_backup"
+
+    "$replacement/bin/stream-archive-cli" status --json | grep -q '"runtime_ready"'
+    assert_output_dir "$replacement/bin/stream-archive-cli" "$runtime_output"
+    "$replacement/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
   )
 
   rm -rf "$scratch"
