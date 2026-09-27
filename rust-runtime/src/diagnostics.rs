@@ -445,11 +445,7 @@ fn collect_items(
         ));
     }
 
-    items.extend(
-        resolve_all_tools(backend, values)
-            .iter()
-            .map(tool_check),
-    );
+    items.extend(resolve_all_tools(backend, values).iter().map(tool_check));
 
     items.push(secret_store_check());
     items.extend(provider_checks(values, configured_secrets));
