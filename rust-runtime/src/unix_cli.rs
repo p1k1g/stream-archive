@@ -8,7 +8,7 @@ use crate::{
         VodQueueSnapshot,
     },
     support::platform::PlatformId,
-    tool_discovery::{ToolKind, ToolResolution, resolve_tool},
+    tool_discovery::resolve_all_tools,
     unix_control::{RuntimeControlRequest, RuntimeControlServer, send_runtime_control},
 };
 use anyhow::{Context, Result, bail};
@@ -81,7 +81,7 @@ async fn command_status(args: &[String]) -> Result<()> {
     let backup = core.backup_snapshot().await?;
     let secrets = core.configured_secrets()?;
     let settings = environment_settings_map(&core)?;
-    let tools = resolve_all(core.backend_dir(), &settings);
+    let tools = resolve_all_tools(core.backend_dir(), &settings);
     let tool_rows = tools
         .iter()
         .map(|tool| {
@@ -1268,20 +1268,6 @@ fn environment_settings_map(core: &StreamArchiveCore) -> Result<BTreeMap<String,
         .into_iter()
         .map(|item| (item.key, item.value))
         .collect())
-}
-
-fn resolve_all(backend: &Path, settings: &BTreeMap<String, String>) -> Vec<ToolResolution> {
-    ToolKind::ALL
-        .into_iter()
-        .map(|kind| {
-            let configured = kind
-                .setting_keys()
-                .iter()
-                .map(|key| (*key, settings.get(*key).map(String::as_str).unwrap_or("")))
-                .collect::<Vec<_>>();
-            resolve_tool(kind, backend, &configured)
-        })
-        .collect()
 }
 
 fn configured_setting(settings: &BTreeMap<String, String>, key: &str) -> bool {
