@@ -193,7 +193,6 @@ fn command_doctor(args: &[String]) -> Result<()> {
     doctor_result(&snapshot)
 }
 
-
 fn print_preflight(snapshot: &DiagnosticsSnapshot) {
     println!("Stream Archive runtime preflight");
     println!("os: {} / {}", env::consts::OS, env::consts::ARCH);
