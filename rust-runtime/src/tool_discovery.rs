@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -144,6 +145,23 @@ pub fn resolve_tool(
         source: "missing".into(),
         warnings,
     }
+}
+
+pub fn resolve_all_tools(
+    backend_dir: &Path,
+    settings: &BTreeMap<String, String>,
+) -> Vec<ToolResolution> {
+    ToolKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let configured = kind
+                .setting_keys()
+                .iter()
+                .map(|key| (*key, settings.get(*key).map(String::as_str).unwrap_or("")))
+                .collect::<Vec<_>>();
+            resolve_tool(kind, backend_dir, &configured)
+        })
+        .collect()
 }
 
 pub fn find_command(name: &str) -> Option<PathBuf> {
