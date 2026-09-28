@@ -177,8 +177,9 @@ path.
 - [ ] newly created managed backup appears in the Native backup list
 - [ ] managed Restore can select a valid backup through the Native UI
 - [ ] active-runtime/unsafe restore conditions are rejected clearly
-- [ ] after an allowed restore, Settings/Channels/History state is checked
-- [ ] restart after restore confirms persistence
+- [ ] after an allowed restore, Settings/Channels/History/Queue state is checked
+- [ ] restored Queue entries/state refresh correctly in the Native UI
+- [ ] restart after restore confirms Settings/Channels/History/Queue persistence
 - [ ] Logs view/callback loads from the Native UI
 - [ ] log refresh works
 - [ ] log row/detail interaction works where exposed
