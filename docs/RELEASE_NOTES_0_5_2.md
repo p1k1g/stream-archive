@@ -1,9 +1,9 @@
-# Stream Archive 0.5.2 — Release Notes Draft
+# Stream Archive 0.5.2 — Release Notes
 
-Status: **Release Candidate draft — not a published release**
+Status: **Final RC draft — publication pending manual RC**
 
 This document describes the currently verified product surface for the 0.5.2
-release candidate. Phase 23.7 does not create a tag or GitHub Release.
+release candidate. Phase 23.9 prepares the final public-release checklist but does not create a tag or GitHub Release.
 
 ## Highlights
 
@@ -73,7 +73,7 @@ Official packages ship an empty runtime `data/` directory. Runtime SQLite,
 logs, provider credentials, backups, downloads and process-state files are not
 release payload.
 
-Phase 23.7 also requires corrupted archive copies to be rejected by the
+The release-candidate contract requires corrupted archive copies to be rejected by the
 verifiers.
 
 ## Backup and restore
@@ -120,7 +120,7 @@ For an upgrade:
    diagnostics;
 7. restart once more to confirm persistence.
 
-Phase 23.7 automatically verifies package replacement against preserved data on
+Automated RC validation verifies package replacement against preserved data on
 Unix RC artifacts. A representative **cross-version upgrade** remains a manual
 release-candidate check.
 
@@ -139,6 +139,7 @@ the observed database state.
 
 ## Release status
 
-This file is a release-notes draft. Public tag/Release creation, signing
-decisions and final go/no-go remain user-controlled after Phase 23.7 automated
-and manual RC validation.
+This file is the final RC release-notes draft. Public tag/Release creation,
+signing decisions and the final release decision remain user-controlled after
+Phase 23.9 manual RC validation. Until those manual checks are complete, public
+release readiness remains **MANUAL VALIDATION REMAINING**.
