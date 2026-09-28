@@ -21,7 +21,9 @@ assert_cli_output_contains() {
 assert_output_dir() {
   local cli="$1"
   local expected="$2"
-  "$cli" settings show --json | python3 -c '
+  local settings_json
+  settings_json="$("$cli" settings show --json)"
+  printf '%s\n' "$settings_json" | python3 -c '
 import json
 import sys
 
