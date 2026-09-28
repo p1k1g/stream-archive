@@ -1,3 +1,4 @@
+use crate::formatting::format_bytes;
 use stream_archive_server::{
     history_service::{format_history_timestamp_local, history_timestamp_sort_key},
     model::{HistoryResponse, LiveHistoryItem, VodHistoryItem},
@@ -305,22 +306,6 @@ pub fn format_duration(seconds: u64) -> String {
         format!("{hours:02}:{minutes:02}:{seconds:02}")
     } else {
         format!("{minutes:02}:{seconds:02}")
-    }
-}
-
-pub fn format_bytes(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-    let value = bytes as f64;
-    if value >= GIB {
-        format!("{:.2} GiB", value / GIB)
-    } else if value >= MIB {
-        format!("{:.1} MiB", value / MIB)
-    } else if value >= KIB {
-        format!("{:.1} KiB", value / KIB)
-    } else {
-        format!("{bytes} B")
     }
 }
 

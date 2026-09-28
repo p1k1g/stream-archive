@@ -2,6 +2,7 @@
 
 mod channels_adapter;
 mod controller;
+mod formatting;
 mod history_adapter;
 mod live_adapter;
 mod maintenance_adapter;

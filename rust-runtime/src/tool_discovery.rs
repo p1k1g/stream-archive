@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -146,6 +147,23 @@ pub fn resolve_tool(
     }
 }
 
+pub fn resolve_all_tools(
+    backend_dir: &Path,
+    settings: &BTreeMap<String, String>,
+) -> Vec<ToolResolution> {
+    ToolKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let configured = kind
+                .setting_keys()
+                .iter()
+                .map(|key| (*key, settings.get(*key).map(String::as_str).unwrap_or("")))
+                .collect::<Vec<_>>();
+            resolve_tool(kind, backend_dir, &configured)
+        })
+        .collect()
+}
+
 pub fn find_command(name: &str) -> Option<PathBuf> {
     let candidate = Path::new(name);
     if candidate.components().count() > 1 && executable_file(candidate) {
@@ -247,6 +265,16 @@ mod tests {
         let resolved = resolve_tool(ToolKind::YtDlp, temp.path(), &[]);
         assert_eq!(resolved.path.as_deref(), Some(binary.as_path()));
         assert_eq!(resolved.source, "bundled");
+    }
+
+    #[test]
+    fn resolve_all_tools_preserves_kind_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let resolved = resolve_all_tools(temp.path(), &BTreeMap::new());
+        assert_eq!(resolved.len(), ToolKind::ALL.len());
+        assert_eq!(resolved[0].kind, ToolKind::Streamlink);
+        assert_eq!(resolved[1].kind, ToolKind::YtDlp);
+        assert_eq!(resolved[2].kind, ToolKind::Ffmpeg);
     }
 
     #[test]

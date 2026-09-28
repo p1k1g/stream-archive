@@ -8,7 +8,7 @@ use crate::{
     backup_service::{BackupManager, BackupPolicy},
     media_process::{DEFAULT_PROBE_TIMEOUT, MediaToolProbeStatus, probe_tool_version},
     store::Store,
-    tool_discovery::{ToolKind, ToolResolution, resolve_tool},
+    tool_discovery::{ToolKind, ToolResolution, resolve_all_tools},
 };
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
@@ -242,18 +242,8 @@ pub async fn collect_active_local_preflight(
     };
     let mut snapshot = collect_preflight_input(backend, database, &input);
 
-    for kind in ToolKind::ALL {
-        let configured: Vec<_> = kind
-            .setting_keys()
-            .iter()
-            .map(|key| {
-                (
-                    *key,
-                    input.values.get(*key).map(String::as_str).unwrap_or(""),
-                )
-            })
-            .collect();
-        let resolved = resolve_tool(kind, backend, &configured);
+    for resolved in resolve_all_tools(backend, &input.values) {
+        let kind = resolved.kind;
         let Some(path) = resolved.path.as_deref() else {
             continue;
         };
@@ -455,14 +445,7 @@ fn collect_items(
         ));
     }
 
-    for kind in ToolKind::ALL {
-        let configured: Vec<_> = kind
-            .setting_keys()
-            .iter()
-            .map(|key| (*key, values.get(*key).map(String::as_str).unwrap_or("")))
-            .collect();
-        items.push(tool_check(&resolve_tool(kind, backend, &configured)));
-    }
+    items.extend(resolve_all_tools(backend, values).iter().map(tool_check));
 
     items.push(secret_store_check());
     items.extend(provider_checks(values, configured_secrets));
