@@ -117,8 +117,12 @@ Verified again:
 - final Windows release archive verification: **PASS**
 - Linux/macOS RC package smoke and corrupted archive rejection: **PASS**
 
-A final documentation-evidence commit is revalidated separately before Phase
-23.9 repository work is considered complete.
+The evidence-only follow-up head was revalidated by Stream Archive check #230
+on `c5acf510e683cffab99e67103ff624de697f20ad`: **PASS**.
+
+The authoritative completion criterion remains that the final PR branch-head
+Stream Archive check is green; this wording avoids changing release evidence
+solely to chase a newer run number.
 
 ## 5. Windows Native UI manual RC
 
@@ -531,9 +535,10 @@ items above are treated as blockers until their evidence exists.
 
 ```text
 Automated RC validation:
-PASS (Phase 23.8 #227, Phase 23.9 #229)
-Phase 23.9 final documentation-head revalidation:
-PENDING
+PASS (Phase 23.8 #227, Phase 23.9 #229 and #230)
+
+Phase 23.9 final PR branch-head CI:
+MUST BE GREEN (authoritative PR check status)
 
 Manual RC validation:
 REMAINING
