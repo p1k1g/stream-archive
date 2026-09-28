@@ -241,9 +241,17 @@ For the real SOOP VOD and CHZZK VOD manual cases:
 - [ ] enqueue the currently analyzed VOD through the Native UI
 - [ ] refresh Queue through the Native UI
 - [ ] verify queued/running/completed state renders correctly
-- [ ] exercise at least one applicable Queue action exposed by the UI
-- [ ] verify the action updates Queue state without restart
+- [ ] exercise **Cancel** on a cancellable Queue item through the Native UI
+- [ ] verify Cancel updates Queue state without restart and owned-process cleanup completes
+- [ ] exercise **Retry** on a retryable failed/cancelled Queue item through the Native UI
+- [ ] verify Retry creates/updates the expected Queue state without restart
+- [ ] exercise **Remove** on a removable Queue item through the Native UI
+- [ ] verify Remove actually removes the intended Queue row without affecting unrelated items
 - [ ] restart and confirm retained Queue state is rendered correctly
+
+Each of the Native `cancel`, `retry`, and `remove` action paths must be exercised
+in an applicable state before the Windows Native Queue gate can be marked PASS.
+Testing only one Queue action is insufficient.
 
 #### History
 
