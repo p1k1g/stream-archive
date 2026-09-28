@@ -124,6 +124,34 @@ The authoritative completion criterion remains that the final PR branch-head
 Stream Archive check is green; this wording avoids changing release evidence
 solely to chase a newer run number.
 
+### RC finding fixed during Phase 23.9
+
+Stream Archive check #234 exposed a macOS packaging-smoke robustness defect:
+the Unix verifier piped packaged Rust CLI stdout directly into `grep -q`.
+When `grep` found its match and exited early, macOS could close the pipe while
+the CLI was still printing, causing a Rust stdout Broken pipe panic and exit
+101.
+
+Fixed in the Phase 23.9 branch by:
+
+- capturing packaged CLI output completely before substring assertions;
+- removing direct packaged-CLI-to-`grep -q` smoke checks;
+- adding a Packaging runtime contract that prevents this unsafe pipe pattern
+  from returning.
+
+Validation:
+
+- macOS Unix release package smoke: **PASS**
+- Linux Unix release package smoke: **PASS**
+- Packaging RuntimeContract: **PASS**
+- Windows core / Linux core / macOS core: **PASS**
+- Windows final release gate: **PASS**
+- Stream Archive check #236 on
+  `fc94721df55b8691348429a10f95b633a536c0a0`: **PASS**
+
+This was a release-verifier robustness correction; no provider, DB, UI,
+backup-format, CLI syntax or runtime behavior contract was changed.
+
 ## 5. Windows Native UI manual RC
 
 Status: **MANUAL TEST REQUIRED**
@@ -635,7 +663,7 @@ items above are treated as blockers until their evidence exists.
 
 ```text
 Automated RC validation:
-PASS (Phase 23.8 #227, Phase 23.9 #229 and #230)
+PASS (Phase 23.8 #227; Phase 23.9 #229/#230/#231/#232/#236 evidence)
 
 Phase 23.9 final PR branch-head CI:
 MUST BE GREEN (authoritative PR check status)
