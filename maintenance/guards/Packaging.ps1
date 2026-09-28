@@ -39,6 +39,8 @@ try {
     Assert-Match $unixVerify 'Archive checksum mismatch' 'Unix verifier must validate archive checksum.'
     Assert-Match $unixVerify 'stream-archive-cli" version' 'Unix verifier must execute the packaged CLI.'
     Assert-Match $unixVerify 'stream-archive-cli" help' 'Unix verifier must execute packaged CLI help.'
+    Assert-Match $unixVerify 'assert_cli_output_contains' 'Unix verifier must capture CLI output before substring assertions.'
+    Assert-NotMatch $unixVerify 'stream-archive-cli[^\r\n]*\|\s*grep\s+-[A-Za-z]*q' 'Unix verifier must not pipe packaged Rust CLI stdout directly into grep -q; early consumer exit can trigger Broken pipe.'
     Assert-Match $unixVerify 'stream-archive-cli" init' 'Unix archive smoke must initialize from the extracted package.'
     Assert-Match $unixVerify 'status --json' 'Unix archive smoke must execute packaged status JSON.'
     Assert-Match $unixVerify 'mktemp -d "[^"]*\s[^"]*\.XXXXXX"' 'Unix archive smoke must exercise a whitespace path.'
