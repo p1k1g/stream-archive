@@ -577,7 +577,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let snapshot = doctor_snapshot(&backend, &db);
+        let snapshot = collect_read_only_preflight(&backend, &db);
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(!json.contains("top-secret"));
         assert!(json.contains("configured"));
