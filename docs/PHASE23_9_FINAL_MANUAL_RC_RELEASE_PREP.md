@@ -671,9 +671,28 @@ MUST BE GREEN (authoritative PR check status)
 Manual RC validation:
 REMAINING
 
+GO requires every section marked MANUAL TEST REQUIRED in this document to have
+PASS evidence, except platform-specific checks explicitly recorded as
+NOT APPLICABLE / NOT TESTED because the required platform environment is
+unavailable and accepted as a documented release limitation.
+
+Required remaining gates include:
+- Windows Native UI, including primary workflows and Management callbacks
+- Windows headless runtime
+- real SOOP LIVE / SOOP VOD / CHZZK LIVE / CHZZK VOD sessions
+- real external Streamlink / yt-dlp / FFmpeg discovery and execution
+- fresh-install scenario
+- representative cross-version upgrade
+- rollback scenario
+- standalone manual backup/restore including integrity and edge cases
+- native secret-store checks where applicable
+- exact publication artifacts: final archive checksums, clean runtime-data
+  contents and release metadata for the assets actually selected for release
+
 Release blockers:
-Windows Native UI, real provider sessions, representative upgrade/rollback,
-and remaining real-environment tool/secret checks.
+All required manual gates above remain blockers until their evidence is
+recorded as complete, together with any P0/P1 issue and any P2 explicitly
+classified as release-blocking.
 
 Public release readiness:
 MANUAL VALIDATION REMAINING
