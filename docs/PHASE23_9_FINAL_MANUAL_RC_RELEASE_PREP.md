@@ -162,6 +162,32 @@ checkout.
 - [ ] missing tool produces understandable state
 - [ ] valid path recovery refreshes correctly
 
+### Native Management actions
+
+These checks must be performed through the extracted `StreamArchive.exe`
+Native UI. CLI/offline-script success does not satisfy this checklist because
+the purpose is to validate the Slint callback bindings and Native presentation
+path.
+
+- [ ] Settings > Management loads without error
+- [ ] backup policy values load
+- [ ] backup policy change can be saved from the Native UI
+- [ ] restart confirms the saved backup policy persists
+- [ ] managed Backup action can create a backup from the Native UI
+- [ ] newly created managed backup appears in the Native backup list
+- [ ] managed Restore can select a valid backup through the Native UI
+- [ ] active-runtime/unsafe restore conditions are rejected clearly
+- [ ] after an allowed restore, Settings/Channels/History state is checked
+- [ ] restart after restore confirms persistence
+- [ ] Logs view/callback loads from the Native UI
+- [ ] log refresh works
+- [ ] log row/detail interaction works where exposed
+- [ ] missing/empty log state is handled without crash
+
+The separate backup/restore manual section remains required for integrity,
+corruption and path-edge cases; these Management checks specifically prove that
+the Windows Native callbacks invoke the canonical services correctly.
+
 ### Paths
 
 - [ ] ASCII path
@@ -442,7 +468,8 @@ Must not appear:
 
 Current blockers:
 
-1. Windows Native UI final manual RC not yet recorded.
+1. Windows Native UI final manual RC, including Native Management backup-policy,
+   managed Backup/Restore and Logs callbacks, not yet recorded.
 2. Real SOOP LIVE/VOD validation not yet recorded.
 3. Real CHZZK LIVE/VOD validation not yet recorded.
 4. Representative cross-version upgrade/rollback not yet recorded.
