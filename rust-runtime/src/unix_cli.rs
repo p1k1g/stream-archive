@@ -17,7 +17,6 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     io::{self, Read},
-    path::Path,
     time::Duration,
 };
 
