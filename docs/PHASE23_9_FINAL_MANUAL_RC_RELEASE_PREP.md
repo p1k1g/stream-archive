@@ -207,6 +207,8 @@ but does **not** satisfy these Native callback checks.
 - [ ] resolve a channel through the Native action
 - [ ] save Channels configuration
 - [ ] reload configuration and confirm the saved channel state persists
+- [ ] remove a test channel through the Native Delete action
+- [ ] save/reload and confirm the removed channel remains absent while unrelated channels remain intact
 - [ ] save provider configuration through the Native UI
 - [ ] SOOP authentication test callback is exercised when credentials/environment permit
 
@@ -217,10 +219,15 @@ For the real SOOP LIVE and CHZZK LIVE manual cases:
 - [ ] refresh LIVE status from the Native UI
 - [ ] start the LIVE watcher/recording flow from the Native UI
 - [ ] verify Native status/progress updates
-- [ ] exercise an applicable LIVE action from the Native UI
-- [ ] stop/cancel from the Native UI
-- [ ] verify owned-process cleanup and UI state recovery
+- [ ] exercise **Stop** on a stoppable active LIVE item and verify the expected state transition
+- [ ] exercise **Resume** on a resumable LIVE item and verify status/progress resumes through the Native UI
+- [ ] exercise **Recheck** on an applicable LIVE item and verify the status is refreshed through the Native UI
+- [ ] verify owned-process cleanup and UI state recovery after Stop
 - [ ] a second Native LIVE operation can start after cleanup
+
+Each of the Native `stop`, `resume`, and `recheck` action paths must be
+exercised in an applicable state before the Windows Native LIVE gate can be
+marked PASS. Exercising only one LIVE action is insufficient.
 
 #### VOD
 
@@ -461,12 +468,14 @@ Status: **MANUAL TEST REQUIRED**
 - [ ] metadata present
 - [ ] SHA-256 present/valid
 - [ ] list backup
-- [ ] mutate state
+- [ ] ensure representative retained Queue state exists in the backup
+- [ ] mutate Settings/Channels/History/Queue state after the backup
 - [ ] restore
 - [ ] Settings restored
 - [ ] Channels restored
 - [ ] History restored
-- [ ] restart persists restored state
+- [ ] Queue rows/state restored immediately after restore
+- [ ] restart persists restored Settings/Channels/History/Queue state
 - [ ] invalid backup rejected
 - [ ] corrupted backup rejected
 - [ ] active runtime restore blocked
