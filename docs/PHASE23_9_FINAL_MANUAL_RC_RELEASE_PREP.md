@@ -672,9 +672,15 @@ Manual RC validation:
 REMAINING
 
 GO requires every section marked MANUAL TEST REQUIRED in this document to have
-PASS evidence, except platform-specific checks explicitly recorded as
-NOT APPLICABLE / NOT TESTED because the required platform environment is
-unavailable and accepted as a documented release limitation.
+PASS evidence.
+
+The only environment-availability waiver allowed by this checklist is for the
+Linux Secret Service and macOS Keychain checks that are explicitly documented
+above as `NOT TESTED if environment unavailable`. Such a waiver must remain a
+documented release limitation. It does **not** apply to Windows Native UI,
+Windows headless, Windows DPAPI, provider sessions, fresh install, upgrade,
+rollback, backup/restore, media-tool validation or exact publication-artifact
+verification; those required gates must have PASS evidence before GO.
 
 Required remaining gates include:
 - Windows Native UI, including primary workflows and Management callbacks
