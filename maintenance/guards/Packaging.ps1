@@ -37,7 +37,7 @@ try {
 
     Assert-Match $unixVerify 'shasum -a 256 -c SHA256SUMS\.txt' 'Unix verifier must validate package-local checksums.'
     Assert-Match $unixVerify 'Archive checksum mismatch' 'Unix verifier must validate archive checksum.'
-    Assert-Match $unixVerify 'stream-archive-cli" version' 'Unix verifier must execute the packaged CLI.'
+    Assert-Match $unixVerify 'assert_cli_output_contains[^\r\n]*stream-archive-cli[^\r\n]*version' 'Unix verifier must execute the packaged CLI version check through captured output.'
     Assert-Match $unixVerify 'stream-archive-cli" help' 'Unix verifier must execute packaged CLI help.'
     Assert-Match $unixVerify 'assert_cli_output_contains' 'Unix verifier must capture CLI output before substring assertions.'
     Assert-NotMatch $unixVerify 'stream-archive-cli[^\r\n]*\|\s*grep\s+-[A-Za-z]*q' 'Unix verifier must not pipe packaged Rust CLI stdout directly into grep -q; early consumer exit can trigger Broken pipe.'
