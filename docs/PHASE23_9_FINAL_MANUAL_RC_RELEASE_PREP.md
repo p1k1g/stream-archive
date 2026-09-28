@@ -162,6 +162,75 @@ checkout.
 - [ ] missing tool produces understandable state
 - [ ] valid path recovery refreshes correctly
 
+### Primary Native workflows
+
+For the Windows release candidate, primary workflow evidence must be captured
+through the freshly extracted `StreamArchive.exe`. Running equivalent
+operations through the CLI/headless runtime is useful supplementary evidence
+but does **not** satisfy these Native callback checks.
+
+#### Channels / provider configuration
+
+- [ ] channel list loads in the Native UI
+- [ ] add a channel draft
+- [ ] edit channel identifier/name fields exposed by the UI
+- [ ] toggle enabled state
+- [ ] toggle/select provider platform where exposed
+- [ ] resolve a channel through the Native action
+- [ ] save Channels configuration
+- [ ] reload configuration and confirm the saved channel state persists
+- [ ] save provider configuration through the Native UI
+- [ ] SOOP authentication test callback is exercised when credentials/environment permit
+
+#### LIVE
+
+For the real SOOP LIVE and CHZZK LIVE manual cases:
+
+- [ ] refresh LIVE status from the Native UI
+- [ ] start the LIVE watcher/recording flow from the Native UI
+- [ ] verify Native status/progress updates
+- [ ] exercise an applicable LIVE action from the Native UI
+- [ ] stop/cancel from the Native UI
+- [ ] verify owned-process cleanup and UI state recovery
+- [ ] a second Native LIVE operation can start after cleanup
+
+#### VOD
+
+For the real SOOP VOD and CHZZK VOD manual cases:
+
+- [ ] enter/edit the VOD URL in the Native UI
+- [ ] analyze the VOD through the Native action
+- [ ] verify metadata/quality/PART state renders
+- [ ] choose/edit the output directory through the Native UI
+- [ ] select quality and applicable PART/merge options
+- [ ] start a direct Native VOD download
+- [ ] verify Native progress/status updates
+- [ ] cancel from the Native UI and verify cleanup
+- [ ] retry a fresh Native VOD operation to completion
+
+#### Queue
+
+- [ ] enqueue the currently analyzed VOD through the Native UI
+- [ ] refresh Queue through the Native UI
+- [ ] verify queued/running/completed state renders correctly
+- [ ] exercise at least one applicable Queue action exposed by the UI
+- [ ] verify the action updates Queue state without restart
+- [ ] restart and confirm retained Queue state is rendered correctly
+
+#### History
+
+- [ ] open History through the Native UI
+- [ ] refresh History
+- [ ] exercise from/to date calendar open/select/clear behavior
+- [ ] shift calendar month where applicable
+- [ ] apply available History filters/limit through the Native UI
+- [ ] verify LIVE/VOD records match the selected filters
+- [ ] clear/change filters and confirm the view refreshes correctly
+
+The provider matrix below remains the source of real-session evidence. On
+Windows, its SOOP/CHZZK LIVE/VOD PASS status requires these Native workflow
+checks; CLI-only provider evidence is insufficient for Windows Native RC.
+
 ### Native Management actions
 
 These checks must be performed through the extracted `StreamArchive.exe`
@@ -218,6 +287,9 @@ Status: **MANUAL TEST REQUIRED**
 ## 7. Provider manual matrix
 
 Real provider/session testing is intentionally outside credential-free CI.
+For Windows, these provider cases must be executed through the freshly
+extracted Native UI as defined above; CLI/headless runs may supplement but not
+replace that evidence.
 
 | Provider path | Status |
 |---|---|
