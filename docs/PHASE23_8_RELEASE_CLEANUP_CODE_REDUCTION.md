@@ -207,8 +207,8 @@ Current Phase 23.8 source metrics:
 
 | Metric | After | Delta |
 |---|---:|---:|
-| Rust total LOC | 25,935 | -16 |
-| Rust production LOC | 19,968 | **-37** |
+| Rust total LOC | 25,934 | -17 |
+| Rust production LOC | 19,967 | **-38** |
 | Rust test LOC | 5,967 | +21 |
 | Slint LOC | 2,376 | 0 |
 | Maintenance/workflow LOC | 2,901 | +7 |
@@ -228,30 +228,28 @@ builds.
 
 ## Regression results
 
-Status: **PENDING PR CI**
+Status: **PASS** on Stream Archive check #226 for cleanup implementation head
+`bf69f58729aebedd67209c30bb54d5dcf663aff7`.
 
-Required before merge:
+Verified:
 
-- Windows core
-- Linux core
-- macOS core
-- Rust fmt/test/check/clippy
-- Slint compile/test/clippy
-- Runtime contracts
-- ProviderE2E
-- ProcessLifecycle / MediaProcess
-- Security / ReleaseSafety
-- ReleaseCandidate
-- Unix CLI integration
-- Linux/macOS RC archive smoke
-- backup/restore and replacement extraction
-- corrupted Unix archive rejection
-- Windows portable build/verification
-- Windows offline backup/restore
-- corrupted backup rejection
-- runtime-data archive rejection
-- corrupted Windows ZIP rejection
-- final Windows archive verification
+- Windows core: **PASS**
+- Linux core: **PASS**
+- macOS core: **PASS**
+- Rust fmt/test/check/clippy: **PASS**
+- Slint compile/test/clippy: **PASS**
+- Runtime contracts including ProviderE2E, ProcessLifecycle, MediaProcess,
+  Security, ToolDiscovery, ReleaseCandidate and ReleaseSafety: **PASS**
+- Unix CLI integration and source-archive metadata regression: **PASS**
+- Linux/macOS RC archive smoke: **PASS**
+- Linux/macOS backup/restore, replacement extraction and persisted data reuse:
+  **PASS**
+- corrupted Unix archive rejection: **PASS**
+- Windows portable build/verification: **PASS**
+- Windows offline backup/restore including corrupted-backup rejection: **PASS**
+- runtime-data archive rejection: **PASS**
+- corrupted Windows ZIP rejection: **PASS**
+- final Windows archive verification: **PASS**
 
 ## Known issues
 
