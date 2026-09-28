@@ -9,6 +9,15 @@ fail() {
   exit 1
 }
 
+assert_cli_output_contains() {
+  local cli="$1"
+  local expected="$2"
+  shift 2
+  local output
+  output="$("$cli" "$@")"
+  [[ "$output" == *"$expected"* ]] || fail "CLI output missing expected text: $expected"
+}
+
 assert_output_dir() {
   local cli="$1"
   local expected="$2"
@@ -80,8 +89,7 @@ verify_tree() {
     shasum -a 256 -c SHA256SUMS.txt
   )
 
-  "$root/bin/stream-archive-cli" version | grep -F "$version" >/dev/null \
-    || fail "packaged CLI version does not match RELEASE_INFO.txt"
+  assert_cli_output_contains "$root/bin/stream-archive-cli" "$version" version
   "$root/bin/stream-archive-cli" help >/dev/null
 }
 
@@ -121,19 +129,20 @@ if [[ -n "$ARCHIVE_PATH" ]]; then
     status_json="$("$extracted/bin/stream-archive-cli" status --json)"
     printf '%s\n' "$status_json" | grep -q '"runtime_ready"'
     assert_output_dir "$extracted/bin/stream-archive-cli" "$runtime_output"
-    "$extracted/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
+    assert_cli_output_contains "$extracted/bin/stream-archive-cli" "rc-fixture" channels list --json
 
     "$extracted/bin/stream-archive-cli" backup create --json >/dev/null
     backup_file="$(find "$runtime_backup" -maxdepth 1 -type f -name 'stream_archive_*.db' -print -quit)"
     [[ -n "$backup_file" ]] || fail "RC backup smoke did not create a managed backup"
 
     "$extracted/bin/stream-archive-cli" channels remove soop rc-fixture >/dev/null
-    if "$extracted/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'; then
+    channel_json="$("$extracted/bin/stream-archive-cli" channels list --json)"
+    if [[ "$channel_json" == *"rc-fixture"* ]]; then
       fail "RC backup smoke could not mutate state before restore"
     fi
 
     "$extracted/bin/stream-archive-cli" backup restore "$(basename "$backup_file")" --yes --json >/dev/null
-    "$extracted/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
+    assert_cli_output_contains "$extracted/bin/stream-archive-cli" "rc-fixture" channels list --json
     assert_output_dir "$extracted/bin/stream-archive-cli" "$runtime_output"
   )
 
@@ -149,9 +158,9 @@ if [[ -n "$ARCHIVE_PATH" ]]; then
     export STREAM_ARCHIVE_DATA_DIR="$runtime_data"
     export STREAM_ARCHIVE_BACKUP_DIR="$runtime_backup"
 
-    "$replacement/bin/stream-archive-cli" status --json | grep -q '"runtime_ready"'
+    assert_cli_output_contains "$replacement/bin/stream-archive-cli" '"runtime_ready"' status --json
     assert_output_dir "$replacement/bin/stream-archive-cli" "$runtime_output"
-    "$replacement/bin/stream-archive-cli" channels list --json | grep -q 'rc-fixture'
+    assert_cli_output_contains "$replacement/bin/stream-archive-cli" "rc-fixture" channels list --json
   )
 
   rm -rf "$scratch"
