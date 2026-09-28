@@ -100,10 +100,25 @@ Stream Archive check #227 on
 
 ### Phase 23.9 branch-head validation
 
-Status: **PENDING PR CI**
+Stream Archive check #229 on documentation/release-preparation head
+`8a6d55115c730c39c3954925118fde17707da02b`: **PASS**
 
-The Phase 23.9 PR must run the same canonical check workflow before merge.
-Documentation-only changes do not waive this requirement.
+Verified again:
+
+- Windows core: **PASS**
+- Linux core: **PASS**
+- macOS core: **PASS**
+- RuntimeContracts: **PASS**
+- source release metadata smoke: **PASS**
+- Windows portable package build/verification: **PASS**
+- Windows offline backup/restore: **PASS**
+- runtime-data release archive rejection: **PASS**
+- corrupted Windows archive rejection: **PASS**
+- final Windows release archive verification: **PASS**
+- Linux/macOS RC package smoke and corrupted archive rejection: **PASS**
+
+A final documentation-evidence commit is revalidated separately before Phase
+23.9 repository work is considered complete.
 
 ## 5. Windows Native UI manual RC
 
@@ -516,9 +531,9 @@ items above are treated as blockers until their evidence exists.
 
 ```text
 Automated RC validation:
-PASS (Phase 23.8 #227)
-Phase 23.9 branch-head revalidation:
-PENDING PR CI
+PASS (Phase 23.8 #227, Phase 23.9 #229)
+Phase 23.9 final documentation-head revalidation:
+PENDING
 
 Manual RC validation:
 REMAINING
