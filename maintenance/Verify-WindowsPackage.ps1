@@ -30,9 +30,7 @@ function Test-PackageTree {
     $resolved = (Resolve-Path -LiteralPath $PackageRoot).Path
     $required = @(
         'StreamArchive.exe',
-        'stream-archive-server.exe',
         'RUN.bat',
-        'RUN_HEADLESS.bat',
         'BACKUP_DATA.bat',
         'RESTORE_DATA.bat',
         'LICENSE',
@@ -52,6 +50,8 @@ function Test-PackageTree {
     }
 
     foreach ($relative in @(
+        'stream-archive-server.exe',
+        'RUN_HEADLESS.bat',
         'stream-archive-launcher.exe',
         'RUN_WEB.bat',
         'RUN_SERVER_CONSOLE.bat',
@@ -104,7 +104,7 @@ function Test-PackageTree {
             $expected[$matches[2].Trim()] = $matches[1].ToLowerInvariant()
         }
     }
-    foreach ($name in @('StreamArchive.exe', 'stream-archive-server.exe')) {
+    foreach ($name in @('StreamArchive.exe')) {
         if (-not $expected.ContainsKey($name)) {
             throw "checksum missing: $name"
         }
@@ -120,11 +120,6 @@ function Test-PackageTree {
     }
     if ($run -match 'launcher|RUN_WEB|127\.0\.0\.1|http') {
         throw 'RUN.bat must remain native-only'
-    }
-
-    $headless = Get-Content -LiteralPath (Join-Path $resolved 'RUN_HEADLESS.bat') -Raw
-    if ($headless -notmatch 'stream-archive-server\.exe') {
-        throw 'RUN_HEADLESS.bat does not use the compatibility headless runtime'
     }
 
     $releaseInfo = Get-Content -LiteralPath (Join-Path $resolved 'RELEASE_INFO.txt') -Raw
