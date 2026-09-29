@@ -87,7 +87,8 @@ try {
     Assert-Match $windowsMetadata '-dirty' 'Local Windows dirty release provenance marker is missing.'
     Assert-Match $windowsBuild '-RepositoryRoot "\."' 'Windows portable packaging must anchor release provenance to the repository checkout.'
     Assert-Match $windowsBuild 'Set-WindowsExecutableIcon\.ps1' 'Windows portable build must embed the application icon into StreamArchive.exe.'
-    Assert-Match $windowsBuild 'rust-gui\\assets\\stream-archive\.ico' 'Windows portable build must use the canonical multi-size icon asset.'
+    Assert-Match $windowsBuild 'rust-gui\\assets\\stream-archive-icon\.png' 'Windows portable build must use the canonical branding source.'
+    Assert-Match $windowsBuild 'GeneratedIconPath' 'Windows portable build must generate a multi-size ICO before embedding it.'
     Assert-Match $gitignore '(?m)^dist/\r?$' 'Generated release staging must be ignored so clean packaging does not self-mark provenance dirty.'
 
     Assert-Match $checkWorkflow '(?s)pull_request:\s+paths:.*?\.gitignore' 'PR packaging checks must trigger when the root .gitignore changes.'
