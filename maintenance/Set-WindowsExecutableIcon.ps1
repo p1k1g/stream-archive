@@ -36,6 +36,55 @@ function Resource-Id([int]$Value) {
     return [IntPtr]::new($Value)
 }
 
+function New-IconDibData {
+    param(
+        [System.Drawing.Bitmap]$Bitmap,
+        [int]$Size
+    )
+
+    $pixelBytes = $Size * $Size * 4
+    $maskStride = [int]([Math]::Ceiling($Size / 32.0) * 4)
+    $maskBytes = $maskStride * $Size
+
+    $stream = New-Object System.IO.MemoryStream
+    $writer = New-Object System.IO.BinaryWriter $stream
+    try {
+        # RT_ICON/ICO entries use a DIB. biHeight is doubled because the
+        # XOR bitmap is followed by the 1-bpp AND mask.
+        $writer.Write([uint32]40)
+        $writer.Write([int32]$Size)
+        $writer.Write([int32]($Size * 2))
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]32)
+        $writer.Write([uint32]0)
+        $writer.Write([uint32]$pixelBytes)
+        $writer.Write([int32]0)
+        $writer.Write([int32]0)
+        $writer.Write([uint32]0)
+        $writer.Write([uint32]0)
+
+        # DIB scanlines are bottom-up and pixels are BGRA.
+        for ($y = $Size - 1; $y -ge 0; $y--) {
+            for ($x = 0; $x -lt $Size; $x++) {
+                $pixel = $Bitmap.GetPixel($x, $y)
+                $writer.Write([byte]$pixel.B)
+                $writer.Write([byte]$pixel.G)
+                $writer.Write([byte]$pixel.R)
+                $writer.Write([byte]$pixel.A)
+            }
+        }
+
+        # A zero AND mask lets the 32-bpp alpha channel own transparency.
+        $writer.Write([byte[]](New-Object byte[] $maskBytes))
+        $writer.Flush()
+        return $stream.ToArray()
+    }
+    finally {
+        $writer.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function New-MultiSizeIcon {
     param(
         [string]$ImagePath,
@@ -45,13 +94,14 @@ function New-MultiSizeIcon {
     $sizes = @(16, 24, 32, 48, 64, 128, 256)
     $source = [System.Drawing.Image]::FromFile((Resolve-Path -LiteralPath $ImagePath).Path)
     try {
-        $images = @()
+        $entries = @()
         foreach ($size in $sizes) {
             $bitmap = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
             try {
                 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
                 try {
                     $graphics.Clear([System.Drawing.Color]::Transparent)
+                    $graphics.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
                     $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
                     $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
                     $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
@@ -61,13 +111,10 @@ function New-MultiSizeIcon {
                     $graphics.Dispose()
                 }
 
-                $stream = New-Object System.IO.MemoryStream
-                try {
-                    $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-                    $images += ,$stream.ToArray()
-                }
-                finally {
-                    $stream.Dispose()
+                $dib = New-IconDibData -Bitmap $bitmap -Size $size
+                $entries += [pscustomobject]@{
+                    Size = $size
+                    Data = $dib
                 }
             }
             finally {
@@ -75,29 +122,28 @@ function New-MultiSizeIcon {
             }
         }
 
-        $directorySize = 6 + (16 * $images.Count)
-        $offset = $directorySize
+        $directorySize = 6 + (16 * $entries.Count)
+        $dataOffset = $directorySize
         $output = New-Object System.IO.MemoryStream
         $writer = New-Object System.IO.BinaryWriter $output
         try {
             $writer.Write([uint16]0)
             $writer.Write([uint16]1)
-            $writer.Write([uint16]$images.Count)
-            for ($i = 0; $i -lt $images.Count; $i++) {
-                $size = $sizes[$i]
-                $image = $images[$i]
-                $writer.Write([byte]($(if ($size -eq 256) { 0 } else { $size })))
-                $writer.Write([byte]($(if ($size -eq 256) { 0 } else { $size })))
+            $writer.Write([uint16]$entries.Count)
+            foreach ($entry in $entries) {
+                $encodedSize = if ($entry.Size -eq 256) { 0 } else { $entry.Size }
+                $writer.Write([byte]$encodedSize)
+                $writer.Write([byte]$encodedSize)
                 $writer.Write([byte]0)
                 $writer.Write([byte]0)
                 $writer.Write([uint16]1)
                 $writer.Write([uint16]32)
-                $writer.Write([uint32]$image.Length)
-                $writer.Write([uint32]$offset)
-                $offset += $image.Length
+                $writer.Write([uint32]$entry.Data.Length)
+                $writer.Write([uint32]$dataOffset)
+                $dataOffset += $entry.Data.Length
             }
-            foreach ($image in $images) {
-                $writer.Write($image)
+            foreach ($entry in $entries) {
+                $writer.Write([byte[]]$entry.Data)
             }
             $writer.Flush()
 
@@ -117,8 +163,82 @@ function New-MultiSizeIcon {
     }
 }
 
+function Assert-GeneratedIconUsesDibFrames {
+    param([string]$IconPath)
+
+    $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $IconPath).Path)
+    $expectedSizes = @(16, 24, 32, 48, 64, 128, 256)
+    $count = [BitConverter]::ToUInt16($bytes, 4)
+    if ($count -ne $expectedSizes.Count) {
+        throw "ICO frame count mismatch: expected $($expectedSizes.Count), got $count"
+    }
+
+    for ($i = 0; $i -lt $count; $i++) {
+        $entryOffset = 6 + (16 * $i)
+        $dataSize = [BitConverter]::ToUInt32($bytes, $entryOffset + 8)
+        $dataOffset = [BitConverter]::ToUInt32($bytes, $entryOffset + 12)
+        if (($dataOffset + $dataSize) -gt $bytes.Length) {
+            throw "ICO frame $i is out of bounds."
+        }
+
+        $size = $expectedSizes[$i]
+        if ([BitConverter]::ToUInt32($bytes, $dataOffset) -ne 40) {
+            throw "ICO frame $size must use a BITMAPINFOHEADER DIB, not a PNG payload."
+        }
+        if ([BitConverter]::ToInt32($bytes, $dataOffset + 4) -ne $size) {
+            throw "ICO frame width mismatch for $size."
+        }
+        if ([BitConverter]::ToInt32($bytes, $dataOffset + 8) -ne ($size * 2)) {
+            throw "ICO frame height/mask contract mismatch for $size."
+        }
+        if ([BitConverter]::ToUInt16($bytes, $dataOffset + 12) -ne 1 -or
+            [BitConverter]::ToUInt16($bytes, $dataOffset + 14) -ne 32) {
+            throw "ICO frame pixel format mismatch for $size."
+        }
+    }
+}
+
+function Assert-EmbeddedExecutableIcon {
+    param([string]$ExecutablePath)
+
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path -LiteralPath $ExecutablePath).Path)
+    if ($null -eq $icon) {
+        throw 'Windows could not extract an associated icon from StreamArchive.exe.'
+    }
+
+    try {
+        $bitmap = $icon.ToBitmap()
+        try {
+            $lowerSignal = 0
+            $lowerPixels = 0
+            for ($y = [int]($bitmap.Height / 2); $y -lt $bitmap.Height; $y++) {
+                for ($x = 0; $x -lt $bitmap.Width; $x++) {
+                    $pixel = $bitmap.GetPixel($x, $y)
+                    $lowerPixels++
+                    if ($pixel.A -gt 0 -and
+                        ($pixel.R -lt 240 -or $pixel.G -lt 240 -or $pixel.B -lt 240)) {
+                        $lowerSignal++
+                    }
+                }
+            }
+
+            if ($lowerPixels -eq 0 -or ($lowerSignal / [double]$lowerPixels) -lt 0.20) {
+                throw "Embedded icon lower half appears blank/cropped: $lowerSignal of $lowerPixels pixels contain visible color."
+            }
+            Write-Host "Verified embedded icon lower-half coverage: $lowerSignal / $lowerPixels"
+        }
+        finally {
+            $bitmap.Dispose()
+        }
+    }
+    finally {
+        $icon.Dispose()
+    }
+}
+
 $exe = (Resolve-Path -LiteralPath $ExecutablePath).Path
 New-MultiSizeIcon -ImagePath $SourceImagePath -OutputPath $GeneratedIconPath
+Assert-GeneratedIconUsesDibFrames -IconPath $GeneratedIconPath
 $ico = (Resolve-Path -LiteralPath $GeneratedIconPath).Path
 $bytes = [System.IO.File]::ReadAllBytes($ico)
 
@@ -213,5 +333,6 @@ finally {
     }
 }
 
-Write-Host "Generated multi-size Windows icon: $ico"
-Write-Host "Embedded Windows application icon: $exe"
+Assert-EmbeddedExecutableIcon -ExecutablePath $exe
+Write-Host "Generated multi-size Windows icon with native DIB frames: $ico"
+Write-Host "Embedded and verified Windows application icon: $exe"
