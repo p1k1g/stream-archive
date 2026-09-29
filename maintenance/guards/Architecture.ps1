@@ -149,6 +149,8 @@ Write-Host 'Architecture contracts passed.'
 # Phase 21.3: inspect every GUI module, not only the small bootstrap.
 Assert-Match $core 'pub\s+async\s+fn\s+update_environment_settings' 'Native settings must persist through shared core.'
 Assert-Match $core 'pub\s+fn\s+diagnostics' 'Structured diagnostics service is missing.'
+Assert-Match $core 'pub\s+async\s+fn\s+active_local_diagnostics' 'Shared core must expose explicit active local diagnostics for Native refresh.'
+Assert-Match $guiSources 'core\.active_local_diagnostics\(' 'Native diagnostics refresh must re-run shared active local tool discovery/probes.'
 Assert-Match $core 'pub\s+fn\s+is_first_run_unconfigured' 'Shared core must expose first-run routing state.'
 Assert-Match $guiSources 'core\.is_first_run_unconfigured\(' 'Native startup must determine first-run routing through the shared core.'
 Assert-Match $guiSources 'core\.update_environment_settings' 'GUI settings bypass shared service.'
