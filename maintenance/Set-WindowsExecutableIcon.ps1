@@ -2,11 +2,14 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ExecutablePath,
     [Parameter(Mandatory = $true)]
-    [string]$IconPath
+    [string]$SourceImagePath,
+    [Parameter(Mandatory = $true)]
+    [string]$GeneratedIconPath
 )
 
 $ErrorActionPreference = 'Stop'
 
+Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -33,8 +36,90 @@ function Resource-Id([int]$Value) {
     return [IntPtr]::new($Value)
 }
 
+function New-MultiSizeIcon {
+    param(
+        [string]$ImagePath,
+        [string]$OutputPath
+    )
+
+    $sizes = @(16, 24, 32, 48, 64, 128, 256)
+    $source = [System.Drawing.Image]::FromFile((Resolve-Path -LiteralPath $ImagePath).Path)
+    try {
+        $images = @()
+        foreach ($size in $sizes) {
+            $bitmap = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            try {
+                $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+                try {
+                    $graphics.Clear([System.Drawing.Color]::Transparent)
+                    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+                    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                    $graphics.DrawImage($source, 0, 0, $size, $size)
+                }
+                finally {
+                    $graphics.Dispose()
+                }
+
+                $stream = New-Object System.IO.MemoryStream
+                try {
+                    $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+                    $images += ,$stream.ToArray()
+                }
+                finally {
+                    $stream.Dispose()
+                }
+            }
+            finally {
+                $bitmap.Dispose()
+            }
+        }
+
+        $directorySize = 6 + (16 * $images.Count)
+        $offset = $directorySize
+        $output = New-Object System.IO.MemoryStream
+        $writer = New-Object System.IO.BinaryWriter $output
+        try {
+            $writer.Write([uint16]0)
+            $writer.Write([uint16]1)
+            $writer.Write([uint16]$images.Count)
+            for ($i = 0; $i -lt $images.Count; $i++) {
+                $size = $sizes[$i]
+                $image = $images[$i]
+                $writer.Write([byte]($(if ($size -eq 256) { 0 } else { $size })))
+                $writer.Write([byte]($(if ($size -eq 256) { 0 } else { $size })))
+                $writer.Write([byte]0)
+                $writer.Write([byte]0)
+                $writer.Write([uint16]1)
+                $writer.Write([uint16]32)
+                $writer.Write([uint32]$image.Length)
+                $writer.Write([uint32]$offset)
+                $offset += $image.Length
+            }
+            foreach ($image in $images) {
+                $writer.Write($image)
+            }
+            $writer.Flush()
+
+            $parent = Split-Path -Parent $OutputPath
+            if (-not [string]::IsNullOrWhiteSpace($parent)) {
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            [System.IO.File]::WriteAllBytes($OutputPath, $output.ToArray())
+        }
+        finally {
+            $writer.Dispose()
+            $output.Dispose()
+        }
+    }
+    finally {
+        $source.Dispose()
+    }
+}
+
 $exe = (Resolve-Path -LiteralPath $ExecutablePath).Path
-$ico = (Resolve-Path -LiteralPath $IconPath).Path
+New-MultiSizeIcon -ImagePath $SourceImagePath -OutputPath $GeneratedIconPath
+$ico = (Resolve-Path -LiteralPath $GeneratedIconPath).Path
 $bytes = [System.IO.File]::ReadAllBytes($ico)
 
 if ($bytes.Length -lt 6) { throw 'ICO file is truncated.' }
@@ -128,4 +213,5 @@ finally {
     }
 }
 
+Write-Host "Generated multi-size Windows icon: $ico"
 Write-Host "Embedded Windows application icon: $exe"
