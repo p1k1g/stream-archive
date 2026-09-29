@@ -334,12 +334,17 @@ fn queue_status(
 fn maintenance_snapshot(
     core: &StreamArchiveCore,
     runtime: &tokio::runtime::Runtime,
+    active_tools: bool,
     message: impl Into<String>,
 ) -> Response {
     match runtime.block_on(core.backup_snapshot()) {
         Ok(snapshot) => Response::Maintenance {
             snapshot,
-            diagnostics: runtime.block_on(core.active_local_diagnostics()),
+            diagnostics: if active_tools {
+                runtime.block_on(core.active_local_diagnostics())
+            } else {
+                core.diagnostics()
+            },
             logs: runtime.block_on(core.runtime_logs(200)),
             message: message.into(),
         },
@@ -505,6 +510,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
         .send(maintenance_snapshot(
             &core,
             &runtime,
+            false,
             "공유 런타임 서비스에서 관리 상태를 불러왔습니다.",
         ))
         .is_err()
@@ -775,9 +781,12 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 },
                 Err(error) => Response::HistoryError(format!("기록 새로고침 실패: {error:#}")),
             },
-            Request::MaintenanceLoad => {
-                maintenance_snapshot(&core, &runtime, "관리 상태를 새로고침했습니다")
-            }
+            Request::MaintenanceLoad => maintenance_snapshot(
+                &core,
+                &runtime,
+                true,
+                "관리 상태를 다시 탐색하고 로컬 도구 버전을 확인했습니다",
+            ),
             Request::BackupPickDirectory { initial } => {
                 match native_picker::pick_directory(&initial) {
                     Ok(path) => Response::MaintenancePicked(path),
@@ -836,6 +845,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                         maintenance_snapshot(
                             &core,
                             &runtime,
+                            false,
                             format!(
                                 "복원 완료: {}. 안전 백업: {}. Watcher는 중지 상태를 유지합니다.",
                                 outcome.restored.file_name, outcome.safety_backup.file_name
