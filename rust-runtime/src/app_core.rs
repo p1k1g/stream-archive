@@ -198,7 +198,8 @@ impl StreamArchiveCore {
     }
 
     pub async fn active_local_diagnostics(&self) -> crate::diagnostics::DiagnosticsSnapshot {
-        crate::diagnostics::collect_active_local_preflight(self.backend_dir(), self.store.path()).await
+        crate::diagnostics::collect_active_local_preflight(self.backend_dir(), self.store.path())
+            .await
     }
 
     pub fn diagnostics(&self) -> crate::diagnostics::DiagnosticsSnapshot {
