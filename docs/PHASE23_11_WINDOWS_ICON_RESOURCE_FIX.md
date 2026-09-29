@@ -18,7 +18,9 @@ The canonical source PNG itself is intact. The defect was in the generated ICO/P
 
 Phase 23.10 generated icon frames and then mutated the linked executable with a custom `UpdateResource` path. Manual RC showed that Windows could enumerate the resource but decoded only the upper portion of the icon. A first Phase 23.11 attempt switched the frame payload to hand-written DIB data; the new package verifier correctly rejected it because the associated icon still had a blank lower half.
 
-The fix therefore removes custom post-link PE resource mutation entirely.
+The subsequent strict Rust PNG decode exposed the deeper root cause: the repository's previous `rust-gui/assets/stream-archive-icon.png` had a corrupt DEFLATE stream (`DistanceTooFarBack`). Tolerant decoders could display enough of it for development, but Windows icon generation/runtime branding could decode it incompletely. Phase 23.11 replaces that damaged file with a valid re-encoded copy of the same selected artwork.
+
+The fix also removes custom post-link PE resource mutation entirely.
 
 The Rust GUI build now:
 
