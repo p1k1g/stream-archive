@@ -33,11 +33,12 @@ cleanup. A real provider/session smoke remains required before public release.
 
 The Windows portable package contains:
 
-- `StreamArchive.exe` as the default Native UI;
-- `stream-archive-server.exe` as the optional compatibility headless runtime;
-- `RUN.bat` and `RUN_HEADLESS.bat`;
+- `StreamArchive.exe` as the Native UI;
+- `RUN.bat` as the Native launcher;
 - packaged offline backup/restore maintenance scripts;
 - release metadata and SHA-256 manifests.
+
+The Windows release package no longer exposes `stream-archive-server.exe` or `RUN_HEADLESS.bat`; Linux/macOS retain their CLI/headless runtime paths.
 
 The retired browser/Web launcher and reverse-proxy surface are not included.
 
