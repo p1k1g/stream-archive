@@ -7,6 +7,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+Add-Type -AssemblyName System.Drawing
+
 function Assert-Leaf {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -18,6 +20,42 @@ function Assert-Directory {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
         throw "Missing package directory: $Path"
+    }
+}
+
+function Assert-EmbeddedApplicationIcon {
+    param([string]$ExecutablePath)
+
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path -LiteralPath $ExecutablePath).Path)
+    if ($null -eq $icon) {
+        throw 'StreamArchive.exe has no extractable Windows application icon.'
+    }
+
+    try {
+        $bitmap = $icon.ToBitmap()
+        try {
+            $lowerSignal = 0
+            $lowerPixels = 0
+            for ($y = [int]($bitmap.Height / 2); $y -lt $bitmap.Height; $y++) {
+                for ($x = 0; $x -lt $bitmap.Width; $x++) {
+                    $pixel = $bitmap.GetPixel($x, $y)
+                    $lowerPixels++
+                    if ($pixel.A -gt 0 -and
+                        ($pixel.R -lt 240 -or $pixel.G -lt 240 -or $pixel.B -lt 240)) {
+                        $lowerSignal++
+                    }
+                }
+            }
+            if ($lowerPixels -eq 0 -or ($lowerSignal / [double]$lowerPixels) -lt 0.20) {
+                throw "StreamArchive.exe icon appears cropped/blank in the lower half: $lowerSignal / $lowerPixels visible pixels."
+            }
+        }
+        finally {
+            $bitmap.Dispose()
+        }
+    }
+    finally {
+        $icon.Dispose()
     }
 }
 
@@ -115,6 +153,8 @@ function Test-PackageTree {
             throw "$name checksum mismatch"
         }
     }
+
+    Assert-EmbeddedApplicationIcon -ExecutablePath (Join-Path $resolved 'StreamArchive.exe')
 
     $run = Get-Content -LiteralPath (Join-Path $resolved 'RUN.bat') -Raw
     if ($run -notmatch 'StreamArchive\.exe') {
