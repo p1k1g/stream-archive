@@ -12,7 +12,10 @@ fn write_u32(writer: &mut impl Write, value: u32) -> std::io::Result<()> {
     writer.write_all(&value.to_le_bytes())
 }
 
-fn generate_windows_icon(source_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn generate_windows_icon(
+    source_path: &Path,
+    output_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     const SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 
     let source = image::open(source_path)?.into_rgba8();
@@ -67,7 +70,8 @@ fn main() {
     .expect("failed to compile Slint application shell");
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is missing"));
+        let out_dir =
+            PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is missing"));
         let icon_path = out_dir.join("stream-archive.ico");
         generate_windows_icon(Path::new("assets/stream-archive-icon.png"), &icon_path)
             .expect("failed to generate Windows application icon");
