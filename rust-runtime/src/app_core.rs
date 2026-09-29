@@ -197,6 +197,10 @@ impl StreamArchiveCore {
         self.environment_settings()
     }
 
+    pub async fn active_local_diagnostics(&self) -> crate::diagnostics::DiagnosticsSnapshot {
+        crate::diagnostics::collect_active_local_preflight(self.backend_dir(), self.store.path()).await
+    }
+
     pub fn diagnostics(&self) -> crate::diagnostics::DiagnosticsSnapshot {
         let values = self.settings().and_then(|mut values| {
             values.extend(self.vod_tool_settings()?);
