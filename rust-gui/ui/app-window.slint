@@ -119,6 +119,7 @@ export global AppState {
     callback live-refresh();
     callback storage-refresh();
     callback live-action(string, string);
+    callback live-open-folder(string);
     callback live-password-submit(string, string);
 
     in-out property <[VodQualityRow]> vod-quality-rows;
@@ -215,6 +216,7 @@ component LiveMetric inherits Rectangle {
 
 export component MainWindow inherits Window {
     title: "Stream Archive";
+    icon: @image-url("../assets/stream-archive-icon.png");
     preferred-width: 1120px;
     preferred-height: 720px;
     min-width: 1000px;
@@ -276,7 +278,6 @@ export component MainWindow inherits Window {
                         spacing: 3px;
                         horizontal-stretch: 1;
                         Text { text: AppState.active-page == "Channels" ? "채널" : AppState.active-page == "Queue" ? "대기열" : AppState.active-page == "History" ? "기록" : AppState.active-page == "Settings" ? "설정" : AppState.active-page; color: #0f172a; font-size: 27px; font-weight: 700; }
-                        Text { text: "Phase 21 Slint native shell"; color: #64748b; font-size: 13px; }
                     }
                     Button {
                         height: 36px;
@@ -562,6 +563,14 @@ export component MainWindow inherits Window {
                                                 background: transparent;
                                             }
 
+                                            if row.file != "": Button {
+                                                width: 112px;
+                                                height: 32px;
+                                                horizontal-stretch: 0;
+                                                text: "저장 폴더 열기";
+                                                enabled: !AppState.live-busy;
+                                                clicked => { AppState.live-open-folder(row.file); }
+                                            }
                                             if row.can-stop-once: Button {
                                                 width: 138px;
                                                 height: 32px;
