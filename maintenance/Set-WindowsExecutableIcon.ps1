@@ -14,12 +14,12 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-internal static class NativeResource {
+public static class NativeResource {
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern IntPtr BeginUpdateResource(string fileName, bool deleteExistingResources);
+    public static extern IntPtr BeginUpdateResource(string fileName, bool deleteExistingResources);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern bool UpdateResource(
+    public static extern bool UpdateResource(
         IntPtr update,
         IntPtr type,
         IntPtr name,
@@ -28,7 +28,7 @@ internal static class NativeResource {
         uint dataSize);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    internal static extern bool EndUpdateResource(IntPtr update, bool discard);
+    public static extern bool EndUpdateResource(IntPtr update, bool discard);
 }
 '@
 
