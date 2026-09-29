@@ -11,7 +11,10 @@ pub fn containing_directory(file_path: &str) -> Result<PathBuf, String> {
         .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| "recording file path has no parent directory".to_string())?;
     if !parent.is_dir() {
-        return Err(format!("recording directory does not exist: {}", parent.display()));
+        return Err(format!(
+            "recording directory does not exist: {}",
+            parent.display()
+        ));
     }
     Ok(parent.to_path_buf())
 }

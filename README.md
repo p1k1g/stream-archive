@@ -388,7 +388,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ shared runtime source path를 `rust-runtime/`로 통일
 - ✅ CI/release workflow 이름을 `rust-runtime-*`로 통일
 - ✅ final legacy/compatibility audit 및 CHZZK transient runtime path 정리
-- `stream-archive-server` package/headless binary 이름은 외부 호환성 경계로 의도적으로 유지
+- `stream-archive-server` package/headless binary 이름은 Linux/macOS CLI/headless 및 개발 호환성 경계로 유지하며 Windows 공식 ZIP에는 포함하지 않음
 
 ### Phase 23 🚧 Product Readiness / Integration
 
@@ -398,7 +398,10 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ 23.4 Provider E2E Validation
 - ✅ 23.5 Unix CLI Completion
 - ✅ 23.6 Packaging / Release Readiness
-- ⏳ 23.7 Release Candidate / Final QA
+- ✅ 23.7 Release Candidate / Final QA
+- ✅ 23.8 Release Cleanup / Code Reduction
+- ✅ 23.9 Final Manual RC / Public Release Preparation
+- 🚧 23.10 Windows Branding / Release Polish
 
 ---
 

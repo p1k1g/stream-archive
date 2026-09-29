@@ -17,7 +17,7 @@ No provider redesign, SQLite schema change, Queue/History redesign, backup-forma
 
 Canonical source artwork: rust-gui/assets/stream-archive-icon.png.
 
-maintenance/Set-WindowsExecutableIcon.ps1 generates a multi-size Windows ICO during the package build at 16, 24, 32, 48, 64, 128 and 256 pixels, then embeds the icon group into the release GUI executable before it is copied as StreamArchive.exe. Slint also embeds the source image as the Window icon. The portable package does not require a standalone PNG/ICO at runtime.
+maintenance/Set-WindowsExecutableIcon.ps1 generates a multi-size Windows ICO during the package build at 16, 24, 32, 48, 64, 128 and 256 pixels, then embeds the icon group into the release GUI executable before it is copied as StreamArchive.exe. Slint uses the source image as the Window icon and build.rs explicitly selects EmbedFiles so the image bytes are compiled into the executable. The portable package does not require a standalone PNG/ICO at runtime, and the Windows package verifier rejects standalone icon assets.
 
 Manual confirmation remains required for Explorer, title-bar, running taskbar, and taskbar pin/unpin/re-pin because Windows icon caching cannot be proven by CI.
 
@@ -25,7 +25,7 @@ Manual confirmation remains required for Explorer, title-bar, running taskbar, a
 
 The obsolete Phase 21 Slint native shell subtitle is removed.
 
-The 저장 폴더 열기 action appears when a LIVE row has an output file path. The controller delegates to a platform helper. Windows launches explorer.exe directly with the directory as a separate argument; it does not use cmd /c or execute the media file.
+The 저장 폴더 열기 action is shown for an active recording row and is disabled until that row has an actual output file path. The controller delegates to a platform helper. Windows launches explorer.exe directly with the directory as a separate argument; it does not use cmd /c or execute the media file.
 
 The helper preserves whitespace/Unicode paths, rejects empty or missing directories without crashing, and does not modify Stop / Resume / Recheck or recorder ownership.
 
