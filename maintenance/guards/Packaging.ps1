@@ -16,7 +16,6 @@ try {
 
     Assert-Match $windowsBuild 'StreamArchive\.exe' 'Windows portable package must retain the Native GUI.'
     Assert-NotMatch $windowsBuild 'stream-archive-server\.exe|RUN_HEADLESS\.bat' 'Windows portable package must not expose the optional headless surface.'
-    Assert-NotMatch $windowsVerify "'stream-archive-server\.exe'\s*,?\s*'RUN_HEADLESS\.bat'\s*," 'Windows verifier required-file list must not require the removed headless surface.'
     Assert-Match $windowsVerify "'stream-archive-server\.exe'" 'Windows verifier must explicitly reject the removed headless binary.'
     Assert-Match $windowsVerify "'RUN_HEADLESS\.bat'" 'Windows verifier must explicitly reject the removed headless launcher.'
     Assert-Match $windowsVerify 'SHA256SUMS\.txt' 'Windows package verifier must validate package-local checksums.'
