@@ -70,8 +70,7 @@ fn main() {
     .expect("failed to compile Slint application shell");
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let out_dir =
-            PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is missing"));
+        let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is missing"));
         let icon_path = out_dir.join("stream-archive.ico");
         generate_windows_icon(Path::new("assets/stream-archive-icon.png"), &icon_path)
             .expect("failed to generate Windows application icon");
