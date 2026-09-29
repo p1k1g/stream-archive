@@ -61,7 +61,7 @@ function Test-PackageTree {
     )) {
         $path = Join-Path $resolved $relative
         if (Test-Path -LiteralPath $path) {
-            throw "Retired Web package file returned: $relative"
+            throw "Forbidden Windows package file returned: $relative"
         }
     }
 
