@@ -3,7 +3,7 @@
 Status: **Final RC draft — publication pending manual RC**
 
 This document describes the currently verified product surface for the 0.5.2
-release candidate. Phase 23.9 prepares the final public-release checklist but does not create a tag or GitHub Release.
+release candidate. Phase 23.10 applies the final Windows branding/release-polish changes but does not create a tag or GitHub Release.
 
 ## Highlights
 
@@ -33,13 +33,14 @@ cleanup. A real provider/session smoke remains required before public release.
 
 The Windows portable package contains:
 
-- `StreamArchive.exe` as the default Native UI;
-- `stream-archive-server.exe` as the optional compatibility headless runtime;
-- `RUN.bat` and `RUN_HEADLESS.bat`;
+- `StreamArchive.exe` as the Native UI;
+- `RUN.bat` as the Native launcher;
 - packaged offline backup/restore maintenance scripts;
 - release metadata and SHA-256 manifests.
 
-The retired browser/Web launcher and reverse-proxy surface are not included.
+The Windows release package no longer exposes `stream-archive-server.exe` or `RUN_HEADLESS.bat`; Linux/macOS retain their CLI/headless runtime paths.
+
+Phase 23.10 also adds the official embedded Windows application icon, removes the old Phase 21 development subtitle from LIVE, adds a Native `저장 폴더 열기` action for active recordings, and enables Slint FemtoVG with software-renderer fallback. The retired browser/Web launcher and reverse-proxy surface are not included.
 
 ## Linux and macOS
 
@@ -92,9 +93,10 @@ Streamlink, yt-dlp and FFmpeg are **external dependencies** and are not bundled
 in the release archives.
 
 Tool discovery supports canonical configuration, application/backend layouts,
-PATH and supported common installation locations. Windows exposes the Native
-Settings/Diagnostics surface; Linux/macOS provide `tools` and
-`doctor --active-tools`.
+PATH and supported common installation locations. Windows Native Diagnostics
+refresh re-runs local discovery/version probes, so yt-dlp or FFmpeg copied into
+the supported bundled layout after startup can be detected without restarting.
+Linux/macOS provide `tools` and `doctor --active-tools`.
 
 ## Secrets
 

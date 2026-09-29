@@ -3,8 +3,8 @@ use crate::{
     LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow,
     MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, StorageDisplayRow,
     VodPartRow, VodQualityRow, channels_adapter::ChannelsDraft, history_adapter, live_adapter,
-    maintenance_adapter, native_picker, queue_adapter, settings_adapter::SettingsDraft,
-    storage_adapter, vod_adapter,
+    maintenance_adapter, native_picker, native_shell, queue_adapter,
+    settings_adapter::SettingsDraft, storage_adapter, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -197,6 +197,28 @@ pub struct Controller {
     _maintenance_log_poll_timer: Timer,
 }
 
+fn read_active_snapshot(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    include_settings: bool,
+    message: &str,
+) -> Response {
+    let fields = if include_settings {
+        match core.environment_settings() {
+            Ok(fields) => Some(fields),
+            Err(error) => return Response::Error(format!("설정 불러오기 실패: {error:#}")),
+        }
+    } else {
+        None
+    };
+    Response::Snapshot {
+        fields,
+        diagnostics: runtime.block_on(core.active_local_diagnostics()),
+        first_run: core.is_first_run_unconfigured().unwrap_or(false),
+        message: message.into(),
+    }
+}
+
 fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str) -> Response {
     let fields = if include_settings {
         match core.environment_settings() {
@@ -312,12 +334,17 @@ fn queue_status(
 fn maintenance_snapshot(
     core: &StreamArchiveCore,
     runtime: &tokio::runtime::Runtime,
+    active_tools: bool,
     message: impl Into<String>,
 ) -> Response {
     match runtime.block_on(core.backup_snapshot()) {
         Ok(snapshot) => Response::Maintenance {
             snapshot,
-            diagnostics: core.diagnostics(),
+            diagnostics: if active_tools {
+                runtime.block_on(core.active_local_diagnostics())
+            } else {
+                core.diagnostics()
+            },
             logs: runtime.block_on(core.runtime_logs(200)),
             message: message.into(),
         },
@@ -483,6 +510,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
         .send(maintenance_snapshot(
             &core,
             &runtime,
+            false,
             "공유 런타임 서비스에서 관리 상태를 불러왔습니다.",
         ))
         .is_err()
@@ -492,10 +520,11 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
 
     for request in requests {
         let response = match request {
-            Request::Refresh => read_snapshot(
+            Request::Refresh => read_active_snapshot(
                 &core,
+                &runtime,
                 false,
-                "진단 정보를 새로고침했습니다. 저장하지 않은 편집 내용은 유지됩니다.",
+                "진단 정보를 다시 탐색하고 로컬 도구 버전을 확인했습니다. 저장하지 않은 편집 내용은 유지됩니다.",
             ),
             Request::Reload => read_snapshot(
                 &core,
@@ -752,9 +781,12 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 },
                 Err(error) => Response::HistoryError(format!("기록 새로고침 실패: {error:#}")),
             },
-            Request::MaintenanceLoad => {
-                maintenance_snapshot(&core, &runtime, "관리 상태를 새로고침했습니다")
-            }
+            Request::MaintenanceLoad => maintenance_snapshot(
+                &core,
+                &runtime,
+                true,
+                "관리 상태를 다시 탐색하고 로컬 도구 버전을 확인했습니다",
+            ),
             Request::BackupPickDirectory { initial } => {
                 match native_picker::pick_directory(&initial) {
                     Ok(path) => Response::MaintenancePicked(path),
@@ -813,6 +845,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                         maintenance_snapshot(
                             &core,
                             &runtime,
+                            false,
                             format!(
                                 "복원 완료: {}. 안전 백업: {}. Watcher는 중지 상태를 유지합니다.",
                                 outcome.restored.file_name, outcome.safety_backup.file_name
@@ -1632,6 +1665,19 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     action: action.to_string(),
                 },
             );
+        }
+    });
+
+    let weak = ui.as_weak();
+    state.on_live_open_folder(move |file_path| {
+        if let Some(ui) = weak.upgrade() {
+            let state = ui.global::<AppState>();
+            match native_shell::open_containing_directory(file_path.as_str()) {
+                Ok(()) => state.set_live_message("저장 폴더를 열었습니다.".into()),
+                Err(error) => {
+                    state.set_live_message(format!("저장 폴더를 열 수 없습니다: {error:#}").into())
+                }
+            }
         }
     });
 

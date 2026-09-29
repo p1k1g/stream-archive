@@ -58,7 +58,7 @@ Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 �
 - SQLite 기반 설정·채널·History 저장
 - 애플리케이션 종료 시 소유한 LIVE/VOD child process 정리
 - 데이터 백업 / 복구 / 진단 / Runtime Logs
-- Windows portable package
+- Windows Native-only portable package
 - native secret 보호
 
 ## 지원 현황
@@ -151,7 +151,7 @@ Headless runtime binary ───┘             │
                                          └─ Streamlink / yt-dlp / FFmpeg
 ```
 
-Windows portable의 기본 진입점은 Slint Native GUI이며 localhost HTTP를 애플리케이션 API로 사용하지 않습니다. Native UI와 headless runtime은 모두 `StreamArchiveCore`와 같은 SQLite/runtime 서비스를 직접 사용합니다.
+Windows portable의 기본 진입점은 Slint Native GUI이며 localhost HTTP를 애플리케이션 API로 사용하지 않습니다. Windows Native UI와 Unix CLI/headless runtime은 모두 `StreamArchiveCore`와 같은 SQLite/runtime 서비스를 직접 사용합니다.
 
 Phase 22.3에서 기존 Axum/browser presentation, browser launcher와 Web fallback package 경로를 제거했습니다. 이전 WinUI/PowerShell 런타임과 INI/TXT 설정 mirror도 제거된 상태를 유지합니다.
 
@@ -190,10 +190,10 @@ Windows에서 실제 실행·테스트·배포에 사용하는 단일 빌드 진
 .\BUILD_PORTABLE.bat
 ```
 
-`BUILD_PORTABLE.bat`은 shared/headless Rust runtime과 Slint Native GUI를 각각 tracked `Cargo.lock`으로 release build한 뒤 실행 가능한 portable 디렉터리를 조립합니다.
+`BUILD_PORTABLE.bat`은 Slint Native GUI를 tracked `Cargo.lock`으로 release build합니다. GUI build가 shared Rust core를 dependency로 함께 컴파일하며, Windows 공식 package에는 별도의 headless server binary를 넣지 않습니다.
 
 ```text
-shared/headless rust-runtime build + rust-gui release build
+rust-gui release build + shared Rust core dependency
                     ↓
              dist\stream-archive
 ```
@@ -209,8 +209,6 @@ dist\stream-archive
 ```text
 StreamArchive.exe
 RUN.bat
-stream-archive-server.exe
-RUN_HEADLESS.bat
 BACKUP_DATA.bat
 RESTORE_DATA.bat
 RELEASE_INFO.txt
@@ -221,7 +219,7 @@ maintenance\...
 docs\...
 ```
 
-`RUN.bat`과 `StreamArchive.exe`가 기본 Native 경로이며, `RUN_HEADLESS.bat`은 선택적인 headless runtime 경로입니다.
+`RUN.bat`과 `StreamArchive.exe`가 Windows 공식 portable package의 Native 실행 경로입니다. Windows release ZIP은 별도의 headless launcher/server를 포함하지 않습니다.
 
 별도의 `BUILD_RELEASE.bat` wrapper는 사용하지 않습니다. 컴파일 결과만 확인해야 하는 개발 작업에서는 Cargo를 직접 실행할 수 있습니다.
 
@@ -259,7 +257,7 @@ SQLite primary 전환 이후 핵심 백업 대상은 `data/stream-archive.db`입
 
 Native UI의 설정 → 관리에서 백업 정책, 온라인 백업 생성/무결성 확인/복원을 shared backup service를 통해 함께 관리할 수 있습니다. 기본 관리형 백업 위치는 portable 디렉터리의 형제 폴더인 `stream-archive-backups`이며, `STREAM_ARCHIVE_BACKUP_DIR`로 위치를 고정할 수 있습니다.
 
-오프라인 수동 백업은 `StreamArchive.exe`를 닫고 선택적인 headless runtime도 중지한 뒤 portable package의 다음 스크립트를 사용할 수 있습니다.
+Windows 공식 portable package에서 오프라인 수동 백업을 할 때는 `StreamArchive.exe`를 정상 종료한 뒤 다음 스크립트를 사용합니다. 개발 환경이나 Unix 호환 경로에서 headless runtime을 별도로 실행했다면 같은 SQLite owner이므로 그것도 먼저 종료해야 합니다.
 
 ```powershell
 .\BACKUP_DATA.bat
@@ -390,7 +388,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ shared runtime source path를 `rust-runtime/`로 통일
 - ✅ CI/release workflow 이름을 `rust-runtime-*`로 통일
 - ✅ final legacy/compatibility audit 및 CHZZK transient runtime path 정리
-- `stream-archive-server` package/headless binary 이름은 외부 호환성 경계로 의도적으로 유지
+- `stream-archive-server` package/headless binary 이름은 Linux/macOS CLI/headless 및 개발 호환성 경계로 유지하며 Windows 공식 ZIP에는 포함하지 않음
 
 ### Phase 23 🚧 Product Readiness / Integration
 
@@ -400,7 +398,10 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ 23.4 Provider E2E Validation
 - ✅ 23.5 Unix CLI Completion
 - ✅ 23.6 Packaging / Release Readiness
-- ⏳ 23.7 Release Candidate / Final QA
+- ✅ 23.7 Release Candidate / Final QA
+- ✅ 23.8 Release Cleanup / Code Reduction
+- ✅ 23.9 Final Manual RC / Public Release Preparation
+- 🚧 23.10 Windows Branding / Release Polish
 
 ---
 

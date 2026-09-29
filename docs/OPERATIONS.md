@@ -46,7 +46,7 @@ On Windows, Stream Archive marks these internal claim files with the Hidden attr
 
 ## Offline manual backup
 
-For an offline maintenance backup, close `StreamArchive.exe` and stop any optional headless `stream-archive-server.exe` runtime cleanly first. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
+For an offline maintenance backup on Windows, close `StreamArchive.exe` cleanly first. The official Windows package is Native-only. If a developer/Unix-compatible headless runtime was started separately, stop that owner as well. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
 
 From the repository root or portable package root:
 
@@ -113,13 +113,12 @@ Before replacing any package:
 
 Official Windows release ZIPs are clean packages. They contain an empty `data\` directory and must not be extracted over the only copy of a live database.
 
-1. Stop `StreamArchive.exe` and any optional `stream-archive-server.exe`.
+1. Stop `StreamArchive.exe`.
 2. Back up `data\stream-archive.db`.
 3. Extract the new ZIP to a new package directory.
 4. Preserve or explicitly point `STREAM_ARCHIVE_DATA_DIR` at the existing data directory.
 5. Launch `StreamArchive.exe` / `RUN.bat`.
 6. Verify Diagnostics, Channels, LIVE start/stop, VOD analyze/download, Queue and History.
-7. If headless operation is used, verify `RUN_HEADLESS.bat` separately.
 
 Local developer `BUILD_PORTABLE.bat` rebuilds may preserve an existing `dist\stream-archive\data` directory. This convenience is distinct from the official CI/release artifact contract, which requires clean runtime data.
 
@@ -143,7 +142,7 @@ Close the new runtime before rollback. Restore the previous package first. Resto
 
 ## Portable package replacement
 
-`BUILD_PORTABLE.bat` writes to `dist\stream-archive`. The package contains `StreamArchive.exe` as the default native application, `RUN.bat` as the native launcher, and `stream-archive-server.exe` plus `RUN_HEADLESS.bat` as the optional compatible headless runtime path. Browser launcher, Web static assets and reverse-proxy artifacts are not packaged. For local rebuilds the existing `data` directory is preserved before package replacement; GitHub Actions builds use a clean package.
+`BUILD_PORTABLE.bat` writes to `dist\stream-archive`. The Windows package contains `StreamArchive.exe` as the Native application and `RUN.bat` as its launcher. `stream-archive-server.exe` and `RUN_HEADLESS.bat` are intentionally excluded from the Windows release surface. Browser launcher, Web static assets and reverse-proxy artifacts are also not packaged. For local rebuilds the existing `data` directory is preserved before package replacement; GitHub Actions builds use a clean package.
 
 Direct Explorer launch is supported: backend resolution prefers the `backend` directory beside `StreamArchive.exe`, and the default SQLite path is the sibling `data\stream-archive.db`. Environment overrides still take precedence where defined.
 

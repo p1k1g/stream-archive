@@ -65,5 +65,7 @@ finally {
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
 "$hash  $archiveName" | Set-Content -LiteralPath $checksumPath -Encoding ASCII
 
+$archiveBytes = (Get-Item -LiteralPath $archivePath).Length
 Write-Host "ARCHIVE=$archivePath"
+Write-Host "ARCHIVE_BYTES=$archiveBytes"
 Write-Host "ARCHIVE_CHECKSUM=$checksumPath"

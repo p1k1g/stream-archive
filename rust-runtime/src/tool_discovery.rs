@@ -268,6 +268,26 @@ mod tests {
     }
 
     #[test]
+    fn bundled_tools_are_rediscovered_after_they_appear() {
+        let temp = tempfile::tempdir().unwrap();
+        let vod = temp.path().join("vod");
+        fs::create_dir_all(&vod).unwrap();
+
+        for kind in [ToolKind::YtDlp, ToolKind::Ffmpeg] {
+            let before = resolve_tool(kind, temp.path(), &[]);
+            assert!(!before.found());
+
+            let binary = vod.join(kind.binary_names()[0]);
+            make_executable(&binary);
+            let after = resolve_tool(kind, temp.path(), &[]);
+            assert_eq!(after.path.as_deref(), Some(binary.as_path()));
+            assert_eq!(after.source, "bundled");
+
+            fs::remove_file(binary).unwrap();
+        }
+    }
+
+    #[test]
     fn resolve_all_tools_preserves_kind_order() {
         let temp = tempfile::tempdir().unwrap();
         let resolved = resolve_all_tools(temp.path(), &BTreeMap::new());

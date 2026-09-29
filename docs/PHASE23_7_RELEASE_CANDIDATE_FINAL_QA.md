@@ -240,8 +240,7 @@ Status: **REMAINING**
 
 ### Windows headless
 
-- [ ] MANUAL TEST REQUIRED — run extracted `RUN_HEADLESS.bat`.
-- [ ] MANUAL TEST REQUIRED — clean shutdown and restart with preserved data.
+Phase 23.10 retires the Windows release-package headless surface. No Windows headless manual gate applies to the Native-only package; Unix CLI/headless validation remains separate.
 
 ### Real provider sessions
 
