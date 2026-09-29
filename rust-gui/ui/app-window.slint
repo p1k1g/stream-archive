@@ -534,7 +534,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     VerticalLayout {
-                                        width: 300px;
+                                        width: 360px;
                                         horizontal-stretch: 0;
                                         spacing: 8px;
 
@@ -563,12 +563,12 @@ export component MainWindow inherits Window {
                                                 background: transparent;
                                             }
 
-                                            if row.file != "": Button {
+                                            if row.can-stop-once: Button {
                                                 width: 112px;
                                                 height: 32px;
                                                 horizontal-stretch: 0;
                                                 text: "저장 폴더 열기";
-                                                enabled: !AppState.live-busy;
+                                                enabled: !AppState.live-busy && row.file != "";
                                                 clicked => { AppState.live-open-folder(row.file); }
                                             }
                                             if row.can-stop-once: Button {
