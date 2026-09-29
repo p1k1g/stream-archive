@@ -114,7 +114,7 @@ Assert-Match $guiManifest 'renderer-femtovg' 'Windows Slint build must keep the 
 Assert-Match $guiManifest 'renderer-software' 'Windows Slint build must keep the software renderer fallback enabled.'
 Assert-Match $guiBuild 'EmbedResourcesKind::EmbedFiles' 'Slint branding image must be embedded into the executable rather than loaded from a package file.'
 Assert-NotMatch $guiUi 'Phase 21 Slint native shell' 'Public LIVE UI must not expose the old development subtitle.'
-Assert-Match $guiUi 'text:\s*"저장 폴더 열기"' 'LIVE recording cards must expose the save-folder action.'
+Assert-Match $guiUi 'AppState\.live-open-folder\(row\.file\)' 'LIVE recording cards must expose the save-folder action through the Native callback.'
 Assert-Match $guiNativeShell 'ShellExecuteW' 'Windows LIVE folder opening must use the Win32 Shell API boundary.'
 Assert-NotMatch $guiNativeShell 'cmd(?:\.exe)?|/c|Command::new|powershell' 'LIVE folder opening must not assemble or spawn a command shell.'
 
