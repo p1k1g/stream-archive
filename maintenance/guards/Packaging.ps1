@@ -18,6 +18,8 @@ try {
     Assert-NotMatch $windowsBuild 'stream-archive-server\.exe|RUN_HEADLESS\.bat' 'Windows portable package must not expose the optional headless surface.'
     Assert-Match $windowsVerify "'stream-archive-server\.exe'" 'Windows verifier must explicitly reject the removed headless binary.'
     Assert-Match $windowsVerify "'RUN_HEADLESS\.bat'" 'Windows verifier must explicitly reject the removed headless launcher.'
+    Assert-Match $windowsVerify "'stream-archive-icon\.png'" 'Windows verifier must reject a standalone branding PNG runtime dependency.'
+    Assert-Match $windowsVerify "'stream-archive\.ico'" 'Windows verifier must reject a standalone ICO runtime dependency.'
     Assert-Match $windowsVerify 'SHA256SUMS\.txt' 'Windows package verifier must validate package-local checksums.'
     Assert-Match $windowsVerify 'RequireCleanData' 'Official Windows release validation must support an empty-data contract.'
     Assert-Match $windowsArchive 'stream-archive-windows-' 'Windows release archive naming contract is missing.'
