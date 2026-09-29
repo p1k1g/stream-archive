@@ -3,8 +3,8 @@ use crate::{
     LiveChannelRow, MainWindow, MaintenanceBackupRow, MaintenanceDiagnosticRow, MaintenanceLogRow,
     MaintenanceState, QueueDisplayRow, QueueHistoryState, SettingRow, StorageDisplayRow,
     VodPartRow, VodQualityRow, channels_adapter::ChannelsDraft, history_adapter, live_adapter,
-    maintenance_adapter, native_picker, native_shell, queue_adapter, settings_adapter::SettingsDraft,
-    storage_adapter, vod_adapter,
+    maintenance_adapter, native_picker, native_shell, queue_adapter,
+    settings_adapter::SettingsDraft, storage_adapter, vod_adapter,
 };
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -1664,9 +1664,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
             let state = ui.global::<AppState>();
             match native_shell::open_containing_directory(file_path.as_str()) {
                 Ok(()) => state.set_live_message("저장 폴더를 열었습니다.".into()),
-                Err(error) => state.set_live_message(
-                    format!("저장 폴더를 열 수 없습니다: {error:#}").into(),
-                ),
+                Err(error) => {
+                    state.set_live_message(format!("저장 폴더를 열 수 없습니다: {error:#}").into())
+                }
             }
         }
     });
