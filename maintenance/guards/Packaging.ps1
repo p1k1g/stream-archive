@@ -15,7 +15,10 @@ try {
     $releaseWorkflow = Read-RepoFile '.github/workflows/rust-runtime-release.yml'
 
     Assert-Match $windowsBuild 'StreamArchive\.exe' 'Windows portable package must retain the Native GUI.'
-    Assert-Match $windowsBuild 'stream-archive-server\.exe' 'Windows portable package must retain the compatibility headless runtime.'
+    Assert-NotMatch $windowsBuild 'stream-archive-server\.exe|RUN_HEADLESS\.bat' 'Windows portable package must not expose the optional headless surface.'
+    Assert-NotMatch $windowsVerify "'stream-archive-server\.exe'\s*,?\s*'RUN_HEADLESS\.bat'\s*," 'Windows verifier required-file list must not require the removed headless surface.'
+    Assert-Match $windowsVerify "'stream-archive-server\.exe'" 'Windows verifier must explicitly reject the removed headless binary.'
+    Assert-Match $windowsVerify "'RUN_HEADLESS\.bat'" 'Windows verifier must explicitly reject the removed headless launcher.'
     Assert-Match $windowsVerify 'SHA256SUMS\.txt' 'Windows package verifier must validate package-local checksums.'
     Assert-Match $windowsVerify 'RequireCleanData' 'Official Windows release validation must support an empty-data contract.'
     Assert-Match $windowsArchive 'stream-archive-windows-' 'Windows release archive naming contract is missing.'
@@ -83,6 +86,8 @@ try {
     Assert-Match $windowsMetadata 'git -c \$safeDirectoryArgument -C \$resolvedRepositoryRoot status --porcelain --untracked-files=normal' 'Local Windows release metadata must detect dirty worktrees from the validated repository root.'
     Assert-Match $windowsMetadata '-dirty' 'Local Windows dirty release provenance marker is missing.'
     Assert-Match $windowsBuild '-RepositoryRoot "\."' 'Windows portable packaging must anchor release provenance to the repository checkout.'
+    Assert-Match $windowsBuild 'Set-WindowsExecutableIcon\.ps1' 'Windows portable build must embed the application icon into StreamArchive.exe.'
+    Assert-Match $windowsBuild 'rust-gui\\assets\\stream-archive\.ico' 'Windows portable build must use the canonical multi-size icon asset.'
     Assert-Match $gitignore '(?m)^dist/\r?$' 'Generated release staging must be ignored so clean packaging does not self-mark provenance dirty.'
 
     Assert-Match $checkWorkflow '(?s)pull_request:\s+paths:.*?\.gitignore' 'PR packaging checks must trigger when the root .gitignore changes.'
