@@ -154,15 +154,6 @@ jobs:
           )
           grep -qx 'commit=unknown' "$status_failure"
 
-      - name: Phase 23.10 GUI lockfile regeneration probe
-        if: ${{ matrix.platform == 'windows' }}
-        shell: bash
-        run: |
-          cargo generate-lockfile --manifest-path rust-gui/Cargo.toml
-          echo 'PHASE23_10_GUI_LOCK_BEGIN'
-          cat rust-gui/Cargo.lock
-          echo 'PHASE23_10_GUI_LOCK_END'
-
       - name: Native compile check
         shell: bash
         run: cargo check --locked --manifest-path rust-runtime/Cargo.toml
