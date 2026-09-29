@@ -312,20 +312,8 @@ Suggested test roots:
 - `C:\Stream Archive RC\`
 - `C:\테스트\Stream Archive\`
 
-## 6. Windows headless manual RC
 
-Status: **MANUAL TEST REQUIRED**
-
-- [ ] fresh extracted package
-- [ ] `RUN_HEADLESS.bat`
-- [ ] runtime startup
-- [ ] canonical SQLite initialization
-- [ ] logs
-- [ ] shutdown
-- [ ] restart
-- [ ] settings/data persistence
-- [ ] same canonical data as Native UI
-- [ ] concurrent ownership conflict is handled safely
+> Phase 23.10 updates the Windows release contract to Native-only packaging. The former Windows headless manual gate is therefore no longer applicable; Linux/macOS CLI/headless validation remains required by their package contracts.
 
 ## 7. Provider manual matrix
 
@@ -695,13 +683,12 @@ The only environment-availability waiver allowed by this checklist is for the
 Linux Secret Service and macOS Keychain checks that are explicitly documented
 above as `NOT TESTED if environment unavailable`. Such a waiver must remain a
 documented release limitation. It does **not** apply to Windows Native UI,
-Windows headless, Windows DPAPI, provider sessions, fresh install, upgrade,
-rollback, backup/restore, media-tool validation or exact publication-artifact
+Windows DPAPI, provider sessions, fresh install, upgrade, rollback,
+backup/restore, media-tool validation or exact publication-artifact
 verification; those required gates must have PASS evidence before GO.
 
 Required remaining gates include:
 - Windows Native UI, including primary workflows and Management callbacks
-- Windows headless runtime
 - real SOOP LIVE / SOOP VOD / CHZZK LIVE / CHZZK VOD sessions
 - real external Streamlink / yt-dlp / FFmpeg discovery and execution
 - fresh-install scenario
