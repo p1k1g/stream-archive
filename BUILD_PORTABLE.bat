@@ -88,6 +88,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Portable package created: %OUT%
+for %%F in ("%OUT%\StreamArchive.exe") do echo StreamArchive.exe bytes: %%~zF
 if "%PRESERVE_RUNTIME%"=="1" echo Existing local SQLite data/history were preserved when present.
 echo Default launch: RUN.bat ^> StreamArchive.exe ^> shared Rust core ^> canonical SQLite.
 echo Native direct launch: StreamArchive.exe
