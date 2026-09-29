@@ -52,6 +52,8 @@ function Test-PackageTree {
     foreach ($relative in @(
         'stream-archive-server.exe',
         'RUN_HEADLESS.bat',
+        'stream-archive-icon.png',
+        'stream-archive.ico',
         'stream-archive-launcher.exe',
         'RUN_WEB.bat',
         'RUN_SERVER_CONSOLE.bat',
