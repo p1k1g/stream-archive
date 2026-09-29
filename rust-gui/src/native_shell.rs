@@ -22,10 +22,7 @@ pub fn containing_directory(file_path: &str) -> Result<PathBuf, String> {
 #[cfg(windows)]
 pub fn open_containing_directory(file_path: &str) -> Result<(), String> {
     use windows::{
-        Win32::UI::{
-            Shell::ShellExecuteW,
-            WindowsAndMessaging::SW_SHOWNORMAL,
-        },
+        Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
         core::{HSTRING, PCWSTR, w},
     };
 
@@ -45,7 +42,9 @@ pub fn open_containing_directory(file_path: &str) -> Result<(), String> {
     };
     let code = result.0 as isize;
     if code <= 32 {
-        return Err(format!("Windows Shell failed to open the recording directory (code {code})"));
+        return Err(format!(
+            "Windows Shell failed to open the recording directory (code {code})"
+        ));
     }
     Ok(())
 }
