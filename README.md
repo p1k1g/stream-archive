@@ -257,7 +257,7 @@ SQLite primary 전환 이후 핵심 백업 대상은 `data/stream-archive.db`입
 
 Native UI의 설정 → 관리에서 백업 정책, 온라인 백업 생성/무결성 확인/복원을 shared backup service를 통해 함께 관리할 수 있습니다. 기본 관리형 백업 위치는 portable 디렉터리의 형제 폴더인 `stream-archive-backups`이며, `STREAM_ARCHIVE_BACKUP_DIR`로 위치를 고정할 수 있습니다.
 
-오프라인 수동 백업은 `StreamArchive.exe`를 닫고 선택적인 headless runtime도 중지한 뒤 portable package의 다음 스크립트를 사용할 수 있습니다.
+Windows 공식 portable package에서 오프라인 수동 백업을 할 때는 `StreamArchive.exe`를 정상 종료한 뒤 다음 스크립트를 사용합니다. 개발 환경이나 Unix 호환 경로에서 headless runtime을 별도로 실행했다면 같은 SQLite owner이므로 그것도 먼저 종료해야 합니다.
 
 ```powershell
 .\BACKUP_DATA.bat
