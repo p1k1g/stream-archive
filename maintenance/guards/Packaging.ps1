@@ -11,6 +11,7 @@ try {
     $windowsBuild = Read-RepoFile 'BUILD_PORTABLE.bat'
     $windowsVerify = Read-RepoFile 'maintenance/Verify-WindowsPackage.ps1'
     $windowsArchive = Read-RepoFile 'maintenance/New-WindowsReleaseArchive.ps1'
+    $windowsIcon = Read-RepoFile 'maintenance/Set-WindowsExecutableIcon.ps1'
     $checkWorkflow = Read-RepoFile '.github/workflows/rust-runtime-check.yml'
     $releaseWorkflow = Read-RepoFile '.github/workflows/rust-runtime-release.yml'
 
@@ -90,6 +91,11 @@ try {
     Assert-Match $windowsBuild 'Set-WindowsExecutableIcon\.ps1' 'Windows portable build must embed the application icon into StreamArchive.exe.'
     Assert-Match $windowsBuild 'rust-gui\\assets\\stream-archive-icon\.png' 'Windows portable build must use the canonical branding source.'
     Assert-Match $windowsBuild 'GeneratedIconPath' 'Windows portable build must generate a multi-size ICO before embedding it.'
+    Assert-Match $windowsIcon 'New-IconDibData' 'Windows icon generation must use native DIB frames suitable for RT_ICON resources.'
+    Assert-Match $windowsIcon 'BITMAPINFOHEADER DIB' 'Windows icon generation must validate DIB-backed ICO frames.'
+    Assert-NotMatch $windowsIcon 'ImageFormat]::Png' 'Windows PE icon frames must not regress to PNG payloads that rendered cropped in manual RC.'
+    Assert-Match $windowsIcon 'Assert-EmbeddedExecutableIcon' 'Windows icon embedding must self-verify the executable icon after resource update.'
+    Assert-Match $windowsVerify 'Assert-EmbeddedApplicationIcon' 'Windows package verification must reject cropped or blank embedded application icons.'
     Assert-Match $gitignore '(?m)^dist/\r?$' 'Generated release staging must be ignored so clean packaging does not self-mark provenance dirty.'
 
     Assert-Match $checkWorkflow '(?s)pull_request:\s+paths:.*?\.gitignore' 'PR packaging checks must trigger when the root .gitignore changes.'
