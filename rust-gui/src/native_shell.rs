@@ -60,8 +60,11 @@ mod tests {
 
     #[test]
     fn containing_directory_preserves_spaces_and_unicode() {
-        let directory =
-            std::env::temp_dir().join(format!("Stream Archive 저장 폴더-{}", std::process::id()));
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("Stream Archive 저장 폴더-{nonce}"));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         let file = directory.join("방송 파일.ts");
