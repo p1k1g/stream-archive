@@ -199,7 +199,10 @@ function Assert-GeneratedIconUsesDibFrames {
 }
 
 function Assert-EmbeddedExecutableIcon {
-    param([string]$ExecutablePath)
+    param(
+        [string]$ExecutablePath,
+        [string]$SourceImagePath
+    )
 
     $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path -LiteralPath $ExecutablePath).Path)
     if ($null -eq $icon) {
@@ -225,6 +228,50 @@ function Assert-EmbeddedExecutableIcon {
             if ($lowerPixels -eq 0 -or ($lowerSignal / [double]$lowerPixels) -lt 0.20) {
                 throw "Embedded icon lower half appears blank/cropped: $lowerSignal of $lowerPixels pixels contain visible color."
             }
+
+            $source = [System.Drawing.Image]::FromFile((Resolve-Path -LiteralPath $SourceImagePath).Path)
+            try {
+                $reference = New-Object System.Drawing.Bitmap $bitmap.Width, $bitmap.Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+                try {
+                    $graphics = [System.Drawing.Graphics]::FromImage($reference)
+                    try {
+                        $graphics.Clear([System.Drawing.Color]::Transparent)
+                        $graphics.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+                        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+                        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                        $graphics.DrawImage($source, 0, 0, $reference.Width, $reference.Height)
+                    }
+                    finally {
+                        $graphics.Dispose()
+                    }
+
+                    [long]$difference = 0
+                    [long]$samples = 0
+                    for ($y = 0; $y -lt $bitmap.Height; $y++) {
+                        for ($x = 0; $x -lt $bitmap.Width; $x++) {
+                            $actual = $bitmap.GetPixel($x, $y)
+                            $expected = $reference.GetPixel($x, $y)
+                            $difference += [Math]::Abs([int]$actual.R - [int]$expected.R)
+                            $difference += [Math]::Abs([int]$actual.G - [int]$expected.G)
+                            $difference += [Math]::Abs([int]$actual.B - [int]$expected.B)
+                            $samples += 3
+                        }
+                    }
+                    $meanDifference = $difference / [double]$samples
+                    if ($meanDifference -gt 24.0) {
+                        throw "Embedded icon does not match the canonical artwork closely enough: mean RGB difference $([Math]::Round($meanDifference, 2))."
+                    }
+                    Write-Host "Verified embedded icon source similarity: mean RGB difference $([Math]::Round($meanDifference, 2))"
+                }
+                finally {
+                    $reference.Dispose()
+                }
+            }
+            finally {
+                $source.Dispose()
+            }
+
             Write-Host "Verified embedded icon lower-half coverage: $lowerSignal / $lowerPixels"
         }
         finally {
@@ -333,6 +380,6 @@ finally {
     }
 }
 
-Assert-EmbeddedExecutableIcon -ExecutablePath $exe
+Assert-EmbeddedExecutableIcon -ExecutablePath $exe -SourceImagePath $SourceImagePath
 Write-Host "Generated multi-size Windows icon with native DIB frames: $ico"
 Write-Host "Embedded and verified Windows application icon: $exe"
