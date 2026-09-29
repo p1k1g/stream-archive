@@ -1,35 +1,34 @@
-use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
-pub fn containing_directory(file_path: &str) -> Result<PathBuf> {
+pub fn containing_directory(file_path: &str) -> Result<PathBuf, String> {
     let file_path = file_path.trim();
     if file_path.is_empty() {
-        bail!("recording file path is empty");
+        return Err("recording file path is empty".into());
     }
     let path = Path::new(file_path);
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .context("recording file path has no parent directory")?;
+        .ok_or_else(|| "recording file path has no parent directory".to_string())?;
     if !parent.is_dir() {
-        bail!("recording directory does not exist: {}", parent.display());
+        return Err(format!("recording directory does not exist: {}", parent.display()));
     }
     Ok(parent.to_path_buf())
 }
 
 #[cfg(windows)]
-pub fn open_containing_directory(file_path: &str) -> Result<()> {
+pub fn open_containing_directory(file_path: &str) -> Result<(), String> {
     let directory = containing_directory(file_path)?;
     std::process::Command::new("explorer.exe")
         .arg(&directory)
         .spawn()
-        .with_context(|| format!("failed to open {}", directory.display()))?;
+        .map_err(|error| format!("failed to open {}: {error}", directory.display()))?;
     Ok(())
 }
 
 #[cfg(not(windows))]
-pub fn open_containing_directory(_file_path: &str) -> Result<()> {
-    bail!("opening a LIVE recording folder is supported only by the Windows Native UI")
+pub fn open_containing_directory(_file_path: &str) -> Result<(), String> {
+    Err("opening a LIVE recording folder is supported only by the Windows Native UI".into())
 }
 
 #[cfg(test)]
