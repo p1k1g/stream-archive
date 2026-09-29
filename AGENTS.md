@@ -60,7 +60,7 @@ Windows product/package flow:
 
 `RUN_DEV.bat` starts the compatible headless runtime. The Native GUI can be run directly through Cargo.
 
-`BUILD_PORTABLE.bat` is the single Windows release/package entry point. It builds the retained shared/headless `rust-runtime` package plus the Slint frontend and assembles `dist\stream-archive` with `StreamArchive.exe` as the default entry point. `RUN_HEADLESS.bat` is the optional console/headless entry. Browser/Web fallback artifacts are not packaged.
+`BUILD_PORTABLE.bat` is the single Windows release/package entry point. It builds the Slint frontend with the shared Rust core dependency and assembles a Native-only `dist\stream-archive` package with `StreamArchive.exe` as the entry point. Windows release packages do not contain `stream-archive-server.exe` or `RUN_HEADLESS.bat`; Unix CLI/headless packaging remains separate. Browser/Web fallback artifacts are not packaged.
 
 Windows Slint compile check:
 
