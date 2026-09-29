@@ -37,8 +37,27 @@ try {
 
     Assert-Match $unixVerify 'shasum -a 256 -c SHA256SUMS\.txt' 'Unix verifier must validate package-local checksums.'
     Assert-Match $unixVerify 'Archive checksum mismatch' 'Unix verifier must validate archive checksum.'
-    Assert-Match $unixVerify 'stream-archive-cli" version' 'Unix verifier must execute the packaged CLI.'
+    Assert-Match $unixVerify 'assert_cli_output_contains[^\r\n]*stream-archive-cli[^\r\n]*version' 'Unix verifier must execute the packaged CLI version check through captured output.'
     Assert-Match $unixVerify 'stream-archive-cli" help' 'Unix verifier must execute packaged CLI help.'
+    Assert-Match $unixVerify 'assert_cli_output_contains' 'Unix verifier must capture CLI output before substring assertions.'
+    $unixVerifyPipeScan = $unixVerify -replace '\\\r?\n\s*', ' '
+    $unsafeCliDirectPipe = 'stream-archive-cli[^\r\n|]*\|(?!\|)'
+    $unsafeCliVariablePipe = '"?\$(?:\{cli\}|cli)"?[^\r\n|]*\|(?!\|)'
+    $unsafeCliHelperPipe = '(?m)^\s*(?:assert_cli_output_contains|assert_output_dir)\b[^\r\n|]*\|(?!\|)'
+    Assert-NotMatch $unixVerifyPipeScan $unsafeCliDirectPipe 'Unix verifier must not pipe packaged Rust CLI stdout directly to any downstream command. Logical OR (||) remains allowed; capture CLI output before downstream assertions instead.'
+    Assert-NotMatch $unixVerifyPipeScan $unsafeCliVariablePipe 'Unix verifier helpers must not pipe a CLI invoked indirectly through $cli/${cli}; capture the CLI output first.'
+    Assert-NotMatch $unixVerifyPipeScan $unsafeCliHelperPipe 'Unix verifier must not pipe helper calls that proxy packaged CLI stdout to downstream consumers.'
+    Assert-Match $unixVerify 'settings_json="\$\("\$cli" settings show --json\)"' 'assert_output_dir must capture CLI JSON before parsing it.'
+    Assert-Match $unixVerify 'printf ''%s\\n'' "\$settings_json" \| python3 -c' 'assert_output_dir must parse captured JSON rather than piping the Rust CLI process directly.'
+    if ('"$cli" "$@" | grep -q "$expected"' -notmatch $unsafeCliVariablePipe) {
+        throw 'Packaging pipeline guard regression: indirect $cli pipeline was not detected.'
+    }
+    if ('assert_cli_output_contains "$cli" x status | grep -q x' -notmatch $unsafeCliHelperPipe) {
+        throw 'Packaging pipeline guard regression: CLI helper pipeline was not detected.'
+    }
+    if ('"$cli" status || fail "status failed"' -match $unsafeCliVariablePipe) {
+        throw 'Packaging pipeline guard regression: logical OR was misclassified as a pipeline.'
+    }
     Assert-Match $unixVerify 'stream-archive-cli" init' 'Unix archive smoke must initialize from the extracted package.'
     Assert-Match $unixVerify 'status --json' 'Unix archive smoke must execute packaged status JSON.'
     Assert-Match $unixVerify 'mktemp -d "[^"]*\s[^"]*\.XXXXXX"' 'Unix archive smoke must exercise a whitespace path.'
