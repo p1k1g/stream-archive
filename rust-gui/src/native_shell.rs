@@ -21,11 +21,32 @@ pub fn containing_directory(file_path: &str) -> Result<PathBuf, String> {
 
 #[cfg(windows)]
 pub fn open_containing_directory(file_path: &str) -> Result<(), String> {
+    use windows::{
+        Win32::UI::{
+            Shell::ShellExecuteW,
+            WindowsAndMessaging::SW_SHOWNORMAL,
+        },
+        core::{HSTRING, PCWSTR, w},
+    };
+
     let directory = containing_directory(file_path)?;
-    std::process::Command::new("explorer.exe")
-        .arg(&directory)
-        .spawn()
-        .map_err(|error| format!("failed to open {}: {error}", directory.display()))?;
+    let directory = HSTRING::from(directory.as_os_str());
+    // SAFETY: all strings live through the call, no ownership is transferred,
+    // and ShellExecuteW is used only to ask Explorer to open this directory.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &directory,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as isize;
+    if code <= 32 {
+        return Err(format!("Windows Shell failed to open the recording directory (code {code})"));
+    }
     Ok(())
 }
 

@@ -21,7 +21,9 @@ $core = Read-RepoFile 'rust-runtime\src\app_core.rs'
 $diagnostics = Read-RepoFile 'rust-runtime\src\diagnostics.rs'
 $cli = Read-RepoFile 'rust-runtime\src\bin\stream-archive-cli.rs'
 $guiManifest = Read-RepoFile 'rust-gui\Cargo.toml'
+$guiBuild = Read-RepoFile 'rust-gui\build.rs'
 $guiMain = Read-RepoFile 'rust-gui\src\main.rs'
+$guiNativeShell = Read-RepoFile 'rust-gui\src\native_shell.rs'
 $guiUi = Read-RepoFile 'rust-gui\ui\app-window.slint'
 $maintenanceUi = Read-RepoFile 'rust-gui\ui\maintenance.slint'
 $guiSources = (Get-ChildItem (Join-Path $script:RuntimeContractsRoot 'rust-gui/src') -Filter '*.rs' -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
@@ -108,6 +110,13 @@ Assert-Match $guiUi 'settings-view:\s*"General"' 'Settings must own an internal 
 Assert-Match $guiUi 'settings-view\s*==\s*"Manage"' 'Settings must expose the nested management view.'
 Assert-Match $guiUi 'MaintenancePage\s*\{' 'Backup/restore/diagnostics/logs must remain reachable inside Settings.'
 Assert-Match $guiUi 'active-page:\s*"LIVE"' 'Configured native startup must default to the LIVE page.'
+Assert-Match $guiManifest 'renderer-femtovg' 'Windows Slint build must keep the FemtoVG renderer enabled.'
+Assert-Match $guiManifest 'renderer-software' 'Windows Slint build must keep the software renderer fallback enabled.'
+Assert-Match $guiBuild 'EmbedResourcesKind::EmbedFiles' 'Slint branding image must be embedded into the executable rather than loaded from a package file.'
+Assert-NotMatch $guiUi 'Phase 21 Slint native shell' 'Public LIVE UI must not expose the old development subtitle.'
+Assert-Match $guiUi 'text:\s*"저장 폴더 열기"' 'LIVE recording cards must expose the save-folder action.'
+Assert-Match $guiNativeShell 'ShellExecuteW' 'Windows LIVE folder opening must use the Win32 Shell API boundary.'
+Assert-NotMatch $guiNativeShell 'cmd(?:\.exe)?|/c|Command::new|powershell' 'LIVE folder opening must not assemble or spawn a command shell.'
 
 # Provider registry/facades.
 Assert-Match $platform 'pub\s+mod\s+live' 'Platform LIVE facade must be registered.'

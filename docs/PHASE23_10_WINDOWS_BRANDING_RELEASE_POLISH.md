@@ -25,7 +25,7 @@ Manual confirmation remains required for Explorer, title-bar, running taskbar, a
 
 The obsolete Phase 21 Slint native shell subtitle is removed.
 
-The 저장 폴더 열기 action is shown for an active recording row and is disabled until that row has an actual output file path. The controller delegates to a platform helper. Windows launches explorer.exe directly with the directory as a separate argument; it does not use cmd /c or execute the media file.
+The 저장 폴더 열기 action is shown for an active recording row and is disabled until that row has an actual output file path. The controller delegates to a GUI-only platform helper. Windows uses the Win32 ShellExecuteW open path for the directory; it does not assemble a shell command, use cmd /c, or execute the media file.
 
 The helper preserves whitespace/Unicode paths, rejects empty or missing directories without crashing, and does not modify Stop / Resume / Recheck or recorder ownership.
 
