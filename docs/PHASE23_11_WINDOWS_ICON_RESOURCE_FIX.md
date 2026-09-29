@@ -16,32 +16,24 @@ The canonical source PNG itself is intact. The defect was in the generated ICO/P
 
 ## Root cause and fix
 
-Phase 23.10 generated each ICO frame as a PNG payload and then inserted those bytes directly as `RT_ICON` resources.
+Phase 23.10 generated icon frames and then mutated the linked executable with a custom `UpdateResource` path. Manual RC showed that Windows could enumerate the resource but decoded only the upper portion of the icon. A first Phase 23.11 attempt switched the frame payload to hand-written DIB data; the new package verifier correctly rejected it because the associated icon still had a blank lower half.
 
-Phase 23.11 replaces those payloads with native 32-bpp Windows DIB icon frames:
+The fix therefore removes custom post-link PE resource mutation entirely.
 
-- BITMAPINFOHEADER
-- bottom-up BGRA XOR bitmap
-- 1-bpp AND mask
-- 16, 24, 32, 48, 64, 128 and 256 pixel entries
+The Rust GUI build now:
 
-This format matches the native `RT_ICON` resource representation and avoids the cropped rendering observed with the previous embedded PNG payloads.
+- reads the canonical `assets/stream-archive-icon.png`;
+- creates 16, 24, 32, 48, 64, 128 and 256 pixel PNG-backed ICO frames in `OUT_DIR`;
+- links that generated ICO through `winresource` / the standard Windows resource compiler path;
+- sets the Stream Archive product/file metadata in the same resource build.
 
-The Slint window icon continues to use the canonical embedded source artwork. No renderer, provider, runtime, database or package-layout behavior changes in this phase.
+Slint continues to embed the canonical source image for the runtime window icon. The portable ZIP still has no standalone PNG/ICO runtime dependency.
 
 ## Regression protection
 
-`Set-WindowsExecutableIcon.ps1` now:
+`Verify-WindowsPackage.ps1` extracts the packaged executable's associated Windows icon and rejects a blank/cropped lower half. Packaging contracts also reject a return to the post-link `Set-WindowsExecutableIcon.ps1` path and require the standard resource-compiler integration.
 
-- validates all seven ICO entries;
-- requires BITMAPINFOHEADER-backed DIB frames;
-- embeds the generated frames into `StreamArchive.exe`;
-- extracts the associated icon again after embedding;
-- rejects an icon whose lower half is effectively blank/cropped.
-
-`Verify-WindowsPackage.ps1` independently performs the same lower-half visibility check against the packaged `StreamArchive.exe`.
-
-Packaging guards prevent the PE icon path from returning to PNG-backed `RT_ICON` payloads without an explicit contract change.
+The previous failing CI is intentionally useful evidence: the verifier caught the malformed icon before an artifact could be accepted.
 
 ## Scope boundary
 
