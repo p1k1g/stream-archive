@@ -253,15 +253,15 @@ pub fn bind(ui: &MainWindow) -> Desktop {
             return slint::CloseRequestResponse::KeepWindowShown;
         }
         if state.get_close_to_tray() {
-            if let Some(tray) = close_tray.as_ref().as_ref() {
+            if let Some(tray) = close_tray.as_ref().as_ref()
+                && tray.state.ensure(&format!("Stream Archive — {}", state.get_desktop_status()))
+            {
+                if !informed.replace(true) {
+                    super::notify(&ui, "창을 닫아도 녹화·다운로드·채널 감시가 계속 실행됩니다.\n앱을 종료하려면 트레이 메뉴의 ‘종료’를 선택하세요.");
+                }
+                // The shell may have restarted while the information dialog was open.
                 if tray.state.ensure(&format!("Stream Archive — {}", state.get_desktop_status())) {
-                    if !informed.replace(true) {
-                        super::notify(&ui, "창을 닫아도 녹화·다운로드·채널 감시가 계속 실행됩니다.\n앱을 종료하려면 트레이 메뉴의 ‘종료’를 선택하세요.");
-                    }
-                    // The shell may have restarted while the information dialog was open.
-                    if tray.state.ensure(&format!("Stream Archive — {}", state.get_desktop_status())) {
-                        return slint::CloseRequestResponse::HideWindow;
-                    }
+                    return slint::CloseRequestResponse::HideWindow;
                 }
             }
             super::notify(&ui, "트레이 아이콘을 등록하지 못해 창을 유지합니다.\n종료하려면 설정에서 ‘프로그램 종료’를 선택해 저장하세요.");

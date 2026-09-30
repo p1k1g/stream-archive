@@ -6,16 +6,17 @@ pub use windows_tray::bind;
 
 #[cfg(windows)]
 fn owner(ui: &crate::MainWindow) -> Option<windows::Win32::Foundation::HWND> {
+    use slint::ComponentHandle;
     use slint::winit_030::{
         WinitWindowAccessor,
         winit::raw_window_handle::{HasWindowHandle, RawWindowHandle},
     };
     let mut result = None;
     ui.window().with_winit_window(|window| {
-        if let Ok(handle) = window.window_handle() {
-            if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-                result = Some(windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut _));
-            }
+        if let Ok(handle) = window.window_handle()
+            && let RawWindowHandle::Win32(handle) = handle.as_raw()
+        {
+            result = Some(windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut _));
         }
     });
     result
