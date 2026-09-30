@@ -266,9 +266,13 @@ stream-archive-cli providers status --json
 
 Non-secret settings:
 
+For SOOP LIVE, deploy `backend/worker.js` and include `/soop/url` in the Worker URL.
+The `CLOUDFLARE_API_KEY` secret must equal the Worker `API_SECRET`, not a Cloudflare account API token.
+See the [Cloudflare Worker setup guide](https://github.com/p1k1g/stream-archive/blob/main/docs/CLOUDFLARE_WORKER.md).
+
 ~~~bash
 stream-archive-cli providers set SOOP_USERNAME my-account
-stream-archive-cli providers set CLOUDFLARE_WORKER_URL https://example.invalid/worker
+stream-archive-cli providers set CLOUDFLARE_WORKER_URL https://example.invalid/soop/url
 ~~~
 
 Provider secrets are stdin-only:

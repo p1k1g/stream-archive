@@ -1,238 +1,80 @@
 # Stream Archive
 
-**SOOP과 CHZZK의 LIVE 녹화 및 VOD 다운로드를 Windows Native UI에서 관리하는 로컬 미디어 아카이브입니다.**
+**SOOP과 CHZZK의 LIVE 자동 녹화와 VOD 다운로드를 관리하는 로컬 아카이브 도구입니다.**
 
-Rust + Slint + SQLite 기반의 Native UI를 기본으로 사용하며, Windows portable 환경을 중심으로 지원합니다. Linux/macOS에서는 CLI/headless 경로를 유지합니다. LIVE/VOD 수명주기, Queue, 설정, History, 백업/복구를 Rust 런타임에서 관리하고 Streamlink · yt-dlp · FFmpeg를 외부 미디어 처리 도구로 사용합니다.
+Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행을 제공합니다. Queue, History, 백업·복구, Diagnostics를 한곳에서 관리할 수 있습니다.
 
-> [!IMPORTANT]
-> Stream Archive는 현재 **SOOP LIVE/VOD와 CHZZK LIVE/VOD만 지원**합니다. CATCH, 클립, 쇼츠/짧은 영상 및 기타 별도 콘텐츠 유형은 지원하지 않습니다.
+[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.0.0 릴리스 노트](docs/RELEASE_NOTES_1_0_0.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
 
-## 프로젝트 성격 및 안정성 안내
+> **1.0.0 공개 준비 중**
+>
+> 첫 공개 안정 버전을 준비하고 있습니다. 아직 `v1.0.0` GitHub Release는 공개하지 않았습니다. 최종 수동 검증 및 공개 승인은 [릴리스 마무리 절차](docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md)와 [수동 RC 체크리스트](docs/MANUAL_RC_1_0_0.md)에서 관리합니다.
 
-Stream Archive는 개인 사용에서 출발해 빠르게 반복 개발하고 있는 오픈소스 프로젝트이며, 개발 과정에서 AI-assisted development를 적극적으로 활용하고 있습니다.
-
-자동화된 테스트와 실제 사용 환경에서의 검증을 병행하고 있지만, 성숙한 상용 소프트웨어처럼 모든 운영체제·환경·예외 상황에서의 완전한 동작을 보장하지는 않습니다. 일부 기능과 UI, 내부 구조는 지속적으로 개선되고 있으며 변경될 수 있습니다.
-
-중요한 녹화물과 설정 데이터는 별도로 백업해 두는 것을 권장합니다. 문제를 발견한 경우 재현 조건과 로그를 포함해 GitHub Issue로 알려주시면 개선에 도움이 됩니다.
-
-## 지원 범위
-
-현재 지원하는 콘텐츠 유형은 다음과 같습니다.
-
-- SOOP LIVE 녹화
-- SOOP VOD 분석 및 다운로드
-- CHZZK LIVE 녹화
-- CHZZK VOD 분석 및 다운로드
-
-현재 지원하지 않는 콘텐츠 유형은 다음과 같습니다.
-
-- SOOP/CHZZK 클립
-- CATCH
-- 쇼츠/짧은 영상 형식
-- 별도 게시물/커뮤니티 콘텐츠
-- 기타 LIVE/VOD 외 콘텐츠 유형
-
-지원 대상은 SOOP 및 CHZZK의 일반 LIVE/VOD 흐름에 한정됩니다.
-
-## 주요 기능
-
-### SOOP
-
-- LIVE 자동 녹화
-- VOD 분석 및 다운로드
-- 녹화 채널 관리
-- 저장 경로 및 품질 설정
-
-### CHZZK
-
-- LIVE 자동 녹화
-- VOD 분석 및 다운로드
-- `NID_AUT` / `NID_SES` 기반 인증 정보 지원
-- 공개/인증 필요 콘텐츠 처리
-
-### 공통
-
-- Windows Slint Native UI 기반 관리
-- LIVE watcher 및 녹화 상태 관리
-- VOD Queue / History / 재시도 / 취소
-- SQLite 기반 설정·채널·History 저장
-- 애플리케이션 종료 시 소유한 LIVE/VOD child process 정리
-- 데이터 백업 / 복구 / 진단 / Runtime Logs
-- Windows Native-only portable package
-- native secret 보호
-
-## 지원 현황
-
-| 기능 | SOOP | CHZZK |
-|---|:---:|:---:|
-| LIVE 녹화 | ✅ | ✅ |
-| VOD 다운로드 | ✅ | ✅ |
-| Native UI 관리 | ✅ | ✅ |
-| Queue / History | ✅ | ✅ |
-| 취소 / 재시도 | ✅ | ✅ |
-| 클립 / CATCH / 기타 콘텐츠 | ❌ | ❌ |
-
-| 운영체제 | 상태 |
-|---|---|
-| Windows | ✅ Native portable ZIP package 검증 완료 (`windows-x64`) |
-| Linux | ✅ CLI/headless TAR.GZ package 검증 완료 (`linux-x64`), Secret Service 경계 유지 |
-| macOS | ✅ CLI/headless TAR.GZ package 검증 완료 (`macos-arm64`), Keychain 경계 유지 |
-
-## 빠른 시작
-
-### 1. 외부 도구 준비
-
-다음 도구가 필요합니다.
-
-- `streamlink`
-- `yt-dlp`
-- `ffmpeg`
-
-Windows/Linux/macOS release package에는 외부 미디어 도구가 포함되지 않습니다. Windows Native UI의 설정 화면에서 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 구성하세요. Linux/macOS에서는 `stream-archive-cli tools` / `tools configure`로 Unix 이름과 `PATH`를 기준으로 탐색하고 SQLite에 절대 경로를 저장할 수 있습니다.
-
-각 외부 도구는 각 프로젝트의 라이선스와 배포 조건을 따릅니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참고하세요.
-
-### 2. 실행
-
-Portable package에서는 `RUN.bat` 또는 `StreamArchive.exe`를 실행합니다.
-
-```text
-RUN.bat
-   ↓
-StreamArchive.exe
-   ↓
-StreamArchiveCore
-   ↓
-data\stream-archive.db
-```
-
-Explorer에서 `StreamArchive.exe`를 직접 더블클릭해도 portable root의 `backend\`와 `data\stream-archive.db`를 기준으로 동작합니다.
-
-개발 환경에서 headless runtime을 직접 실행하려면 저장소 루트에서 `RUN_DEV.bat`을 사용하고, Native GUI는 Cargo로 직접 실행할 수 있습니다.
-
-```powershell
-.\RUN_DEV.bat
-cargo run --locked --manifest-path .\rust-gui\Cargo.toml
-```
-
-### 3. 종료
-
-Native 앱은 창을 정상 종료합니다. 선택적으로 headless runtime을 직접 실행한 경우 콘솔에서 `Ctrl+C`를 누릅니다.
-
-Stream Archive는 종료 과정에서 자신이 소유한 LIVE/VOD child process를 정리합니다. 프로세스 이름 전체를 대상으로 하는 `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe` 같은 방식은 사용하지 않습니다.
-
-## 기본 사용 흐름
+## 화면 미리보기
 
 ### LIVE
 
-1. Native UI의 채널 화면에서 플랫폼과 채널을 등록합니다.
-2. 저장 경로와 필요한 설정을 구성합니다.
-3. Watcher를 시작합니다.
-4. 방송이 시작되면 Recorder가 LIVE 녹화를 시작합니다.
-5. 방송 종료, 수동 중지 또는 런타임 종료 시 소유한 녹화 프로세스를 정리합니다.
+방송 감시·녹화 상태와 저장공간을 확인합니다.
 
-### VOD
+![Stream Archive Windows Native LIVE 화면](docs/images/live.png)
 
-1. SOOP 또는 CHZZK VOD URL을 입력합니다.
-2. 콘텐츠 정보를 분석합니다.
-3. 다운로드를 Queue에 등록합니다.
-4. 진행 상태, 완료 내역, 실패/재시도 상태를 Native UI의 대기열/기록 화면에서 확인합니다.
-5. 필요하면 실행 중 작업을 취소할 수 있습니다.
+<details>
+<summary>채널 및 대기열 화면 보기</summary>
 
-## 런타임 구조
+### 채널
 
-```text
-Windows Slint Native GUI ─┐
-Unix CLI/headless ─────────┼──> StreamArchiveCore / shared Rust runtime
-Headless runtime binary ───┘             │
-                                         ├─ SQLite: data/stream-archive.db
-                                         ├─ NativeWatcherManager / RecorderManager
-                                         ├─ VOD / Queue / History / Backup
-                                         └─ Streamlink / yt-dlp / FFmpeg
-```
+SOOP/CHZZK 녹화 채널을 등록하고 관리합니다.
 
-Windows portable의 기본 진입점은 Slint Native GUI이며 localhost HTTP를 애플리케이션 API로 사용하지 않습니다. Windows Native UI와 Unix CLI/headless runtime은 모두 `StreamArchiveCore`와 같은 SQLite/runtime 서비스를 직접 사용합니다.
+![Stream Archive Windows Native 채널 화면](docs/images/channels.png)
 
-Phase 22.3에서 기존 Axum/browser presentation, browser launcher와 Web fallback package 경로를 제거했습니다. 이전 WinUI/PowerShell 런타임과 INI/TXT 설정 mirror도 제거된 상태를 유지합니다.
+### 대기열 (Queue)
 
-Linux/macOS는 Phase 23.5에서 완성한 `stream-archive-cli` 기반 headless daily-use 인터페이스를 사용합니다.
+VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
-## 데이터와 보안
+![Stream Archive Windows Native VOD 대기열 화면](docs/images/queue.png)
 
-기본 SQLite 위치는 다음과 같습니다.
+</details>
 
-```text
-data/stream-archive.db
-```
+위 이미지는 채널과 작업이 등록되지 않은 초기 화면 예시입니다.
 
-`data/stream-archive.db`가 설정, 채널, Queue, History와 backup policy의 canonical source of truth입니다.
+## 다운로드 및 지원 환경
 
-`STREAM_ARCHIVE_DATA_DIR` 환경변수로 데이터 디렉터리를 변경할 수 있습니다.
+1.0.0 공개 후 [GitHub Releases](https://github.com/p1k1g/stream-archive/releases)에서 다음 파일을 받으세요. 현재 표는 공개 예정 패키지 안내이며 다운로드 가능한 Release가 있다는 의미는 아닙니다.
 
-이전 개발 버전의 `data/soop.db`만 존재하고 `stream-archive.db`가 없는 경우에는 시작 시 새 파일명으로 한 번 이전합니다. INI/TXT 설정 파일을 런타임 원본이나 mirror로 사용하지 않습니다.
+| 운영체제 | 패키지 | 실행 방식 |
+|---|---|---|
+| Windows x64 | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
+| Linux x64 | `stream-archive-linux-x64.tar.gz` | CLI·headless |
+| macOS arm64 | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
 
-Windows에서는 SOOP 비밀번호, Cloudflare API key, CHZZK `NID_AUT` / `NID_SES` 같은 민감 정보가 CurrentUser DPAPI로 암호화된 형태로 SQLite에 저장됩니다. Linux/macOS에서는 SQLite에 평문 secret 대신 불투명한 `native-secret:v1:` 참조만 저장하고, 실제 secret은 각각 Linux Secret Service 또는 macOS Keychain에 저장합니다. Linux에서는 `secret-tool`과 사용 가능한 Secret Service 세션이 필요하며, native store를 사용할 수 없을 때 평문 저장으로 자동 fallback하지 않습니다.
+패키지 build와 smoke는 각 플랫폼의 CI에서 검증합니다. 실제 서비스 세션, GUI 조작 및 OS별 비밀정보 저장의 최종 수동 검증은 별도로 관리합니다. Linux/macOS에는 GUI를 제공하지 않으며, 검증하지 않은 아키텍처의 지원을 주장하지 않습니다.
 
+**Streamlink, yt-dlp, FFmpeg는 별도로 설치해야 합니다. 공식 패키지에는 포함되지 않습니다.**
 
-## 빌드
+## 빠른 시작
 
-### 개발 / 로컬 실행
+### SOOP LIVE 사전 설정 — Cloudflare Worker
 
-```powershell
-.\RUN_DEV.bat
-```
+SOOP LIVE를 사용하려면 [backend/worker.js](backend/worker.js)를 본인의 Cloudflare Workers에 배포하고 앱에 Worker URL과 API key를 설정해야 합니다. **Worker URL에는 `/soop/url`을 포함**하고, **앱의 Worker API key는 Worker secret `API_SECRET`과 같은 값**을 입력합니다. Cloudflare 계정의 API Token을 입력하는 항목이 아닙니다.
 
-### Windows portable package
+생성·배포·secret 설정과 연결 확인은 [Cloudflare Worker 설정 가이드](docs/CLOUDFLARE_WORKER.md)를 따라 진행하세요. CHZZK만 사용하는 경우 이 단계는 필요하지 않습니다(SOOP 채널은 비활성화). SOOP VOD 다운로드 경로에도 이 Worker를 사용하지 않습니다.
 
-Windows에서 실제 실행·테스트·배포에 사용하는 단일 빌드 진입점은 다음입니다.
+### Windows
 
-```powershell
-.\BUILD_PORTABLE.bat
-```
+1. [Streamlink](https://streamlink.github.io/install.html), [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation), [FFmpeg](https://ffmpeg.org/download.html)를 준비합니다.
+2. 공개된 Windows ZIP과 함께 제공되는 `.sha256`을 확인한 뒤 새 폴더에 압축을 풉니다.
+3. `StreamArchive.exe`를 더블클릭하거나 `RUN.bat`를 실행합니다. Rust 설치나 source build는 필요하지 않습니다.
+4. **설정 → 일반**에서 저장 경로와 필요한 서비스 설정을 구성합니다. SOOP LIVE는 위 Worker 사전 설정을 먼저 완료합니다. 외부 도구는 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 준비합니다.
+5. **설정 → 관리**의 Diagnostics에서 도구 탐색·버전 확인 결과를 확인합니다.
+6. 채널을 등록해 LIVE 녹화를 시작하거나, VOD URL을 입력해 다운로드합니다.
 
-`BUILD_PORTABLE.bat`은 Slint Native GUI를 tracked `Cargo.lock`으로 release build합니다. GUI build가 shared Rust core를 dependency로 함께 컴파일하며, Windows 공식 package에는 별도의 headless server binary를 넣지 않습니다.
+Explorer에서 직접 실행해도 실행 파일 옆의 `backend\`와 `data\stream-archive.db`를 기본 경로로 사용합니다.
 
-```text
-rust-gui release build + shared Rust core dependency
-                    ↓
-             dist\stream-archive
-```
+창을 정상 종료하면 애플리케이션이 소유한 LIVE/VOD 프로세스를 정리합니다. 계속 녹화하려면 애플리케이션을 실행한 상태로 유지하세요.
 
-기본 출력 위치:
+### Linux / macOS
 
-```text
-dist\stream-archive
-```
-
-주요 패키지 구성:
-
-```text
-StreamArchive.exe
-RUN.bat
-BACKUP_DATA.bat
-RESTORE_DATA.bat
-RELEASE_INFO.txt
-SHA256SUMS.txt
-backend\
-data\
-maintenance\...
-docs\...
-```
-
-`RUN.bat`과 `StreamArchive.exe`가 Windows 공식 portable package의 Native 실행 경로입니다. Windows release ZIP은 별도의 headless launcher/server를 포함하지 않습니다.
-
-별도의 `BUILD_RELEASE.bat` wrapper는 사용하지 않습니다. 컴파일 결과만 확인해야 하는 개발 작업에서는 Cargo를 직접 실행할 수 있습니다.
-
-```powershell
-cargo build --locked --release --manifest-path .\rust-runtime\Cargo.toml
-cargo build --locked --release --manifest-path .\rust-gui\Cargo.toml
-```
-
-각 Cargo `target\release` 디렉터리는 raw build output이며 배포 패키지 기준이 아닙니다. 실제 실행·배포 검증은 `dist\stream-archive`를 기준으로 합니다.
-
-### Linux / macOS package
-
-Phase 23.6의 Unix release artifact는 source checkout 없이 사용할 수 있는 portable TAR.GZ입니다. PR CI에서 현재 검증된 native artifact는 `stream-archive-linux-x64.tar.gz`와 `stream-archive-macos-arm64.tar.gz`입니다.
+외부 도구를 설치하고 압축 파일의 `.sha256`을 확인한 뒤 실행합니다. 아래 예시는 Linux이며 macOS는 파일명을 `stream-archive-macos-arm64.tar.gz`로 바꿉니다.
 
 ```bash
 tar -xzf stream-archive-linux-x64.tar.gz
@@ -245,173 +87,91 @@ cd stream-archive
 ./bin/stream-archive-cli status --json
 ```
 
-macOS도 archive 이름만 `stream-archive-macos-arm64.tar.gz`로 바꾸고 같은 package-local `./bin/stream-archive-cli` 경로를 사용합니다. package root의 `backend/`와 `data/`를 기본 layout으로 사용하므로 archive root에서 실행하거나 `STREAM_ARCHIVE_BACKEND_DIR` / `STREAM_ARCHIVE_DATA_DIR`를 명시하세요.
+이후 채널·서비스 설정을 구성하고 foreground watcher를 실행할 수 있습니다.
 
-개발/source build가 필요하면 `./BUILD_UNIX_PACKAGE.sh`가 locked release build → clean staging → metadata/checksum → package verify → archive/checksum → fresh-extract smoke를 한 흐름으로 수행합니다. `tools configure`는 Streamlink/yt-dlp/FFmpeg를 SQLite 설정 → backend layout → `PATH` → 일반적인 Unix 설치 경로 순서로 찾습니다. 외부 media tool은 archive에 포함되지 않습니다.
-
-Phase 23.5의 daily-use CLI, runtime owner lock, non-recovering observer, Unix-domain runtime control, SIGINT/SIGTERM semantics는 그대로 유지됩니다. 자세한 command tree와 운영 제약은 `docs/UNIX_CLI.md`를 참고하세요.
-
-## 백업 / 복구
-
-SQLite primary 전환 이후 핵심 백업 대상은 `data/stream-archive.db`입니다.
-
-Native UI의 설정 → 관리에서 백업 정책, 온라인 백업 생성/무결성 확인/복원을 shared backup service를 통해 함께 관리할 수 있습니다. 기본 관리형 백업 위치는 portable 디렉터리의 형제 폴더인 `stream-archive-backups`이며, `STREAM_ARCHIVE_BACKUP_DIR`로 위치를 고정할 수 있습니다.
-
-Windows 공식 portable package에서 오프라인 수동 백업을 할 때는 `StreamArchive.exe`를 정상 종료한 뒤 다음 스크립트를 사용합니다. 개발 환경이나 Unix 호환 경로에서 headless runtime을 별도로 실행했다면 같은 SQLite owner이므로 그것도 먼저 종료해야 합니다.
-
-```powershell
-.\BACKUP_DATA.bat
+```bash
+./bin/stream-archive-cli serve --watch
 ```
 
-복구:
+패키지 root에서 실행하거나 `STREAM_ARCHIVE_BACKEND_DIR` / `STREAM_ARCHIVE_DATA_DIR`를 명시하세요. 종료는 `Ctrl+C`를 사용합니다. 전체 명령과 사용 조건은 [Unix CLI 가이드](docs/UNIX_CLI.md)를 참고하세요.
 
-```powershell
-.\RESTORE_DATA.bat -BackupFile ..\stream-archive-backups\stream_archive_manual_YYYYMMDD_HHMMSS.db
-```
+## 주요 기능 및 지원 범위
 
-백업/복구 스크립트는 Native 앱 또는 headless runtime 실행 중에는 동작하지 않으며, 복구 시 기존 DB의 `pre_restore_*.db` 안전 복사본을 만든 뒤 교체합니다.
+| 기능 | SOOP | CHZZK |
+|---|:---:|:---:|
+| LIVE 자동 녹화 | ✅ | ✅ |
+| VOD 분석·다운로드 | ✅ | ✅ |
+| Queue / History | ✅ | ✅ |
+| 취소·재시도 | ✅ | ✅ |
+| 클립 / CATCH / 쇼츠 / 기타 별도 콘텐츠 | 미지원 | 미지원 |
 
-자세한 운영 절차는 `docs/OPERATIONS.md`를 참고하세요.
+- Windows Native UI에서 채널·녹화·다운로드 관리
+- 저장 경로·품질 설정 및 LIVE 저장공간 확인
+- SQLite 기반 설정·Channels·Queue·History 유지
+- 자동 백업 정책, Backup / Restore, Diagnostics / Runtime Logs
+- Windows DPAPI / Linux Secret Service / macOS Keychain을 통한 비밀정보 보호
 
-## 런타임 환경 변수
+지원 대상은 SOOP/CHZZK의 일반 LIVE/VOD입니다. 클립, CATCH, 쇼츠·짧은 영상, 별도 게시물·커뮤니티 콘텐츠 등은 지원하지 않습니다.
 
-| 환경 변수 | 설명 |
-|---|---|
-| `STREAM_ARCHIVE_START_WATCHER` | headless runtime 시작 후 watcher 자동 시작 여부 |
-| `STREAM_ARCHIVE_BACKEND_DIR` | backend 디렉터리 override |
-| `STREAM_ARCHIVE_DATA_DIR` | SQLite 데이터 디렉터리 |
-| `STREAM_ARCHIVE_BACKUP_DIR` | 관리형 백업 디렉터리 override |
+## 기본 사용법
 
-SOOP/CHZZK 계정 정보처럼 특정 provider에 속하는 설정 키는 provider namespace를 유지합니다.
+### LIVE 녹화
 
+1. **채널** 화면에서 플랫폼과 채널을 등록하고 저장합니다.
+2. 출력 경로와 필요한 인증정보를 설정합니다.
+3. **LIVE** 화면에서 Watcher를 시작합니다.
+4. 방송이 시작되면 녹화를 시작하며 상태와 저장공간을 확인할 수 있습니다.
+5. 방송 종료·수동 중지·앱 종료 시 애플리케이션이 소유한 녹화 프로세스를 정리합니다.
 
-## 프로젝트 및 서비스 관련 안내
+### VOD 다운로드
 
-Stream Archive는 독립적인 오픈소스 프로젝트이며 SOOP, NAVER, CHZZK, Streamlink, FFmpeg, yt-dlp와 제휴·승인·후원 관계가 없습니다. 각 명칭과 상표는 해당 권리자에게 귀속됩니다.
+1. **VOD** 화면에서 SOOP/CHZZK VOD URL을 입력하고 분석합니다.
+2. 품질과 출력 경로 등 필요한 옵션을 선택합니다.
+3. 다운로드를 시작하거나 Queue에 등록합니다.
+4. **대기열**에서 진행·실패·취소·재시도 상태를 확인합니다.
+5. **기록**에서 LIVE/VOD 작업 내역을 확인합니다.
 
-사용자는 Stream Archive를 사용하는 과정에서 적용되는 법률, 저작권 규정 및 각 서비스의 이용약관을 확인하고 준수할 책임이 있습니다. 본 프로젝트는 콘텐츠에 대한 권리를 부여하거나 서비스 측 접근 제한을 우회할 권리를 제공하지 않습니다.
+## 데이터·백업·업그레이드
 
-보안 취약점 제보 방법은 `SECURITY.md`, 기여 방법은 `CONTRIBUTING.md`를 참고하세요.
+설정, Channels, Queue, History와 백업 정책의 기준 데이터는 `data/stream-archive.db`입니다. `STREAM_ARCHIVE_DATA_DIR`로 데이터 경로를 지정할 수 있습니다.
 
-## 라이선스
+- **설정 → 관리**에서 백업 정책, 백업 생성·무결성 확인·Restore를 관리합니다.
+- 기본 백업 폴더는 portable 패키지 밖의 형제 디렉터리 `stream-archive-backups`입니다. `STREAM_ARCHIVE_BACKUP_DIR`로 고정할 수 있습니다.
+- Windows 오프라인 백업은 앱을 종료한 뒤 `BACKUP_DATA.bat`를 사용합니다. 복구 명령과 안전 조건은 [운영 가이드](docs/OPERATIONS.md)를 따릅니다.
+- 업그레이드 전 정상 종료·백업·무결성 확인을 수행하고 이전 패키지를 보관합니다. 새 패키지는 별도 폴더에 풀고 기존 데이터 경로를 유지합니다.
+- 새 버전 실행 후 설정·Channels·Queue·History를 확인하고 재실행 후에도 유지되는지 확인합니다.
+- rollback 시 임의 schema downgrade 호환성을 가정하지 않습니다. 실제 DB 상태에서 필요한 경우에만 검증한 업그레이드 전 백업을 복구합니다.
 
-Stream Archive 자체 코드는 **GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)**로 공개합니다.
+Windows는 CurrentUser DPAPI, Linux는 `secret-tool`을 통한 Secret Service, macOS는 Keychain을 사용합니다. Linux에는 사용 가능한 Secret Service 세션이 필요하며, native store가 없을 때 평문 저장으로 자동 fallback하지 않습니다. 다른 PC·OS로 DB만 옮겼을 때 같은 비밀정보를 사용할 수 있다고 가정하지 마세요.
 
-Streamlink, FFmpeg, yt-dlp는 Stream Archive에 포함된 코드가 아니라 별도로 설치·탐지·실행되는 외부 도구이며 각 프로젝트의 라이선스를 따릅니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참고하세요.
+## 알려진 제한사항 및 문제 해결
 
-## 개발 / CI
+- 외부 미디어 도구는 별도 설치가 필요합니다. 탐색 실패 시 경로와 `PATH`를 확인한 뒤 Diagnostics를 새로고침하세요.
+- 인증이 필요한 콘텐츠에는 유효한 서비스 인증정보가 필요합니다.
+- Windows artifact는 Authenticode 서명되지 않았고 macOS artifact는 code signing·notarization을 적용하지 않았습니다.
+- MSI, deb/rpm, Homebrew, Snap/Flatpak/AppImage 및 systemd/launchd 설치 기능은 제공하지 않습니다.
+- 개인 사용에서 출발한 오픈소스 프로젝트이며 모든 환경·예외 상황의 동작을 보장하지 않습니다. 중요한 설정과 녹화물은 별도로 백업하세요.
 
-Pull Request의 런타임 검증은 `.github/workflows/rust-runtime-check.yml`에서 수행합니다.
+문제가 있으면 [GitHub Issues](https://github.com/p1k1g/stream-archive/issues)에 버전, OS, 재현 순서, 실제 결과와 관련 로그를 알려주세요. 비밀번호·cookie·token 등 인증정보는 포함하지 마세요. 보안 취약점은 [보안 제보 안내](SECURITY.md)를 따릅니다.
 
-주요 검증 항목:
-
-- Windows / Linux / macOS 전체 crate의 `cargo fmt --check`
-- Windows / Linux / macOS Rust unit tests 및 재현 가능한 미디어 도구 subprocess 검증
-- Windows / Linux / macOS native compile 검증
-- Windows / Linux / macOS strict Clippy (`-D warnings`)
-- Windows 런타임 contract guard
-- source archive에서 릴리스 metadata 생성 smoke (Windows/Linux/macOS)
-- Windows portable 패키지 및 ZIP build·검증
-- Linux/macOS TAR.GZ build, 패키지 내부·압축 파일 체크섬 및 새 압축 해제 CLI smoke
-
-릴리스 workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식입니다. GitHub Release/tag를 만들지 않고 검증한 Actions artifact만 업로드합니다. artifact job 전에 런타임·패키징 contract gate가 통과해야 하며, 업로드 전 정확한 1.0.0 metadata와 Windows EXE 버전도 확인합니다. artifact 보관 기간은 7일입니다.
-
-PR CI는 각 플랫폼의 GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-arm64` 패키지를 실제 조립하고 체크섬·새 압축 해제 smoke까지 검증합니다. 실제 인증정보가 필요한 로그인·세션 smoke와 공개 판정은 자동 CI 범위 밖입니다. 남은 항목은 [1.0.0 수동 검증 체크리스트](docs/MANUAL_RC_1_0_0.md)에서 관리합니다.
-
-## 문서
+## 문서 및 개발
 
 | 문서 | 내용 |
 |---|---|
-| `docs/RELEASE_NOTES_1_0_0.md` | 1.0.0 릴리스 노트 및 지원 범위 |
-| `docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md` | 릴리스 검증·artifact 생성·공개 판정 절차 |
-| `docs/MANUAL_RC_1_0_0.md` | 최종 artifact의 수동 QA·업그레이드·rollback 체크리스트 |
-| `docs/PHASE21_NATIVE_PORTABLE.md` | Phase 21.8 portable 구조 및 Windows 수동 QA |
-| `docs/PHASE23_1_NATIVE_UX_CLOSURE.md` | Phase 23.1 Windows Native daily-use UX closure 및 portable 수동 QA 체크리스트 |
-| `docs/PHASE23_2_RUNTIME_PREFLIGHT.md` | Phase 23.2 shared Diagnostics / CLI runtime preflight contract |
-| `docs/PHASE23_3_MEDIA_TOOL_HARNESS.md` | Phase 23.3 deterministic media-tool subprocess integration harness |
-| `docs/PHASE23_4_PROVIDER_E2E.md` | Phase 23.4 deterministic SOOP/CHZZK provider E2E validation |
-| `docs/PHASE23_5_UNIX_CLI_COMPLETION.md` | Phase 23.5 Unix CLI daily-use completion, signal lifecycle 및 CI |
-| `docs/PHASE23_6_PACKAGING_RELEASE_READINESS.md` | Phase 23.6 Windows/Linux/macOS portable 구성, 체크섬 및 CI·릴리스 준비 |
-| `docs/PHASE21_NATIVE_UX_POLISH.md` | Phase 21.9 Native storage/backup IA/claim sidecar UX 및 manual QA |
-| `docs/UNIX_CLI.md` | Linux/macOS headless CLI command reference, secrets, lifecycle 및 smoke |
-| `docs/OPERATIONS.md` | DB 백업·복구 및 업그레이드·rollback 절차 |
-| `docs/PHASE19_AUDIT.md` | Runtime hardening, ownership, architecture audit 및 Phase 20 경계 |
-| `THIRD_PARTY_NOTICES.md` | 외부 도구 및 라이선스 안내 |
-| `SECURITY.md` | 보안 취약점 제보 정책 |
-| `CONTRIBUTING.md` | 기여 및 PR 가이드 |
+| [1.0.0 릴리스 노트](docs/RELEASE_NOTES_1_0_0.md) | 지원 범위·변경사항·제한사항 |
+| [운영 가이드](docs/OPERATIONS.md) | 백업·복구·업그레이드·rollback |
+| [Cloudflare Worker 설정](docs/CLOUDFLARE_WORKER.md) | SOOP LIVE용 Worker 생성·secret·앱 연결 |
+| [Unix CLI 가이드](docs/UNIX_CLI.md) | Linux/macOS 명령 및 운영 조건 |
+| [개발 및 빌드](docs/DEVELOPMENT.md) | Rust/Slint 구조·source build·CI |
+| [개발 이력 및 로드맵](docs/ROADMAP.md) | Phase별 작업 이력·공개 준비 상태 |
+| [기여 안내](CONTRIBUTING.md) | 개발 참여 및 PR 작성 |
 
-<a id="roadmap"></a>
+Windows Slint UI와 Unix CLI·headless는 공통 `StreamArchiveCore`를 사용합니다. 개발 과정에서 AI-assisted development를 활용하며 자동 테스트와 실제 환경 검증을 병행합니다. 상세 내부 구조와 완료한 Phase 이력은 위 개발 문서로 분리했습니다.
 
-## 로드맵
+## 프로젝트 안내 및 라이선스
 
-### Phase 19 ✅ 런타임 안정화 및 정리
+Stream Archive는 독립적인 오픈소스 프로젝트이며 SOOP, NAVER, CHZZK, Streamlink, FFmpeg, yt-dlp와 제휴·승인·후원 관계가 없습니다. 명칭과 상표는 해당 권리자에게 귀속됩니다.
 
-- 런타임 자원 소유권 및 정리 강화
-- LIVE process-tree 소유권 강화
-- CHZZK VOD reader의 처리 한도 및 취소 시 정리
-- SQLite를 기준 데이터 저장소로 정리
-- OS별 런타임 경계 통합
-- 런타임 contract 및 CI 통합
+사용자는 적용되는 법률·저작권 규정·각 서비스 이용약관을 준수해야 합니다. 이 프로젝트는 콘텐츠 이용 권한이나 서비스 접근 제한을 우회할 권리를 부여하지 않습니다.
 
-### Phase 19.5 ✅ 이름 체계 및 legacy 정리
-
-- 제품 이름 체계를 `Stream Archive`로 통일
-- 공통 환경변수와 런타임 파일명을 `STREAM_ARCHIVE_*` / `stream-archive-*`로 정리
-- INI/TXT 호환 경로와 사용하지 않는 코드 제거
-- portable·build·릴리스 이름 정리
-
-### Phase 20 ✅ 크로스플랫폼 런타임 준비
-
-- ✅ Windows/Linux/macOS GitHub-hosted CI matrix 기반 확립
-- ✅ Unix process-group 소유권 및 종료
-- ✅ Linux Secret Service / macOS Keychain 비밀정보 저장 경계
-- ✅ Unix/headless CLI 및 크로스플랫폼 Streamlink/yt-dlp/FFmpeg 탐색 기반
-- ✅ Linux/macOS CLI 런타임·설정 명령 확장 — Phase 23.5에서 완료
-- ✅ Linux/macOS 실제 binary 기반의 재현 가능한 CLI·도구 통합 검증 — Phase 23.5에서 완료
-- ✅ Unix portable 압축 파일 패키징 및 설치 안내 — Phase 23.6에서 완료
-
-Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 추가하지 않습니다. Unix 계열은 CLI/headless 경로를 명확히 하고, Windows GUI 교체는 Phase 21로 분리합니다.
-
-### Phase 21 ✅ Slint Native GUI
-
-- ✅ 설정 / Native 경로 선택 / 진단
-- ✅ Channels 및 LIVE 감시·녹화
-- ✅ SOOP/CHZZK VOD 분석·다운로드
-- ✅ VOD Queue + LIVE/VOD History
-- ✅ Native Backup/Restore 및 Diagnostics/Runtime Logs
-- ✅ Windows Native portable 패키징 및 실행 경로 전환
-- ✅ Native UX 개선: LIVE 저장공간, 설정 내부 일반/관리 정리 및 Backup 관리 통합, 내부 claim sidecar 노출 개선 — Phase 23.1에서 일상 사용 UX 정리 완료
-- Slint GUI는 shared Rust core를 직접 호출하며 localhost HTTP, direct SQLite, direct process control을 사용하지 않음
-- ✅ Phase 22.3에서 legacy browser/Web UI, Axum presentation, Web launcher/fallback 제거
-- Linux/macOS는 GUI를 복제하지 않고 Phase 20의 CLI/headless 인터페이스 유지
-
-### Phase 22 ✅ 런타임 및 legacy 구조 정리
-
-- ✅ legacy dependency 및 warning 정리
-- ✅ browser/Web presentation 및 Axum application layer 제거
-- ✅ 런타임·core 호환 경계 점검
-- ✅ 공유 런타임 source 경로를 `rust-runtime/`로 통일
-- ✅ CI/release workflow 이름을 `rust-runtime-*`로 통일
-- ✅ 최종 legacy·호환성 점검 및 CHZZK 임시 런타임 경로 정리
-- `stream-archive-server` package/headless binary 이름은 Linux/macOS CLI/headless 및 개발 호환성 경계로 유지하며 Windows 공식 ZIP에는 포함하지 않음
-
-### Phase 23 🚧 제품 공개 준비 및 통합
-
-- ✅ 23.1 Native 일상 사용 UX 정리
-- ✅ 23.2 Diagnostics 및 런타임 사전 점검
-- ✅ 23.3 미디어 도구 통합 검증
-- ✅ 23.4 서비스별 E2E 검증
-- ✅ 23.5 Unix CLI 완성
-- ✅ 23.6 패키징 및 릴리스 준비
-- ✅ 23.7 RC 및 최종 QA 절차 정리
-- ✅ 23.8 릴리스 정리 및 코드 축소
-- ✅ 23.9 최종 수동 RC 절차 및 공개 준비
-- ✅ 23.10 Windows 브랜딩 및 배포 마무리
-- ✅ 23.11 Windows 아이콘 resource 수정
-- 🚧 23.12 1.0.0 릴리스 마무리 (문서·검증 정리 완료, 수동 RC 및 공개 승인 대기)
-
-첫 공개 안정 버전 `1.0.0`을 준비 중입니다. [릴리스 노트](docs/RELEASE_NOTES_1_0_0.md), [릴리스 마무리 절차](docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md), [최종 수동 검증 체크리스트](docs/MANUAL_RC_1_0_0.md)를 참고하세요. 로드맵의 완료 표시는 해당 구현·절차 정리를 뜻하며 실제 수동 QA 완료나 공개 승인을 의미하지 않습니다. 아직 `v1.0.0` tag / GitHub Release는 공개하지 않았습니다.
-
----
-
-**Stream Archive**는 Phase 20에서 Windows 런타임의 안정성을 유지하면서 Linux/macOS headless 기반을 완성하고, Phase 21부터 Windows 사용자 경험을 Slint native GUI로 전환하는 것을 목표로 합니다.
+코드는 **GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)**로 공개합니다. [LICENSE](LICENSE)를 참고하세요. 외부 도구는 각각의 라이선스를 따르며 자세한 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다.
