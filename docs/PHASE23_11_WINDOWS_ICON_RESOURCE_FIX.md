@@ -18,22 +18,25 @@ The canonical source PNG itself is intact. The defect was in the generated ICO/P
 
 Phase 23.10 generated icon frames and then mutated the linked executable with a custom `UpdateResource` path. Manual RC showed that Windows could enumerate the resource but decoded only the upper portion of the icon. A first Phase 23.11 attempt switched the frame payload to hand-written DIB data; the package verifier correctly rejected it because the associated icon still had a blank lower half.
 
-A later attempt moved icon generation into `build.rs`, which exposed that the repository PNG used by the experimental path was not reliably decodable in CI (`UnexpectedEof`). Phase 23.11 therefore removes all custom runtime/build-time image conversion.
+The follow-up investigation exposed two separate problems in the experimental fixes:
 
-The final fix uses two verified canonical assets produced from the same selected artwork:
+- the original repository PNG used by the first build-time generation attempt was damaged and failed strict PNG decoding with `UnexpectedEof`;
+- a later `winresource` attempt referenced `assets/stream-archive.ico` as a path relative to the generated `resource.rc`, so `rc.exe` could not find the file.
 
-- `rust-gui/assets/stream-archive-icon.png` for the Slint Window icon;
-- `rust-gui/assets/stream-archive.ico` containing 16, 24, 32, 48, 64, 128 and 256 pixel Windows icon entries.
+The final Phase 23.11 path removes custom post-link PE mutation and keeps one validated canonical artwork source:
 
-`build.rs` links the checked-in ICO through `winresource` / the standard Windows resource compiler path. There is no post-link `UpdateResource` mutation and no image decoder/generator dependency in the build script.
+- `rust-gui/assets/stream-archive-icon.png` is the canonical source for both Slint runtime branding and Windows icon generation;
+- `build.rs` decodes that validated PNG and generates 16, 24, 32, 48, 64, 128 and 256 pixel ICO frames into Cargo `OUT_DIR`;
+- the generated ICO path is absolute and is handed to `winresource`, which uses the standard Windows resource compiler/linker path;
+- the generated ICO is a build intermediate only and is not copied into the portable package.
 
-The portable ZIP still has no standalone PNG/ICO runtime dependency: both assets are build inputs only.
+The portable ZIP therefore still has no standalone PNG/ICO runtime dependency.
 
 ## Regression protection
 
-`Verify-WindowsPackage.ps1` extracts the packaged executable's associated Windows icon and rejects a blank/cropped lower half. Packaging contracts reject a return to post-link icon mutation or build-time image regeneration and require the canonical checked-in ICO plus `winresource`.
+`Verify-WindowsPackage.ps1` extracts the packaged executable's associated Windows icon and rejects a blank/cropped lower half. Packaging contracts prevent a return to post-link `UpdateResource` mutation, require the canonical validated PNG, require all seven icon sizes, require `OUT_DIR` generation, and require `winresource` resource linking.
 
-The previous failing CI runs are useful evidence that the verifier/build boundary now fails closed instead of accepting a visually broken icon.
+The earlier failing CI runs are intentionally useful evidence: malformed/truncated resources and invalid paths now fail closed before a release artifact can be accepted.
 
 ## Scope boundary
 
