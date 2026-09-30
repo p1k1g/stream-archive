@@ -33,7 +33,10 @@ Local environment lacks cargo and PowerShell; no local Rust/Windows pass is clai
 The release-artifacts workflow is workflow_dispatch with contents: read; it only
 uploads Actions artifacts and does not publish Releases. After the PR CI passes,
 the maintainer may dispatch it on this branch/final merged revision to obtain
-1.0.0 Windows ZIP / Linux TAR.GZ / macOS TAR.GZ for manual RC. Verify all jobs and
+1.0.0 Windows ZIP / Linux TAR.GZ / macOS TAR.GZ for manual RC. The artifact-producing
+workflow independently enforces Cargo/package version and Windows PE ProductVersion
+before upload. Dispatch the final selected revision explicitly; a historical
+workflow on a stale ref cannot be validated by current guards. Verify all jobs and
 download the three archives plus their sibling .sha256 files. This phase does
 not dispatch publication or create a tag/Release.
 
@@ -59,6 +62,33 @@ fixtures do not establish real provider or native secret-store success.
 - [ ] Windows CurrentUser DPAPI secret write/read across restart
 - [ ] Linux Secret Service secret write/read in a usable session
 - [ ] macOS Keychain secret write/read across restart
+
+### Inherited release gates (all pending)
+
+The [Phase 23.9 manual RC checklist](PHASE23_9_FINAL_MANUAL_RC_RELEASE_PREP.md)
+sections 5 and 7–14 remain mandatory in full for the final 1.0.0 artifacts.
+This checklist supplements them; it does not supersede or waive any unresolved
+gate. Apply their tests to 1.0.0 (retain the previous RC as the upgrade/rollback
+source), using the current Native-only Windows contract. No earlier PASS is
+inferred. Every applicable inherited item needs recorded evidence before GO.
+
+- [ ] Native startup/render/shutdown/restart and ASCII/whitespace/Unicode paths
+- [ ] Settings paths/tool configuration/save/restart/persistence
+- [ ] Diagnostics discovery/probes/invalid and missing paths/recovery
+- [ ] Channels add/edit/enable/provider/resolve/save/reload/delete and provider configuration/authentication
+- [ ] LIVE refresh/start/progress/Stop/Resume/Recheck/owned cleanup/second operation
+- [ ] VOD analysis/metadata/quality/PART/output/start/progress/cancel/cleanup/retry/completion
+- [ ] Queue enqueue/refresh/Cancel/Retry/Remove/restart persistence
+- [ ] History calendars/month changes/date clearing/filters/limits/LIVE and VOD records
+- [ ] Management backup policy persistence/backup list/safe restore rejection/restored state/Logs interactions
+- [ ] Real Streamlink/yt-dlp/FFmpeg PATH and explicit discovery/version/execution/invalid or missing tools/whitespace and Unicode paths/timeout and cancellation
+- [ ] Each real provider's complete LIVE/VOD evidence checklist, including output, cancellation, owned cleanup, retry, Queue/History and restart persistence
+- [ ] Fresh-install initialization/defaults/provider setup/tool discovery and no repository-relative dependency
+- [ ] Representative cross-version upgrade with retained Settings/Channels/Queue/History/secrets and restart
+- [ ] Rollback: previous package before upgrade, observed post-upgrade DB compatibility, verified pre-upgrade backup restoration when required (no arbitrary downgrade assumption)
+- [ ] Representative backup/restore metadata/hash/state/restart/corruption/active-runtime/path cases
+- [ ] Native secret stores: restart/read/write, no plaintext leakage, unavailable/failure cases fail closed
+- [ ] Exact publication-artifact inspection on all platforms: final archive SHA256, extracted package-local checksums, version=1.0.0, clean data, no credentials/cookies/logs/backups/downloads/process state or bundled external media binaries; Windows Native-only surface
 
 Record artifact SHA256, OS, test date, observed result and limitations for each
 manual check. Do not assume arbitrary schema downgrade compatibility; retain a
