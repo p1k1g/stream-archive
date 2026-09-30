@@ -42,6 +42,8 @@ The Windows release package no longer exposes `stream-archive-server.exe` or `RU
 
 Phase 23.10 also adds the official embedded Windows application icon, removes the old Phase 21 development subtitle from LIVE, adds a Native `저장 폴더 열기` action for active recordings, and enables Slint FemtoVG with software-renderer fallback. The retired browser/Web launcher and reverse-proxy surface are not included.
 
+Phase 23.11 corrects the Windows executable icon resource encoding after manual RC found cropped Explorer/title-bar/taskbar rendering in the Phase 23.10 artifact. The canonical artwork is unchanged; only the Windows ICO/PE resource representation and validation are corrected.
+
 ## Linux and macOS
 
 Linux and macOS use:

@@ -49,9 +49,6 @@ mkdir "%OUT%\data" || exit /b 1
 mkdir "%OUT%\maintenance" || exit /b 1
 mkdir "%OUT%\docs" || exit /b 1
 
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\maintenance\Set-WindowsExecutableIcon.ps1" -ExecutablePath ".\rust-gui\target\release\stream-archive-gui.exe" -SourceImagePath ".\rust-gui\assets\stream-archive-icon.png" -GeneratedIconPath ".\rust-gui\target\release\stream-archive.ico"
-if errorlevel 1 exit /b 1
-
 copy /y "rust-gui\target\release\stream-archive-gui.exe" "%OUT%\StreamArchive.exe" >nul || exit /b 1
 copy /y "maintenance\Backup-StreamArchiveData.ps1" "%OUT%\maintenance\Backup-StreamArchiveData.ps1" >nul || exit /b 1
 copy /y "maintenance\Restore-StreamArchiveData.ps1" "%OUT%\maintenance\Restore-StreamArchiveData.ps1" >nul || exit /b 1
