@@ -2807,40 +2807,43 @@ impl Drop for Controller {
 }
 
 #[cfg(test)]
+#[path = "../tests/support/desktop_process.rs"]
+mod desktop_process;
+
+#[cfg(test)]
 mod desktop_lifecycle_tests {
     use super::*;
 
     #[test]
     fn confirmed_shutdown_does_not_execute_queued_mutations() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!("stream-archive-close-{nonce}"));
-        let backend = directory.join("backend");
-        std::fs::create_dir_all(&backend).unwrap();
-        let core = StreamArchiveCore::open(&backend).unwrap().core;
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .unwrap();
-        let (sender, requests) = mpsc::channel();
-        let (responses, _receiver) = mpsc::channel();
-        sender
-            .send(Request::Save(BTreeMap::from([(
-                "CHECK_INTERVAL".into(),
-                "99".into(),
-            )])))
-            .unwrap();
-        sender.send(Request::Shutdown).unwrap();
-        drop(sender);
-        let stopping = std::sync::atomic::AtomicBool::new(true);
-        worker_loop(&core, &runtime, requests, &responses, &stopping);
-        assert_eq!(core.settings().unwrap()["CHECK_INTERVAL"], "30");
-        runtime.block_on(core.shutdown());
-        drop(runtime);
-        drop(core);
-        std::fs::remove_dir_all(directory).unwrap();
+        desktop_process::run(
+            "controller::desktop_lifecycle_tests::confirmed_shutdown_does_not_execute_queued_mutations",
+            |directory| {
+                let backend = directory.join("backend");
+                std::fs::create_dir_all(&backend).unwrap();
+                let core = StreamArchiveCore::open(&backend).unwrap().core;
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let (sender, requests) = mpsc::channel();
+                let (responses, _receiver) = mpsc::channel();
+                sender
+                    .send(Request::Save(BTreeMap::from([(
+                        "CHECK_INTERVAL".into(),
+                        "99".into(),
+                    )])))
+                    .unwrap();
+                sender.send(Request::Shutdown).unwrap();
+                drop(sender);
+                let stopping = std::sync::atomic::AtomicBool::new(true);
+                worker_loop(&core, &runtime, requests, &responses, &stopping);
+                assert_eq!(core.settings().unwrap()["CHECK_INTERVAL"], "30");
+                runtime.block_on(core.shutdown());
+                drop(runtime);
+                drop(core);
+            },
+        );
     }
 }
