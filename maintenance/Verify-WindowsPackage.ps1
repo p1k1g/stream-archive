@@ -23,39 +23,338 @@ function Assert-Directory {
     }
 }
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+
+public sealed class EmbeddedIconFrame
+{
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public ushort Planes { get; set; }
+    public ushort BitCount { get; set; }
+    public int ResourceId { get; set; }
+    public byte[] IcoData { get; set; }
+}
+
+public static class WindowsIconResourceReader
+{
+    private const int RT_ICON = 3;
+    private const int RT_GROUP_ICON = 14;
+    private const uint LOAD_LIBRARY_AS_DATAFILE = 0x00000002;
+    private const uint LOAD_LIBRARY_AS_IMAGE_RESOURCE = 0x00000020;
+
+    private delegate bool EnumResNameProc(IntPtr module, IntPtr type, IntPtr name, IntPtr parameter);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr LoadLibraryExW(string fileName, IntPtr file, uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FreeLibrary(IntPtr module);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool EnumResourceNamesW(
+        IntPtr module,
+        IntPtr type,
+        EnumResNameProc callback,
+        IntPtr parameter);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr FindResourceW(IntPtr module, IntPtr name, IntPtr type);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LoadResource(IntPtr module, IntPtr resourceInfo);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LockResource(IntPtr resourceData);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint SizeofResource(IntPtr module, IntPtr resourceInfo);
+
+    private sealed class ResourceName
+    {
+        public ushort? Id;
+        public string Name;
+    }
+
+    public static EmbeddedIconFrame[] Read(string executablePath)
+    {
+        IntPtr module = LoadLibraryExW(
+            executablePath,
+            IntPtr.Zero,
+            LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+        if (module == IntPtr.Zero)
+            throw new InvalidOperationException(
+                "LoadLibraryExW failed for icon verification: " + Marshal.GetLastWin32Error());
+
+        try
+        {
+            var groupNames = new List<ResourceName>();
+            EnumResNameProc callback = delegate(IntPtr h, IntPtr t, IntPtr name, IntPtr p)
+            {
+                long raw = name.ToInt64();
+                if ((((ulong)raw) >> 16) == 0)
+                {
+                    groupNames.Add(new ResourceName { Id = unchecked((ushort)raw) });
+                }
+                else
+                {
+                    groupNames.Add(new ResourceName { Name = Marshal.PtrToStringUni(name) });
+                }
+                return true;
+            };
+
+            bool enumerated = EnumResourceNamesW(
+                module,
+                new IntPtr(RT_GROUP_ICON),
+                callback,
+                IntPtr.Zero);
+            GC.KeepAlive(callback);
+
+            if (!enumerated)
+                throw new InvalidOperationException(
+                    "EnumResourceNamesW(RT_GROUP_ICON) failed: " + Marshal.GetLastWin32Error());
+            if (groupNames.Count == 0)
+                throw new InvalidDataException("Executable has no RT_GROUP_ICON resources.");
+
+            var frames = new List<EmbeddedIconFrame>();
+            foreach (ResourceName groupName in groupNames)
+            {
+                IntPtr allocatedName = IntPtr.Zero;
+                try
+                {
+                    IntPtr namePtr;
+                    if (groupName.Id.HasValue)
+                    {
+                        namePtr = new IntPtr(groupName.Id.Value);
+                    }
+                    else
+                    {
+                        allocatedName = Marshal.StringToHGlobalUni(groupName.Name);
+                        namePtr = allocatedName;
+                    }
+
+                    byte[] group = ReadResource(module, namePtr, RT_GROUP_ICON);
+                    ParseGroup(module, group, frames);
+                }
+                finally
+                {
+                    if (allocatedName != IntPtr.Zero)
+                        Marshal.FreeHGlobal(allocatedName);
+                }
+            }
+
+            return frames.ToArray();
+        }
+        finally
+        {
+            FreeLibrary(module);
+        }
+    }
+
+    private static byte[] ReadResource(IntPtr module, IntPtr name, int type)
+    {
+        IntPtr info = FindResourceW(module, name, new IntPtr(type));
+        if (info == IntPtr.Zero)
+            throw new InvalidDataException(
+                "FindResourceW failed for resource type " + type + ": " + Marshal.GetLastWin32Error());
+
+        uint size = SizeofResource(module, info);
+        if (size == 0)
+            throw new InvalidDataException("Embedded icon resource is empty.");
+
+        IntPtr loaded = LoadResource(module, info);
+        if (loaded == IntPtr.Zero)
+            throw new InvalidDataException(
+                "LoadResource failed: " + Marshal.GetLastWin32Error());
+
+        IntPtr locked = LockResource(loaded);
+        if (locked == IntPtr.Zero)
+            throw new InvalidDataException("LockResource returned null.");
+
+        byte[] bytes = new byte[size];
+        Marshal.Copy(locked, bytes, 0, checked((int)size));
+        return bytes;
+    }
+
+    private static void ParseGroup(
+        IntPtr module,
+        byte[] group,
+        List<EmbeddedIconFrame> frames)
+    {
+        if (group.Length < 6)
+            throw new InvalidDataException("RT_GROUP_ICON header is truncated.");
+
+        ushort reserved = ReadUInt16(group, 0);
+        ushort type = ReadUInt16(group, 2);
+        ushort count = ReadUInt16(group, 4);
+        if (reserved != 0 || type != 1 || count == 0)
+            throw new InvalidDataException("RT_GROUP_ICON header is invalid.");
+
+        int expectedLength = checked(6 + count * 14);
+        if (group.Length < expectedLength)
+            throw new InvalidDataException("RT_GROUP_ICON directory is truncated.");
+
+        for (int i = 0; i < count; i++)
+        {
+            int offset = 6 + i * 14;
+            int width = group[offset] == 0 ? 256 : group[offset];
+            int height = group[offset + 1] == 0 ? 256 : group[offset + 1];
+            byte colorCount = group[offset + 2];
+            byte entryReserved = group[offset + 3];
+            ushort planes = ReadUInt16(group, offset + 4);
+            ushort bitCount = ReadUInt16(group, offset + 6);
+            uint bytesInRes = ReadUInt32(group, offset + 8);
+            ushort resourceId = ReadUInt16(group, offset + 12);
+
+            if (entryReserved != 0)
+                throw new InvalidDataException("RT_GROUP_ICON entry reserved byte is non-zero.");
+            if (width != height)
+                throw new InvalidDataException(
+                    "Embedded application icon frame is not square: " + width + "x" + height);
+
+            byte[] image = ReadResource(module, new IntPtr(resourceId), RT_ICON);
+            if (image.Length != bytesInRes)
+                throw new InvalidDataException(
+                    "RT_ICON size mismatch for " + width + "px frame: group=" +
+                    bytesInRes + ", resource=" + image.Length);
+
+            frames.Add(new EmbeddedIconFrame
+            {
+                Width = width,
+                Height = height,
+                Planes = planes,
+                BitCount = bitCount,
+                ResourceId = resourceId,
+                IcoData = BuildSingleFrameIco(
+                    width,
+                    height,
+                    colorCount,
+                    planes,
+                    bitCount,
+                    image)
+            });
+        }
+    }
+
+    private static byte[] BuildSingleFrameIco(
+        int width,
+        int height,
+        byte colorCount,
+        ushort planes,
+        ushort bitCount,
+        byte[] image)
+    {
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write((ushort)0);
+            writer.Write((ushort)1);
+            writer.Write((ushort)1);
+            writer.Write((byte)(width == 256 ? 0 : width));
+            writer.Write((byte)(height == 256 ? 0 : height));
+            writer.Write(colorCount);
+            writer.Write((byte)0);
+            writer.Write(planes);
+            writer.Write(bitCount);
+            writer.Write((uint)image.Length);
+            writer.Write((uint)22);
+            writer.Write(image);
+            writer.Flush();
+            return stream.ToArray();
+        }
+    }
+
+    private static ushort ReadUInt16(byte[] data, int offset)
+    {
+        return (ushort)(data[offset] | (data[offset + 1] << 8));
+    }
+
+    private static uint ReadUInt32(byte[] data, int offset)
+    {
+        return (uint)(
+            data[offset] |
+            (data[offset + 1] << 8) |
+            (data[offset + 2] << 16) |
+            (data[offset + 3] << 24));
+    }
+}
+'@
+
+function Assert-IconBitmapSignal {
+    param(
+        [System.Drawing.Bitmap]$Bitmap,
+        [int]$ExpectedSize
+    )
+
+    if ($Bitmap.Width -ne $ExpectedSize -or $Bitmap.Height -ne $ExpectedSize) {
+        throw "StreamArchive.exe embedded icon frame decoded at $($Bitmap.Width)x$($Bitmap.Height); expected $($ExpectedSize)x$($ExpectedSize)."
+    }
+
+    $lowerSignal = 0
+    $lowerPixels = 0
+    for ($y = [int]($Bitmap.Height / 2); $y -lt $Bitmap.Height; $y++) {
+        for ($x = 0; $x -lt $Bitmap.Width; $x++) {
+            $pixel = $Bitmap.GetPixel($x, $y)
+            $lowerPixels++
+            if ($pixel.A -gt 0 -and
+                ($pixel.R -lt 240 -or $pixel.G -lt 240 -or $pixel.B -lt 240)) {
+                $lowerSignal++
+            }
+        }
+    }
+
+    if ($lowerPixels -eq 0 -or ($lowerSignal / [double]$lowerPixels) -lt 0.20) {
+        throw "StreamArchive.exe $($ExpectedSize)px icon appears cropped/blank in the lower half: $lowerSignal / $lowerPixels visible pixels."
+    }
+}
+
 function Assert-EmbeddedApplicationIcon {
     param([string]$ExecutablePath)
 
-    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path -LiteralPath $ExecutablePath).Path)
-    if ($null -eq $icon) {
-        throw 'StreamArchive.exe has no extractable Windows application icon.'
+    $expectedSizes = @(16, 24, 32, 48, 64, 128, 256)
+    $resolvedExecutable = (Resolve-Path -LiteralPath $ExecutablePath).Path
+    $frames = @([WindowsIconResourceReader]::Read($resolvedExecutable))
+
+    if ($frames.Count -ne $expectedSizes.Count) {
+        throw "StreamArchive.exe must embed exactly $($expectedSizes.Count) application icon frames; found $($frames.Count)."
     }
 
-    try {
-        $bitmap = $icon.ToBitmap()
+    $actualSizes = @($frames | ForEach-Object { $_.Width } | Sort-Object -Unique)
+    $sizeDifference = @(Compare-Object -ReferenceObject $expectedSizes -DifferenceObject $actualSizes)
+    if ($sizeDifference.Count -ne 0) {
+        throw "StreamArchive.exe embedded icon sizes are invalid. Expected: $($expectedSizes -join ', '); actual: $($actualSizes -join ', ')."
+    }
+
+    foreach ($frame in $frames | Sort-Object Width) {
+        if ($frame.Width -ne $frame.Height) {
+            throw "StreamArchive.exe embedded icon frame is not square: $($frame.Width)x$($frame.Height)."
+        }
+
+        $stream = [System.IO.MemoryStream]::new($frame.IcoData, $false)
         try {
-            $lowerSignal = 0
-            $lowerPixels = 0
-            for ($y = [int]($bitmap.Height / 2); $y -lt $bitmap.Height; $y++) {
-                for ($x = 0; $x -lt $bitmap.Width; $x++) {
-                    $pixel = $bitmap.GetPixel($x, $y)
-                    $lowerPixels++
-                    if ($pixel.A -gt 0 -and
-                        ($pixel.R -lt 240 -or $pixel.G -lt 240 -or $pixel.B -lt 240)) {
-                        $lowerSignal++
-                    }
+            $icon = [System.Drawing.Icon]::new($stream)
+            try {
+                $bitmap = $icon.ToBitmap()
+                try {
+                    Assert-IconBitmapSignal -Bitmap $bitmap -ExpectedSize $frame.Width
+                }
+                finally {
+                    $bitmap.Dispose()
                 }
             }
-            if ($lowerPixels -eq 0 -or ($lowerSignal / [double]$lowerPixels) -lt 0.20) {
-                throw "StreamArchive.exe icon appears cropped/blank in the lower half: $lowerSignal / $lowerPixels visible pixels."
+            finally {
+                $icon.Dispose()
             }
         }
-        finally {
-            $bitmap.Dispose()
+        catch {
+            throw "StreamArchive.exe $($frame.Width)px embedded icon resource could not be decoded: $($_.Exception.Message)"
         }
-    }
-    finally {
-        $icon.Dispose()
+        finally {
+            $stream.Dispose()
+        }
     }
 }
 
