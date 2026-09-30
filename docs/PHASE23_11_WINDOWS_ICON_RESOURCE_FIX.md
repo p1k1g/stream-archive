@@ -16,26 +16,24 @@ The canonical source PNG itself is intact. The defect was in the generated ICO/P
 
 ## Root cause and fix
 
-Phase 23.10 generated icon frames and then mutated the linked executable with a custom `UpdateResource` path. Manual RC showed that Windows could enumerate the resource but decoded only the upper portion of the icon. A first Phase 23.11 attempt switched the frame payload to hand-written DIB data; the new package verifier correctly rejected it because the associated icon still had a blank lower half.
+Phase 23.10 generated icon frames and then mutated the linked executable with a custom `UpdateResource` path. Manual RC showed that Windows could enumerate the resource but decoded only the upper portion of the icon. A first Phase 23.11 attempt switched the frame payload to hand-written DIB data; the package verifier correctly rejected it because the associated icon still had a blank lower half.
 
-The subsequent strict Rust PNG decode exposed the deeper root cause: the repository's previous `rust-gui/assets/stream-archive-icon.png` had a corrupt DEFLATE stream (`DistanceTooFarBack`). Tolerant decoders could display enough of it for development, but Windows icon generation/runtime branding could decode it incompletely. Phase 23.11 replaces that damaged file with a valid re-encoded copy of the same selected artwork.
+A later attempt moved icon generation into `build.rs`, which exposed that the repository PNG used by the experimental path was not reliably decodable in CI (`UnexpectedEof`). Phase 23.11 therefore removes all custom runtime/build-time image conversion.
 
-The fix also removes custom post-link PE resource mutation entirely.
+The final fix uses two verified canonical assets produced from the same selected artwork:
 
-The Rust GUI build now:
+- `rust-gui/assets/stream-archive-icon.png` for the Slint Window icon;
+- `rust-gui/assets/stream-archive.ico` containing 16, 24, 32, 48, 64, 128 and 256 pixel Windows icon entries.
 
-- reads the canonical `assets/stream-archive-icon.png`;
-- creates 16, 24, 32, 48, 64, 128 and 256 pixel PNG-backed ICO frames in `OUT_DIR`;
-- links that generated ICO through `winresource` / the standard Windows resource compiler path;
-- sets the Stream Archive product/file metadata in the same resource build.
+`build.rs` links the checked-in ICO through `winresource` / the standard Windows resource compiler path. There is no post-link `UpdateResource` mutation and no image decoder/generator dependency in the build script.
 
-Slint continues to embed the canonical source image for the runtime window icon. The portable ZIP still has no standalone PNG/ICO runtime dependency.
+The portable ZIP still has no standalone PNG/ICO runtime dependency: both assets are build inputs only.
 
 ## Regression protection
 
-`Verify-WindowsPackage.ps1` extracts the packaged executable's associated Windows icon and rejects a blank/cropped lower half. Packaging contracts also reject a return to the post-link `Set-WindowsExecutableIcon.ps1` path and require the standard resource-compiler integration.
+`Verify-WindowsPackage.ps1` extracts the packaged executable's associated Windows icon and rejects a blank/cropped lower half. Packaging contracts reject a return to post-link icon mutation or build-time image regeneration and require the canonical checked-in ICO plus `winresource`.
 
-The previous failing CI is intentionally useful evidence: the verifier caught the malformed icon before an artifact could be accepted.
+The previous failing CI runs are useful evidence that the verifier/build boundary now fails closed instead of accepting a visually broken icon.
 
 ## Scope boundary
 
