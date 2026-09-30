@@ -46,16 +46,25 @@ Windows Native의 **설정 → 일반**에서 다음을 설정하고 저장합�
 
 **Worker URL에는 `/soop/url`까지 포함합니다.** 앱은 입력한 URL에 그대로 POST하며 경로를 자동으로 덧붙이지 않습니다. Worker root나 `/health`를 입력하면 URL 조회가 정상 동작하지 않습니다. 사용자 지정 domain을 사용해도 같은 `/soop/url` 경로를 지정합니다.
 
-Linux/macOS에서는 CLI의 provider 설정을 사용합니다.
+Linux/macOS에서는 CLI의 provider 설정을 사용합니다. 아래 secret 입력 예시는 Bash에서 실행하며 화면에 비밀값을 표시하지 않습니다.
 
 ```bash
 ./bin/stream-archive-cli providers set CLOUDFLARE_WORKER_URL https://example-worker.example-subdomain.workers.dev/soop/url
 ./bin/stream-archive-cli providers set SOOP_USERNAME my-account
-./bin/stream-archive-cli providers secret CLOUDFLARE_API_KEY --stdin
-./bin/stream-archive-cli providers secret SOOP_PASSWORD --stdin
+read -r -s -p 'Worker API key: ' worker_api_key
+printf '\n'
+printf '%s' "$worker_api_key" |
+  ./bin/stream-archive-cli providers secret CLOUDFLARE_API_KEY --stdin
+unset worker_api_key
+
+read -r -s -p 'SOOP password: ' soop_password
+printf '\n'
+printf '%s' "$soop_password" |
+  ./bin/stream-archive-cli providers secret SOOP_PASSWORD --stdin
+unset soop_password
 ```
 
-위 예시 URL을 본인의 실제 Worker URL로 바꾼 뒤 실행합니다. 비밀값은 `--stdin`을 통해 입력하며 command 인자로 붙이지 않습니다. 자세한 사용법은 [Unix CLI 가이드](UNIX_CLI.md)를 따릅니다.
+위 예시 URL을 본인의 실제 Worker URL로 바꾼 뒤 실행합니다. `read -s`로 숨겨 입력한 비밀값을 `printf`에서 CLI stdin으로 전달하고 임시 shell 변수는 지웁니다. `--stdin` 명령만 단독 실행하면 EOF까지 기다리므로 위 pipe 예시를 사용합니다. 비밀값을 command 인자로 붙이지 않습니다. 자세한 사용법은 [Unix CLI 가이드](UNIX_CLI.md)를 따릅니다.
 
 ## 4. 연결 및 실제 서비스 확인
 
