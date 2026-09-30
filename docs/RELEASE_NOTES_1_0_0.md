@@ -1,0 +1,156 @@
+# Stream Archive 1.0.0 — Release Notes
+
+Status: **1.0.0 stable release preparation — not yet published**
+
+Stream Archive 1.0.0 is the planned first public stable release. This PR prepares
+the version and release documentation; merge, tag and publication remain manual.
+
+## Highlights
+
+Stream Archive 1.0.0 consolidates the application around the Rust + SQLite
+runtime and provides two supported presentation surfaces:
+
+- **Windows Native** Slint desktop application;
+- Linux/macOS CLI and headless runtime.
+
+Both surfaces use the same `StreamArchiveCore`, SQLite store, provider services,
+Queue, History, Backup, storage diagnostics and owned-process lifecycle.
+
+## Provider support
+
+The retained provider paths are:
+
+- SOOP LIVE
+- SOOP VOD
+- CHZZK LIVE
+- CHZZK VOD
+
+Credential-free CI uses offline provider/media-tool fixtures to verify command
+construction, result mapping, timeouts, cancellation and owned-descendant
+cleanup. A real provider/session smoke remains required before public release.
+
+## Windows Native
+
+The Windows portable package contains:
+
+- `StreamArchive.exe` as the Native UI;
+- `RUN.bat` as the Native launcher;
+- packaged offline backup/restore maintenance scripts;
+- release metadata and SHA-256 manifests.
+
+The Windows release package no longer exposes `stream-archive-server.exe` or `RUN_HEADLESS.bat`; Linux/macOS retain their CLI/headless runtime paths.
+
+Phase 23.10 also adds the official embedded Windows application icon, removes the old Phase 21 development subtitle from LIVE, adds a Native `저장 폴더 열기` action for active recordings, and enables Slint FemtoVG with software-renderer fallback. The retired browser/Web launcher and reverse-proxy surface are not included.
+
+Phase 23.11 corrects the Windows executable icon resource encoding after manual RC found cropped Explorer/title-bar/taskbar rendering in the Phase 23.10 artifact. The canonical artwork is unchanged; the Windows ICO/PE resource representation and validation are corrected. The canonical PNG produces 16/24/32/48/64/128/256 frames in `build.rs`, embedded through `winresource`; the verifier decodes every expected RT_GROUP_ICON/RT_ICON frame.
+
+## Linux and macOS
+
+Linux and macOS use:
+
+- `bin/stream-archive-cli`
+- `bin/stream-archive-server`
+
+The CLI includes initialization, status, settings, provider readiness, media
+tools, doctor, channels, watcher, VOD, Queue, History, Backup, storage, logs and
+foreground serve operations.
+
+CI-verified archive names are:
+
+- `stream-archive-linux-x64.tar.gz`
+- `stream-archive-macos-arm64.tar.gz`
+
+No untested architecture is advertised.
+
+## Packaging and checksums
+
+The Windows portable artifact is:
+
+- `stream-archive-windows-x64.zip`
+
+Every canonical artifact contains `RELEASE_INFO.txt` and package-local
+`SHA256SUMS.txt`, and every final archive has a sibling archive-level SHA-256
+file.
+
+Official packages ship an empty runtime `data/` directory. Runtime SQLite,
+logs, provider credentials, backups, downloads and process-state files are not
+release payload.
+
+The release-candidate contract requires corrupted archive copies to be rejected by the
+verifiers.
+
+## Backup and restore
+
+The shared BackupManager provides managed SQLite backup/restore and retention.
+The Windows package also contains offline PowerShell backup/restore scripts for
+maintenance while Stream Archive is stopped.
+
+The RC suite covers managed backup round-trip behavior, runtime-owner restore
+safety, Windows offline backup metadata/hash validation, and restore rejection
+for a corrupted backup.
+
+## Diagnostics and media tools
+
+Streamlink, yt-dlp and FFmpeg are **external dependencies** and are not bundled
+in the release archives.
+
+Tool discovery supports canonical configuration, application/backend layouts,
+PATH and supported common installation locations. Windows Native Diagnostics
+refresh re-runs local discovery/version probes, so yt-dlp or FFmpeg copied into
+the supported bundled layout after startup can be detected without restarting.
+Linux/macOS provide `tools` and `doctor --active-tools`.
+
+## Secrets
+
+Secrets are not intentionally stored as plaintext fallbacks.
+
+- Windows: CurrentUser DPAPI
+- Linux: Secret Service through `secret-tool`
+- macOS: Keychain Services
+
+Linux requires a usable Secret Service session for secret writes. Real provider
+credentials are not injected into CI.
+
+## Upgrade guidance
+
+For an upgrade:
+
+1. stop the active runtime cleanly;
+2. create and verify a backup;
+3. keep the previous package available for rollback;
+4. extract the new package separately rather than overwriting it in place;
+5. reuse the existing canonical data directory;
+6. start the new package and verify settings, channels, history, Queue and
+   diagnostics;
+7. restart once more to confirm persistence.
+
+Automated RC validation verifies package replacement against preserved data on
+Unix RC artifacts. A representative **cross-version upgrade** remains a manual
+release-candidate check.
+
+Do not assume arbitrary schema downgrade compatibility. If rollback requires a
+database change, restore a verified pre-upgrade backup only when appropriate to
+the observed database state.
+
+## Known limitations
+
+- Windows artifacts are not Authenticode signed.
+- macOS artifacts are not code-signed or notarized.
+- There is no MSI, deb/rpm, Homebrew, Snap/Flatpak/AppImage package.
+- There is no systemd/launchd installer.
+- Real SOOP/CHZZK sessions remain manual final QA.
+- Windows Native GUI interaction remains manual final QA.
+
+## Release status
+
+Automated validation covers unit/integration fixtures, runtime contracts, native
+compilation, package checksums, fresh extraction, offline backup/restore, runtime
+leakage rejection and corrupted archive rejection on Windows/Linux/macOS. The
+Phase 23.12 PR CI results are the evidence for the 1.0.0 revision; earlier RC
+success alone does not validate this revision.
+
+Manual checks are tracked in [the 1.0.0 closure checklist](PHASE23_12_1_0_0_RELEASE_CLOSURE.md).
+Real provider sessions, GUI interaction, representative cross-version upgrades
+and native secret-store integration remain manual gates. No unperformed manual
+QA is marked complete. Public release approval, `v1.0.0` and GitHub Release
+publication remain with the maintainer.
