@@ -639,7 +639,7 @@ mod tests {
         let backend = dir.path().join("backend");
         std::fs::create_dir_all(&backend).unwrap();
         let db = Store::default_path(&backend);
-        let core = StreamArchiveCore::assemble(backend, Store::open(&db).unwrap()).unwrap();
+        let core = StreamArchiveCore::assemble(backend, Store::open(db.clone()).unwrap()).unwrap();
         assert_eq!(
             core.settings().unwrap()["STREAM_ARCHIVE_CLOSE_ACTION"],
             "EXIT"
