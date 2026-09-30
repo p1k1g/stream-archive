@@ -85,6 +85,17 @@ jobs:
           cargo clippy --version
           git --version
 
+      - name: Stable release version contract
+        shell: bash
+        run: |
+          python3 - <<'PYVERSION'
+          import json, subprocess
+          for manifest, name in [('rust-runtime/Cargo.toml', 'stream-archive-server'), ('rust-gui/Cargo.toml', 'stream-archive-gui')]:
+              data = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1', '--manifest-path', manifest]))
+              package = next(p for p in data['packages'] if p['name'] == name)
+              assert package['version'] == '1.0.0', (name, package['version'])
+          PYVERSION
+
       - name: Rust format check
         shell: bash
         run: cargo fmt --manifest-path rust-runtime/Cargo.toml -- --check
@@ -186,6 +197,13 @@ jobs:
         if: ${{ matrix.platform != 'windows' }}
         shell: bash
         run: ./BUILD_UNIX_PACKAGE.sh
+
+      - name: Verify Unix stable artifact version
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: |
+          metadata="$(find dist -type f -path '*/unix-*/stream-archive/RELEASE_INFO.txt' -print -quit)"
+          grep -qx 'version=1.0.0' "$metadata"
 
       - name: Reject corrupted Unix release archive
         if: ${{ matrix.platform != 'windows' }}
@@ -376,6 +394,14 @@ jobs:
       - name: Verify Windows portable package
         shell: powershell
         run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
+
+      - name: Verify Windows stable artifact version
+        shell: powershell
+        run: |
+          $metadata = Get-Content -LiteralPath './dist/stream-archive/RELEASE_INFO.txt'
+          if ($metadata -notcontains 'version=1.0.0') { throw 'Expected stable artifact version=1.0.0' }
+          $version = (Get-Item './dist/stream-archive/StreamArchive.exe').VersionInfo.ProductVersion
+          if ($version -ne '1.0.0') { throw "Expected executable ProductVersion=1.0.0, got $version" }
 
       - name: Windows offline backup restore smoke
         shell: powershell

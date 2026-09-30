@@ -401,7 +401,11 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - ✅ 23.7 Release Candidate / Final QA
 - ✅ 23.8 Release Cleanup / Code Reduction
 - ✅ 23.9 Final Manual RC / Public Release Preparation
-- 🚧 23.10 Windows Branding / Release Polish
+- ✅ 23.10 Windows Branding / Release Polish
+- ✅ 23.11 Windows Icon Resource Fix
+- 🚧 23.12 1.0.0 Release Closure (PR preparation; public release pending)
+
+첫 public stable release `1.0.0`을 준비 중입니다. [Release notes](docs/RELEASE_NOTES_1_0_0.md)와 [manual RC 체크리스트](docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md)를 참고하세요. 아직 tag/Release는 발행하지 않았습니다.
 
 ---
 
