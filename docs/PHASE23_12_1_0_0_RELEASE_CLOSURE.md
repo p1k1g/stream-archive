@@ -1,108 +1,64 @@
-# Phase 23.12 — 1.0.0 Release Closure
+# Phase 23.12 — 1.0.0 릴리스 마무리
 
-Status: PR preparation; first public stable release pending maintainer approval.
+상태: **첫 공개 안정 버전 준비 중 — 공개 승인 및 최종 수동 검증 대기**
 
-## Baseline and scope
+## 기준 revision과 작업 범위
 
-Main baseline: `fbd4461d61dd9a79aef18c1a7b14a5562ae88e32`, Phase 23.11 / PR #106.
-Main check #306 and release-artifacts #3 succeeded; #3 produced unexpired Windows,
-Linux and macOS artifacts. These are 0.5.2 baseline evidence, not 1.0.0 validation.
+Phase 23.12의 시작 기준은 `main`의 `fbd4461d61dd9a79aef18c1a7b14a5562ae88e32`입니다(Phase 23.11 / PR #106). 당시 `Stream Archive check` #306과 `Stream Archive release artifacts` #3은 성공했고, #3에서 Windows/Linux/macOS artifact를 생성했습니다. 당시 artifact는 0.5.2 검증 근거이며 1.0.0 검증을 대신하지 않습니다. Actions artifact 보관 기간은 7일이므로 다운로드 시 만료 여부를 다시 확인합니다.
 
-Product versions come from rust-runtime/Cargo.toml and rust-gui/Cargo.toml.
-Only product package entries in both lockfiles change; dependency versions and
-historical Phase documents remain intact. RELEASE_INFO generation reads Cargo
-metadata; Windows build.rs/winresource uses the GUI package version. Existing
-0.5.2 notes are retained for historical links; current notes are RELEASE_NOTES_1_0_0.md.
+제품 버전의 기준은 `rust-runtime/Cargo.toml`과 `rust-gui/Cargo.toml`입니다. 두 lockfile에서는 제품 package 항목만 1.0.0으로 변경하고 dependency 버전 및 과거 Phase 문서는 유지했습니다. `RELEASE_INFO.txt` 생성은 Cargo metadata를 읽고, Windows `build.rs` / `winresource`는 GUI package 버전을 사용합니다. 과거 링크를 위해 0.5.2 릴리스 노트는 보존하며 현재 안내는 `docs/RELEASE_NOTES_1_0_0.md`입니다.
 
-No renderer, allocator, working-set trim, icon-cache workaround or architecture
-change is included. Shared StreamArchiveCore and owned-process lifecycle remain.
+renderer, allocator, working-set trim, 아이콘 cache 우회 및 architecture 변경은 포함하지 않습니다. `StreamArchiveCore` 공유 경계와 애플리케이션이 만든 프로세스만 종료하는 수명주기 contract를 유지합니다.
 
-## Automated validation
+## 자동 검증
 
-PR workflow rust-runtime-check.yml is authoritative for the final commit:
-- Runtime fmt, unit tests, check and strict clippy on all three platforms.
-- Windows Slint fmt, compile, adapter tests and strict clippy.
-- RuntimeContracts, icon frame decoding and Native-only Windows package verifier.
-- Windows offline backup/restore with corrupted-backup rejection.
-- Runtime data leakage rejection, package-local and archive checksums,
-  fresh extraction smoke and corrupted archive rejection.
-- Linux/macOS canonical package builds and CLI/backup/replacement smokes.
-- Explicit 1.0.0 Cargo, package metadata and Windows PE ProductVersion checks.
+최종 commit의 `.github/workflows/rust-runtime-check.yml` 결과를 기준으로 판단합니다.
 
-Local environment lacks cargo and PowerShell; no local Rust/Windows pass is claimed.
-The release-artifacts workflow is workflow_dispatch with contents: read; it only
-uploads Actions artifacts and does not publish Releases. After the PR CI passes,
-the maintainer may dispatch it on this branch/final merged revision to obtain
-1.0.0 Windows ZIP / Linux TAR.GZ / macOS TAR.GZ for manual RC. The artifact-producing
-workflow independently enforces Cargo/package version and Windows PE ProductVersion
-before upload. Dispatch the final selected revision explicitly; a historical
-workflow on a stale ref cannot be validated by current guards. Verify all jobs and
-download the three archives plus their sibling .sha256 files. This phase does
-not dispatch publication or create a tag/Release.
+- 세 플랫폼의 runtime fmt, unit tests, cargo check 및 strict clippy
+- Windows Slint fmt, compile, adapter tests 및 strict clippy
+- RuntimeContracts, 아이콘 frame 디코딩 및 Native-only Windows package verifier
+- Windows 오프라인 백업·복구와 손상된 백업 거부
+- 런타임 데이터 유출 거부, 패키지 내부·압축 파일 체크섬, 새 디렉터리 압축 해제 smoke 및 손상된 압축 파일 거부
+- Linux/macOS 공식 스크립트 기반 package build 및 CLI·백업·패키지 교체 smoke
+- Cargo·패키지 metadata의 정확한 1.0.0 버전과 Windows PE `ProductVersion` 확인
 
-## Manual RC validation — MANUAL TEST REQUIRED
+초기 Phase 23.12 최종 commit `badd2c11e26f038363ef7b27f1c2968c2298e018`은 [CI run 36672598519](https://github.com/p1k1g/stream-archive/actions/runs/36672598519)에서 `core-check (windows)`, `core-check (linux)`, `core-check (macos)`, `windows-check`가 모두 통과했습니다. 후속 문서 변경의 검증은 해당 PR의 최신 commit 결과로 별도 확인합니다. 로컬 환경에는 cargo와 PowerShell이 없어 로컬 Rust/Windows 테스트 성공을 주장하지 않습니다.
 
-The following checks remain pending on the final 1.0.0 artifacts. Credential-free
-fixtures do not establish real provider or native secret-store success.
+## 수동 검증용 artifact 생성 절차
 
-- [ ] Windows Explorer icon
-- [ ] Windows title bar icon
-- [ ] Windows taskbar icon
-- [ ] Windows Task Manager icon
-- [ ] Taskbar pin / unpin / re-pin
-- [ ] Repaint / minimize / restore / resize
-- [ ] SOOP LIVE real session smoke
-- [ ] SOOP VOD real session smoke
-- [ ] CHZZK LIVE real session smoke
-- [ ] CHZZK VOD real session smoke
-- [ ] Queue / History end-to-end interaction
-- [ ] Fresh install on representative supported hosts
-- [ ] Representative cross-version upgrade from retained RC data
-- [ ] Backup / restore using representative user data
-- [ ] Windows CurrentUser DPAPI secret write/read across restart
-- [ ] Linux Secret Service secret write/read in a usable session
-- [ ] macOS Keychain secret write/read across restart
+`.github/workflows/rust-runtime-release.yml`은 수동 `workflow_dispatch` 방식이고 `contents: read` 권한을 사용합니다. Actions artifact만 업로드하며 GitHub Release를 공개하지 않습니다.
 
-### Inherited release gates (all pending)
+1. 최종 선택한 branch/revision의 필수 PR CI가 모두 통과했는지 확인합니다.
+2. GitHub Actions의 `Stream Archive release artifacts`에서 해당 ref를 명시적으로 선택하고 실행합니다.
+3. `release-contracts`, `windows-package`, `unix-package (linux)`, `unix-package (macos)`가 모두 성공했는지 확인합니다.
+4. 아래 압축 파일과 각각의 `.sha256` 파일을 다운로드합니다.
+5. 실제 공개 대상으로 선택한 파일의 SHA-256, package metadata, 내부 체크섬 및 새 압축 해제 결과를 기록합니다.
+6. [최종 수동 검증 체크리스트](MANUAL_RC_1_0_0.md)를 해당 파일로 수행합니다.
 
-The [Phase 23.9 manual RC checklist](PHASE23_9_FINAL_MANUAL_RC_RELEASE_PREP.md)
-sections 5 and 7–14 remain mandatory in full for the final 1.0.0 artifacts.
-This checklist supplements them; it does not supersede or waive any unresolved
-gate. Apply their tests to 1.0.0 (retain the previous RC as the upgrade/rollback
-source), using the current Native-only Windows contract. No earlier PASS is
-inferred. Every applicable inherited item needs recorded evidence before GO.
+| 플랫폼 | 압축 파일 |
+|---|---|
+| Windows x64 | `stream-archive-windows-x64.zip` |
+| Linux x64 | `stream-archive-linux-x64.tar.gz` |
+| macOS arm64 | `stream-archive-macos-arm64.tar.gz` |
 
-- [ ] Native startup/render/shutdown/restart and ASCII/whitespace/Unicode paths
-- [ ] Settings paths/tool configuration/save/restart/persistence
-- [ ] Diagnostics discovery/probes/invalid and missing paths/recovery
-- [ ] Channels add/edit/enable/provider/resolve/save/reload/delete and provider configuration/authentication
-- [ ] LIVE refresh/start/progress/Stop/Resume/Recheck/owned cleanup/second operation
-- [ ] VOD analysis/metadata/quality/PART/output/start/progress/cancel/cleanup/retry/completion
-- [ ] Queue enqueue/refresh/Cancel/Retry/Remove/restart persistence
-- [ ] History calendars/month changes/date clearing/filters/limits/LIVE and VOD records
-- [ ] Management backup policy persistence/backup list/safe restore rejection/restored state/Logs interactions
-- [ ] Real Streamlink/yt-dlp/FFmpeg PATH and explicit discovery/version/execution/invalid or missing tools/whitespace and Unicode paths/timeout and cancellation
-- [ ] Each real provider's complete LIVE/VOD evidence checklist, including output, cancellation, owned cleanup, retry, Queue/History and restart persistence
-- [ ] Fresh-install initialization/defaults/provider setup/tool discovery and no repository-relative dependency
-- [ ] Representative cross-version upgrade with retained Settings/Channels/Queue/History/secrets and restart
-- [ ] Rollback: previous package before upgrade, observed post-upgrade DB compatibility, verified pre-upgrade backup restoration when required (no arbitrary downgrade assumption)
-- [ ] Representative backup/restore metadata/hash/state/restart/corruption/active-runtime/path cases
-- [ ] Native secret stores: restart/read/write, no plaintext leakage, unavailable/failure cases fail closed
-- [ ] Exact publication-artifact inspection on all platforms: final archive SHA256, extracted package-local checksums, version=1.0.0, clean data, no credentials/cookies/logs/backups/downloads/process state or bundled external media binaries; Windows Native-only surface
+artifact 생성 workflow도 업로드 전에 Cargo·패키지 버전과 Windows PE `ProductVersion`을 독립적으로 확인합니다. 과거 ref의 workflow는 현재 guard의 검증 대상이 아니므로 오래된 ref를 선택해 생성한 파일을 최신 1.0.0으로 간주하면 안 됩니다. 이 문서는 tag나 GitHub Release 공개를 자동으로 실행하지 않습니다.
 
-Record artifact SHA256, OS, test date, observed result and limitations for each
-manual check. Do not assume arbitrary schema downgrade compatibility; retain a
-verified pre-upgrade backup.
+## 수동 RC 검증 — 미완료
 
-Maintainer reports for 0.5.2: embedded icon resources in artifact #3 were valid;
-the same binary displayed correctly on another PC/new path. Some existing hosts
-retained stale icons. This is not completion of final 1.0.0 icon checks.
-Maintainer memory observations were stable within each PC (home about 45 MB,
-office about 75 MB for both renderers); private memory/handles/threads stabilized
-without a persistent leak pattern. No numerical memory optimization is warranted.
+최종 1.0.0 artifact의 수동 검증은 [한국어 체크리스트](MANUAL_RC_1_0_0.md)에서 관리합니다. Windows 아이콘·GUI 조작, 실제 SOOP/CHZZK LIVE/VOD, 외부 도구, 신규 설치, 업그레이드·rollback, 백업·복구 및 OS별 비밀정보 저장 검증이 필요합니다. 인증정보 없는 fixture는 실제 세션이나 native secret store 검증을 대신하지 않습니다.
 
-## Release blockers and public release readiness
+기존 [Phase 23.9 수동 RC 문서](PHASE23_9_FINAL_MANUAL_RC_RELEASE_PREP.md)의 5절 및 7–14절은 모든 항목이 그대로 필수 조건입니다. 한국어 체크리스트는 해당 세부 항목과 제한을 옮기고 Phase 23.11 아이콘 검증을 추가했습니다. 기존 미완료 gate를 폐기하거나 면제하지 않습니다. 이전 RC는 업그레이드·rollback의 출발점으로 보관하고, 검증 대상은 최종 1.0.0입니다. 기존 PASS를 새 artifact에 자동 적용하지 않으며 모든 해당 항목에 증빙이 있어야 공개할 수 있습니다.
 
-Failed required CI or failed manual gates block public release. Ready for review
-means code review readiness, not manual RC completion or publication approval.
-Maintainer alone decides merge, v1.0.0 tag and GitHub Release publication.
+수동 결과에는 artifact SHA-256, OS, 확인 날짜, 실제 결과 및 제한사항을 기록합니다. 임의 schema downgrade 호환성을 가정하지 않고 검증한 업그레이드 전 백업을 보관합니다.
+
+## 기존 RC 관찰 결과
+
+운영자가 보고한 0.5.2 artifact #3의 EXE 내장 아이콘 resource는 정상입니다. 같은 binary가 다른 PC·새 경로에서 정상 표시됐고, 일부 기존 PC에는 이전 아이콘이 남았습니다. 이 결과를 최종 1.0.0의 수동 아이콘 검증 완료로 처리하지 않습니다.
+
+메모리는 동일 PC에서 안정적이었습니다(집 약 45 MB, 회사 약 75 MB; 두 renderer 모두 비슷한 수준). private memory, handles, threads도 안정화되어 지속 증가하는 leak 패턴은 확인되지 않았습니다. 숫자만 줄이는 메모리 최적화의 근거로 삼지 않습니다.
+
+## 공개 차단 조건 및 릴리스 판정
+
+필수 CI 실패, 수동 gate 실패 또는 필요한 증빙 미확보 상태에서는 공개하지 않습니다. Ready for review는 코드 검토 준비 상태이며 수동 RC 완료나 공개 승인을 뜻하지 않습니다. 환경·인증정보가 없어 검증하지 못한 경우 미검증으로 기록하고, 완료로 표시하지 않습니다.
+
+운영자가 최종 merge, `v1.0.0` tag 및 GitHub Release 공개를 결정합니다. 현재 공개 준비 상태를 이미 출시한 것으로 표현하지 않습니다.
