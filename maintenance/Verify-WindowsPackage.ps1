@@ -36,7 +36,7 @@ public sealed class EmbeddedIconFrame
     public ushort Planes { get; set; }
     public ushort BitCount { get; set; }
     public int ResourceId { get; set; }
-    public byte[] IcoData { get; set; }
+    public byte[] ImageData { get; set; }
 }
 
 public static class WindowsIconResourceReader
@@ -228,42 +228,8 @@ public static class WindowsIconResourceReader
                 Planes = planes,
                 BitCount = bitCount,
                 ResourceId = resourceId,
-                IcoData = BuildSingleFrameIco(
-                    width,
-                    height,
-                    colorCount,
-                    planes,
-                    bitCount,
-                    image)
+                ImageData = image
             });
-        }
-    }
-
-    private static byte[] BuildSingleFrameIco(
-        int width,
-        int height,
-        byte colorCount,
-        ushort planes,
-        ushort bitCount,
-        byte[] image)
-    {
-        using (var stream = new MemoryStream())
-        using (var writer = new BinaryWriter(stream))
-        {
-            writer.Write((ushort)0);
-            writer.Write((ushort)1);
-            writer.Write((ushort)1);
-            writer.Write((byte)(width == 256 ? 0 : width));
-            writer.Write((byte)(height == 256 ? 0 : height));
-            writer.Write(colorCount);
-            writer.Write((byte)0);
-            writer.Write(planes);
-            writer.Write(bitCount);
-            writer.Write((uint)image.Length);
-            writer.Write((uint)22);
-            writer.Write(image);
-            writer.Flush();
-            return stream.ToArray();
         }
     }
 
@@ -333,11 +299,22 @@ function Assert-EmbeddedApplicationIcon {
             throw "StreamArchive.exe embedded icon frame is not square: $($frame.Width)x$($frame.Height)."
         }
 
-        $stream = [System.IO.MemoryStream]::new($frame.IcoData, $false)
+        $imageBytes = $frame.ImageData
+        $pngSignature = [byte[]](137, 80, 78, 71, 13, 10, 26, 10)
+        if ($imageBytes.Length -lt $pngSignature.Length) {
+            throw "StreamArchive.exe $($frame.Width)px RT_ICON resource is truncated."
+        }
+        for ($index = 0; $index -lt $pngSignature.Length; $index++) {
+            if ($imageBytes[$index] -ne $pngSignature[$index]) {
+                throw "StreamArchive.exe $($frame.Width)px RT_ICON resource is not the expected PNG frame."
+            }
+        }
+
+        $stream = [System.IO.MemoryStream]::new($imageBytes, $false)
         try {
-            $icon = [System.Drawing.Icon]::new($stream)
+            $image = [System.Drawing.Image]::FromStream($stream, $true, $true)
             try {
-                $bitmap = $icon.ToBitmap()
+                $bitmap = [System.Drawing.Bitmap]::new($image)
                 try {
                     Assert-IconBitmapSignal -Bitmap $bitmap -ExpectedSize $frame.Width
                 }
@@ -346,11 +323,11 @@ function Assert-EmbeddedApplicationIcon {
                 }
             }
             finally {
-                $icon.Dispose()
+                $image.Dispose()
             }
         }
         catch {
-            throw "StreamArchive.exe $($frame.Width)px embedded icon resource could not be decoded: $($_.Exception.Message)"
+            throw "StreamArchive.exe $($frame.Width)px embedded RT_ICON PNG could not be decoded: $($_.Exception.Message)"
         }
         finally {
             $stream.Dispose()
