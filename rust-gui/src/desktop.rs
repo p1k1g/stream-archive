@@ -33,7 +33,9 @@ pub fn confirm_exit(ui: &crate::MainWindow) -> bool {
     unsafe {
         MessageBoxW(
             owner(ui),
-            w!("녹화·다운로드·채널 감시 또는 대기 중인 Queue가 있습니다.\n이 앱의 작업을 정리하고 종료할까요?"),
+            w!(
+                "녹화·다운로드·채널 감시 또는 대기 중인 Queue가 있습니다.\n이 앱의 작업을 정리하고 종료할까요?"
+            ),
             w!("Stream Archive 종료"),
             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
         ) == IDYES

@@ -500,10 +500,7 @@ fn worker_loop(
     if responses.send(vod_status(core, runtime, false)).is_err() {
         return;
     }
-    if responses
-        .send(queue_status(core, runtime, false))
-        .is_err()
-    {
+    if responses.send(queue_status(core, runtime, false)).is_err() {
         return;
     }
     match core.history(&HistoryFilter::default()) {
@@ -556,9 +553,11 @@ fn worker_loop(
                     Err(error) => format!("상태 확인 실패: {error}"),
                 })
             }
-            Request::PrepareExit => {
-                Response::ExitCheck(runtime.block_on(desktop_snapshot(core)).map(|(_, active)| active))
-            }
+            Request::PrepareExit => Response::ExitCheck(
+                runtime
+                    .block_on(desktop_snapshot(core))
+                    .map(|(_, active)| active),
+            ),
             Request::Refresh => read_active_snapshot(
                 core,
                 runtime,
@@ -906,7 +905,6 @@ fn worker_loop(
             break;
         }
     }
-
 }
 
 async fn desktop_snapshot(core: &StreamArchiveCore) -> Result<(String, bool), String> {
@@ -920,8 +918,11 @@ async fn desktop_snapshot(core: &StreamArchiveCore) -> Result<(String, bool), St
         queue.queued_count,
         if live.running { "실행 중" } else { "중지" }
     );
-    let active = live.running || live.recording_count > 0 || vod.running
-        || queue.active_id.is_some() || queue.queued_count > 0;
+    let active = live.running
+        || live.recording_count > 0
+        || vod.running
+        || queue.active_id.is_some()
+        || queue.queued_count > 0;
     Ok((summary, active))
 }
 
@@ -939,7 +940,9 @@ fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a str {
         "CHECK_INTERVAL" => "LIVE 상태 확인 간격(초)입니다. 허용 범위: 1~86400.",
         "MIN_FREE_SPACE_GB" => "최소 여유 디스크 공간(GB)입니다. 허용 범위: 0~1000000.",
         "QUALITY" => "LIVE 화질입니다. 예: best",
-        "STREAM_ARCHIVE_CLOSE_ACTION" => "Windows 닫기 버튼 동작입니다. 트레이에서는 녹화·다운로드·감시가 계속됩니다. 변경사항을 저장하면 적용됩니다.",
+        "STREAM_ARCHIVE_CLOSE_ACTION" => {
+            "Windows 닫기 버튼 동작입니다. 트레이에서는 녹화·다운로드·감시가 계속됩니다. 변경사항을 저장하면 적용됩니다."
+        }
         _ => fallback,
     }
 }
@@ -1287,6 +1290,9 @@ pub fn bind_core_snapshot(ui: &MainWindow, diagnostics: DiagnosticsSnapshot) {
 }
 
 fn send_settings(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    if ui.global::<AppState>().get_desktop_exit_pending() {
+        return;
+    }
     let state = ui.global::<AppState>();
     if state.get_settings_busy() {
         return;
@@ -1303,6 +1309,9 @@ fn send_settings(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Reque
 }
 
 fn send_config(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    if ui.global::<AppState>().get_desktop_exit_pending() {
+        return;
+    }
     let state = ui.global::<AppState>();
     if state.get_config_busy() {
         return;
@@ -1317,6 +1326,9 @@ fn send_config(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request
 }
 
 fn send_live(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    if ui.global::<AppState>().get_desktop_exit_pending() {
+        return;
+    }
     let state = ui.global::<AppState>();
     if state.get_live_busy() {
         return;
@@ -1331,6 +1343,9 @@ fn send_live(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) 
 }
 
 fn send_vod(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    if ui.global::<AppState>().get_desktop_exit_pending() {
+        return;
+    }
     let state = ui.global::<AppState>();
     if state.get_vod_busy() {
         return;
@@ -1345,6 +1360,9 @@ fn send_vod(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
 }
 
 fn send_queue(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    if ui.global::<AppState>().get_desktop_exit_pending() {
+        return;
+    }
     let state = ui.global::<QueueHistoryState>();
     if state.get_queue_busy() {
         return;
@@ -1359,6 +1377,9 @@ fn send_queue(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request)
 }
 
 fn send_history(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    if ui.global::<AppState>().get_desktop_exit_pending() {
+        return;
+    }
     let state = ui.global::<QueueHistoryState>();
     if state.get_history_busy() {
         return;
@@ -1373,6 +1394,9 @@ fn send_history(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Reques
 }
 
 fn send_maintenance(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Request) {
+    if ui.global::<AppState>().get_desktop_exit_pending() {
+        return;
+    }
     let state = ui.global::<MaintenanceState>();
     if state.get_busy() {
         return;
@@ -2773,7 +2797,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
 
 impl Drop for Controller {
     fn drop(&mut self) {
-        self.stopping.store(true, std::sync::atomic::Ordering::Release);
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::Release);
         let _ = self.sender.send(Request::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -2788,18 +2813,26 @@ mod desktop_lifecycle_tests {
     #[test]
     fn confirmed_shutdown_does_not_execute_queued_mutations() {
         let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let directory = std::env::temp_dir().join(format!("stream-archive-close-{nonce}"));
         let backend = directory.join("backend");
         std::fs::create_dir_all(&backend).unwrap();
         let core = StreamArchiveCore::open(&backend).unwrap().core;
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1).enable_all().build().unwrap();
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
         let (sender, requests) = mpsc::channel();
         let (responses, _receiver) = mpsc::channel();
-        sender.send(Request::Save(BTreeMap::from([
-            ("CHECK_INTERVAL".into(), "99".into()),
-        ]))).unwrap();
+        sender
+            .send(Request::Save(BTreeMap::from([(
+                "CHECK_INTERVAL".into(),
+                "99".into(),
+            )])))
+            .unwrap();
         sender.send(Request::Shutdown).unwrap();
         drop(sender);
         let stopping = std::sync::atomic::AtomicBool::new(true);

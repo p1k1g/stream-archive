@@ -640,17 +640,31 @@ mod tests {
         std::fs::create_dir_all(&backend).unwrap();
         let db = Store::default_path(&backend);
         let core = StreamArchiveCore::assemble(backend, Store::open(&db).unwrap()).unwrap();
-        assert_eq!(core.settings().unwrap()["STREAM_ARCHIVE_CLOSE_ACTION"], "EXIT");
-        core.update_environment_settings(&BTreeMap::from([
-            ("STREAM_ARCHIVE_CLOSE_ACTION".into(), "TRAY".into()),
-        ])).await.unwrap();
-        assert!(core.update_environment_settings(&BTreeMap::from([
-            ("STREAM_ARCHIVE_CLOSE_ACTION".into(), "invalid".into()),
-        ])).await.is_err());
+        assert_eq!(
+            core.settings().unwrap()["STREAM_ARCHIVE_CLOSE_ACTION"],
+            "EXIT"
+        );
+        core.update_environment_settings(&BTreeMap::from([(
+            "STREAM_ARCHIVE_CLOSE_ACTION".into(),
+            "TRAY".into(),
+        )]))
+        .await
+        .unwrap();
+        assert!(
+            core.update_environment_settings(&BTreeMap::from([(
+                "STREAM_ARCHIVE_CLOSE_ACTION".into(),
+                "invalid".into()
+            ),]))
+                .await
+                .is_err()
+        );
         core.shutdown().await;
         drop(core);
         let reopened = Store::open(db).unwrap();
-        assert_eq!(reopened.safe_settings().unwrap()["STREAM_ARCHIVE_CLOSE_ACTION"], "TRAY");
+        assert_eq!(
+            reopened.safe_settings().unwrap()["STREAM_ARCHIVE_CLOSE_ACTION"],
+            "TRAY"
+        );
     }
 
     #[tokio::test]
