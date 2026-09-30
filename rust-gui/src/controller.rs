@@ -33,6 +33,9 @@ use vod_adapter::{AnalysisSync, VodDraft};
 
 enum Request {
     Refresh,
+    DesktopStatus,
+    PrepareExit,
+    Shutdown,
     Reload,
     Save(BTreeMap<String, String>),
     Pick(usize, SettingKind, String),
@@ -186,9 +189,15 @@ enum Response {
         poll: bool,
     },
     Error(String),
+    DesktopStatus(String),
+    ExitCheck(Result<bool, String>),
+    ExitComplete,
 }
 
 pub struct Controller {
+    sender: mpsc::Sender<Request>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
     _response_timer: Timer,
     _live_poll_timer: Timer,
     _storage_poll_timer: Timer,
@@ -406,7 +415,11 @@ fn save_channels(
     }
 }
 
-fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) {
+fn worker(
+    requests: mpsc::Receiver<Request>,
+    responses: mpsc::Sender<Response>,
+    stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
     // Watcher/VOD operations spawn long-lived Tokio tasks. A single-worker
     // multi-thread runtime keeps those tasks moving between GUI requests while
     // retaining one dedicated native-runtime worker for controller requests.
@@ -439,6 +452,18 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
             return;
         }
     };
+    worker_loop(&core, &runtime, requests, &responses, &stopping);
+    runtime.block_on(core.shutdown());
+    let _ = responses.send(Response::ExitComplete);
+}
+
+fn worker_loop(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    requests: mpsc::Receiver<Request>,
+    responses: &mpsc::Sender<Response>,
+    stopping: &std::sync::atomic::AtomicBool,
+) {
     // spawn_vod_history_sync uses tokio::spawn internally, so enter the runtime
     // while creating that long-lived task. The multi-thread runtime then keeps
     // driving it between GUI requests.
@@ -449,7 +474,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     });
     if responses
         .send(read_snapshot(
-            &core,
+            core,
             true,
             "canonical SQLite에서 설정을 불러왔습니다. 저장한 변경사항은 이후 런타임 작업부터 적용됩니다.",
         ))
@@ -459,24 +484,24 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     }
     if responses
         .send(configuration_snapshot(
-            &core,
+            core,
             "canonical SQLite에서 채널 및 서비스 연결 정보를 불러왔습니다.",
         ))
         .is_err()
     {
         return;
     }
-    if responses.send(live_status(&core, &runtime, false)).is_err() {
+    if responses.send(live_status(core, runtime, false)).is_err() {
         return;
     }
-    if responses.send(storage_status(&core, false)).is_err() {
+    if responses.send(storage_status(core, false)).is_err() {
         return;
     }
-    if responses.send(vod_status(&core, &runtime, false)).is_err() {
+    if responses.send(vod_status(core, runtime, false)).is_err() {
         return;
     }
     if responses
-        .send(queue_status(&core, &runtime, false))
+        .send(queue_status(core, runtime, false))
         .is_err()
     {
         return;
@@ -508,8 +533,8 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
 
     if responses
         .send(maintenance_snapshot(
-            &core,
-            &runtime,
+            core,
+            runtime,
             false,
             "공유 런타임 서비스에서 관리 상태를 불러왔습니다.",
         ))
@@ -519,22 +544,36 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
     }
 
     for request in requests {
+        if stopping.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
         let response = match request {
+            Request::Shutdown => break,
+            Request::DesktopStatus => {
+                let status = runtime.block_on(desktop_snapshot(core));
+                Response::DesktopStatus(match status {
+                    Ok((summary, _)) => summary,
+                    Err(error) => format!("상태 확인 실패: {error}"),
+                })
+            }
+            Request::PrepareExit => {
+                Response::ExitCheck(runtime.block_on(desktop_snapshot(core)).map(|(_, active)| active))
+            }
             Request::Refresh => read_active_snapshot(
-                &core,
-                &runtime,
+                core,
+                runtime,
                 false,
                 "진단 정보를 다시 탐색하고 로컬 도구 버전을 확인했습니다. 저장하지 않은 편집 내용은 유지됩니다.",
             ),
             Request::Reload => read_snapshot(
-                &core,
+                core,
                 true,
                 "저장된 설정을 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.",
             ),
             Request::Save(patch) => {
                 match runtime.block_on(core.update_environment_settings(&patch)) {
                     Ok(_) => read_snapshot(
-                        &core,
+                        core,
                         true,
                         "canonical SQLite에 저장했습니다. 진행 중인 녹화는 현재 설정을 그대로 유지합니다.",
                     ),
@@ -546,10 +585,10 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 Err(error) => Response::Error(format!("폴더 선택기 오류: {error}")),
             },
             Request::ConfigReload => configuration_snapshot(
-                &core,
+                core,
                 "저장된 채널 및 공급자 인증 정보를 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.",
             ),
-            Request::ChannelsSave(channels) => save_channels(&core, &runtime, channels),
+            Request::ChannelsSave(channels) => save_channels(core, runtime, channels),
             Request::ChannelResolve {
                 index,
                 platform,
@@ -575,7 +614,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 ]);
                 match runtime.block_on(core.update_provider_configuration(&settings, &secrets)) {
                     Ok(_) => configuration_snapshot(
-                        &core,
+                        core,
                         "서비스 연결 정보를 저장했습니다. 비밀 값은 암호화 상태로 유지되며 UI로 다시 읽어오지 않습니다.",
                     ),
                     Err(error) => Response::ConfigError(format!(
@@ -589,8 +628,8 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     Response::ConfigError(format!("SOOP / Worker 테스트 실패: {error:#}"))
                 }
             },
-            Request::LiveStatus { poll } => live_status(&core, &runtime, poll),
-            Request::StorageLoad { poll } => storage_status(&core, poll),
+            Request::LiveStatus { poll } => live_status(core, runtime, poll),
+            Request::StorageLoad { poll } => storage_status(core, poll),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
                 Ok(status) => Response::Live {
                     status,
@@ -668,7 +707,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     },
                 }
             }
-            Request::VodStatus { poll } => vod_status(&core, &runtime, poll),
+            Request::VodStatus { poll } => vod_status(core, runtime, poll),
             Request::VodAnalyze { url } => {
                 match runtime.block_on(core.analyze_vod(vod_analyze_request(url))) {
                     Ok(status) => Response::Vod {
@@ -716,7 +755,7 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                     poll: false,
                 },
             },
-            Request::QueueStatus { poll } => queue_status(&core, &runtime, poll),
+            Request::QueueStatus { poll } => queue_status(core, runtime, poll),
             Request::QueueEnqueue(req) => {
                 let selected_parts = selected_parts_label(&req.parts);
                 match runtime.block_on(core.enqueue_vod(req)) {
@@ -782,8 +821,8 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 Err(error) => Response::HistoryError(format!("기록 새로고침 실패: {error:#}")),
             },
             Request::MaintenanceLoad => maintenance_snapshot(
-                &core,
-                &runtime,
+                core,
+                runtime,
                 true,
                 "관리 상태를 다시 탐색하고 로컬 도구 버전을 확인했습니다",
             ),
@@ -826,15 +865,15 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                 match runtime.block_on(core.restore_backup(&file_name)) {
                     Ok(outcome) => {
                         let _ = responses.send(read_snapshot(
-                            &core,
+                            core,
                             true,
                             "DB를 복원하고 canonical SQLite에서 설정을 다시 불러왔습니다.",
                         ));
                         let _ = responses.send(configuration_snapshot(
-                            &core,
+                            core,
                             "DB를 복원하고 채널 및 서비스 연결 정보를 다시 불러왔습니다.",
                         ));
-                        let _ = responses.send(queue_status(&core, &runtime, false));
+                        let _ = responses.send(queue_status(core, runtime, false));
                         if let Ok(history) = core.history(&HistoryFilter::default()) {
                             let _ = responses.send(Response::History {
                                 history,
@@ -843,8 +882,8 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
                             });
                         }
                         maintenance_snapshot(
-                            &core,
-                            &runtime,
+                            core,
+                            runtime,
                             false,
                             format!(
                                 "복원 완료: {}. 안전 백업: {}. Watcher는 중지 상태를 유지합니다.",
@@ -868,7 +907,22 @@ fn worker(requests: mpsc::Receiver<Request>, responses: mpsc::Sender<Response>) 
         }
     }
 
-    runtime.block_on(core.shutdown());
+}
+
+async fn desktop_snapshot(core: &StreamArchiveCore) -> Result<(String, bool), String> {
+    let live = core.watcher_status().await.map_err(|e| e.to_string())?;
+    let vod = core.local_vod_status().await;
+    let queue = core.queue_snapshot().await.map_err(|e| e.to_string())?;
+    let summary = format!(
+        "녹화 {}개 / 다운로드 {}개 / 대기 {}개 / 감시 {}",
+        live.recording_count,
+        usize::from(vod.running),
+        queue.queued_count,
+        if live.running { "실행 중" } else { "중지" }
+    );
+    let active = live.running || live.recording_count > 0 || vod.running
+        || queue.active_id.is_some() || queue.queued_count > 0;
+    Ok((summary, active))
 }
 
 fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a str {
@@ -885,6 +939,7 @@ fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a str {
         "CHECK_INTERVAL" => "LIVE 상태 확인 간격(초)입니다. 허용 범위: 1~86400.",
         "MIN_FREE_SPACE_GB" => "최소 여유 디스크 공간(GB)입니다. 허용 범위: 0~1000000.",
         "QUALITY" => "LIVE 화질입니다. 예: best",
+        "STREAM_ARCHIVE_CLOSE_ACTION" => "Windows 닫기 버튼 동작입니다. 트레이에서는 녹화·다운로드·감시가 계속됩니다. 변경사항을 저장하면 적용됩니다.",
         _ => fallback,
     }
 }
@@ -1345,10 +1400,12 @@ pub fn bind(ui: &MainWindow) -> Controller {
     queue_history.set_history_busy(true);
     let maintenance = ui.global::<MaintenanceState>();
     maintenance.set_busy(true);
-    if let Err(error) = std::thread::Builder::new()
+    let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_stopping = stopping.clone();
+    let worker = std::thread::Builder::new()
         .name("native-runtime".into())
-        .spawn(move || worker(requests, responses))
-    {
+        .spawn(move || worker(requests, responses, worker_stopping));
+    if let Err(error) = &worker {
         state.set_settings_busy(false);
         state.set_config_busy(false);
         state.set_live_busy(false);
@@ -2168,6 +2225,33 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let response_maintenance_log_poll_flag = maintenance_log_poll_in_flight.clone();
     let response_channels = channels_draft.clone();
     let response_vod_draft = vod_draft.clone();
+    let exit_sender = sender.clone();
+    let exit_stopping = stopping.clone();
+    let exit_weak = ui.as_weak();
+    state.on_desktop_exit(move || {
+        if let Some(ui) = exit_weak.upgrade() {
+            let state = ui.global::<AppState>();
+            if !state.get_desktop_exit_pending() {
+                state.set_desktop_exit_pending(true);
+                if exit_sender.send(Request::PrepareExit).is_err() {
+                    let _ = slint::quit_event_loop();
+                }
+            }
+        }
+    });
+    let desktop_sender = sender.clone();
+    let desktop_weak = ui.as_weak();
+    state.on_desktop_poll(move || {
+        if let Some(ui) = desktop_weak.upgrade() {
+            let state = ui.global::<AppState>();
+            if !state.get_desktop_poll_pending()
+                && desktop_sender.send(Request::DesktopStatus).is_ok()
+            {
+                state.set_desktop_poll_pending(true);
+            }
+        }
+    });
+    let response_exit_sender = sender.clone();
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
@@ -2176,6 +2260,33 @@ pub fn bind(ui: &MainWindow) -> Controller {
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
+                Response::DesktopStatus(status) => {
+                    state.set_desktop_poll_pending(false);
+                    state.set_desktop_status(status.into());
+                }
+                Response::ExitCheck(check) => {
+                    let confirmed = match check {
+                        Ok(active) => !active || crate::desktop::confirm_exit(&ui),
+                        Err(error) => {
+                            crate::desktop::notify(&ui, &format!(
+                                "작업 상태를 확인하지 못했습니다. 종료를 다시 시도하세요.\n{error}"
+                            ));
+                            false
+                        }
+                    };
+                    if confirmed {
+                        exit_stopping.store(true, std::sync::atomic::Ordering::Release);
+                        state.set_desktop_status("작업 정리 후 종료 중...".into());
+                        if response_exit_sender.send(Request::Shutdown).is_err() {
+                            let _ = slint::quit_event_loop();
+                        }
+                    } else {
+                        state.set_desktop_exit_pending(false);
+                    }
+                }
+                Response::ExitComplete => {
+                    let _ = slint::quit_event_loop();
+                }
                 Response::Snapshot {
                     fields,
                     diagnostics,
@@ -2186,6 +2297,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     let has_settings_snapshot = fields.is_some();
                     let startup_failed = !state.get_live_loaded() && fields.is_none();
                     if let Some(fields) = fields {
+                        state.set_close_to_tray(fields.iter().any(|f|
+                            f.key == "STREAM_ARCHIVE_CLOSE_ACTION" && f.value == "TRAY"
+                        ));
                         draft.borrow_mut().load(fields);
                         render_draft(&ui, &draft.borrow());
                         state.set_settings_loaded(true);
@@ -2615,7 +2729,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     );
 
     let weak = ui.as_weak();
-    let maintenance_log_poll_sender = sender;
+    let maintenance_log_poll_sender = sender.clone();
     let maintenance_log_poll_flag = maintenance_log_poll_in_flight;
     let maintenance_log_poll_timer = Timer::default();
     maintenance_log_poll_timer.start(
@@ -2645,11 +2759,55 @@ pub fn bind(ui: &MainWindow) -> Controller {
     );
 
     Controller {
+        sender,
+        worker: worker.ok(),
+        stopping,
         _response_timer: response_timer,
         _live_poll_timer: live_poll_timer,
         _storage_poll_timer: storage_poll_timer,
         _vod_poll_timer: vod_poll_timer,
         _queue_poll_timer: queue_poll_timer,
         _maintenance_log_poll_timer: maintenance_log_poll_timer,
+    }
+}
+
+impl Drop for Controller {
+    fn drop(&mut self) {
+        self.stopping.store(true, std::sync::atomic::Ordering::Release);
+        let _ = self.sender.send(Request::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod desktop_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn confirmed_shutdown_does_not_execute_queued_mutations() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("stream-archive-close-{nonce}"));
+        let backend = directory.join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let core = StreamArchiveCore::open(&backend).unwrap().core;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1).enable_all().build().unwrap();
+        let (sender, requests) = mpsc::channel();
+        let (responses, _receiver) = mpsc::channel();
+        sender.send(Request::Save(BTreeMap::from([
+            ("CHECK_INTERVAL".into(), "99".into()),
+        ]))).unwrap();
+        sender.send(Request::Shutdown).unwrap();
+        drop(sender);
+        let stopping = std::sync::atomic::AtomicBool::new(true);
+        worker_loop(&core, &runtime, requests, &responses, &stopping);
+        assert_eq!(core.settings().unwrap()["CHECK_INTERVAL"], "30");
+        runtime.block_on(core.shutdown());
+        drop(runtime);
+        drop(core);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -23,6 +23,9 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
         }
         validate_single_line(value, 2048, &format!("setting {key}"))?;
         match key.as_str() {
+            "STREAM_ARCHIVE_CLOSE_ACTION" if !matches!(value.as_str(), "EXIT" | "TRAY") => {
+                bail!("STREAM_ARCHIVE_CLOSE_ACTION must be EXIT or TRAY");
+            }
             "CHECK_INTERVAL" => validate_int(value, 1, 86_400, key)?,
             "CHANNEL_RELOAD_INTERVAL" => validate_int(value, 1, 3_600, key)?,
             "RECORD_RETRY_INTERVAL" => validate_int(value, 1, 3_600, key)?,

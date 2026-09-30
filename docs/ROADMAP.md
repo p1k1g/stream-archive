@@ -73,3 +73,9 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - 🚧 23.12 1.0.0 릴리스 마무리 (문서·검증 정리 완료, 수동 RC 및 공개 승인 대기)
 
 첫 공개 안정 버전 `1.0.0`을 준비 중입니다. [릴리스 노트](RELEASE_NOTES_1_0_0.md), [릴리스 마무리 절차](PHASE23_12_1_0_0_RELEASE_CLOSURE.md), [최종 수동 검증 체크리스트](MANUAL_RC_1_0_0.md)를 참고하세요. 로드맵의 완료 표시는 해당 구현·절차 정리를 뜻하며 실제 수동 QA 완료나 공개 승인을 의미하지 않습니다. 아직 `v1.0.0` tag / GitHub Release는 공개하지 않았습니다.
+
+## 1.0.0 이후 개발
+
+- Phase 24.1 🚧 Windows 닫기 동작 / 시스템 트레이 ([설계 및 수동 QA](PHASE24_1_WINDOWS_TRAY.md))
+- Phase 24.2 예정: 트레이·종료 동작 최종 검증 및 릴리스 준비
+- Phase 25 예정: Kick LIVE 지원 조사 및 구현
