@@ -301,111 +301,116 @@ Streamlink, FFmpeg, yt-dlp는 Stream Archive에 포함된 코드가 아니라 �
 
 ## 개발 / CI
 
-Pull Request runtime validation은 `.github/workflows/rust-runtime-check.yml`에서 수행합니다.
+Pull Request의 런타임 검증은 `.github/workflows/rust-runtime-check.yml`에서 수행합니다.
 
 주요 검증 항목:
 
-- Windows / Linux / macOS whole-crate `cargo fmt --check`
-- Windows / Linux / macOS Rust unit tests, including deterministic media-tool subprocess harness coverage
-- Windows / Linux / macOS native compile check
+- Windows / Linux / macOS 전체 crate의 `cargo fmt --check`
+- Windows / Linux / macOS Rust unit tests 및 재현 가능한 미디어 도구 subprocess 검증
+- Windows / Linux / macOS native compile 검증
 - Windows / Linux / macOS strict Clippy (`-D warnings`)
-- Windows Runtime contract guard
-- Source archive release-metadata smoke test (Windows/Linux/macOS)
-- Windows portable package + ZIP archive build/verification
-- Linux/macOS TAR.GZ package build, package-local checksum, archive checksum, fresh-extract CLI smoke
+- Windows 런타임 contract guard
+- source archive에서 릴리스 metadata 생성 smoke (Windows/Linux/macOS)
+- Windows portable 패키지 및 ZIP build·검증
+- Linux/macOS TAR.GZ build, 패키지 내부·압축 파일 체크섬 및 새 압축 해제 CLI smoke
 
-Release workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식이며 GitHub Release/tag를 만들지 않고 검증된 Actions artifact만 업로드하도록 구성되어 있습니다. artifact job 전에 canonical runtime/packaging contract gate가 먼저 통과해야 하며 artifact retention은 7일입니다.
+릴리스 workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식입니다. GitHub Release/tag를 만들지 않고 검증한 Actions artifact만 업로드합니다. artifact job 전에 런타임·패키징 contract gate가 통과해야 하며, 업로드 전 정확한 1.0.0 metadata와 Windows EXE 버전도 확인합니다. artifact 보관 기간은 7일입니다.
 
-PR CI는 native GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-arm64` package를 실제 조립하고 checksum/fresh-extract smoke까지 검증합니다. 실제 provider credential이 필요한 로그인/session smoke와 공개 release 판정은 자동 CI 범위 밖이며 Phase 23.7 수동 QA로 남깁니다.
+PR CI는 각 플랫폼의 GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-arm64` 패키지를 실제 조립하고 체크섬·새 압축 해제 smoke까지 검증합니다. 실제 인증정보가 필요한 로그인·세션 smoke와 공개 판정은 자동 CI 범위 밖입니다. 남은 항목은 [1.0.0 수동 검증 체크리스트](docs/MANUAL_RC_1_0_0.md)에서 관리합니다.
 
 ## 문서
 
 | 문서 | 내용 |
 |---|---|
-| `docs/PHASE21_NATIVE_PORTABLE.md` | Phase 21.8 portable 구조 및 Windows manual QA |
-| `docs/PHASE23_1_NATIVE_UX_CLOSURE.md` | Phase 23.1 Windows Native daily-use UX closure 및 portable manual QA checklist |
+| `docs/RELEASE_NOTES_1_0_0.md` | 1.0.0 릴리스 노트 및 지원 범위 |
+| `docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md` | 릴리스 검증·artifact 생성·공개 판정 절차 |
+| `docs/MANUAL_RC_1_0_0.md` | 최종 artifact의 수동 QA·업그레이드·rollback 체크리스트 |
+| `docs/PHASE21_NATIVE_PORTABLE.md` | Phase 21.8 portable 구조 및 Windows 수동 QA |
+| `docs/PHASE23_1_NATIVE_UX_CLOSURE.md` | Phase 23.1 Windows Native daily-use UX closure 및 portable 수동 QA 체크리스트 |
 | `docs/PHASE23_2_RUNTIME_PREFLIGHT.md` | Phase 23.2 shared Diagnostics / CLI runtime preflight contract |
 | `docs/PHASE23_3_MEDIA_TOOL_HARNESS.md` | Phase 23.3 deterministic media-tool subprocess integration harness |
 | `docs/PHASE23_4_PROVIDER_E2E.md` | Phase 23.4 deterministic SOOP/CHZZK provider E2E validation |
 | `docs/PHASE23_5_UNIX_CLI_COMPLETION.md` | Phase 23.5 Unix CLI daily-use completion, signal lifecycle 및 CI |
-| `docs/PHASE23_6_PACKAGING_RELEASE_READINESS.md` | Phase 23.6 Windows/Linux/macOS portable artifact layout, checksum, CI/release readiness |
+| `docs/PHASE23_6_PACKAGING_RELEASE_READINESS.md` | Phase 23.6 Windows/Linux/macOS portable 구성, 체크섬 및 CI·릴리스 준비 |
 | `docs/PHASE21_NATIVE_UX_POLISH.md` | Phase 21.9 Native storage/backup IA/claim sidecar UX 및 manual QA |
 | `docs/UNIX_CLI.md` | Linux/macOS headless CLI command reference, secrets, lifecycle 및 smoke |
-| `docs/OPERATIONS.md` | DB backup/restore, upgrade/rollback 절차 |
+| `docs/OPERATIONS.md` | DB 백업·복구 및 업그레이드·rollback 절차 |
 | `docs/PHASE19_AUDIT.md` | Runtime hardening, ownership, architecture audit 및 Phase 20 경계 |
 | `THIRD_PARTY_NOTICES.md` | 외부 도구 및 라이선스 안내 |
 | `SECURITY.md` | 보안 취약점 제보 정책 |
 | `CONTRIBUTING.md` | 기여 및 PR 가이드 |
 
-## Roadmap
+<a id="roadmap"></a>
 
-### Phase 19 ✅ Runtime Hardening / Cleanup
+## 로드맵
 
-- Runtime resource ownership 및 cleanup 강화
-- LIVE process-tree ownership 강화
-- CHZZK VOD bounded reader / cancellation cleanup
-- SQLite source-of-truth 정리
-- OS-specific runtime boundary 통합
-- Runtime contract / CI consolidation
+### Phase 19 ✅ 런타임 안정화 및 정리
 
-### Phase 19.5 ✅ Namespace / Legacy Cleanup
+- 런타임 자원 소유권 및 정리 강화
+- LIVE process-tree 소유권 강화
+- CHZZK VOD reader의 처리 한도 및 취소 시 정리
+- SQLite를 기준 데이터 저장소로 정리
+- OS별 런타임 경계 통합
+- 런타임 contract 및 CI 통합
 
-- 제품 namespace를 `Stream Archive`로 통일
-- app-wide 환경변수와 runtime 파일명을 `STREAM_ARCHIVE_*` / `stream-archive-*`로 정리
-- INI/TXT compatibility path와 dead code 제거
-- portable/build/release 이름 정리
+### Phase 19.5 ✅ 이름 체계 및 legacy 정리
 
-### Phase 20 ✅ Cross-platform Runtime Readiness
+- 제품 이름 체계를 `Stream Archive`로 통일
+- 공통 환경변수와 런타임 파일명을 `STREAM_ARCHIVE_*` / `stream-archive-*`로 정리
+- INI/TXT 호환 경로와 사용하지 않는 코드 제거
+- portable·build·릴리스 이름 정리
 
-- ✅ Windows/Linux/macOS GitHub-hosted CI matrix baseline
-- ✅ Unix process-group ownership / termination
-- ✅ Linux Secret Service / macOS Keychain native secret-storage boundary
-- ✅ Unix/headless CLI + cross-platform Streamlink/yt-dlp/FFmpeg discovery baseline
-- ✅ Linux/macOS CLI runtime/configuration commands 확장 — Phase 23.5에서 완료
-- ✅ deterministic Linux/macOS real-binary CLI/tool integration coverage — Phase 23.5에서 완료
-- ✅ Unix portable archive packaging / install guidance — Phase 23.6에서 완료
+### Phase 20 ✅ 크로스플랫폼 런타임 준비
+
+- ✅ Windows/Linux/macOS GitHub-hosted CI matrix 기반 확립
+- ✅ Unix process-group 소유권 및 종료
+- ✅ Linux Secret Service / macOS Keychain 비밀정보 저장 경계
+- ✅ Unix/headless CLI 및 크로스플랫폼 Streamlink/yt-dlp/FFmpeg 탐색 기반
+- ✅ Linux/macOS CLI 런타임·설정 명령 확장 — Phase 23.5에서 완료
+- ✅ Linux/macOS 실제 binary 기반의 재현 가능한 CLI·도구 통합 검증 — Phase 23.5에서 완료
+- ✅ Unix portable 압축 파일 패키징 및 설치 안내 — Phase 23.6에서 완료
 
 Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 추가하지 않습니다. Unix 계열은 CLI/headless 경로를 명확히 하고, Windows GUI 교체는 Phase 21로 분리합니다.
 
 ### Phase 21 ✅ Slint Native GUI
 
-- ✅ Settings / native picker / diagnostics
-- ✅ Channels + LIVE watcher/recording
-- ✅ SOOP/CHZZK VOD analyze/download
+- ✅ 설정 / Native 경로 선택 / 진단
+- ✅ Channels 및 LIVE 감시·녹화
+- ✅ SOOP/CHZZK VOD 분석·다운로드
 - ✅ VOD Queue + LIVE/VOD History
-- ✅ Native Backup/Restore + Diagnostics/Runtime Logs
-- ✅ Windows Native portable packaging / startup 전환
-- ✅ Native UX polish: LIVE 저장공간, 설정 내부 일반/관리 정리 및 Backup 관리 통합, 내부 claim sidecar 노출 개선 — Phase 23.1에서 daily-use UX closure 완료
+- ✅ Native Backup/Restore 및 Diagnostics/Runtime Logs
+- ✅ Windows Native portable 패키징 및 실행 경로 전환
+- ✅ Native UX 개선: LIVE 저장공간, 설정 내부 일반/관리 정리 및 Backup 관리 통합, 내부 claim sidecar 노출 개선 — Phase 23.1에서 일상 사용 UX 정리 완료
 - Slint GUI는 shared Rust core를 직접 호출하며 localhost HTTP, direct SQLite, direct process control을 사용하지 않음
 - ✅ Phase 22.3에서 legacy browser/Web UI, Axum presentation, Web launcher/fallback 제거
 - Linux/macOS는 GUI를 복제하지 않고 Phase 20의 CLI/headless 인터페이스 유지
 
-### Phase 22 ✅ Runtime / Legacy Architecture Closure
+### Phase 22 ✅ 런타임 및 legacy 구조 정리
 
-- ✅ legacy dependency / warning cleanup
+- ✅ legacy dependency 및 warning 정리
 - ✅ browser/Web presentation 및 Axum application layer 제거
-- ✅ runtime/core compatibility boundary audit
-- ✅ shared runtime source path를 `rust-runtime/`로 통일
+- ✅ 런타임·core 호환 경계 점검
+- ✅ 공유 런타임 source 경로를 `rust-runtime/`로 통일
 - ✅ CI/release workflow 이름을 `rust-runtime-*`로 통일
-- ✅ final legacy/compatibility audit 및 CHZZK transient runtime path 정리
+- ✅ 최종 legacy·호환성 점검 및 CHZZK 임시 런타임 경로 정리
 - `stream-archive-server` package/headless binary 이름은 Linux/macOS CLI/headless 및 개발 호환성 경계로 유지하며 Windows 공식 ZIP에는 포함하지 않음
 
-### Phase 23 🚧 Product Readiness / Integration
+### Phase 23 🚧 제품 공개 준비 및 통합
 
-- ✅ 23.1 Native Daily-use UX Closure
-- ✅ 23.2 Diagnostics / Runtime Preflight
-- ✅ 23.3 Media-tool Integration Harness
-- ✅ 23.4 Provider E2E Validation
-- ✅ 23.5 Unix CLI Completion
-- ✅ 23.6 Packaging / Release Readiness
-- ✅ 23.7 Release Candidate / Final QA
-- ✅ 23.8 Release Cleanup / Code Reduction
-- ✅ 23.9 Final Manual RC / Public Release Preparation
-- ✅ 23.10 Windows Branding / Release Polish
-- ✅ 23.11 Windows Icon Resource Fix
-- 🚧 23.12 1.0.0 Release Closure (PR preparation; public release pending)
+- ✅ 23.1 Native 일상 사용 UX 정리
+- ✅ 23.2 Diagnostics 및 런타임 사전 점검
+- ✅ 23.3 미디어 도구 통합 검증
+- ✅ 23.4 서비스별 E2E 검증
+- ✅ 23.5 Unix CLI 완성
+- ✅ 23.6 패키징 및 릴리스 준비
+- ✅ 23.7 RC 및 최종 QA 절차 정리
+- ✅ 23.8 릴리스 정리 및 코드 축소
+- ✅ 23.9 최종 수동 RC 절차 및 공개 준비
+- ✅ 23.10 Windows 브랜딩 및 배포 마무리
+- ✅ 23.11 Windows 아이콘 resource 수정
+- 🚧 23.12 1.0.0 릴리스 마무리 (문서·검증 정리 완료, 수동 RC 및 공개 승인 대기)
 
-첫 public stable release `1.0.0`을 준비 중입니다. [Release notes](docs/RELEASE_NOTES_1_0_0.md)와 [manual RC 체크리스트](docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md)를 참고하세요. 아직 tag/Release는 발행하지 않았습니다.
+첫 공개 안정 버전 `1.0.0`을 준비 중입니다. [릴리스 노트](docs/RELEASE_NOTES_1_0_0.md), [릴리스 마무리 절차](docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md), [최종 수동 검증 체크리스트](docs/MANUAL_RC_1_0_0.md)를 참고하세요. 로드맵의 완료 표시는 해당 구현·절차 정리를 뜻하며 실제 수동 QA 완료나 공개 승인을 의미하지 않습니다. 아직 `v1.0.0` tag / GitHub Release는 공개하지 않았습니다.
 
 ---
 

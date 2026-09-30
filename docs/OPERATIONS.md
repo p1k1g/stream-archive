@@ -1,158 +1,185 @@
-# Stream Archive Operations
+<a id="stream-archive-operations"></a>
 
-Operational guidance for the current Rust/SQLite runtime.
+# Stream Archive 운영 가이드
 
-## Source of truth
+현재 Rust/SQLite 런타임의 운영, 백업·복구, 업그레이드 및 rollback 절차입니다.
 
-The primary database is `data/stream-archive.db` unless `STREAM_ARCHIVE_DATA_DIR` is set. Settings, channels, encrypted secrets, VOD queue state, LIVE history, VOD history, and backup policy are stored there.
+<a id="source-of-truth"></a>
 
-Runtime INI/TXT mirrors are retired. Do not create or edit `SOOP_LIVE_SETTING.ini`, `SOOP_LIVE_CHANNELS.txt`, or `SOOP_VOD_SETTING.ini` as application configuration.
+## 설정과 데이터의 기준
 
-For users upgrading from an earlier private build, startup performs only a bounded database filename migration: if `stream-archive.db` does not exist but `soop.db` does, the database is copied into the new canonical filename and the old database file is removed after the SQLite backup completes successfully.
+`STREAM_ARCHIVE_DATA_DIR`을 지정하지 않으면 기본 DB는 `data/stream-archive.db`입니다. 설정, Channels, 암호화된 비밀정보, VOD Queue 상태, LIVE/VOD History 및 백업 정책이 이 DB에 저장됩니다.
 
-## Online backup
+INI/TXT 설정 mirror는 폐기했습니다. `SOOP_LIVE_SETTING.ini`, `SOOP_LIVE_CHANNELS.txt`, `SOOP_VOD_SETTING.ini`를 애플리케이션 설정으로 만들거나 편집하지 않습니다.
 
-The native Slint UI keeps administration under one top-level **설정** page. **설정 -> 일반** contains provider/runtime configuration, while **설정 -> 관리** owns the complete backup surface: automatic-backup policy, managed backup creation/list/integrity/restore, Diagnostics, and Runtime Logs. These views use the shared BackupManager/StreamArchiveCore service and canonical SQLite policy.
+이전 비공개 build에서 업그레이드할 때 시작 과정에서 제한된 DB 파일명 migration만 수행합니다. `stream-archive.db`가 없고 `soop.db`가 있으면 새 기준 파일명으로 복사하며, SQLite 백업이 성공한 뒤 기존 DB 파일을 삭제합니다.
 
-Defaults:
+<a id="online-backup"></a>
 
-- backup enabled;
-- every 24 hours;
-- keep at most 10 managed backups;
-- remove managed backups older than 3 days;
-- default directory is the sibling `stream-archive-backups` folder outside the replaceable portable package directory.
+## 실행 중 백업
 
-Set `STREAM_ARCHIVE_BACKUP_DIR` to force a specific backup directory. When the environment override is present the Native backup-directory field is read-only, while retention settings remain editable.
+Slint Native UI의 관리는 **설정** 화면에 모여 있습니다. **설정 → 일반**에서 서비스·런타임 설정을 관리하고, **설정 → 관리**에서 자동 백업 정책, 관리형 백업 생성·목록·무결성·복구, Diagnostics 및 Runtime Logs를 사용합니다. 공유 `BackupManager` / `StreamArchiveCore` 서비스와 SQLite의 기준 정책을 사용합니다.
 
-Managed backup names use the `stream_archive_*.db` prefix and include companion `.db.json` metadata. Files without valid metadata are not automatically pruned.
+기본 정책은 다음과 같습니다.
 
-## Native storage status
+- 백업 활성화
+- 24시간 간격
+- 관리형 백업 최대 10개 보관
+- 3일이 지난 관리형 백업 삭제
+- 교체하는 portable 패키지 밖의 형제 디렉터리 `stream-archive-backups` 사용
 
-The Native LIVE page reads storage diagnostics through `StreamArchiveCore` and the shared `storage_service`; it does not use localhost HTTP or probe filesystems from Slint. The snapshot includes the configured `OUTPUT_DIR`, per-channel output-directory overrides, and the canonical SQLite data directory. Paths on the same Windows volume are collapsed into one row.
+`STREAM_ARCHIVE_BACKUP_DIR`로 백업 디렉터리를 강제 지정할 수 있습니다. 환경변수가 지정되면 Native UI의 백업 경로 필드는 읽기 전용이 되며 보관 정책은 편집할 수 있습니다.
 
-Storage state uses the shared runtime thresholds:
+관리형 백업 파일명은 `stream_archive_*.db`이며 `.db.json` metadata가 함께 생성됩니다. 유효한 metadata가 없는 파일은 자동 정리하지 않습니다.
 
-- **정상 / OK**: free space is greater than twice `MIN_FREE_SPACE_GB`;
-- **주의 / WARN**: free space is at or below twice the threshold but above the threshold;
-- **공간 부족 / CRITICAL**: free space is at or below `MIN_FREE_SPACE_GB`.
+<a id="native-storage-status"></a>
 
-The recorder's actual low-space stop/start boundary remains `MIN_FREE_SPACE_GB`; the warning band is presentation only. Storage refresh happens on initial Native load, when returning to LIVE, on explicit refresh, and on a bounded LIVE-only timer.
+## Native 저장공간 상태
 
-## CHZZK destination claim sidecars
+LIVE 화면은 `StreamArchiveCore`와 공유 `storage_service`에서 저장공간 진단을 읽습니다. Slint가 localhost HTTP를 사용하거나 직접 filesystem을 조회하지 않습니다. 설정된 `OUTPUT_DIR`, 채널별 출력 경로와 기준 SQLite 데이터 경로가 포함되며, 같은 Windows volume의 경로는 한 행으로 묶습니다.
 
-CHZZK VOD publication uses a `.stream-archive.claim` sidecar beside the intended final media pathname as a reusable file-lock anchor. The claim pathname intentionally survives job completion; deleting it immediately after unlock can let concurrent contenders lock different file identities and weaken no-clobber guarantees.
+| 상태 | 남은 공간 |
+|---|---|
+| 정상 / OK | `MIN_FREE_SPACE_GB`의 2배보다 큼 |
+| 주의 / WARN | 기준값보다 크고 2배 이하 |
+| 공간 부족 / CRITICAL | `MIN_FREE_SPACE_GB` 이하 |
 
-On Windows, Stream Archive marks these internal claim files with the Hidden attribute so they do not normally appear in Explorer while hidden items are disabled. The lock location and reuse semantics are unchanged. Existing claim files are hidden the next time that destination is claimed. `.stream-archive.finalizing` remains a temporary publication artifact and is reclaimed/removed by the existing completion, cancellation, and stale-recovery paths.
+녹화기의 실제 공간 부족 시작·중지 기준은 `MIN_FREE_SPACE_GB` 그대로입니다. 주의 구간은 화면 표시용입니다. 최초 Native 로딩, LIVE 화면으로 복귀, 직접 새로고침 및 LIVE 화면에서만 동작하는 제한된 timer로 갱신합니다.
 
-## Offline manual backup
+<a id="chzzk-destination-claim-sidecars"></a>
 
-For an offline maintenance backup on Windows, close `StreamArchive.exe` cleanly first. The official Windows package is Native-only. If a developer/Unix-compatible headless runtime was started separately, stop that owner as well. Do not kill unrelated `streamlink`, `ffmpeg`, or `yt-dlp` processes.
+## CHZZK 출력 경로 claim sidecar
 
-From the repository root or portable package root:
+CHZZK VOD의 최종 파일 확정에는 목표 미디어 파일 옆의 `.stream-archive.claim`을 재사용 가능한 file-lock 기준으로 사용합니다. 작업 완료 후에도 이 경로를 유지합니다. unlock 직후 삭제하면 경쟁 작업이 서로 다른 파일을 잠가 덮어쓰기 방지 보장이 약해질 수 있습니다.
+
+Windows에서는 내부 claim 파일에 Hidden 속성을 지정해 Explorer에서 숨김 파일 표시를 끈 경우 보이지 않도록 합니다. 잠금 위치와 재사용 방식은 같습니다. 기존 claim 파일도 다음에 해당 출력 경로를 claim할 때 숨김 처리합니다. `.stream-archive.finalizing`은 임시 파일 확정용 artifact이며 기존 완료·취소·오래된 작업 복구 경로에서 정리합니다.
+
+<a id="offline-manual-backup"></a>
+
+## 종료 후 수동 백업
+
+Windows 오프라인 유지보수 백업 전 `StreamArchive.exe`를 정상 종료합니다. 공식 Windows 패키지는 Native-only입니다. 개발용 또는 Unix 호환 headless 런타임을 따로 실행했다면 해당 소유자도 종료합니다. 관계없는 `streamlink`, `ffmpeg`, `yt-dlp` 프로세스를 종료하지 않습니다.
+
+repository root 또는 portable package root에서 실행합니다.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1
 ```
 
-The script:
+스크립트는 다음을 수행합니다.
 
-- refuses to run while `StreamArchive.exe` or `stream-archive-server.exe` is active;
-- validates the SQLite header;
-- backs up `stream-archive.db`;
-- writes a timestamped `stream_archive_manual_*.db` file;
-- writes companion JSON metadata with size and SHA-256;
-- uses the sibling `stream-archive-backups` directory by default;
-- keeps the newest 10 managed backups by default.
+- `StreamArchive.exe` 또는 `stream-archive-server.exe` 실행 중에는 거부
+- SQLite header 검증
+- `stream-archive.db` 백업
+- timestamp가 포함된 `stream_archive_manual_*.db` 생성
+- 파일 크기·SHA-256을 포함한 JSON metadata 생성
+- 기본 경로로 형제 디렉터리 `stream-archive-backups` 사용
+- 기본적으로 최신 관리형 백업 10개 보관
 
-Custom retention:
+보관 정책 지정:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1 -Keep 30 -RetentionDays 30
 ```
 
-Custom data directory:
+데이터 디렉터리 지정:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1 -DataDir D:\StreamArchiveData
 ```
 
-## Restore
+<a id="restore"></a>
 
-Restore is destructive to the active authoritative database and therefore requires the watcher, active VOD work, and VOD queue to be stopped. `StreamArchiveCore::restore_backup` enforces these runtime conditions and creates a `pre_restore` safety backup first.
+## 복구
 
-Offline restore:
+복구는 기준 DB를 교체하므로 watcher, 실행 중인 VOD 작업 및 VOD Queue를 먼저 중지해야 합니다. `StreamArchiveCore::restore_backup`은 이 조건을 확인하고 먼저 `pre_restore` 안전 백업을 생성합니다.
+
+오프라인 복구:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\maintenance\Restore-StreamArchiveData.ps1 -BackupFile ..\stream-archive-backups\stream_archive_manual_YYYYMMDD_HHMMSS.db
 ```
 
-The restore script:
+복구 스크립트는 다음을 수행합니다.
 
-- refuses to run while `StreamArchive.exe` or `stream-archive-server.exe` is active;
-- validates the SQLite header;
-- verifies SHA-256 when companion metadata exists;
-- creates a `pre_restore_*.db` safety copy of the current database;
-- removes stale `-wal` and `-shm` sidecars;
-- copies through a temporary file before replacing `stream-archive.db`.
+- `StreamArchive.exe` 또는 `stream-archive-server.exe` 실행 중에는 거부
+- SQLite header 검증
+- 함께 제공된 metadata가 있으면 SHA-256 검증
+- 현재 DB의 `pre_restore_*.db` 안전 사본 생성
+- 오래된 `-wal`, `-shm` sidecar 제거
+- 임시 파일을 거쳐 복사한 뒤 `stream-archive.db` 교체
 
-After restore, launch `StreamArchive.exe` and verify settings, channels, LIVE history, VOD history, and queue state before resuming unattended operation.
+복구 후 `StreamArchive.exe`를 실행해 설정, Channels, LIVE/VOD History 및 Queue 상태를 확인한 뒤 무인 운영을 재개합니다.
 
+<a id="upgrade-procedure"></a>
 
-## Upgrade procedure
+## 업그레이드 절차
 
-Before replacing any package:
+패키지를 교체하기 전에 다음을 수행합니다.
 
-1. Stop the foreground watcher/runtime cleanly.
-2. Create a database backup.
-3. Keep the previous package/archive until the new version has been exercised.
-4. Verify the new archive checksum before extraction.
-5. Keep the existing runtime data directory separate from the replacement package files.
-6. Start the new package and run diagnostics before resuming unattended work.
+1. foreground watcher·런타임을 정상 종료합니다.
+2. DB 백업을 생성합니다.
+3. 새 버전을 충분히 확인할 때까지 이전 패키지·압축 파일을 보관합니다.
+4. 새 압축 파일의 체크섬을 확인합니다.
+5. 기존 런타임 데이터 경로와 교체할 패키지 파일을 분리합니다.
+6. 새 패키지를 실행하고 Diagnostics를 확인한 뒤 무인 작업을 재개합니다.
 
-### Windows portable upgrade
+<a id="windows-portable-upgrade"></a>
 
-Official Windows release ZIPs are clean packages. They contain an empty `data\` directory and must not be extracted over the only copy of a live database.
+### Windows portable 업그레이드
 
-1. Stop `StreamArchive.exe`.
-2. Back up `data\stream-archive.db`.
-3. Extract the new ZIP to a new package directory.
-4. Preserve or explicitly point `STREAM_ARCHIVE_DATA_DIR` at the existing data directory.
-5. Launch `StreamArchive.exe` / `RUN.bat`.
-6. Verify Diagnostics, Channels, LIVE start/stop, VOD analyze/download, Queue and History.
+공식 Windows ZIP은 비어 있는 `data\` 디렉터리를 포함하는 깨끗한 패키지입니다. 실행 중 DB의 유일한 사본 위에 덮어 풀면 안 됩니다.
 
-Local developer `BUILD_PORTABLE.bat` rebuilds may preserve an existing `dist\stream-archive\data` directory. This convenience is distinct from the official CI/release artifact contract, which requires clean runtime data.
+1. `StreamArchive.exe`를 종료합니다.
+2. `data\stream-archive.db`를 백업합니다.
+3. 새 ZIP을 새 패키지 디렉터리에 풉니다.
+4. 기존 데이터를 보존하거나 `STREAM_ARCHIVE_DATA_DIR`로 해당 경로를 명시합니다.
+5. `StreamArchive.exe` / `RUN.bat`를 실행합니다.
+6. Diagnostics, Channels, LIVE 시작·종료, VOD 분석·다운로드, Queue, History를 확인합니다.
 
-### Linux/macOS portable upgrade
+개발용 `BUILD_PORTABLE.bat` 재빌드는 기존 `dist\stream-archive\data`를 보존할 수 있습니다. 이 편의 기능과 런타임 데이터가 비어 있어야 하는 공식 CI·배포 artifact contract는 구분합니다.
 
-The Phase 23.6 Unix archives contain `bin/`, `backend/`, `data/`, docs, release metadata and checksums. The bundled `data/` directory is intentionally empty.
+<a id="linuxmacos-portable-upgrade"></a>
 
-1. Stop `stream-archive-cli serve --watch` or `stream-archive-server`.
-2. Back up the canonical SQLite database.
-3. Verify the archive-level `.sha256` file.
-4. Extract the new archive to a new directory instead of overwriting the current package in place.
-5. Reuse the existing data directory with `STREAM_ARCHIVE_DATA_DIR`, or copy only after a verified backup.
-6. Run `./bin/stream-archive-cli doctor --active-tools`.
-7. Start the runtime and verify status/Queue/History before unattended operation.
+### Linux/macOS portable 업그레이드
 
-When using package-local defaults, run commands from the extracted `stream-archive/` root so `backend/` and `data/` resolve to that package. For long-lived installs, explicitly separating package binaries, runtime data and backup directories with environment overrides is safer.
+Phase 23.6에서 정립한 Unix 압축 파일은 `bin/`, `backend/`, 비어 있는 `data/`, 문서, 릴리스 metadata 및 체크섬을 포함합니다.
 
-### Rollback
+1. `stream-archive-cli serve --watch` 또는 `stream-archive-server`를 종료합니다.
+2. 기준 SQLite DB를 백업합니다.
+3. 압축 파일의 `.sha256`을 확인합니다.
+4. 기존 패키지에 덮어쓰지 않고 새 디렉터리에 풉니다.
+5. `STREAM_ARCHIVE_DATA_DIR`로 기존 데이터 경로를 재사용합니다. 복사할 경우 먼저 백업을 검증합니다.
+6. `./bin/stream-archive-cli doctor --active-tools`를 실행합니다.
+7. 런타임을 시작하고 상태·Queue·History를 확인한 뒤 무인 운영을 재개합니다.
 
-Close the new runtime before rollback. Restore the previous package first. Restore a pre-upgrade database backup only when required by the actual database state; do not assume arbitrary schema downgrades are supported.
+패키지 기본 경로를 사용할 때는 압축 해제한 `stream-archive/` root에서 명령을 실행해야 `backend/`와 `data/`가 해당 패키지 기준으로 해석됩니다. 장기 운영에서는 환경변수로 binary·런타임 데이터·백업 디렉터리를 명시적으로 분리하는 편이 안전합니다.
 
-## Portable package replacement
+<a id="rollback"></a>
 
-`BUILD_PORTABLE.bat` writes to `dist\stream-archive`. The Windows package contains `StreamArchive.exe` as the Native application and `RUN.bat` as its launcher. `stream-archive-server.exe` and `RUN_HEADLESS.bat` are intentionally excluded from the Windows release surface. Browser launcher, Web static assets and reverse-proxy artifacts are also not packaged. For local rebuilds the existing `data` directory is preserved before package replacement; GitHub Actions builds use a clean package.
+### rollback
 
-Direct Explorer launch is supported: backend resolution prefers the `backend` directory beside `StreamArchive.exe`, and the default SQLite path is the sibling `data\stream-archive.db`. Environment overrides still take precedence where defined.
+rollback 전에 새 런타임을 종료합니다. 먼저 이전 패키지로 돌아가고, 실제 DB 상태에서 필요한 경우에만 업그레이드 전 백업을 복구합니다. 임의 schema downgrade 호환성을 가정하지 않습니다.
 
-Linux/macOS release archives are built with `BUILD_UNIX_PACKAGE.sh` and contain `bin/stream-archive-cli` plus `bin/stream-archive-server`. They do not install systemd/launchd services or package-manager entries.
+[1.0.0 최종 수동 검증 체크리스트](https://github.com/p1k1g/stream-archive/blob/main/docs/MANUAL_RC_1_0_0.md)에 이전 버전 실행 가능 여부, 새 버전 실행 후 DB 호환 상태 및 필요한 백업 복구 증빙을 기록합니다. 확인하지 않은 rollback을 성공으로 표시하지 않습니다.
 
-Do not copy old INI/TXT configuration files into a new package. SQLite is the only runtime configuration source.
+<a id="portable-package-replacement"></a>
 
-## Release package verification
+## portable 패키지 교체
 
-Phase 23.6 keeps package verification separate from package assembly.
+`BUILD_PORTABLE.bat`은 `dist\stream-archive`에 패키지를 만듭니다. Windows는 Native 애플리케이션 `StreamArchive.exe`와 launcher `RUN.bat`를 포함합니다. Windows 공식 배포에는 `stream-archive-server.exe`, `RUN_HEADLESS.bat`, browser launcher, Web static asset 및 reverse-proxy artifact가 포함되지 않습니다. 로컬 재빌드는 기존 `data`를 보존하지만 GitHub Actions build는 깨끗한 패키지를 사용합니다.
+
+Explorer에서 직접 실행할 수 있습니다. backend 탐색은 `StreamArchive.exe` 옆의 `backend`를 우선하며 기본 SQLite 경로는 형제 디렉터리의 `data\stream-archive.db`입니다. 정의된 환경변수가 있으면 우선 적용합니다.
+
+Linux/macOS는 `BUILD_UNIX_PACKAGE.sh`로 만들고 `bin/stream-archive-cli`, `bin/stream-archive-server`를 포함합니다. systemd/launchd 서비스나 package manager 항목은 설치하지 않습니다.
+
+이전 INI/TXT 설정 파일을 새 패키지로 복사하지 않습니다. SQLite가 유일한 런타임 설정 기준입니다.
+
+<a id="release-package-verification"></a>
+
+## 릴리스 패키지 검증
+
+Phase 23.6부터 패키지 조립과 검증을 분리합니다.
 
 Windows:
 
@@ -162,7 +189,7 @@ powershell -ExecutionPolicy Bypass -File .\maintenance\Verify-WindowsPackage.ps1
 powershell -ExecutionPolicy Bypass -File .\maintenance\New-WindowsReleaseArchive.ps1 -PackageRoot .\dist\stream-archive -OutputDir .\dist\release
 ```
 
-`New-WindowsReleaseArchive.ps1` also enforces the same clean-data verifier internally before it opens the output ZIP. A local `BUILD_PORTABLE.bat` tree that preserved an existing database therefore cannot be turned into an official-looking release archive until runtime data is removed from the staging tree. CI/release validation also verifies the generated ZIP plus its archive-level `.sha256`.
+`New-WindowsReleaseArchive.ps1`도 ZIP을 열기 전에 같은 clean-data verifier를 수행합니다. 기존 DB를 보존한 로컬 `BUILD_PORTABLE.bat` 결과는 staging에서 런타임 데이터를 분리하기 전에는 공식 배포 형태의 압축 파일로 만들 수 없습니다. 운영 데이터 원본을 삭제하는 절차가 아닙니다. CI·배포 검증은 생성한 ZIP과 archive-level `.sha256`도 확인합니다.
 
 Linux/macOS:
 
@@ -171,21 +198,27 @@ Linux/macOS:
 ./maintenance/Verify-UnixPackage.sh ./dist/unix-<platform>-<arch>/stream-archive ./dist/release/stream-archive-<platform>-<arch>.tar.gz
 ```
 
-The verifier checks required files, executable bits, clean runtime data, package-local `SHA256SUMS.txt`, archive checksum, forbidden legacy/runtime artifacts, and executes the CLI from a fresh extraction path containing whitespace and non-ASCII characters.
+검증기는 필수 파일, 실행 권한, 비어 있는 런타임 데이터, 내부 `SHA256SUMS.txt`, 압축 파일 체크섬 및 금지한 legacy·runtime artifact를 확인합니다. 공백·비ASCII 문자가 포함된 새 압축 해제 경로에서 CLI도 실행합니다.
 
-Streamlink, yt-dlp and FFmpeg remain external dependencies and are not redistributed in any Phase 23.6 package.
+Streamlink, yt-dlp, FFmpeg는 외부 의존성이며 공식 패키지에 재배포하지 않습니다. 최종 공개 artifact의 정확한 파일 점검은 [수동 RC 체크리스트](https://github.com/p1k1g/stream-archive/blob/main/docs/MANUAL_RC_1_0_0.md)를 따릅니다.
 
-## Runtime environment overrides
+<a id="runtime-environment-overrides"></a>
 
-- `STREAM_ARCHIVE_START_WATCHER`: optional headless-runtime watcher auto-start flag.
-- `STREAM_ARCHIVE_BACKEND_DIR`: explicit backend directory.
-- `STREAM_ARCHIVE_DATA_DIR`: explicit SQLite data directory.
-- `STREAM_ARCHIVE_BACKUP_DIR`: explicit managed backup directory.
+## 런타임 환경변수
 
-Provider-specific account settings such as `SOOP_USERNAME`, `SOOP_PASSWORD`, `CHZZK_NID_AUT`, and `CHZZK_NID_SES` remain provider-scoped settings stored in SQLite.
+| 환경변수 | 용도 |
+|---|---|
+| `STREAM_ARCHIVE_START_WATCHER` | headless 런타임의 선택적 watcher 자동 시작 |
+| `STREAM_ARCHIVE_BACKEND_DIR` | backend 디렉터리 지정 |
+| `STREAM_ARCHIVE_DATA_DIR` | SQLite 데이터 디렉터리 지정 |
+| `STREAM_ARCHIVE_BACKUP_DIR` | 관리형 백업 디렉터리 지정 |
 
-## Incident notes
+`SOOP_USERNAME`, `SOOP_PASSWORD`, `CHZZK_NID_AUT`, `CHZZK_NID_SES`는 서비스별 설정으로 SQLite에 저장합니다.
 
-The process-lifecycle invariant is strict: the application may terminate only child-process trees it created and owns. Never use broad `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, `taskkill /IM yt-dlp.exe`, or equivalent process-name cleanup.
+<a id="incident-notes"></a>
 
-If a package rebuild or restore fails because a file is locked, stop Stream Archive cleanly and retry rather than terminating unrelated media-tool processes.
+## 장애 대응 시 주의사항
+
+애플리케이션은 자신이 생성하고 소유한 child-process tree만 종료할 수 있습니다. `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, `taskkill /IM yt-dlp.exe` 또는 같은 방식의 process-name 기반 일괄 종료를 사용하지 않습니다.
+
+패키지 재빌드·복구 중 파일 잠금으로 실패하면 관계없는 미디어 도구를 종료하지 말고 Stream Archive를 정상 종료한 뒤 다시 시도합니다.
