@@ -175,3 +175,7 @@ Stream Archive는 독립적인 오픈소스 프로젝트이며 SOOP, NAVER, CHZZ
 사용자는 적용되는 법률·저작권 규정·각 서비스 이용약관을 준수해야 합니다. 이 프로젝트는 콘텐츠 이용 권한이나 서비스 접근 제한을 우회할 권리를 부여하지 않습니다.
 
 코드는 **GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)**로 공개합니다. [LICENSE](LICENSE)를 참고하세요. 외부 도구는 각각의 라이선스를 따르며 자세한 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다.
+
+### 개발 중: Windows 시스템 트레이
+
+Phase 24.1에서는 닫기 버튼의 프로그램 종료 / 시스템 트레이 이동 선택을 추가합니다. 기본값은 프로그램 종료이며, 트레이 이동 시 녹화·다운로드·채널 감시를 유지합니다. [사용 방법 및 수동 검증](docs/PHASE24_1_WINDOWS_TRAY.md)을 참고하세요. 현재 PR 단계이며 공개 릴리스에 포함되었다고 보장하지 않습니다.

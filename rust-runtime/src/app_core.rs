@@ -634,6 +634,40 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn desktop_close_action_defaults_to_exit_and_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = dir.path().join("backend");
+        std::fs::create_dir_all(&backend).unwrap();
+        let db = Store::default_path(&backend);
+        let core = StreamArchiveCore::assemble(backend, Store::open(db.clone()).unwrap()).unwrap();
+        assert_eq!(
+            core.settings().unwrap()["STREAM_ARCHIVE_CLOSE_ACTION"],
+            "EXIT"
+        );
+        core.update_environment_settings(&BTreeMap::from([(
+            "STREAM_ARCHIVE_CLOSE_ACTION".into(),
+            "TRAY".into(),
+        )]))
+        .await
+        .unwrap();
+        assert!(
+            core.update_environment_settings(&BTreeMap::from([(
+                "STREAM_ARCHIVE_CLOSE_ACTION".into(),
+                "invalid".into()
+            ),]))
+                .await
+                .is_err()
+        );
+        core.shutdown().await;
+        drop(core);
+        let reopened = Store::open(db).unwrap();
+        assert_eq!(
+            reopened.safe_settings().unwrap()["STREAM_ARCHIVE_CLOSE_ACTION"],
+            "TRAY"
+        );
+    }
+
+    #[tokio::test]
     async fn assembled_core_keeps_one_canonical_store_backend_and_queue() {
         let dir = tempfile::tempdir().unwrap();
         let backend = dir.path().join("app").join("backend");

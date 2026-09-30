@@ -60,6 +60,11 @@ const FIELDS: &[(&str, SettingKind, &str)] = &[
         "Minimum free disk space in GB (0–1000000)",
     ),
     (
+        "STREAM_ARCHIVE_CLOSE_ACTION",
+        SettingKind::Text,
+        "Windows close action: EXIT (default) or TRAY; Unix headless is unaffected",
+    ),
+    (
         "QUALITY",
         SettingKind::Text,
         "LIVE quality, for example best",
@@ -148,6 +153,15 @@ mod tests {
         }
         assert!(validate_updates(&update("CHECK_INTERVAL", "0")).is_err());
         assert!(validate_updates(&update("MIN_FREE_SPACE_GB", "NaN")).is_err());
+    }
+
+    #[test]
+    fn windows_close_action_accepts_only_explicit_exit_or_tray() {
+        validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", "EXIT")).unwrap();
+        validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", "TRAY")).unwrap();
+        for value in ["", "tray", "MINIMIZE", "TRAY\nEXIT"] {
+            assert!(validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", value)).is_err());
+        }
     }
 
     #[test]

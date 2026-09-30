@@ -276,6 +276,7 @@ impl Store {
             ("GUI_NOTIFY_RECORD_START", "N"),
             ("GUI_NOTIFY_RECORD_FINISH", "Y"),
             ("GUI_NOTIFY_WARNING", "Y"),
+            ("STREAM_ARCHIVE_CLOSE_ACTION", "EXIT"),
             ("MIN_FREE_SPACE_GB", "20"),
             ("OUTPUT_DIR", ""),
             ("QUALITY", "best"),

@@ -2,6 +2,7 @@
 
 mod channels_adapter;
 mod controller;
+mod desktop;
 mod formatting;
 mod history_adapter;
 mod live_adapter;
@@ -20,5 +21,12 @@ slint::include_modules!();
 fn main() -> Result<(), slint::PlatformError> {
     let ui = MainWindow::new()?;
     let _controller = controller::bind(&ui);
+    #[cfg(windows)]
+    {
+        let _desktop = desktop::bind(&ui);
+        ui.show()?;
+        slint::run_event_loop_until_quit()
+    }
+    #[cfg(not(windows))]
     ui.run()
 }

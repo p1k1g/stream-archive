@@ -1,4 +1,4 @@
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { QueuePage, HistoryPage, QueueHistoryState as QueueHistoryLocal } from "queue-history.slint";
 import { MaintenancePage, MaintenanceState } from "maintenance.slint";
 export { QueueHistoryState } from "queue-history.slint";
@@ -56,6 +56,12 @@ export struct VodPartRow {
 
 export global AppState {
     in-out property <[SettingRow]> settings-rows;
+    in-out property <bool> close-to-tray: false;
+    in-out property <bool> desktop-exit-pending: false;
+    in-out property <bool> desktop-poll-pending: false;
+    in-out property <string> desktop-status: "상태 확인 중";
+    callback desktop-exit();
+    callback desktop-poll();
     in-out property <[DiagnosticRow]> diagnostics-rows;
     in-out property <bool> settings-busy: true;
     in-out property <bool> settings-loaded: false;
@@ -1274,12 +1280,19 @@ export component MainWindow inherits Window {
                                 VerticalLayout {
                                     padding: 12px;
                                     spacing: 6px;
-                                    Text { text: row.key; color: #0f172a; font-weight: 600; font-size: 12px; }
+                                    Text { text: row.key == "STREAM_ARCHIVE_CLOSE_ACTION" ? "창을 닫을 때" : row.key; color: #0f172a; font-weight: 600; font-size: 12px; }
                                     HorizontalLayout {
                                         height: 34px;
                                         vertical-stretch: 0;
                                         spacing: 8px;
-                                        LineEdit {
+                                        if row.key == "STREAM_ARCHIVE_CLOSE_ACTION": ComboBox {
+                                            height: 34px;
+                                            model: ["프로그램 종료", "시스템 트레이로 이동"];
+                                            current-index: row.value == "TRAY" ? 1 : 0;
+                                            enabled: !AppState.settings-busy;
+                                            selected(value) => { AppState.setting-edited(index, self.current-index == 1 ? "TRAY" : "EXIT"); }
+                                        }
+                                        if row.key != "STREAM_ARCHIVE_CLOSE_ACTION": LineEdit {
                                             height: 34px;
                                             text <=> row.value;
                                             enabled: !AppState.settings-busy;
