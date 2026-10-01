@@ -380,14 +380,14 @@ export component MainWindow inherits Window {
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
-                                min-height: 112px;
+                                min-height: max(112px, live-content.min-height);
                                 vertical-stretch: 0;
                                 background: Theme.surface;
                                 border-radius: 8px;
                                 border-width: 1px;
                                 border-color: Theme.border;
 
-                                HorizontalLayout {
+                                live-content := HorizontalLayout {
                                     padding: 12px;
                                     spacing: 12px;
 
@@ -502,7 +502,7 @@ export component MainWindow inherits Window {
                         }
                     }
                     Rectangle {
-                        height: 142px; vertical-stretch: 0;
+                        height: AppState.storage-rows.length < 2 ? 142px : 184px; vertical-stretch: 0;
                         background: Theme.surface; border-radius: 8px;
                         border-width: 1px; border-color: Theme.border;
                         VerticalLayout {
@@ -520,9 +520,9 @@ export component MainWindow inherits Window {
                                     spacing: 5px; alignment: start;
                                     if AppState.storage-rows.length == 0: Text { text: "표시할 저장소가 없습니다."; color: Theme.muted; }
                                     for row in AppState.storage-rows: Rectangle {
-                                        min-height: 62px; vertical-stretch: 0;
+                                        min-height: max(44px, volume-content.min-height); vertical-stretch: 0;
                                         background: transparent;
-                                        HorizontalLayout {
+                                        volume-content := HorizontalLayout {
                                             spacing: 10px;
                                             Text { width: 90px; text: row.volume; color: Theme.text; font-weight: 600; wrap: word-wrap; }
                                             VerticalLayout {
@@ -556,10 +556,10 @@ export component MainWindow inherits Window {
                             spacing: 7px; alignment: start;
                             if AppState.channel-config-rows.length == 0: Text { text: "등록된 채널이 없습니다. 채널을 추가하고 저장하세요."; color: Theme.muted; wrap: word-wrap; }
                             for row[index] in AppState.channel-config-rows: Rectangle {
-                                min-height: 122px; vertical-stretch: 0;
+                                min-height: max(122px, content-1.min-height); vertical-stretch: 0;
                                 background: Theme.surface; border-radius: 8px;
                                 border-width: 1px; border-color: Theme.border;
-                                VerticalLayout {
+                                content-1 := VerticalLayout {
                                     padding: 10px; spacing: 6px;
                                     HorizontalLayout {
                                         height: 50px; vertical-stretch: 0; spacing: 8px;
@@ -636,13 +636,13 @@ export component MainWindow inherits Window {
                         }
                     }
                     Rectangle {
-                        min-height: 72px;
+                        min-height: max(72px, content-2.min-height);
                         vertical-stretch: 0;
                         background: Theme.surface;
                         border-radius: 8px;
                         border-width: 1px;
                         border-color: Theme.border;
-                        VerticalLayout {
+                        content-2 := VerticalLayout {
                             padding: 11px;
                             spacing: 5px;
                             LineEdit {
@@ -664,13 +664,13 @@ export component MainWindow inherits Window {
                             spacing: 10px;
                             alignment: start;
                             if AppState.vod-title != "" || AppState.vod-streamer != "": Rectangle {
-                                min-height: 82px;
+                                min-height: max(82px, content-3.min-height);
                                 vertical-stretch: 0;
                                 background: Theme.surface;
                                 border-radius: 8px;
                                 border-width: 1px;
                                 border-color: Theme.border;
-                                VerticalLayout {
+                                content-3 := VerticalLayout {
                                     padding: 11px;
                                     spacing: 4px;
                                     Text { text: AppState.vod-title != "" ? AppState.vod-title : "VOD metadata"; color: Theme.text; font-size: 15px; font-weight: 700; wrap: word-wrap; }
@@ -680,13 +680,13 @@ export component MainWindow inherits Window {
                             }
 
                             Rectangle {
-                                min-height: 108px;
+                                min-height: max(108px, content-4.min-height);
                                 vertical-stretch: 0;
                                 background: Theme.surface;
                                 border-radius: 8px;
                                 border-width: 1px;
                                 border-color: Theme.border;
-                                VerticalLayout {
+                                content-4 := VerticalLayout {
                                     padding: 12px;
                                     spacing: 5px;
                                     HorizontalLayout {
@@ -901,13 +901,13 @@ export component MainWindow inherits Window {
                                 spacing: 12px;
 
                                 Rectangle {
-                                    min-height: 330px;
+                                    min-height: max(330px, content-5.min-height);
                                     vertical-stretch: 0;
                                     background: Theme.surface;
                                     border-radius: 8px;
                                     border-width: 1px;
                                     border-color: Theme.border;
-                                    VerticalLayout {
+                                    content-5 := VerticalLayout {
                                         padding: 14px;
                                         spacing: 8px;
                                         Text { text: "서비스 연결 및 인증"; color: Theme.text; font-size: 18px; font-weight: 700; }
@@ -996,13 +996,13 @@ export component MainWindow inherits Window {
                                 }
 
                                 Rectangle {
-                                    min-height: 72px;
+                                    min-height: max(72px, content-6.min-height);
                                     vertical-stretch: 0;
                                     background: Theme.surface;
                                     border-radius: 8px;
                                     border-width: 1px;
                                     border-color: Theme.border;
-                                    VerticalLayout {
+                                    content-6 := VerticalLayout {
                                         padding: 12px;
                                         spacing: 6px;
                                         HorizontalLayout {
@@ -1029,13 +1029,13 @@ export component MainWindow inherits Window {
                                 }
 
                                 for row[index] in AppState.settings-rows: Rectangle {
-                                    min-height: 88px;
+                                    min-height: max(88px, content-7.min-height);
                                     vertical-stretch: 0;
                                     background: Theme.surface;
                                     border-radius: 8px;
                                     border-width: 1px;
                                     border-color: Theme.border;
-                                    VerticalLayout {
+                                    content-7 := VerticalLayout {
                                         padding: 12px;
                                         spacing: 6px;
                                         if row.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" && AppState.download-notifications-status != "": Text { text: AppState.download-notifications-status; wrap: word-wrap; color: Theme.muted; font-size: 11px; }

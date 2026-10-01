@@ -83,10 +83,10 @@ export global QueueHistoryState {
 component QueueTask inherits Rectangle {
     in property <QueueDisplayRow> task;
     private property <bool> expanded: false;
-    min-height: 116px; vertical-stretch: 0;
+    min-height: max(116px, task-content.min-height); vertical-stretch: 0;
     background: Theme.surface; border-radius: 8px;
     border-width: 1px; border-color: Theme.border;
-    VerticalLayout {
+    task-content := VerticalLayout {
         padding: 12px; spacing: 6px;
         HorizontalLayout {
             min-height: 32px; vertical-stretch: 0; spacing: 10px;
@@ -100,7 +100,7 @@ component QueueTask inherits Rectangle {
         }
         Rectangle {
             height: 5px; vertical-stretch: 0; border-radius: 3px; background: Theme.raised;
-            Rectangle { height: parent.height; width: parent.width * clamp(root.task.percent, 0, 100) / 100; border-radius: 3px; background: Theme.accent; }
+            Rectangle { x: 0px; y: 0px; height: parent.height; width: parent.width * clamp(root.task.percent, 0, 100) / 100; border-radius: 3px; background: Theme.accent; }
         }
         HorizontalLayout {
             min-height: 30px; vertical-stretch: 0; spacing: 7px;
@@ -284,13 +284,13 @@ export component HistoryPage inherits VerticalLayout {
     }
 
     Rectangle {
-        min-height: 116px;
+        min-height: max(116px, content-1.min-height);
         vertical-stretch: 0;
         background: Theme.surface;
         border-radius: 8px;
         border-width: 1px;
         border-color: Theme.border;
-        VerticalLayout {
+        content-1 := VerticalLayout {
             padding: 10px;
             spacing: 7px;
             HorizontalLayout {
@@ -402,13 +402,13 @@ export component HistoryPage inherits VerticalLayout {
             }
 
             for row in QueueHistoryState.history-rows: Rectangle {
-                min-height: 96px;
+                min-height: max(96px, content-2.min-height);
                 vertical-stretch: 0;
                 background: Theme.surface;
                 border-radius: 8px;
                 border-width: 1px;
                 border-color: Theme.border;
-                VerticalLayout {
+                content-2 := VerticalLayout {
                     padding: 8px;
                     spacing: 2px;
                     HorizontalLayout {

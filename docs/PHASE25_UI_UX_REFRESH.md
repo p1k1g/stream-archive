@@ -26,7 +26,7 @@ Slint의 localhost HTTP / direct SQLite / child process 제어는 추가하지 �
 
 ## 검증
 
-Slint compile, 기존 Rust fmt/unit/check/clippy, RuntimeContracts 및 Windows/Linux/macOS package 검증은 최신 PR CI 결과로 확인합니다. 시각 검증용 예시 데이터는 제품 코드에 포함하지 않으며 실제 provider 성공을 뜻하지 않습니다. 아래 항목은 Windows에서 따로 확인해야 합니다.
+Slint compile, 기존 Rust fmt/unit/check/clippy, RuntimeContracts 및 Windows/Linux/macOS package 검증은 [PR #112](https://github.com/p1k1g/stream-archive/pull/112)의 최신 CI 결과로 확인합니다. `ui_smoke_tests`는 기존 software renderer의 headless window에서 감시 버튼 분기·busy 차단·Space 입력·Diagnostics/Logs/Backup navigation과 최소 창 크기의 7개 화면 렌더링을 검증합니다. 로컬 GUI 테스트는 41개 통과했습니다. Slint 1.18 interpreter의 예시 데이터 화면과 입력 smoke도 Linux 가상 디스플레이에서 확인했습니다. 이 검증은 실제 Windows shell·DPI·서비스 QA를 대신하지 않습니다. 시각 검증용 예시 데이터는 제품 코드에 포함하지 않으며 실제 provider 성공을 뜻하지 않습니다. 아래 항목은 Windows에서 따로 확인해야 합니다.
 
 ## Windows 최종 수동 QA — 미수행
 

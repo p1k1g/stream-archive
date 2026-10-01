@@ -15,6 +15,9 @@ mod settings_adapter;
 mod storage_adapter;
 mod vod_adapter;
 
+#[cfg(test)]
+mod ui_smoke_tests;
+
 use slint::ComponentHandle;
 
 slint::include_modules!();
