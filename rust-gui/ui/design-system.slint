@@ -32,7 +32,7 @@ export component ActionButton inherits Rectangle {
     vertical-stretch: 0;
     border-radius: 6px;
     border-width: 1px;
-    border-color: focus.has-focus && root.enabled ? Theme.accent : Theme.border;
+    border-color: focus.has-focus && root.enabled ? (root.primary ? Theme.text : Theme.accent) : Theme.border;
     background: !root.enabled ? Theme.surface : root.primary ? (touch.pressed ? #24af9d : touch.has-hover ? #58e2cf : Theme.accent) : root.selected ? Theme.selected : touch.has-hover ? Theme.raised : Theme.surface;
     opacity: root.enabled ? 1 : 0.5;
     forward-focus: focus;
