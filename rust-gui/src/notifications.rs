@@ -14,8 +14,20 @@ impl Summary {
     }
 }
 
-pub fn discard_stale(receiver: &mut tokio::sync::broadcast::Receiver<DownloadEvent>) {
-    while let Ok(_) | Err(TryRecvError::Lagged(_)) = receiver.try_recv() {}
+pub fn drain_download_events(
+    mut receive: impl FnMut() -> Result<DownloadEvent, TryRecvError>,
+) -> Vec<DownloadEvent> {
+    let mut events = Vec::new();
+    while events.len() < 128 {
+        match receive() {
+            Ok(event) => events.push(event),
+            Err(TryRecvError::Lagged(count)) => {
+                eprintln!("Windows download notifications skipped {count} older events");
+            }
+            Err(_) => break,
+        }
+    }
+    events
 }
 
 #[derive(Default)]
@@ -118,14 +130,17 @@ mod tests {
 
     #[test]
     fn configuration_transition_discards_buffered_and_lagged_results() {
-        let (sender, mut receiver) = tokio::sync::broadcast::channel(128);
-        for id in 0..300 {
-            sender.send(event(&id.to_string(), true)).unwrap();
-        }
-        discard_stale(&mut receiver);
-        assert!(receiver.try_recv().is_err());
-        sender.send(event("new-session-result", true)).unwrap();
-        assert_eq!(receiver.try_recv().unwrap().job_id, "new-session-result");
+        // The core subscription filters old generations even after receiver lag.
+        // The GUI must preserve a valid new completion returned after that lag.
+        let mut results = vec![
+            Err(TryRecvError::Lagged(300)),
+            Ok(event("new-session-result", true)),
+            Err(TryRecvError::Empty),
+        ]
+        .into_iter();
+        let events = drain_download_events(|| results.next().unwrap_or(Err(TryRecvError::Empty)));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].job_id, "new-session-result");
     }
 
     #[test]

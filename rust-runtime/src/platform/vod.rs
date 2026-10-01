@@ -35,9 +35,7 @@ impl VodManager {
         }
     }
 
-    pub fn subscribe_download_events(
-        &self,
-    ) -> tokio::sync::broadcast::Receiver<crate::download_events::DownloadEvent> {
+    pub fn subscribe_download_events(&self) -> crate::download_events::DownloadSubscription {
         self.events.subscribe()
     }
 

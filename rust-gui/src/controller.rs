@@ -576,7 +576,6 @@ fn worker_loop(
                 match runtime.block_on(core.update_environment_settings(&patch)) {
                     Ok(_) => {
                         if patch.contains_key("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS") {
-                            crate::notifications::discard_stale(&mut download_events);
                             let _ = responses.send(Response::ClearNotices);
                         }
                         read_snapshot(
@@ -872,7 +871,6 @@ fn worker_loop(
             Request::BackupRestore { file_name } => {
                 match runtime.block_on(core.restore_backup(&file_name)) {
                     Ok(outcome) => {
-                        crate::notifications::discard_stale(&mut download_events);
                         let _ = responses.send(Response::ClearNotices);
                         let _ = responses.send(read_snapshot(
                             core,
@@ -915,16 +913,7 @@ fn worker_loop(
         if responses.send(response).is_err() {
             break;
         }
-        let mut events = Vec::new();
-        while events.len() < 128 {
-            match download_events.try_recv() {
-                Ok(event) => events.push(event),
-                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(count)) => {
-                    eprintln!("Windows download notifications skipped {count} older events");
-                }
-                Err(_) => break,
-            }
-        }
+        let events = crate::notifications::drain_download_events(|| download_events.try_recv());
         if !events.is_empty() && responses.send(Response::Downloads(events)).is_err() {
             break;
         }

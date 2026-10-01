@@ -10,8 +10,47 @@ pub struct DownloadEvent {
 }
 
 #[derive(Clone)]
+struct PublishedDownload {
+    event: DownloadEvent,
+    epoch: u64,
+}
+
+/// Current-generation results only, including events queued before a transition.
+pub struct DownloadSubscription {
+    receiver: broadcast::Receiver<PublishedDownload>,
+    epoch: std::sync::Arc<std::sync::Mutex<u64>>,
+}
+
+impl DownloadSubscription {
+    fn is_current(&self, epoch: u64) -> bool {
+        *self
+            .epoch
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) == epoch
+    }
+
+    pub fn try_recv(&mut self) -> Result<DownloadEvent, broadcast::error::TryRecvError> {
+        loop {
+            let published = self.receiver.try_recv()?;
+            if self.is_current(published.epoch) {
+                return Ok(published.event);
+            }
+        }
+    }
+
+    pub async fn recv(&mut self) -> Result<DownloadEvent, broadcast::error::RecvError> {
+        loop {
+            let published = self.receiver.recv().await?;
+            if self.is_current(published.epoch) {
+                return Ok(published.event);
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct DownloadEvents {
-    sender: broadcast::Sender<DownloadEvent>,
+    sender: broadcast::Sender<PublishedDownload>,
     epoch: std::sync::Arc<std::sync::Mutex<u64>>,
 }
 
@@ -25,8 +64,11 @@ impl Default for DownloadEvents {
 }
 
 impl DownloadEvents {
-    pub fn subscribe(&self) -> broadcast::Receiver<DownloadEvent> {
-        self.sender.subscribe()
+    pub fn subscribe(&self) -> DownloadSubscription {
+        DownloadSubscription {
+            receiver: self.sender.subscribe(),
+            epoch: self.epoch.clone(),
+        }
     }
 
     pub fn epoch(&self) -> u64 {
@@ -52,7 +94,7 @@ impl DownloadEvents {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         if *current == epoch {
-            let _ = self.sender.send(event);
+            let _ = self.sender.send(PublishedDownload { event, epoch });
         }
     }
 
@@ -82,7 +124,6 @@ impl DownloadEvents {
             epoch,
         );
     }
-
 }
 
 #[cfg(test)]
@@ -154,6 +195,24 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         events.terminal(&status, true, events.epoch());
         assert!(receiver.try_recv().unwrap().completed);
+    }
+
+    #[test]
+    fn transition_filters_queued_old_results_without_dropping_new_completions() {
+        let events = DownloadEvents::default();
+        let mut receiver = events.subscribe();
+        for attempt in 0..300 {
+            events.start_failed("old", attempt, PlatformId::Soop, events.epoch());
+        }
+        events.invalidate();
+        events.start_failed("new", 1, PlatformId::Chzzk, events.epoch());
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(broadcast::error::TryRecvError::Lagged(_))
+        ));
+        // Remaining old queued events are filtered, while the new result survives.
+        assert_eq!(receiver.try_recv().unwrap().job_id, "queue:new:1");
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

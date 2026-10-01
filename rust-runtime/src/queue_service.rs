@@ -580,14 +580,18 @@ mod tests {
         queue.claim_next().unwrap().unwrap();
         // fail_start stamps before exposing FAILED; pause between commit and send.
         let epoch = queue.vod.download_event_epoch();
-        queue.fail_item(&item.id, "failure before enabling").unwrap();
+        queue
+            .fail_item(&item.id, "failure before enabling")
+            .unwrap();
         queue.vod.notification_settings_changed().await;
         let failed = queue.item(&item.id).unwrap().unwrap();
         queue.vod.report_start_failure(&failed, epoch);
         assert!(receiver.try_recv().is_err());
         queue.retry(&item.id).await.unwrap();
         queue.claim_next().unwrap().unwrap();
-        queue.fail_start(&item.id, "new failure after enabling").unwrap();
+        queue
+            .fail_start(&item.id, "new failure after enabling")
+            .unwrap();
         assert!(receiver.try_recv().unwrap().job_id.ends_with(":2"));
     }
 
