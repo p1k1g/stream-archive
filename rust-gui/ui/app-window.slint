@@ -65,6 +65,7 @@ export global AppState {
     in-out property <bool> download-notifications-enabled: true;
     in-out property <string> download-notifications-status: "";
     callback download-notice(int, int);
+    callback clear-download-notices();
     in-out property <[DiagnosticRow]> diagnostics-rows;
     in-out property <bool> settings-busy: true;
     in-out property <bool> settings-loaded: false;

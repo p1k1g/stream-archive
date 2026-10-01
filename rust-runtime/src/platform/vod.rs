@@ -168,7 +168,10 @@ mod tests {
     #[tokio::test]
     async fn real_provider_task_failures_reach_the_shared_subscriber_offline() {
         for (platform, url) in [
-            (PlatformId::Soop, "https://vod.sooplive.com/player/123456789"),
+            (
+                PlatformId::Soop,
+                "https://vod.sooplive.com/player/123456789",
+            ),
             (PlatformId::Chzzk, "https://chzzk.naver.com/video/123456"),
         ] {
             let dir = tempfile::tempdir().unwrap();

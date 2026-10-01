@@ -13,6 +13,15 @@ impl Summary {
     }
 }
 
+pub fn discard_stale(receiver: &mut tokio::sync::broadcast::Receiver<DownloadEvent>) {
+    loop {
+        match receiver.try_recv() {
+            Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+            Err(_) => break,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Tracker {
     seen: VecDeque<(stream_archive_server::support::platform::PlatformId, String)>,
@@ -105,6 +114,18 @@ mod tests {
             platform: PlatformId::Soop,
             completed,
         }
+    }
+
+    #[test]
+    fn configuration_transition_discards_buffered_and_lagged_results() {
+        let (sender, mut receiver) = tokio::sync::broadcast::channel(128);
+        for id in 0..300 {
+            sender.send(event(&id.to_string(), true)).unwrap();
+        }
+        discard_stale(&mut receiver);
+        assert!(receiver.try_recv().is_err());
+        sender.send(event("new-session-result", true)).unwrap();
+        assert_eq!(receiver.try_recv().unwrap().job_id, "new-session-result");
     }
 
     #[test]

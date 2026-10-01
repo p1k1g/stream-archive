@@ -193,6 +193,7 @@ enum Response {
     ExitCheck(Result<bool, String>),
     ExitComplete,
     Downloads(Vec<stream_archive_server::download_events::DownloadEvent>),
+    ClearNotices,
 }
 
 pub struct Controller {
@@ -573,11 +574,17 @@ fn worker_loop(
             ),
             Request::Save(patch) => {
                 match runtime.block_on(core.update_environment_settings(&patch)) {
-                    Ok(_) => read_snapshot(
-                        core,
-                        true,
-                        "canonical SQLite에 저장했습니다. 진행 중인 녹화는 현재 설정을 그대로 유지합니다.",
-                    ),
+                    Ok(_) => {
+                        if patch.contains_key("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS") {
+                            crate::notifications::discard_stale(&mut download_events);
+                            let _ = responses.send(Response::ClearNotices);
+                        }
+                        read_snapshot(
+                            core,
+                            true,
+                            "canonical SQLite에 저장했습니다. 진행 중인 녹화는 현재 설정을 그대로 유지합니다.",
+                        )
+                    }
                     Err(error) => Response::Error(format!("저장 실패: {error:#}")),
                 }
             }
@@ -865,6 +872,8 @@ fn worker_loop(
             Request::BackupRestore { file_name } => {
                 match runtime.block_on(core.restore_backup(&file_name)) {
                     Ok(outcome) => {
+                        crate::notifications::discard_stale(&mut download_events);
+                        let _ = responses.send(Response::ClearNotices);
                         let _ = responses.send(read_snapshot(
                             core,
                             true,
@@ -2300,6 +2309,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
+                Response::ClearNotices => state.invoke_clear_download_notices(),
                 Response::Downloads(events) => {
                     let summary = download_tracker.collect(events,
                         state.get_download_notifications_enabled() && !state.get_desktop_exit_pending());

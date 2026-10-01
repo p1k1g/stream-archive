@@ -298,6 +298,12 @@ pub fn bind(ui: &MainWindow) -> Desktop {
             None
         }
     });
+    let clear_tray = tray.clone();
+    ui.global::<AppState>().on_clear_download_notices(move || {
+        if let Some(tray) = clear_tray.as_ref().as_ref() {
+            tray.state.clear_notice();
+        }
+    });
     let weak = ui.as_weak();
     let notice_tray = tray.clone();
     ui.global::<AppState>()
