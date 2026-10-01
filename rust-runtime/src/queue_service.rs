@@ -310,7 +310,7 @@ impl VodQueueManager {
             let req: VodDownloadRequest = match serde_json::from_str(&claimed.request_json) {
                 Ok(req) => req,
                 Err(err) => {
-                    let _ = self.fail_item(&claimed.id, &format!("저장된 요청 해석 실패: {err}"));
+                    let _ = self.fail_start(&claimed.id, &format!("저장된 요청 해석 실패: {err}"));
                     *self.active_id.lock().await = None;
                     drop(lifecycle_guard);
                     continue;
@@ -321,7 +321,7 @@ impl VodQueueManager {
             let started = match started {
                 Ok(status) => status,
                 Err(err) => {
-                    let _ = self.fail_item(&claimed.id, &format!("VOD 시작 실패: {err:#}"));
+                    let _ = self.fail_start(&claimed.id, &format!("VOD 시작 실패: {err:#}"));
                     self.logs
                         .push(format!(
                             "[VOD_QUEUE:ERR] start failed id={} err={err:#}",
@@ -333,7 +333,7 @@ impl VodQueueManager {
                 }
             };
             let Some(job_id) = started.job_id.clone() else {
-                let _ = self.fail_item(&claimed.id, "VOD job id가 생성되지 않았습니다.");
+                let _ = self.fail_start(&claimed.id, "VOD job id가 생성되지 않았습니다.");
                 *self.active_id.lock().await = None;
                 continue;
             };
@@ -425,6 +425,15 @@ impl VodQueueManager {
             "UPDATE vod_queue SET state='RUNNING', message='다운로드 진행 중', updated_at=?2 WHERE id=?1",
             params![id, now],
         )?;
+        Ok(())
+    }
+
+    fn fail_start(&self, id: &str, message: &str) -> Result<()> {
+        let epoch = self.vod.download_event_epoch();
+        self.fail_item(id, message)?;
+        if let Some(item) = self.item(id)? {
+            self.vod.report_start_failure(&item, epoch);
+        }
         Ok(())
     }
 
@@ -561,6 +570,53 @@ mod tests {
         let vod = Arc::new(VodManager::new(backend, logs.clone()));
         let queue = VodQueueManager::new(store, vod, logs, Arc::new(Mutex::new(()))).unwrap();
         (dir, queue)
+    }
+
+    #[tokio::test]
+    async fn settings_change_excludes_queue_failure_published_after_terminal_commit() {
+        let (_dir, queue) = queue();
+        let mut receiver = queue.vod.subscribe_download_events();
+        let item = queue.enqueue(request("out")).await.unwrap();
+        queue.claim_next().unwrap().unwrap();
+        // fail_start stamps before exposing FAILED; pause between commit and send.
+        let epoch = queue.vod.download_event_epoch();
+        queue
+            .fail_item(&item.id, "failure before enabling")
+            .unwrap();
+        queue.vod.notification_settings_changed().await;
+        let failed = queue.item(&item.id).unwrap().unwrap();
+        queue.vod.report_start_failure(&failed, epoch);
+        assert!(receiver.try_recv().is_err());
+        queue.retry(&item.id).await.unwrap();
+        queue.claim_next().unwrap().unwrap();
+        queue
+            .fail_start(&item.id, "new failure after enabling")
+            .unwrap();
+        assert!(receiver.try_recv().unwrap().job_id.ends_with(":2"));
+    }
+
+    #[tokio::test]
+    async fn failed_queue_start_emits_one_event_and_retry_has_a_new_attempt() {
+        let (_dir, queue) = queue();
+        let mut receiver = queue.vod.subscribe_download_events();
+        let item = queue.enqueue(request("out")).await.unwrap();
+        queue.claim_next().unwrap().unwrap();
+        queue
+            .fail_start(&item.id, "private failure detail")
+            .unwrap();
+        let first = receiver.try_recv().unwrap();
+        assert!(!first.completed);
+        assert!(first.job_id.ends_with(":1"));
+        assert!(receiver.try_recv().is_err());
+        queue.retry(&item.id).await.unwrap();
+        queue.claim_next().unwrap().unwrap();
+        queue
+            .fail_start(&item.id, "private failure detail")
+            .unwrap();
+        let second = receiver.try_recv().unwrap();
+        assert!(second.job_id.ends_with(":2"));
+        assert_ne!(first.job_id, second.job_id);
+        assert!(receiver.try_recv().is_err());
     }
 
     #[tokio::test]

@@ -176,6 +176,8 @@ Stream Archive는 독립적인 오픈소스 프로젝트이며 SOOP, NAVER, CHZZ
 
 코드는 **GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)**로 공개합니다. [LICENSE](LICENSE)를 참고하세요. 외부 도구는 각각의 라이선스를 따르며 자세한 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다.
 
-### 개발 중: Windows 시스템 트레이
+### Windows 시스템 트레이 및 개발 중인 다운로드 알림
 
-Phase 24.1에서는 닫기 버튼의 프로그램 종료 / 시스템 트레이 이동 선택을 추가합니다. 기본값은 프로그램 종료이며, 트레이 이동 시 녹화·다운로드·채널 감시를 유지합니다. [사용 방법 및 수동 검증](docs/PHASE24_1_WINDOWS_TRAY.md)을 참고하세요. 현재 PR 단계이며 공개 릴리스에 포함되었다고 보장하지 않습니다.
+Phase 24.1에서 닫기 버튼의 프로그램 종료 / 시스템 트레이 이동 선택을 추가했습니다. 기본값은 프로그램 종료이며, 트레이 이동 시 녹화·다운로드·채널 감시를 유지합니다. [사용 방법 및 수동 검증](docs/PHASE24_1_WINDOWS_TRAY.md)을 참고하세요.
+
+Phase 24.2에서는 Windows 다운로드 완료·실패 알림을 추가합니다. 설정에서 끌 수 있으며, 연속 결과는 묶어서 표시합니다. portable 실행 중의 native 트레이 알림으로 알림 센터 지속 보관이나 앱 종료 후 클릭은 보장하지 않습니다. [알림 정책 및 수동 검증](docs/PHASE24_2_WINDOWS_NOTIFICATIONS.md)을 참고하세요. 현재 PR 단계이며 공개 릴리스 포함 여부는 별도로 결정합니다.

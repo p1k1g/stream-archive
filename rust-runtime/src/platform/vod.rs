@@ -16,16 +16,56 @@ pub struct VodManager {
     chzzk: chzzk::vod::VodManager,
     selected: Mutex<PlatformId>,
     lifecycle: Mutex<()>,
+    events: crate::download_events::DownloadEvents,
 }
 
 impl VodManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
+        let events = crate::download_events::DownloadEvents::default();
         Self {
-            soop: soop::vod::VodManager::new(backend_dir.clone(), logs.clone()),
-            chzzk: chzzk::vod::VodManager::new(backend_dir, logs),
+            soop: soop::vod::VodManager::new_with_events(
+                backend_dir.clone(),
+                logs.clone(),
+                events.clone(),
+            ),
+            chzzk: chzzk::vod::VodManager::new_with_events(backend_dir, logs, events.clone()),
+            events,
             selected: Mutex::new(PlatformId::Soop),
             lifecycle: Mutex::new(()),
         }
+    }
+
+    pub fn subscribe_download_events(&self) -> crate::download_events::DownloadSubscription {
+        self.events.subscribe()
+    }
+
+    pub(crate) fn invalidate_download_events(&self) {
+        self.events.invalidate();
+    }
+
+    pub(crate) async fn notification_settings_changed(&self) {
+        let (soop_status, soop_epoch) = self.soop.notification_state();
+        let (chzzk_status, chzzk_epoch) = self.chzzk.notification_state();
+        // Idle commits and new job initialization use these same status locks.
+        // Already idle jobs keep their invalidated token; active jobs are rearmed.
+        let soop = soop_status.write().await;
+        let chzzk = chzzk_status.write().await;
+        let epoch = self.events.invalidate();
+        if soop.running {
+            soop_epoch.store(epoch, std::sync::atomic::Ordering::Release);
+        }
+        if chzzk.running {
+            chzzk_epoch.store(epoch, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    pub(crate) fn download_event_epoch(&self) -> u64 {
+        self.events.epoch()
+    }
+
+    pub(crate) fn report_start_failure(&self, item: &crate::model::VodQueueItem, epoch: u64) {
+        self.events
+            .start_failed(&item.id, item.attempts, item.platform, epoch);
     }
 
     async fn provider_status(&self, platform: PlatformId) -> VodJobStatus {
@@ -146,5 +186,96 @@ mod tests {
         );
         assert!(vod_platform("https://chzzk.naver.com/live/123456").is_err());
         assert!(vod_platform("https://example.com/player/123456789").is_err());
+    }
+    #[tokio::test]
+    async fn settings_transition_excludes_idle_results_and_rearms_active_jobs() {
+        for platform in [PlatformId::Soop, PlatformId::Chzzk] {
+            let dir = tempfile::tempdir().unwrap();
+            let manager = VodManager::new(dir.path().to_path_buf(), LogBuffer::new());
+            let mut receiver = manager.subscribe_download_events();
+            let (status, token) = match platform {
+                PlatformId::Soop => manager.soop.notification_state(),
+                PlatformId::Chzzk => manager.chzzk.notification_state(),
+            };
+            let finished = VodJobStatus {
+                platform,
+                state: "COMPLETED".into(),
+                job_id: Some("finished-while-disabled".into()),
+                ..Default::default()
+            };
+            *status.write().await = finished.clone();
+            token.store(manager.events.epoch(), std::sync::atomic::Ordering::Release);
+            manager.notification_settings_changed().await;
+            manager.events.terminal(
+                &finished,
+                true,
+                token.load(std::sync::atomic::Ordering::Acquire),
+            );
+            assert!(receiver.try_recv().is_err());
+
+            let mut active = finished.clone();
+            active.job_id = Some("still-active-at-enable".into());
+            active.running = true;
+            active.state = "DOWNLOADING".into();
+            *status.write().await = active.clone();
+            token.store(manager.events.epoch(), std::sync::atomic::Ordering::Release);
+            manager.notification_settings_changed().await;
+            active.running = false;
+            active.state = "COMPLETED".into();
+            *status.write().await = active.clone();
+            manager.events.terminal(
+                &active,
+                true,
+                token.load(std::sync::atomic::Ordering::Acquire),
+            );
+            assert_eq!(
+                receiver.try_recv().unwrap().job_id,
+                "still-active-at-enable"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn real_provider_task_failures_reach_the_shared_subscriber_offline() {
+        for (platform, url) in [
+            (
+                PlatformId::Soop,
+                "https://vod.sooplive.com/player/123456789",
+            ),
+            (PlatformId::Chzzk, "https://chzzk.naver.com/video/123456"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let manager = VodManager::new(dir.path().to_path_buf(), LogBuffer::new());
+            let mut receiver = manager.subscribe_download_events();
+            let missing = dir.path().join("missing-media-tool").display().to_string();
+            let started = manager
+                .download(VodDownloadRequest {
+                    vod_url: url.into(),
+                    output_directory: dir.path().join("out").display().to_string(),
+                    parts: vec![],
+                    quality: "best".into(),
+                    merge: true,
+                    cookie_mode: "SOOP_LOGIN".into(),
+                    cookie_file: String::new(),
+                    browser_name: "firefox".into(),
+                    yt_dlp_path: missing.clone(),
+                    ffmpeg_path: missing,
+                    max_retries: 0,
+                })
+                .await
+                .unwrap();
+            let event = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(event.platform, platform);
+            assert_eq!(Some(event.job_id.as_str()), started.job_id.as_deref());
+            assert!(!event.completed);
+            assert!(receiver.try_recv().is_err());
+            assert_eq!(
+                manager.terminal_status(&event.job_id).await.unwrap().state,
+                "FAILED"
+            );
+        }
     }
 }

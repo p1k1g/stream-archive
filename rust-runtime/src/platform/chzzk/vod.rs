@@ -126,10 +126,20 @@ pub struct VodManager {
     runtime: Mutex<JobRuntime>,
     status: Arc<RwLock<VodJobStatus>>,
     terminal: Arc<Mutex<VecDeque<(String, VodJobStatus)>>>,
+    events: crate::download_events::DownloadEvents,
+    notification_epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl VodManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
+        Self::new_with_events(backend_dir, logs, Default::default())
+    }
+
+    pub(crate) fn new_with_events(
+        backend_dir: PathBuf,
+        logs: LogBuffer,
+        events: crate::download_events::DownloadEvents,
+    ) -> Self {
         let _ = cleanup_stale_job_dirs(&backend_dir);
         Self {
             backend_dir,
@@ -143,7 +153,15 @@ impl VodManager {
                 ..Default::default()
             })),
             terminal: Arc::new(Mutex::new(VecDeque::new())),
+            events,
+            notification_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    pub(crate) fn notification_state(
+        &self,
+    ) -> (&RwLock<VodJobStatus>, &std::sync::atomic::AtomicU64) {
+        (&self.status, &self.notification_epoch)
     }
 
     pub async fn status(&self) -> VodJobStatus {
@@ -204,8 +222,13 @@ impl VodManager {
                 started_at: Some(Utc::now().to_rfc3339()),
                 ..Default::default()
             };
+            self.notification_epoch
+                .store(self.events.epoch(), Ordering::Release);
         }
 
+        let events = self.events.clone();
+        let event_epoch = self.notification_epoch.clone();
+        let download = matches!(&kind, VodJobKind::Download(_));
         let task = tokio::spawn(async move {
             let result = match kind {
                 VodJobKind::Analyze(req) => run_analysis(&backend, req, &logs, &status, &cancel)
@@ -235,6 +258,7 @@ impl VodManager {
             if terminal.len() >= TERMINAL_CACHE_LIMIT {
                 terminal.pop_front();
             }
+            events.terminal(&final_status, download, event_epoch.load(Ordering::Acquire));
             terminal.push_back((terminal_job_id, final_status));
         });
         runtime.task = Some(task);
@@ -1828,6 +1852,57 @@ fn exit_code(status: ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn restore_epoch_blocks_a_result_waiting_after_idle_is_observable() {
+        let dir = tempfile::tempdir().unwrap();
+        let events = crate::download_events::DownloadEvents::default();
+        let mut receiver = events.subscribe();
+        let manager = super::VodManager::new_with_events(
+            dir.path().to_path_buf(),
+            crate::backend::LogBuffer::new(),
+            events.clone(),
+        );
+        let terminal_guard = manager.terminal.lock().await;
+        let missing = dir.path().join("missing-media-tool").display().to_string();
+        let started = manager
+            .download(crate::model::VodDownloadRequest {
+                vod_url: "https://chzzk.naver.com/video/123456".into(),
+                output_directory: dir.path().join("out").display().to_string(),
+                parts: vec![],
+                quality: "best".into(),
+                merge: true,
+                cookie_mode: "SOOP_LOGIN".into(),
+                cookie_file: String::new(),
+                browser_name: "firefox".into(),
+                yt_dlp_path: missing.clone(),
+                ffmpeg_path: missing,
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !manager.status().await.running {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // The old job is idle, but cannot publish until terminal_guard is dropped.
+        events.invalidate();
+        drop(terminal_guard);
+        let task = manager.runtime.lock().await.task.take().unwrap();
+        task.await.unwrap();
+        let terminal = manager
+            .terminal_status(started.job_id.as_deref().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(terminal.state, "FAILED");
+        assert!(receiver.try_recv().is_err());
+    }
+
     use super::*;
 
     #[test]

@@ -192,6 +192,8 @@ enum Response {
     DesktopStatus(String),
     ExitCheck(Result<bool, String>),
     ExitComplete,
+    Downloads(Vec<stream_archive_server::download_events::DownloadEvent>),
+    ClearNotices,
 }
 
 pub struct Controller {
@@ -464,6 +466,7 @@ fn worker_loop(
     responses: &mpsc::Sender<Response>,
     stopping: &std::sync::atomic::AtomicBool,
 ) {
+    let mut download_events = core.subscribe_download_events();
     // spawn_vod_history_sync uses tokio::spawn internally, so enter the runtime
     // while creating that long-lived task. The multi-thread runtime then keeps
     // driving it between GUI requests.
@@ -571,11 +574,16 @@ fn worker_loop(
             ),
             Request::Save(patch) => {
                 match runtime.block_on(core.update_environment_settings(&patch)) {
-                    Ok(_) => read_snapshot(
-                        core,
-                        true,
-                        "canonical SQLite에 저장했습니다. 진행 중인 녹화는 현재 설정을 그대로 유지합니다.",
-                    ),
+                    Ok(_) => {
+                        if patch.contains_key("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS") {
+                            let _ = responses.send(Response::ClearNotices);
+                        }
+                        read_snapshot(
+                            core,
+                            true,
+                            "canonical SQLite에 저장했습니다. 진행 중인 녹화는 현재 설정을 그대로 유지합니다.",
+                        )
+                    }
                     Err(error) => Response::Error(format!("저장 실패: {error:#}")),
                 }
             }
@@ -863,6 +871,7 @@ fn worker_loop(
             Request::BackupRestore { file_name } => {
                 match runtime.block_on(core.restore_backup(&file_name)) {
                     Ok(outcome) => {
+                        let _ = responses.send(Response::ClearNotices);
                         let _ = responses.send(read_snapshot(
                             core,
                             true,
@@ -902,6 +911,10 @@ fn worker_loop(
             },
         };
         if responses.send(response).is_err() {
+            break;
+        }
+        let events = crate::notifications::drain_download_events(|| download_events.try_recv());
+        if !events.is_empty() && responses.send(Response::Downloads(events)).is_err() {
             break;
         }
     }
@@ -2276,6 +2289,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         }
     });
     let response_exit_sender = sender.clone();
+    let mut download_tracker = crate::notifications::Tracker::default();
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
@@ -2284,6 +2298,17 @@ pub fn bind(ui: &MainWindow) -> Controller {
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
+                Response::ClearNotices => {
+                    download_tracker.clear();
+                    state.invoke_clear_download_notices();
+                }
+                Response::Downloads(events) => {
+                    let summary = download_tracker.collect(events,
+                        state.get_download_notifications_enabled() && !state.get_desktop_exit_pending());
+                    if !summary.is_empty() {
+                        state.invoke_download_notice(summary.completed, summary.failed);
+                    }
+                }
                 Response::DesktopStatus(status) => {
                     state.set_desktop_poll_pending(false);
                     state.set_desktop_status(status.into());
@@ -2321,6 +2346,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     let has_settings_snapshot = fields.is_some();
                     let startup_failed = !state.get_live_loaded() && fields.is_none();
                     if let Some(fields) = fields {
+                        state.set_download_notifications_enabled(fields.iter().any(|f|
+                            f.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" && f.value == "true"
+                        ));
                         state.set_close_to_tray(fields.iter().any(|f|
                             f.key == "STREAM_ARCHIVE_CLOSE_ACTION" && f.value == "TRAY"
                         ));
