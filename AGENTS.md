@@ -11,7 +11,7 @@
 - `rust-gui/Cargo.toml`: Windows Slint desktop frontend crate.
 - `rust-gui/src/main.rs`: Slint bootstrap/state binding. 반드시 `StreamArchiveCore`를 직접 호출하고 localhost HTTP, 직접 SQLite, 직접 child-process 제어를 추가하지 않는다.
 - `rust-gui/ui/*.slint`: Windows native presentation/navigation. provider/storage/process 구현 로직을 넣지 않는다.
-- Native `설정` 내부는 `일반`과 `관리`로 나뉜다. `일반`은 provider/runtime 설정, `관리`는 backup policy + Backup/Restore/Diagnostics/Logs를 담당한다. 모든 작업은 shared services를 사용한다.
+- Native `설정` 내부는 `일반`과 `백업 / 복원`으로 나뉜다. `일반`은 provider/runtime 설정, 내부 `Manage` view는 backup policy + Backup/Restore를 담당한다. `Diagnostics` navigation은 읽기 전용 진단과 런타임 로그를 제공한다. 모두 기존 `MaintenanceState` / shared services를 사용한다.
 - `rust-runtime/src/tool_discovery.rs`: cross-platform Streamlink/yt-dlp/FFmpeg discovery.
 - `rust-runtime/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI entry. bootstrap(`init`/`tools`/`doctor`)과 Phase 23.5 daily-use management를 제공하며, management는 `rust-runtime/src/unix_cli.rs`를 통해 `StreamArchiveCore`를 사용한다. `serve`는 shared headless runner를 직접 사용하고 Web server를 시작하지 않는다.
 - `rust-runtime/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration.

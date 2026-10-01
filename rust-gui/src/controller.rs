@@ -2793,7 +2793,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
             };
             let app_state = ui.global::<AppState>();
             let maintenance_state = ui.global::<MaintenanceState>();
-            if app_state.get_active_page().as_str() != "Maintenance"
+            if app_state.get_active_page().as_str() != "Diagnostics"
                 || maintenance_state.get_section().as_str() != "Logs"
                 || !maintenance_state.get_log_auto_refresh()
                 || maintenance_state.get_busy()
