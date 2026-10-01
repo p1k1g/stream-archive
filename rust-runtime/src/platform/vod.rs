@@ -61,9 +61,13 @@ impl VodManager {
         }
     }
 
-    pub(crate) fn report_start_failure(&self, item: &crate::model::VodQueueItem) {
+    pub(crate) fn download_event_epoch(&self) -> u64 {
+        self.events.epoch()
+    }
+
+    pub(crate) fn report_start_failure(&self, item: &crate::model::VodQueueItem, epoch: u64) {
         self.events
-            .start_failed(&item.id, item.attempts, item.platform);
+            .start_failed(&item.id, item.attempts, item.platform, epoch);
     }
 
     async fn provider_status(&self, platform: PlatformId) -> VodJobStatus {
@@ -226,7 +230,10 @@ mod tests {
                 true,
                 token.load(std::sync::atomic::Ordering::Acquire),
             );
-            assert_eq!(receiver.try_recv().unwrap().job_id, "still-active-at-enable");
+            assert_eq!(
+                receiver.try_recv().unwrap().job_id,
+                "still-active-at-enable"
+            );
         }
     }
 

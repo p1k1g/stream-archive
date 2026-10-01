@@ -391,11 +391,7 @@ impl VodManager {
             if terminal.len() >= TERMINAL_CACHE_LIMIT {
                 terminal.pop_front();
             }
-            events.terminal(
-                &final_status,
-                download,
-                event_epoch.load(Ordering::Acquire),
-            );
+            events.terminal(&final_status, download, event_epoch.load(Ordering::Acquire));
             terminal.push_back((terminal_job_id, final_status));
         });
         runtime.task = Some(task);

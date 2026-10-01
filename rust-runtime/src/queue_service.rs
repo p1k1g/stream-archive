@@ -429,9 +429,10 @@ impl VodQueueManager {
     }
 
     fn fail_start(&self, id: &str, message: &str) -> Result<()> {
+        let epoch = self.vod.download_event_epoch();
         self.fail_item(id, message)?;
         if let Some(item) = self.item(id)? {
-            self.vod.report_start_failure(&item);
+            self.vod.report_start_failure(&item, epoch);
         }
         Ok(())
     }
@@ -569,6 +570,25 @@ mod tests {
         let vod = Arc::new(VodManager::new(backend, logs.clone()));
         let queue = VodQueueManager::new(store, vod, logs, Arc::new(Mutex::new(()))).unwrap();
         (dir, queue)
+    }
+
+    #[tokio::test]
+    async fn settings_change_excludes_queue_failure_published_after_terminal_commit() {
+        let (_dir, queue) = queue();
+        let mut receiver = queue.vod.subscribe_download_events();
+        let item = queue.enqueue(request("out")).await.unwrap();
+        queue.claim_next().unwrap().unwrap();
+        // fail_start stamps before exposing FAILED; pause between commit and send.
+        let epoch = queue.vod.download_event_epoch();
+        queue.fail_item(&item.id, "failure before enabling").unwrap();
+        queue.vod.notification_settings_changed().await;
+        let failed = queue.item(&item.id).unwrap().unwrap();
+        queue.vod.report_start_failure(&failed, epoch);
+        assert!(receiver.try_recv().is_err());
+        queue.retry(&item.id).await.unwrap();
+        queue.claim_next().unwrap().unwrap();
+        queue.fail_start(&item.id, "new failure after enabling").unwrap();
+        assert!(receiver.try_recv().unwrap().job_id.ends_with(":2"));
     }
 
     #[tokio::test]

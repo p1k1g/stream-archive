@@ -45,39 +45,44 @@ impl DownloadEvents {
         *epoch
     }
 
-    pub fn terminal(&self, status: &VodJobStatus, download: bool, epoch: u64) {
-        if !download || status.running || !matches!(status.state.as_str(), "COMPLETED" | "FAILED") {
-            return;
-        }
-        // Serialize epoch validation + send against successful Restore.
-        // An old task may be idle already but still waiting on its terminal cache.
+    fn publish(&self, event: DownloadEvent, epoch: u64) {
+        // Serialize generation validation + send against Restore/settings changes.
         let current = self
             .epoch
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if *current != epoch {
-            return;
-        }
-        if let Some(job_id) = &status.job_id {
-            let _ = self.sender.send(DownloadEvent {
-                job_id: job_id.clone(),
-                platform: status.platform,
-                completed: status.state == "COMPLETED",
-            });
+        if *current == epoch {
+            let _ = self.sender.send(event);
         }
     }
 
-    pub fn start_failed(&self, id: &str, attempt: u32, platform: PlatformId) {
-        let _epoch = self
-            .epoch
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let _ = self.sender.send(DownloadEvent {
-            job_id: format!("queue:{id}:{attempt}"),
-            platform,
-            completed: false,
-        });
+    pub fn terminal(&self, status: &VodJobStatus, download: bool, epoch: u64) {
+        if !download || status.running || !matches!(status.state.as_str(), "COMPLETED" | "FAILED") {
+            return;
+        }
+        if let Some(job_id) = &status.job_id {
+            self.publish(
+                DownloadEvent {
+                    job_id: job_id.clone(),
+                    platform: status.platform,
+                    completed: status.state == "COMPLETED",
+                },
+                epoch,
+            );
+        }
     }
+
+    pub fn start_failed(&self, id: &str, attempt: u32, platform: PlatformId, epoch: u64) {
+        self.publish(
+            DownloadEvent {
+                job_id: format!("queue:{id}:{attempt}"),
+                platform,
+                completed: false,
+            },
+            epoch,
+        );
+    }
+
 }
 
 #[cfg(test)]
@@ -122,11 +127,11 @@ mod tests {
     #[test]
     fn new_subscriber_does_not_replay_old_results_and_queue_retries_are_distinct() {
         let events = DownloadEvents::default();
-        events.start_failed("old", 1, PlatformId::Soop);
+        events.start_failed("old", 1, PlatformId::Soop, events.epoch());
         let mut receiver = events.subscribe();
         assert!(receiver.try_recv().is_err());
         for attempt in [1, 2] {
-            events.start_failed("item", attempt, PlatformId::Chzzk);
+            events.start_failed("item", attempt, PlatformId::Chzzk, events.epoch());
             assert_eq!(
                 receiver.try_recv().unwrap().job_id,
                 format!("queue:item:{attempt}")
@@ -156,7 +161,7 @@ mod tests {
         let events = DownloadEvents::default();
         let mut receiver = events.subscribe();
         for attempt in 0..300 {
-            events.start_failed("item", attempt, PlatformId::Soop);
+            events.start_failed("item", attempt, PlatformId::Soop, events.epoch());
         }
         assert!(matches!(
             receiver.try_recv(),
