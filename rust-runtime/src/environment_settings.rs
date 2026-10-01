@@ -65,6 +65,11 @@ const FIELDS: &[(&str, SettingKind, &str)] = &[
         "Windows close action: EXIT (default) or TRAY; Unix headless is unaffected",
     ),
     (
+        "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS",
+        SettingKind::Text,
+        "Windows VOD 완료·실패 알림: true / false; 변경사항 저장 후 적용",
+    ),
+    (
         "QUALITY",
         SettingKind::Text,
         "LIVE quality, for example best",
@@ -161,6 +166,16 @@ mod tests {
         validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", "TRAY")).unwrap();
         for value in ["", "tray", "MINIMIZE", "TRAY\nEXIT"] {
             assert!(validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", value)).is_err());
+        }
+    }
+
+    #[test]
+    fn download_notifications_accepts_only_explicit_booleans() {
+        for value in ["true", "false"] {
+            validate_updates(&update("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS", value)).unwrap();
+        }
+        for value in ["", "TRUE", "1", "false\ntrue"] {
+            assert!(validate_updates(&update("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS", value)).is_err());
         }
     }
 

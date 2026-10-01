@@ -76,6 +76,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 
 ## 1.0.0 이후 개발
 
-- Phase 24.1 🚧 Windows 닫기 동작 / 시스템 트레이 ([설계 및 수동 QA](PHASE24_1_WINDOWS_TRAY.md))
-- Phase 24.2 예정: 트레이·종료 동작 최종 검증 및 릴리스 준비
+- Phase 24.1 ✅ Windows 닫기 동작 / 시스템 트레이 ([설계 및 수동 QA](PHASE24_1_WINDOWS_TRAY.md))
+- Phase 24.2 🚧 Windows 다운로드 완료·실패 알림 ([알림 정책 및 수동 QA](PHASE24_2_WINDOWS_NOTIFICATIONS.md))
+- Phase 24.3 예정: 트레이·알림 최종 수동 검증 및 릴리스 준비
 - Phase 25 예정: Kick LIVE 지원 조사 및 구현

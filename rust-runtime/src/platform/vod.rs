@@ -16,16 +16,27 @@ pub struct VodManager {
     chzzk: chzzk::vod::VodManager,
     selected: Mutex<PlatformId>,
     lifecycle: Mutex<()>,
+    events: crate::download_events::DownloadEvents,
 }
 
 impl VodManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
+        let events = crate::download_events::DownloadEvents::default();
         Self {
-            soop: soop::vod::VodManager::new(backend_dir.clone(), logs.clone()),
-            chzzk: chzzk::vod::VodManager::new(backend_dir, logs),
+            soop: soop::vod::VodManager::new_with_events(backend_dir.clone(), logs.clone(), events.clone()),
+            chzzk: chzzk::vod::VodManager::new_with_events(backend_dir, logs, events.clone()),
+            events,
             selected: Mutex::new(PlatformId::Soop),
             lifecycle: Mutex::new(()),
         }
+    }
+
+    pub fn subscribe_download_events(&self) -> tokio::sync::broadcast::Receiver<crate::download_events::DownloadEvent> {
+        self.events.subscribe()
+    }
+
+    pub(crate) fn report_start_failure(&self, item: &crate::model::VodQueueItem) {
+        self.events.start_failed(&item.id, item.attempts, item.platform);
     }
 
     async fn provider_status(&self, platform: PlatformId) -> VodJobStatus {

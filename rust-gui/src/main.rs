@@ -9,6 +9,7 @@ mod live_adapter;
 mod maintenance_adapter;
 mod native_picker;
 mod native_shell;
+mod notifications;
 mod queue_adapter;
 mod settings_adapter;
 mod storage_adapter;

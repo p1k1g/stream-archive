@@ -126,10 +126,15 @@ pub struct VodManager {
     runtime: Mutex<JobRuntime>,
     status: Arc<RwLock<VodJobStatus>>,
     terminal: Arc<Mutex<VecDeque<(String, VodJobStatus)>>>,
+    events: crate::download_events::DownloadEvents,
 }
 
 impl VodManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
+        Self::new_with_events(backend_dir, logs, Default::default())
+    }
+
+    pub(crate) fn new_with_events(backend_dir: PathBuf, logs: LogBuffer, events: crate::download_events::DownloadEvents) -> Self {
         let _ = cleanup_stale_job_dirs(&backend_dir);
         Self {
             backend_dir,
@@ -143,6 +148,7 @@ impl VodManager {
                 ..Default::default()
             })),
             terminal: Arc::new(Mutex::new(VecDeque::new())),
+            events,
         }
     }
 
@@ -206,6 +212,8 @@ impl VodManager {
             };
         }
 
+        let events = self.events.clone();
+        let download = matches!(&kind, VodJobKind::Download(_));
         let task = tokio::spawn(async move {
             let result = match kind {
                 VodJobKind::Analyze(req) => run_analysis(&backend, req, &logs, &status, &cancel)
@@ -235,6 +243,7 @@ impl VodManager {
             if terminal.len() >= TERMINAL_CACHE_LIMIT {
                 terminal.pop_front();
             }
+            events.terminal(&final_status, download);
             terminal.push_back((terminal_job_id, final_status));
         });
         runtime.task = Some(task);

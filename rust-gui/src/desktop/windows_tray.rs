@@ -1,6 +1,6 @@
 //! A hidden top-level window receives TaskbarCreated broadcasts. Message-only
 //! windows do not. Wndproc only forwards presentation events, never core commands.
-use crate::{AppState, MainWindow};
+use crate::{AppState, MainWindow, QueueHistoryState, notifications::{NoticeQueue, Summary}};
 use slint::{ComponentHandle, Timer, TimerMode};
 use std::{
     cell::{Cell, RefCell},
@@ -14,7 +14,7 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Shell::{
-                NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+                NIF_ICON, NIF_MESSAGE, NIF_TIP, NIF_INFO, NIIF_INFO, NIIF_WARNING, NIIF_RESPECT_QUIET_TIME, NIN_BALLOONUSERCLICK, NIN_BALLOONHIDE, NIN_BALLOONTIMEOUT, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
                 Shell_NotifyIconW,
             },
             WindowsAndMessaging::*,
@@ -31,6 +31,8 @@ enum Event {
     Open,
     Exit,
     ShellRestart,
+    History,
+    NoticeClosed,
 }
 
 struct State {
@@ -39,6 +41,8 @@ struct State {
     taskbar_created: u32,
     events: mpsc::Sender<Event>,
     status: RefCell<String>,
+    notices: RefCell<NoticeQueue>,
+    notice_visible: Cell<bool>,
 }
 
 impl State {
@@ -56,6 +60,28 @@ impl State {
             *dest = src;
         }
         data
+    }
+
+    fn show_notice(&self, summary: Summary) -> bool {
+        let mut data = self.data("");
+        data.uFlags = NIF_INFO;
+        data.dwInfoFlags = (if summary.failed > 0 { NIIF_WARNING } else { NIIF_INFO }) | NIIF_RESPECT_QUIET_TIME;
+        let title = if summary.failed > 0 { "Stream Archive 다운로드 결과" } else { "Stream Archive 다운로드 완료" };
+        let body = format!("SOOP / CHZZK VOD 완료 {}건 · 실패 {}건\n클릭하면 History에서 결과를 확인합니다.", summary.completed, summary.failed);
+        for (dest, src) in data.szInfoTitle.iter_mut().take(63).zip(title.encode_utf16()) { *dest = src; }
+        for (dest, src) in data.szInfo.iter_mut().take(255).zip(body.encode_utf16()) { *dest = src; }
+        let shown = unsafe { Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() };
+        self.notice_visible.set(shown);
+        shown
+    }
+
+    fn clear_notice(&self) {
+        self.notices.borrow_mut().clear();
+        if self.notice_visible.replace(false) {
+            let mut data = self.data("");
+            data.uFlags = NIF_INFO;
+            let _ = unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
+        }
     }
 
     fn ensure(&self, tooltip: &str) -> bool {
@@ -126,6 +152,8 @@ impl Tray {
                 icon,
                 taskbar_created,
                 status: RefCell::new("상태 확인 중".into()),
+                notices: RefCell::new(NoticeQueue::default()),
+                notice_visible: Cell::new(false),
                 events,
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_ref() as *const State as isize);
@@ -164,6 +192,13 @@ unsafe extern "system" fn wndproc(
         }
         if message == CALLBACK {
             match lparam.0 as u32 {
+                NIN_BALLOONUSERCLICK => {
+                    let _ = state.events.send(Event::History);
+                    let _ = state.events.send(Event::NoticeClosed);
+                }
+                NIN_BALLOONHIDE | NIN_BALLOONTIMEOUT => {
+                    let _ = state.events.send(Event::NoticeClosed);
+                }
                 WM_LBUTTONUP => {
                     let _ = state.events.send(Event::Open);
                 }
@@ -240,6 +275,18 @@ pub fn bind(ui: &MainWindow) -> Desktop {
         }
     });
     let weak = ui.as_weak();
+    let notice_tray = tray.clone();
+    ui.global::<AppState>().on_download_notice(move |completed, failed| {
+        let Some(ui) = weak.upgrade() else { return };
+        let state = ui.global::<AppState>();
+        if !state.get_download_notifications_enabled() || state.get_desktop_exit_pending() { return; }
+        if let Some(tray) = notice_tray.as_ref().as_ref() {
+            tray.state.notices.borrow_mut().add(Summary { completed, failed }, Instant::now());
+        } else {
+            state.set_download_notifications_status("트레이 등록 실패로 알림을 표시하지 못했습니다. History에서 결과를 확인하세요.".into());
+        }
+    });
+    let weak = ui.as_weak();
     let close_tray = tray.clone();
     let informed = Cell::new(false);
     ui.window().on_close_requested(move || {
@@ -285,7 +332,47 @@ pub fn bind(ui: &MainWindow) -> Desktop {
                     restore(&ui);
                     state.invoke_desktop_exit();
                 }
-                Event::ShellRestart => recover = true,
+                Event::ShellRestart => {
+                    recover = true;
+                    if let Some(tray) = timer_tray.as_ref().as_ref() {
+                        tray.state.notice_visible.set(false);
+                        tray.state.notices.borrow_mut().closed();
+                    }
+                }
+                Event::NoticeClosed => {
+                    if let Some(tray) = timer_tray.as_ref().as_ref() {
+                        tray.state.notice_visible.set(false);
+                        tray.state.notices.borrow_mut().closed();
+                    }
+                }
+                Event::History => {
+                    restore(&ui);
+                    state.set_active_page("History".into());
+                    let history = ui.global::<QueueHistoryState>();
+                    history.set_history_view("VOD".into());
+                    history.set_history_search("".into());
+                    history.set_history_status("".into());
+                    history.set_history_from_date("".into());
+                    history.set_history_to_date("".into());
+                    history.set_history_limit("100".into());
+                    history.invoke_history_refresh();
+                }
+            }
+        }
+        if let Some(tray) = timer_tray.as_ref().as_ref() {
+            if !state.get_download_notifications_enabled() || state.get_desktop_exit_pending() {
+                tray.state.clear_notice();
+            } else {
+                let summary = tray.state.notices.borrow_mut().take(Instant::now());
+                if let Some(summary) = summary {
+                    // Best effort only; never block downloads or show a modal error.
+                    if !tray.state.ensure(&format!("Stream Archive — {}", state.get_desktop_status())) || !tray.state.show_notice(summary) {
+                        tray.state.notices.borrow_mut().closed();
+                        state.set_download_notifications_status("Windows 알림 전송 실패. History에서 결과를 확인하세요.".into());
+                    } else {
+                        state.set_download_notifications_status("".into());
+                    }
+                }
             }
         }
         if recover || last_poll.elapsed() >= Duration::from_secs(2) {
