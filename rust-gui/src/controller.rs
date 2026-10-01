@@ -2309,7 +2309,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
-                Response::ClearNotices => state.invoke_clear_download_notices(),
+                Response::ClearNotices => {
+                    download_tracker.clear();
+                    state.invoke_clear_download_notices();
+                }
                 Response::Downloads(events) => {
                     let summary = download_tracker.collect(events,
                         state.get_download_notifications_enabled() && !state.get_desktop_exit_pending());

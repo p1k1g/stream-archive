@@ -23,6 +23,10 @@ pub struct Tracker {
     seen: VecDeque<(stream_archive_server::support::platform::PlatformId, String)>,
 }
 impl Tracker {
+    pub fn clear(&mut self) {
+        self.seen.clear();
+    }
+
     pub fn collect(&mut self, events: Vec<DownloadEvent>, enabled: bool) -> Summary {
         let mut summary = Summary::default();
         for event in events {
@@ -122,6 +126,18 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         sender.send(event("new-session-result", true)).unwrap();
         assert_eq!(receiver.try_recv().unwrap().job_id, "new-session-result");
+    }
+
+    #[test]
+    fn restored_queue_attempt_can_notify_again_after_clearing_the_old_epoch() {
+        let mut tracker = Tracker::default();
+        let attempt = event("queue:restored-item:2", false);
+        assert_eq!(tracker.collect(vec![attempt.clone()], true).failed, 1);
+        assert!(tracker.collect(vec![attempt.clone()], true).is_empty());
+        // Restore may rewind persisted attempts; the same key is a new failure.
+        tracker.clear();
+        assert_eq!(tracker.collect(vec![attempt.clone()], true).failed, 1);
+        assert!(tracker.collect(vec![attempt], true).is_empty());
     }
 
     #[test]
