@@ -594,6 +594,7 @@ impl StreamArchiveCore {
         }
 
         let outcome = self.backups.restore(file_name).await?;
+        self.vod.invalidate_download_events();
         self.logs
             .push(format!(
                 "[BACKUP] database restored file={} safety={}",

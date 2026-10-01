@@ -41,6 +41,10 @@ impl VodManager {
         self.events.subscribe()
     }
 
+    pub(crate) fn invalidate_download_events(&self) {
+        self.events.invalidate();
+    }
+
     pub(crate) fn report_start_failure(&self, item: &crate::model::VodQueueItem) {
         self.events
             .start_failed(&item.id, item.attempts, item.platform);

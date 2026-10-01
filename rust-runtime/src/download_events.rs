@@ -10,25 +10,46 @@ pub struct DownloadEvent {
 }
 
 #[derive(Clone)]
-pub(crate) struct DownloadEvents(broadcast::Sender<DownloadEvent>);
+pub(crate) struct DownloadEvents {
+    sender: broadcast::Sender<DownloadEvent>,
+    epoch: std::sync::Arc<std::sync::Mutex<u64>>,
+}
 
 impl Default for DownloadEvents {
     fn default() -> Self {
-        Self(broadcast::channel(128).0)
+        Self {
+            sender: broadcast::channel(128).0,
+            epoch: std::sync::Arc::new(std::sync::Mutex::new(0)),
+        }
     }
 }
 
 impl DownloadEvents {
     pub fn subscribe(&self) -> broadcast::Receiver<DownloadEvent> {
-        self.0.subscribe()
+        self.sender.subscribe()
     }
 
-    pub fn terminal(&self, status: &VodJobStatus, download: bool) {
+    pub fn epoch(&self) -> u64 {
+        *self.epoch.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    pub fn invalidate(&self) {
+        let mut epoch = self.epoch.lock().unwrap_or_else(|poison| poison.into_inner());
+        *epoch = epoch.wrapping_add(1);
+    }
+
+    pub fn terminal(&self, status: &VodJobStatus, download: bool, epoch: u64) {
         if !download || status.running || !matches!(status.state.as_str(), "COMPLETED" | "FAILED") {
             return;
         }
+        // Serialize epoch validation + send against successful Restore.
+        // An old task may be idle already but still waiting on its terminal cache.
+        let current = self.epoch.lock().unwrap_or_else(|poison| poison.into_inner());
+        if *current != epoch {
+            return;
+        }
         if let Some(job_id) = &status.job_id {
-            let _ = self.0.send(DownloadEvent {
+            let _ = self.sender.send(DownloadEvent {
                 job_id: job_id.clone(),
                 platform: status.platform,
                 completed: status.state == "COMPLETED",
@@ -37,7 +58,8 @@ impl DownloadEvents {
     }
 
     pub fn start_failed(&self, id: &str, attempt: u32, platform: PlatformId) {
-        let _ = self.0.send(DownloadEvent {
+        let _epoch = self.epoch.lock().unwrap_or_else(|poison| poison.into_inner());
+        let _ = self.sender.send(DownloadEvent {
             job_id: format!("queue:{id}:{attempt}"),
             platform,
             completed: false,
@@ -62,16 +84,16 @@ mod tests {
                 output_file: Some("private path".into()),
                 ..Default::default()
             };
-            events.terminal(&status, false);
+            events.terminal(&status, false, events.epoch());
             assert!(receiver.try_recv().is_err());
             for state in ["READY", "CANCELLED", "CANCELLING"] {
                 status.state = state.into();
-                events.terminal(&status, true);
+                events.terminal(&status, true, events.epoch());
                 assert!(receiver.try_recv().is_err());
             }
             for (state, completed) in [("COMPLETED", true), ("FAILED", false)] {
                 status.state = state.into();
-                events.terminal(&status, true);
+                events.terminal(&status, true, events.epoch());
                 assert_eq!(
                     receiver.try_recv().unwrap(),
                     DownloadEvent {
@@ -97,6 +119,23 @@ mod tests {
                 format!("queue:item:{attempt}")
             );
         }
+    }
+
+    #[test]
+    fn restore_invalidates_late_old_results_but_keeps_new_jobs() {
+        let events = DownloadEvents::default();
+        let mut receiver = events.subscribe();
+        let old_epoch = events.epoch();
+        let status = VodJobStatus {
+            state: "COMPLETED".into(),
+            job_id: Some("late-old-job".into()),
+            ..Default::default()
+        };
+        events.invalidate();
+        events.terminal(&status, true, old_epoch);
+        assert!(receiver.try_recv().is_err());
+        events.terminal(&status, true, events.epoch());
+        assert!(receiver.try_recv().unwrap().completed);
     }
 
     #[test]
