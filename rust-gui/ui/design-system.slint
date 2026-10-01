@@ -1,0 +1,112 @@
+// Shared presentation tokens. No runtime or persistence logic belongs here.
+export global Theme {
+    out property <color> canvas: #171c22;
+    out property <color> sidebar: #14191f;
+    out property <color> surface: #20272f;
+    out property <color> raised: #28323c;
+    out property <color> border: #34404b;
+    out property <color> text: #edf3f5;
+    out property <color> secondary: #becad2;
+    out property <color> muted: #9aaab6;
+    out property <color> accent: #32d5bf;
+    out property <color> accent-ink: #092822;
+    out property <color> selected: #203b3c;
+    out property <color> success: #71ddba;
+    out property <color> warning: #f3c36b;
+    out property <color> danger: #ff9caa;
+    out property <color> success-surface: #203a32;
+    out property <color> warning-surface: #393126;
+    out property <color> danger-surface: #3c2830;
+}
+
+// Keep keyboard, focus and accessibility semantics for every styled action.
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    min-width: max(32px, label.preferred-width + 24px);
+    min-height: 30px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: focus.has-focus && root.enabled ? Theme.accent : Theme.border;
+    background: !root.enabled ? Theme.surface : root.primary ? (touch.pressed ? #24af9d : touch.has-hover ? #58e2cf : Theme.accent) : root.selected ? Theme.selected : touch.has-hover ? Theme.raised : Theme.surface;
+    opacity: root.enabled ? 1 : 0.5;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    label := Text {
+        x: 12px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text: root.text;
+        color: root.primary ? Theme.accent-ink : root.selected ? Theme.accent : Theme.text;
+        font-size: 12px;
+        font-weight: root.primary ? 600 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+export component StatusPill inherits Rectangle {
+    in property <string> text;
+    in property <string> tone;
+    height: 26px;
+    min-width: label.preferred-width + 22px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 13px;
+    background: root.tone == "error" ? Theme.danger-surface : root.tone == "warn" ? Theme.warning-surface : root.tone == "ok" ? Theme.success-surface : Theme.raised;
+    label := Text {
+        x: 11px;
+        width: parent.width - 22px;
+        height: parent.height;
+        text: root.text;
+        color: root.tone == "error" ? Theme.danger : root.tone == "warn" ? Theme.warning : root.tone == "ok" ? Theme.success : Theme.secondary;
+        font-size: 11px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+// Platform labels use existing provider data; no profile-image lookup is added.
+export component PlatformBadge inherits Rectangle {
+    in property <string> platform;
+    width: 54px;
+    height: 32px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 6px;
+    background: Theme.raised;
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.platform;
+        color: root.platform == "CHZZK" ? Theme.accent : #88baff;
+        font-size: 10px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

@@ -1,4 +1,5 @@
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme, ActionButton as Button, StatusPill, PlatformBadge } from "design-system.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct MaintenanceBackupRow {
     file-name: string,
@@ -62,18 +63,20 @@ export global MaintenanceState {
 }
 
 component SectionButton inherits Button {
+    selected: MaintenanceState.section == root.section-name;
     in property <string> section-name;
     text: root.section-name == "Backup" ? "백업 / 복원" : root.section-name == "Diagnostics" ? "진단" : "로그";
     clicked => { MaintenanceState.section = root.section-name; }
 }
 
 component SummaryLabel inherits Text {
-    color: #64748b;
+    color: Theme.muted;
     font-size: 11px;
     wrap: word-wrap;
 }
 
 export component MaintenancePage inherits VerticalLayout {
+    in property <bool> diagnostics-page: false;
     spacing: 10px;
 
     HorizontalLayout {
@@ -81,16 +84,16 @@ export component MaintenancePage inherits VerticalLayout {
         vertical-stretch: 0;
         spacing: 8px;
         Text {
-            text: "백업 / 복원 / 진단 / 로그";
-            color: #0f172a;
+            text: root.diagnostics-page ? "실행 환경 / 런타임 로그" : "백업 정책 및 복원";
+            color: Theme.text;
             font-size: 18px;
             font-weight: 700;
             horizontal-stretch: 1;
             vertical-alignment: center;
         }
-        SectionButton { height: 34px; section-name: "Backup"; enabled: !MaintenanceState.busy; }
-        SectionButton { height: 34px; section-name: "Diagnostics"; enabled: !MaintenanceState.busy; }
-        SectionButton { height: 34px; section-name: "Logs"; enabled: !MaintenanceState.busy; }
+        if !root.diagnostics-page: SectionButton { height: 34px; section-name: "Backup"; enabled: !MaintenanceState.busy; }
+        if root.diagnostics-page: SectionButton { height: 34px; section-name: "Diagnostics"; enabled: !MaintenanceState.busy; }
+        if root.diagnostics-page: SectionButton { height: 34px; section-name: "Logs"; enabled: !MaintenanceState.busy; clicked => { MaintenanceState.section = "Logs"; MaintenanceState.refresh-logs(); } }
         Button {
             height: 34px;
             text: "새로고침";
@@ -101,23 +104,23 @@ export component MaintenancePage inherits VerticalLayout {
 
     Text {
         text: MaintenanceState.message;
-        color: #475569;
+        color: Theme.secondary;
         font-size: 12px;
         wrap: word-wrap;
         vertical-stretch: 0;
     }
 
-    if MaintenanceState.section == "Backup": VerticalLayout {
+    if !root.diagnostics-page: VerticalLayout {
         spacing: 10px;
 
         // Phase 21.9: Settings > Manage owns backup policy and operations.
         Rectangle {
             min-height: 188px;
             vertical-stretch: 0;
-            background: #ffffff;
-            border-radius: 10px;
+            background: Theme.surface;
+            border-radius: 8px;
             border-width: 1px;
-            border-color: #e2e8f0;
+            border-color: Theme.border;
             VerticalLayout {
                 padding: 12px;
                 spacing: 8px;
@@ -126,7 +129,7 @@ export component MaintenancePage inherits VerticalLayout {
                     vertical-stretch: 0;
                     Text {
                         text: "백업 정책";
-                        color: #0f172a;
+                        color: Theme.text;
                         font-size: 17px;
                         font-weight: 700;
                         horizontal-stretch: 1;
@@ -134,13 +137,14 @@ export component MaintenancePage inherits VerticalLayout {
                     Button {
                         height: 28px;
                         text: "정책 저장";
+                        primary: true;
                         enabled: MaintenanceState.loaded && !MaintenanceState.busy;
                         clicked => { MaintenanceState.save-backup-policy(); }
                     }
                 }
                 Text {
                     text: "자동 백업의 위치와 보존 정책을 설정합니다. 아래에서 즉시 백업 생성과 복원도 함께 관리합니다.";
-                    color: #64748b;
+                    color: Theme.muted;
                     font-size: 11px;
                     wrap: word-wrap;
                 }
@@ -165,8 +169,8 @@ export component MaintenancePage inherits VerticalLayout {
                 }
                 if !MaintenanceState.backup-directory-editable: Text {
                     text: "STREAM_ARCHIVE_BACKUP_DIR에서 관리되는 경로이므로 읽기 전용입니다.";
-                    color: #a16207;
-                    font-size: 10px;
+                    color: Theme.warning;
+                    font-size: 11px;
                     wrap: word-wrap;
                 }
                 HorizontalLayout {
@@ -177,7 +181,7 @@ export component MaintenancePage inherits VerticalLayout {
                         width: 126px;
                         horizontal-stretch: 0;
                         spacing: 2px;
-                        Text { text: "자동 백업"; color: #64748b; font-size: 10px; }
+                        Text { text: "자동 백업"; color: Theme.muted; font-size: 11px; }
                         Button {
                             height: 30px;
                             text: MaintenanceState.backup-enabled ? "켜짐" : "꺼짐";
@@ -188,7 +192,7 @@ export component MaintenancePage inherits VerticalLayout {
                     VerticalLayout {
                         horizontal-stretch: 1;
                         spacing: 2px;
-                        Text { text: "백업 주기(시간)"; color: #64748b; font-size: 10px; }
+                        Text { text: "백업 주기(시간)"; color: Theme.muted; font-size: 11px; }
                         LineEdit {
                             height: 30px;
                             text <=> MaintenanceState.backup-interval-hours;
@@ -198,7 +202,7 @@ export component MaintenancePage inherits VerticalLayout {
                     VerticalLayout {
                         horizontal-stretch: 1;
                         spacing: 2px;
-                        Text { text: "최대 백업 개수 · 0 = 제한 없음"; color: #64748b; font-size: 10px; }
+                        Text { text: "최대 백업 개수 · 0 = 제한 없음"; color: Theme.muted; font-size: 11px; }
                         LineEdit {
                             height: 30px;
                             text <=> MaintenanceState.backup-keep-count;
@@ -208,7 +212,7 @@ export component MaintenancePage inherits VerticalLayout {
                     VerticalLayout {
                         horizontal-stretch: 1;
                         spacing: 2px;
-                        Text { text: "보관 기간(일) · 0 = 제한 없음"; color: #64748b; font-size: 10px; }
+                        Text { text: "보관 기간(일) · 0 = 제한 없음"; color: Theme.muted; font-size: 11px; }
                         LineEdit {
                             height: 30px;
                             text <=> MaintenanceState.backup-retention-days;
@@ -222,10 +226,10 @@ export component MaintenancePage inherits VerticalLayout {
         Rectangle {
             min-height: 92px;
             vertical-stretch: 0;
-            background: #ffffff;
-            border-radius: 10px;
+            background: Theme.surface;
+            border-radius: 8px;
             border-width: 1px;
-            border-color: #e2e8f0;
+            border-color: Theme.border;
             VerticalLayout {
                 padding: 12px;
                 spacing: 7px;
@@ -235,7 +239,7 @@ export component MaintenancePage inherits VerticalLayout {
                     spacing: 8px;
                     Text {
                         text: "백업 / 복원";
-                        color: #0f172a;
+                        color: Theme.text;
                         font-size: 14px;
                         font-weight: 700;
                         horizontal-stretch: 1;
@@ -244,6 +248,7 @@ export component MaintenancePage inherits VerticalLayout {
                     Button {
                         height: 32px;
                         text: "지금 백업 생성";
+                        primary: true;
                         enabled: MaintenanceState.loaded && !MaintenanceState.busy;
                         clicked => { MaintenanceState.create-backup(); }
                     }
@@ -252,7 +257,7 @@ export component MaintenancePage inherits VerticalLayout {
                     text: "백업 위치: " + (MaintenanceState.backup-directory != "" ? MaintenanceState.backup-directory : "-");
                 }
                 SummaryLabel {
-                    text: "현재 정책으로 수동 백업을 생성하고, 무결성 확인과 복원을 수행합니다.";
+                    text: "설정·채널·Queue·History DB를 백업합니다. 녹화·다운로드 파일과 외부 도구는 포함하지 않습니다.";
                 }
             }
         }
@@ -260,23 +265,23 @@ export component MaintenancePage inherits VerticalLayout {
         if MaintenanceState.restore-pending-file != "": Rectangle {
             min-height: 108px;
             vertical-stretch: 0;
-            background: #fff7ed;
-            border-radius: 10px;
+            background: Theme.warning-surface;
+            border-radius: 8px;
             border-width: 1px;
-            border-color: #fdba74;
+            border-color: Theme.border;
             VerticalLayout {
                 padding: 12px;
                 spacing: 6px;
                 Text {
                     text: MaintenanceState.restore-pending-file + " 파일을 복원할까요?";
-                    color: #9a3412;
+                    color: Theme.warning;
                     font-size: 14px;
                     font-weight: 700;
                     wrap: word-wrap;
                 }
                 SummaryLabel {
-                    text: "canonical SQLite DB를 이 백업으로 복원합니다. 먼저 pre_restore 안전 백업을 생성하며, Watcher·VOD·Queue 작업이 모두 유휴 상태여야 합니다.";
-                    color: #9a3412;
+                    text: "설정과 작업 기록 DB를 복원합니다. 먼저 pre_restore 안전 백업을 생성하며, 방송 감시·VOD·Queue 작업이 모두 유휴 상태여야 합니다. 녹화·다운로드 파일은 백업에 포함되지 않습니다.";
+                    color: Theme.warning;
                 }
                 HorizontalLayout {
                     height: 32px;
@@ -309,23 +314,23 @@ export component MaintenancePage inherits VerticalLayout {
                 if MaintenanceState.backup-rows.length == 0: Rectangle {
                     height: 78px;
                     vertical-stretch: 0;
-                    background: #ffffff;
-                    border-radius: 10px;
+                    background: Theme.surface;
+                    border-radius: 8px;
                     border-width: 1px;
-                    border-color: #e2e8f0;
+                    border-color: Theme.border;
                     VerticalLayout {
                         padding: 14px;
-                        Text { text: "관리 중인 백업이 없습니다."; color: #64748b; }
+                        Text { text: "관리 중인 백업이 없습니다."; color: Theme.muted; }
                     }
                 }
 
                 for row in MaintenanceState.backup-rows: Rectangle {
                     min-height: 68px;
                     vertical-stretch: 0;
-                    background: #ffffff;
-                    border-radius: 10px;
+                    background: Theme.surface;
+                    border-radius: 8px;
                     border-width: 1px;
-                    border-color: row.integrity-tone == "ok" ? #bbf7d0 : row.integrity-tone == "error" ? #fecaca : #fde68a;
+                    border-color: Theme.border;
                     VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
@@ -335,7 +340,7 @@ export component MaintenancePage inherits VerticalLayout {
                             spacing: 8px;
                             Text {
                                 text: row.file-name;
-                                color: #0f172a;
+                                color: Theme.text;
                                 font-size: 13px;
                                 font-weight: 700;
                                 horizontal-stretch: 1;
@@ -344,7 +349,7 @@ export component MaintenancePage inherits VerticalLayout {
                             }
                             Text {
                                 text: row.integrity;
-                                color: row.integrity-tone == "ok" ? #15803d : row.integrity-tone == "error" ? #b91c1c : #a16207;
+                                color: row.integrity-tone == "ok" ? Theme.success : row.integrity-tone == "error" ? Theme.danger : Theme.warning;
                                 font-weight: 700;
                                 vertical-alignment: center;
                             }
@@ -372,7 +377,7 @@ export component MaintenancePage inherits VerticalLayout {
     }
 
     // Phase 23.2: Native Diagnostics renders the shared read-only runtime preflight.
-    if MaintenanceState.section == "Diagnostics": ScrollView {
+    if root.diagnostics-page && MaintenanceState.section == "Diagnostics": ScrollView {
         vertical-stretch: 1;
         VerticalLayout {
             padding: 2px;
@@ -381,16 +386,16 @@ export component MaintenancePage inherits VerticalLayout {
             Rectangle {
                 min-height: 64px;
                 vertical-stretch: 0;
-                background: MaintenanceState.diagnostic-runtime-ready ? #f0fdf4 : #fff1f2;
-                border-radius: 9px;
+                background: MaintenanceState.diagnostic-runtime-ready ? Theme.success-surface : Theme.danger-surface;
+                border-radius: 8px;
                 border-width: 1px;
-                border-color: MaintenanceState.diagnostic-runtime-ready ? #bbf7d0 : #fecaca;
+                border-color: MaintenanceState.diagnostic-runtime-ready ? Theme.border : Theme.border;
                 VerticalLayout {
                     padding: 11px;
                     spacing: 4px;
                     Text {
                         text: MaintenanceState.diagnostic-runtime-ready ? "런타임 사용 가능" : "차단 오류 확인 필요";
-                        color: MaintenanceState.diagnostic-runtime-ready ? #15803d : #b91c1c;
+                        color: MaintenanceState.diagnostic-runtime-ready ? Theme.success : Theme.danger;
                         font-weight: 700;
                         font-size: 13px;
                     }
@@ -399,7 +404,7 @@ export component MaintenancePage inherits VerticalLayout {
             }
             Text {
                 text: "진단은 로컬 읽기 전용 preflight입니다. 공급자 네트워크 접속, 실제 다운로드, 설정 변경은 수행하지 않습니다.";
-                color: #64748b;
+                color: Theme.muted;
                 font-size: 11px;
                 wrap: word-wrap;
                 vertical-stretch: 0;
@@ -407,10 +412,10 @@ export component MaintenancePage inherits VerticalLayout {
             for row in MaintenanceState.diagnostic-rows: Rectangle {
                 min-height: 88px;
                 vertical-stretch: 0;
-                background: #ffffff;
-                border-radius: 9px;
+                background: Theme.surface;
+                border-radius: 8px;
                 border-width: 1px;
-                border-color: row.status-tone == "ok" ? #bbf7d0 : row.status-tone == "error" ? #fecaca : #fde68a;
+                border-color: Theme.border;
                 VerticalLayout {
                     padding: 11px;
                     spacing: 4px;
@@ -420,22 +425,22 @@ export component MaintenancePage inherits VerticalLayout {
                         spacing: 8px;
                         Text {
                             text: row.category + " · " + row.name;
-                            color: #0f172a;
+                            color: Theme.text;
                             font-weight: 700;
                             horizontal-stretch: 1;
                             wrap: word-wrap;
                         }
                         Text {
                             text: row.requirement + " · " + row.status;
-                            color: row.status-tone == "error" ? #b91c1c : row.status-tone == "warn" ? #a16207 : #15803d;
+                            color: row.status-tone == "error" ? Theme.danger : row.status-tone == "warn" ? Theme.warning : Theme.success;
                             font-weight: 700;
                         }
                     }
-                    Text { text: row.summary; color: #334155; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
+                    Text { text: row.summary; color: Theme.secondary; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
                     if row.detail != "": SummaryLabel { text: row.detail; }
                     if row.remediation != "": Text {
                         text: "조치: " + row.remediation;
-                        color: row.status-tone == "error" ? #b91c1c : #a16207;
+                        color: row.status-tone == "error" ? Theme.danger : Theme.warning;
                         font-size: 11px;
                         wrap: word-wrap;
                         vertical-stretch: 0;
@@ -445,7 +450,7 @@ export component MaintenancePage inherits VerticalLayout {
         }
     }
 
-    if MaintenanceState.section == "Logs": VerticalLayout {
+    if root.diagnostics-page && MaintenanceState.section == "Logs": VerticalLayout {
         spacing: 8px;
         HorizontalLayout {
             height: 34px;
@@ -465,7 +470,7 @@ export component MaintenancePage inherits VerticalLayout {
             }
             Text {
                 text: MaintenanceState.log-message;
-                color: #64748b;
+                color: Theme.muted;
                 font-size: 11px;
                 horizontal-stretch: 1;
                 vertical-alignment: center;
@@ -481,31 +486,31 @@ export component MaintenancePage inherits VerticalLayout {
                 if MaintenanceState.log-rows.length == 0: Rectangle {
                     height: 70px;
                     vertical-stretch: 0;
-                    background: #ffffff;
+                    background: Theme.surface;
                     border-radius: 8px;
                     border-width: 1px;
-                    border-color: #e2e8f0;
+                    border-color: Theme.border;
                     Text {
                         x: 12px;
                         y: 12px;
                         width: parent.width - 24px;
                         text: "아직 런타임 로그가 없습니다.";
-                        color: #64748b;
+                        color: Theme.muted;
                     }
                 }
                 for row in MaintenanceState.log-rows: Rectangle {
                     min-height: 28px;
                     vertical-stretch: 0;
-                    background: #ffffff;
+                    background: Theme.surface;
                     border-radius: 5px;
                     border-width: 1px;
-                    border-color: #e2e8f0;
+                    border-color: Theme.border;
                     VerticalLayout {
                         padding: 6px;
                         Text {
                             text: row.text;
-                            color: #334155;
-                            font-size: 10px;
+                            color: Theme.secondary;
+                            font-size: 11px;
                             wrap: word-wrap;
                         }
                     }

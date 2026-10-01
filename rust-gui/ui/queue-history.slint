@@ -1,4 +1,5 @@
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme, ActionButton as Button, StatusPill, PlatformBadge } from "design-system.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct QueueDisplayRow {
     id: string,
@@ -79,173 +80,62 @@ export global QueueHistoryState {
     callback history-calendar-clear();
 }
 
-component MetricCard inherits Rectangle {
-    in property <string> label;
-    in property <string> value;
-    height: 62px;
-    vertical-stretch: 0;
-    horizontal-stretch: 1;
-    background: #ffffff;
-    border-radius: 9px;
-    border-width: 1px;
-    border-color: #e2e8f0;
+component QueueTask inherits Rectangle {
+    in property <QueueDisplayRow> task;
+    private property <bool> expanded: false;
+    min-height: 116px; vertical-stretch: 0;
+    background: Theme.surface; border-radius: 8px;
+    border-width: 1px; border-color: Theme.border;
     VerticalLayout {
-        padding: 10px;
-        spacing: 2px;
-        Text { text: root.label; color: #64748b; font-size: 10px; }
-        Text { text: root.value; color: #0f172a; font-size: 19px; font-weight: 700; }
+        padding: 12px; spacing: 6px;
+        HorizontalLayout {
+            min-height: 32px; vertical-stretch: 0; spacing: 10px;
+            PlatformBadge { platform: root.task.platform; }
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 3px;
+                Text { text: root.task.title; color: Theme.text; font-size: 14px; font-weight: 600; wrap: word-wrap; vertical-stretch: 0; }
+                if root.task.streamer != "": Text { text: root.task.streamer; color: Theme.muted; font-size: 11px; vertical-stretch: 0; }
+            }
+            StatusPill { text: root.task.state-label; tone: root.task.state-tone; }
+        }
+        Rectangle {
+            height: 5px; vertical-stretch: 0; border-radius: 3px; background: Theme.raised;
+            Rectangle { height: parent.height; width: parent.width * clamp(root.task.percent, 0, 100) / 100; border-radius: 3px; background: Theme.accent; }
+        }
+        HorizontalLayout {
+            min-height: 30px; vertical-stretch: 0; spacing: 7px;
+            Text { text: root.task.percent-label + " · " + root.task.part-progress + " · 시도 " + root.task.attempts; color: Theme.muted; font-size: 11px; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
+            Button { text: root.expanded ? "상세 닫기" : "상세"; selected: root.expanded; clicked => { root.expanded = !root.expanded; } }
+            if root.task.can-cancel: Button { text: "취소"; enabled: !QueueHistoryState.queue-busy; clicked => { QueueHistoryState.queue-action(root.task.id, "cancel"); } }
+            if root.task.can-retry: Button { text: "재시도"; enabled: !QueueHistoryState.queue-busy; clicked => { QueueHistoryState.queue-action(root.task.id, "retry"); } }
+            if root.task.can-remove: Button { text: "삭제"; enabled: !QueueHistoryState.queue-busy; clicked => { QueueHistoryState.queue-action(root.task.id, "remove"); } }
+        }
+        // Failures remain visible without requiring the user to expand details.
+        if root.task.message != "": Text { text: root.task.message; color: root.task.state-tone == "error" ? Theme.danger : Theme.secondary; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
+        if root.expanded: VerticalLayout {
+            spacing: 4px;
+            Text { text: root.task.url; color: Theme.muted; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
+            Text { text: "저장 폴더: " + root.task.output-directory; color: Theme.muted; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
+            if root.task.output-file != "": Text { text: "출력: " + root.task.output-file; color: Theme.secondary; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
+            Text { text: "생성: " + root.task.created-at + " · 시작: " + root.task.started-at + " · 완료: " + root.task.finished-at; color: Theme.muted; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
+        }
     }
 }
 
 export component QueuePage inherits VerticalLayout {
     spacing: 9px;
-
     HorizontalLayout {
-        height: 36px;
-        vertical-stretch: 0;
-        spacing: 8px;
-        Text {
-            text: "VOD 다운로드 대기열";
-            color: #0f172a;
-            font-size: 18px;
-            font-weight: 700;
-            horizontal-stretch: 1;
-            vertical-alignment: center;
-        }
-        Button {
-            height: 34px;
-            text: "새로고침";
-            enabled: QueueHistoryState.queue-loaded && !QueueHistoryState.queue-busy;
-            clicked => { QueueHistoryState.queue-refresh(); }
-        }
+        min-height: 34px; vertical-stretch: 0; spacing: 8px;
+        Text { text: "진행 중 " + QueueHistoryState.queue-active-count + "   ·   대기 " + QueueHistoryState.queue-queued-count + "   ·   완료 " + QueueHistoryState.queue-completed-count + "   ·   실패 / 중단 " + QueueHistoryState.queue-failed-count; color: Theme.secondary; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
+        Button { text: "새로고침"; enabled: QueueHistoryState.queue-loaded && !QueueHistoryState.queue-busy; clicked => { QueueHistoryState.queue-refresh(); } }
     }
-
-    Text { text: QueueHistoryState.queue-message; color: #334155; wrap: word-wrap; font-size: 12px; }
-
-    HorizontalLayout {
-        height: 62px;
-        vertical-stretch: 0;
-        spacing: 8px;
-        MetricCard { label: "진행 중"; value: QueueHistoryState.queue-active-count; }
-        MetricCard { label: "대기"; value: QueueHistoryState.queue-queued-count; }
-        MetricCard { label: "완료"; value: QueueHistoryState.queue-completed-count; }
-        MetricCard { label: "실패 / 중단"; value: QueueHistoryState.queue-failed-count; }
-    }
-
+    Text { text: QueueHistoryState.queue-message; color: Theme.muted; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
     ScrollView {
         vertical-stretch: 1;
         VerticalLayout {
-            padding: 2px;
-            spacing: 9px;
-            alignment: start;
-
-            if QueueHistoryState.queue-rows.length == 0: Rectangle {
-                height: 82px;
-                vertical-stretch: 0;
-                background: #ffffff;
-                border-radius: 10px;
-                border-width: 1px;
-                border-color: #e2e8f0;
-                VerticalLayout {
-                    padding: 15px;
-                    spacing: 4px;
-                    Text { text: "대기열이 비어 있습니다."; color: #0f172a; font-size: 14px; font-weight: 700; }
-                    Text { text: "VOD를 분석한 뒤 대기열에 추가하면 작업이 저장됩니다."; color: #64748b; font-size: 11px; wrap: word-wrap; }
-                }
-            }
-
-            for row in QueueHistoryState.queue-rows: Rectangle {
-                min-height: 250px;
-                vertical-stretch: 0;
-                background: #ffffff;
-                border-radius: 10px;
-                border-width: 1px;
-                border-color: row.state-tone == "error" ? #fecaca : row.state-tone == "warn" ? #fde68a : row.state-tone == "ok" ? #bbf7d0 : #e2e8f0;
-                VerticalLayout {
-                    padding: 12px;
-                    spacing: 5px;
-                    HorizontalLayout {
-                        min-height: 24px;
-                        vertical-stretch: 0;
-                        spacing: 8px;
-                        Text {
-                            vertical-stretch: 0;
-                            text: row.platform + " · " + row.title;
-                            color: #0f172a;
-                            font-size: 15px;
-                            font-weight: 700;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            text: row.state-label;
-                            color: row.state-tone == "error" ? #b91c1c : row.state-tone == "warn" ? #a16207 : row.state-tone == "ok" ? #15803d : #64748b;
-                            font-weight: 700;
-                            vertical-alignment: center;
-                        }
-                    }
-                    if row.streamer != "": Text { vertical-stretch: 0; text: row.streamer; color: #64748b; font-size: 11px; }
-                    Text { vertical-stretch: 0; text: row.url; color: #475569; font-size: 11px; wrap: word-wrap; }
-                    Rectangle {
-                        height: 8px;
-                        vertical-stretch: 0;
-                        background: #e2e8f0;
-                        border-radius: 4px;
-                        Rectangle {
-                            x: 0px;
-                            y: 0px;
-                            height: parent.height;
-                            width: parent.width * row.percent / 100;
-                            background: #334155;
-                            border-radius: 4px;
-                        }
-                    }
-                    Text {
-                        vertical-stretch: 0;
-                        text: row.percent-label + "  ·  " + row.part-progress + "  ·  시도 " + row.attempts;
-                        color: #64748b;
-                        font-size: 11px;
-                    }
-                    if row.message != "": Text { vertical-stretch: 0; text: row.message; color: #475569; font-size: 11px; wrap: word-wrap; }
-                    if row.output-file != "": Text { vertical-stretch: 0; text: "Output: " + row.output-file; color: #475569; font-size: 11px; wrap: word-wrap; }
-                    Text {
-                        vertical-stretch: 0;
-                        text: "생성: " + row.created-at + "  ·  시작: " + row.started-at + "  ·  완료: " + row.finished-at;
-                        color: #94a3b8;
-                        font-size: 10px;
-                        wrap: word-wrap;
-                    }
-                    Rectangle {
-                        vertical-stretch: 1;
-                        background: transparent;
-                    }
-                    HorizontalLayout {
-                        height: 32px;
-                        vertical-stretch: 0;
-                        spacing: 7px;
-                        if row.can-cancel: Button {
-                            height: 30px;
-                            text: "취소";
-                            enabled: !QueueHistoryState.queue-busy;
-                            clicked => { QueueHistoryState.queue-action(row.id, "cancel"); }
-                        }
-                        if row.can-retry: Button {
-                            height: 30px;
-                            text: "재시도";
-                            enabled: !QueueHistoryState.queue-busy;
-                            clicked => { QueueHistoryState.queue-action(row.id, "retry"); }
-                        }
-                        if row.can-remove: Button {
-                            height: 30px;
-                            text: "삭제";
-                            enabled: !QueueHistoryState.queue-busy;
-                            clicked => { QueueHistoryState.queue-action(row.id, "remove"); }
-                        }
-                        Rectangle { horizontal-stretch: 1; background: transparent; }
-                    }
-                }
-            }
+            padding: 2px; spacing: 7px; alignment: start;
+            if QueueHistoryState.queue-rows.length == 0: Text { text: "대기열이 비어 있습니다. VOD를 분석한 뒤 대기열에 추가하세요."; color: Theme.muted; wrap: word-wrap; }
+            for row in QueueHistoryState.queue-rows: QueueTask { task: row; }
         }
     }
 }
@@ -258,8 +148,8 @@ export component HistoryPage inherits VerticalLayout {
         vertical-stretch: 0;
         spacing: 7px;
         Text {
-            text: "LIVE / VOD 기록";
-            color: #0f172a;
+            text: "기록 유형";
+            color: Theme.text;
             font-size: 18px;
             font-weight: 700;
             horizontal-stretch: 1;
@@ -269,7 +159,7 @@ export component HistoryPage inherits VerticalLayout {
             width: 60px;
             height: 32px;
             text: "전체";
-            primary: QueueHistoryState.history-view == "ALL";
+            selected: QueueHistoryState.history-view == "ALL";
             enabled: !QueueHistoryState.history-busy;
             clicked => { QueueHistoryState.history-view = "ALL"; QueueHistoryState.history-refresh(); }
         }
@@ -277,7 +167,7 @@ export component HistoryPage inherits VerticalLayout {
             width: 60px;
             height: 32px;
             text: "LIVE";
-            primary: QueueHistoryState.history-view == "LIVE";
+            selected: QueueHistoryState.history-view == "LIVE";
             enabled: !QueueHistoryState.history-busy;
             clicked => { QueueHistoryState.history-view = "LIVE"; QueueHistoryState.history-refresh(); }
         }
@@ -285,7 +175,7 @@ export component HistoryPage inherits VerticalLayout {
             width: 60px;
             height: 32px;
             text: "VOD";
-            primary: QueueHistoryState.history-view == "VOD";
+            selected: QueueHistoryState.history-view == "VOD";
             enabled: !QueueHistoryState.history-busy;
             clicked => { QueueHistoryState.history-view = "VOD"; QueueHistoryState.history-refresh(); }
         }
@@ -306,10 +196,10 @@ export component HistoryPage inherits VerticalLayout {
         close-policy: close-on-click-outside;
 
         Rectangle {
-            background: #ffffff;
-            border-radius: 10px;
+            background: Theme.surface;
+            border-radius: 8px;
             border-width: 1px;
-            border-color: #cbd5e1;
+            border-color: Theme.secondary;
 
             VerticalLayout {
                 padding: 10px;
@@ -327,8 +217,8 @@ export component HistoryPage inherits VerticalLayout {
                     }
                     Text {
                         text: (QueueHistoryState.history-calendar-target == "from" ? "시작일 · " : "종료일 · ")
-                            + QueueHistoryState.history-calendar-label;
-                        color: #0f172a;
+                        + QueueHistoryState.history-calendar-label;
+                        color: Theme.text;
                         font-size: 13px;
                         font-weight: 700;
                         horizontal-stretch: 1;
@@ -349,19 +239,19 @@ export component HistoryPage inherits VerticalLayout {
                     spacing-horizontal: 3px;
                     spacing-vertical: 3px;
 
-                    Text { row: 0; col: 0; text: "일"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
-                    Text { row: 0; col: 1; text: "월"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
-                    Text { row: 0; col: 2; text: "화"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
-                    Text { row: 0; col: 3; text: "수"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
-                    Text { row: 0; col: 4; text: "목"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
-                    Text { row: 0; col: 5; text: "금"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
-                    Text { row: 0; col: 6; text: "토"; color: #64748b; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 0; text: "일"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 1; text: "월"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 2; text: "화"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 3; text: "수"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 4; text: "목"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 5; text: "금"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { row: 0; col: 6; text: "토"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
 
                     for day[index] in QueueHistoryState.history-calendar-days: Button {
                         row: index / 7 + 1;
                         col: Math.mod(index, 7);
                         height: 28px;
-                        text: day.selected ? "✓ " + day.day : day.day;
+                        text: day.day; selected: day.selected;
                         opacity: day.in-month ? 1 : 0.55;
                         clicked => {
                             QueueHistoryState.history-calendar-select(day.date);
@@ -396,10 +286,10 @@ export component HistoryPage inherits VerticalLayout {
     Rectangle {
         min-height: 116px;
         vertical-stretch: 0;
-        background: #ffffff;
-        border-radius: 9px;
+        background: Theme.surface;
+        border-radius: 8px;
         border-width: 1px;
-        border-color: #e2e8f0;
+        border-color: Theme.border;
         VerticalLayout {
             padding: 10px;
             spacing: 7px;
@@ -485,7 +375,7 @@ export component HistoryPage inherits VerticalLayout {
                 }
                 Button { height: 32px; text: "필터 적용"; enabled: !QueueHistoryState.history-busy; clicked => { QueueHistoryState.history-refresh(); } }
             }
-            Text { text: QueueHistoryState.history-message; color: #475569; font-size: 11px; wrap: word-wrap; }
+            Text { text: QueueHistoryState.history-message; color: Theme.secondary; font-size: 11px; wrap: word-wrap; }
         }
     }
 
@@ -499,25 +389,25 @@ export component HistoryPage inherits VerticalLayout {
             if QueueHistoryState.history-rows.length == 0: Rectangle {
                 height: 82px;
                 vertical-stretch: 0;
-                background: #ffffff;
-                border-radius: 10px;
+                background: Theme.surface;
+                border-radius: 8px;
                 border-width: 1px;
-                border-color: #e2e8f0;
+                border-color: Theme.border;
                 VerticalLayout {
                     padding: 15px;
                     spacing: 4px;
-                    Text { text: "현재 필터 조건에 맞는 기록이 없습니다."; color: #0f172a; font-size: 14px; font-weight: 700; }
-                    Text { text: "기록은 canonical live_recordings 및 vod_jobs 테이블에서 조회합니다."; color: #64748b; font-size: 11px; wrap: word-wrap; }
+                    Text { text: "현재 필터 조건에 맞는 기록이 없습니다."; color: Theme.text; font-size: 14px; font-weight: 700; }
+                    Text { text: "검색어, 상태와 조회 기간을 확인하세요."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                 }
             }
 
             for row in QueueHistoryState.history-rows: Rectangle {
                 min-height: 96px;
                 vertical-stretch: 0;
-                background: #ffffff;
-                border-radius: 10px;
+                background: Theme.surface;
+                border-radius: 8px;
                 border-width: 1px;
-                border-color: row.state-tone == "error" ? #fecaca : row.state-tone == "warn" ? #fde68a : row.state-tone == "ok" ? #bbf7d0 : #e2e8f0;
+                border-color: Theme.border;
                 VerticalLayout {
                     padding: 8px;
                     spacing: 2px;
@@ -527,7 +417,7 @@ export component HistoryPage inherits VerticalLayout {
                         spacing: 8px;
                         Text {
                             text: row.kind + " · " + row.platform + " · " + row.title;
-                            color: #0f172a;
+                            color: Theme.text;
                             font-size: 13px;
                             font-weight: 700;
                             horizontal-stretch: 1;
@@ -535,19 +425,13 @@ export component HistoryPage inherits VerticalLayout {
                             vertical-alignment: center;
                             wrap: word-wrap;
                         }
-                        Text {
-                            text: row.state;
-                            color: row.state-tone == "error" ? #b91c1c : row.state-tone == "warn" ? #a16207 : row.state-tone == "ok" ? #15803d : #64748b;
-                            font-weight: 700;
-                            vertical-stretch: 0;
-                            vertical-alignment: center;
-                        }
+                        StatusPill { text: row.state; tone: row.state-tone; }
                     }
-                    Text { vertical-stretch: 0; text: row.subject; color: #475569; font-size: 10px; wrap: word-wrap; }
-                    if row.detail != "": Text { vertical-stretch: 0; text: row.detail; color: #64748b; font-size: 10px; wrap: word-wrap; }
-                    Text { vertical-stretch: 0; text: row.timing; color: #94a3b8; font-size: 9px; wrap: word-wrap; }
-                    if row.file != "": Text { vertical-stretch: 0; text: "파일: " + row.file; color: #475569; font-size: 9px; wrap: word-wrap; }
-                    if row.meta != "": Text { vertical-stretch: 0; text: row.meta; color: #94a3b8; font-size: 9px; wrap: word-wrap; }
+                    Text { vertical-stretch: 0; text: row.subject; color: Theme.secondary; font-size: 11px; wrap: word-wrap; }
+                    if row.detail != "": Text { vertical-stretch: 0; text: row.detail; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                    Text { vertical-stretch: 0; text: row.timing; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                    if row.file != "": Text { vertical-stretch: 0; text: "파일: " + row.file; color: Theme.secondary; font-size: 11px; wrap: word-wrap; }
+                    if row.meta != "": Text { vertical-stretch: 0; text: row.meta; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                 }
             }
         }
