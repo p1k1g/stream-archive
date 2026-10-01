@@ -36,12 +36,13 @@ impl DownloadEvents {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    pub fn invalidate(&self) {
+    pub fn invalidate(&self) -> u64 {
         let mut epoch = self
             .epoch
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         *epoch = epoch.wrapping_add(1);
+        *epoch
     }
 
     pub fn terminal(&self, status: &VodJobStatus, download: bool, epoch: u64) {

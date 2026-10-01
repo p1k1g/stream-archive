@@ -194,6 +194,9 @@ impl StreamArchiveCore {
         crate::environment_settings::validate_updates(updates)?;
         let _guard = self.config_write_lock.lock().await;
         self.store.sync_settings(updates, "native-environment")?;
+        if updates.contains_key("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS") {
+            self.vod.notification_settings_changed().await;
+        }
         self.environment_settings()
     }
 

@@ -45,6 +45,22 @@ impl VodManager {
         self.events.invalidate();
     }
 
+    pub(crate) async fn notification_settings_changed(&self) {
+        let (soop_status, soop_epoch) = self.soop.notification_state();
+        let (chzzk_status, chzzk_epoch) = self.chzzk.notification_state();
+        // Idle commits and new job initialization use these same status locks.
+        // Already idle jobs keep their invalidated token; active jobs are rearmed.
+        let soop = soop_status.write().await;
+        let chzzk = chzzk_status.write().await;
+        let epoch = self.events.invalidate();
+        if soop.running {
+            soop_epoch.store(epoch, std::sync::atomic::Ordering::Release);
+        }
+        if chzzk.running {
+            chzzk_epoch.store(epoch, std::sync::atomic::Ordering::Release);
+        }
+    }
+
     pub(crate) fn report_start_failure(&self, item: &crate::model::VodQueueItem) {
         self.events
             .start_failed(&item.id, item.attempts, item.platform);
@@ -169,6 +185,51 @@ mod tests {
         assert!(vod_platform("https://chzzk.naver.com/live/123456").is_err());
         assert!(vod_platform("https://example.com/player/123456789").is_err());
     }
+    #[tokio::test]
+    async fn settings_transition_excludes_idle_results_and_rearms_active_jobs() {
+        for platform in [PlatformId::Soop, PlatformId::Chzzk] {
+            let dir = tempfile::tempdir().unwrap();
+            let manager = VodManager::new(dir.path().to_path_buf(), LogBuffer::new());
+            let mut receiver = manager.subscribe_download_events();
+            let (status, token) = match platform {
+                PlatformId::Soop => manager.soop.notification_state(),
+                PlatformId::Chzzk => manager.chzzk.notification_state(),
+            };
+            let finished = VodJobStatus {
+                platform,
+                state: "COMPLETED".into(),
+                job_id: Some("finished-while-disabled".into()),
+                ..Default::default()
+            };
+            *status.write().await = finished.clone();
+            token.store(manager.events.epoch(), std::sync::atomic::Ordering::Release);
+            manager.notification_settings_changed().await;
+            manager.events.terminal(
+                &finished,
+                true,
+                token.load(std::sync::atomic::Ordering::Acquire),
+            );
+            assert!(receiver.try_recv().is_err());
+
+            let mut active = finished.clone();
+            active.job_id = Some("still-active-at-enable".into());
+            active.running = true;
+            active.state = "DOWNLOADING".into();
+            *status.write().await = active.clone();
+            token.store(manager.events.epoch(), std::sync::atomic::Ordering::Release);
+            manager.notification_settings_changed().await;
+            active.running = false;
+            active.state = "COMPLETED".into();
+            *status.write().await = active.clone();
+            manager.events.terminal(
+                &active,
+                true,
+                token.load(std::sync::atomic::Ordering::Acquire),
+            );
+            assert_eq!(receiver.try_recv().unwrap().job_id, "still-active-at-enable");
+        }
+    }
+
     #[tokio::test]
     async fn real_provider_task_failures_reach_the_shared_subscriber_offline() {
         for (platform, url) in [

@@ -127,6 +127,7 @@ pub struct VodManager {
     status: Arc<RwLock<VodJobStatus>>,
     terminal: Arc<Mutex<VecDeque<(String, VodJobStatus)>>>,
     events: crate::download_events::DownloadEvents,
+    notification_epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl VodManager {
@@ -153,7 +154,14 @@ impl VodManager {
             })),
             terminal: Arc::new(Mutex::new(VecDeque::new())),
             events,
+            notification_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    pub(crate) fn notification_state(
+        &self,
+    ) -> (&RwLock<VodJobStatus>, &std::sync::atomic::AtomicU64) {
+        (&self.status, &self.notification_epoch)
     }
 
     pub async fn status(&self) -> VodJobStatus {
@@ -214,10 +222,12 @@ impl VodManager {
                 started_at: Some(Utc::now().to_rfc3339()),
                 ..Default::default()
             };
+            self.notification_epoch
+                .store(self.events.epoch(), Ordering::Release);
         }
 
         let events = self.events.clone();
-        let event_epoch = events.epoch();
+        let event_epoch = self.notification_epoch.clone();
         let download = matches!(&kind, VodJobKind::Download(_));
         let task = tokio::spawn(async move {
             let result = match kind {
@@ -248,7 +258,11 @@ impl VodManager {
             if terminal.len() >= TERMINAL_CACHE_LIMIT {
                 terminal.pop_front();
             }
-            events.terminal(&final_status, download, event_epoch);
+            events.terminal(
+                &final_status,
+                download,
+                event_epoch.load(Ordering::Acquire),
+            );
             terminal.push_back((terminal_job_id, final_status));
         });
         runtime.task = Some(task);
