@@ -1,6 +1,7 @@
 //! Presentation-only deduplication and notification pacing. Never controls downloads.
 use std::collections::VecDeque;
 use stream_archive_server::download_events::DownloadEvent;
+use tokio::sync::broadcast::error::TryRecvError;
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {
@@ -14,12 +15,7 @@ impl Summary {
 }
 
 pub fn discard_stale(receiver: &mut tokio::sync::broadcast::Receiver<DownloadEvent>) {
-    loop {
-        match receiver.try_recv() {
-            Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
-            Err(_) => break,
-        }
-    }
+    while let Ok(_) | Err(TryRecvError::Lagged(_)) = receiver.try_recv() {}
 }
 
 #[derive(Default)]
