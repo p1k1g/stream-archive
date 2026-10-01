@@ -26,7 +26,8 @@ impl DownloadSubscription {
         *self
             .epoch
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) == epoch
+            .unwrap_or_else(|poison| poison.into_inner())
+            == epoch
     }
 
     pub fn try_recv(&mut self) -> Result<DownloadEvent, broadcast::error::TryRecvError> {
