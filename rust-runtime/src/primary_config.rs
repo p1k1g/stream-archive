@@ -26,7 +26,9 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
             "STREAM_ARCHIVE_CLOSE_ACTION" if !matches!(value.as_str(), "EXIT" | "TRAY") => {
                 bail!("STREAM_ARCHIVE_CLOSE_ACTION must be EXIT or TRAY");
             }
-            "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" if !matches!(value.as_str(), "true" | "false") => {
+            "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"
+                if !matches!(value.as_str(), "true" | "false") =>
+            {
                 bail!("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS must be true or false");
             }
             "CHECK_INTERVAL" => validate_int(value, 1, 86_400, key)?,

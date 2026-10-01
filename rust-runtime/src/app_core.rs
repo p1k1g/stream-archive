@@ -457,7 +457,9 @@ impl StreamArchiveCore {
     }
 
     /// New session results only; notification failures never affect VOD lifecycle.
-    pub fn subscribe_download_events(&self) -> tokio::sync::broadcast::Receiver<crate::download_events::DownloadEvent> {
+    pub fn subscribe_download_events(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::download_events::DownloadEvent> {
         self.vod.subscribe_download_events()
     }
 
@@ -810,12 +812,25 @@ mod tests {
     async fn notification_setting_defaults_enabled_and_survives_restart() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("stream-archive.db");
-        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db.clone()).unwrap()).unwrap();
-        assert_eq!(core.settings().unwrap()["STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"], "true");
-        core.update_environment_settings(&BTreeMap::from([("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS".into(), "false".into())])).await.unwrap();
+        let core =
+            StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db.clone()).unwrap())
+                .unwrap();
+        assert_eq!(
+            core.settings().unwrap()["STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"],
+            "true"
+        );
+        core.update_environment_settings(&BTreeMap::from([(
+            "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS".into(),
+            "false".into(),
+        )]))
+        .await
+        .unwrap();
         drop(core);
         let reopened = Store::open(db).unwrap();
-        assert_eq!(reopened.safe_settings().unwrap()["STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"], "false");
+        assert_eq!(
+            reopened.safe_settings().unwrap()["STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"],
+            "false"
+        );
     }
 
     #[tokio::test]

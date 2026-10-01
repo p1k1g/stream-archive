@@ -134,7 +134,11 @@ impl VodManager {
         Self::new_with_events(backend_dir, logs, Default::default())
     }
 
-    pub(crate) fn new_with_events(backend_dir: PathBuf, logs: LogBuffer, events: crate::download_events::DownloadEvents) -> Self {
+    pub(crate) fn new_with_events(
+        backend_dir: PathBuf,
+        logs: LogBuffer,
+        events: crate::download_events::DownloadEvents,
+    ) -> Self {
         let _ = cleanup_stale_job_dirs(&backend_dir);
         Self {
             backend_dir,

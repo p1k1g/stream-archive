@@ -55,8 +55,11 @@ mod tests {
         let mut receiver = events.subscribe();
         for platform in [PlatformId::Soop, PlatformId::Chzzk] {
             let mut status = VodJobStatus {
-                platform, job_id: Some("job".into()), state: "COMPLETED".into(),
-                message: "secret error".into(), output_file: Some("private path".into()),
+                platform,
+                job_id: Some("job".into()),
+                state: "COMPLETED".into(),
+                message: "secret error".into(),
+                output_file: Some("private path".into()),
                 ..Default::default()
             };
             events.terminal(&status, false);
@@ -69,9 +72,14 @@ mod tests {
             for (state, completed) in [("COMPLETED", true), ("FAILED", false)] {
                 status.state = state.into();
                 events.terminal(&status, true);
-                assert_eq!(receiver.try_recv().unwrap(), DownloadEvent {
-                    job_id: "job".into(), platform, completed,
-                });
+                assert_eq!(
+                    receiver.try_recv().unwrap(),
+                    DownloadEvent {
+                        job_id: "job".into(),
+                        platform,
+                        completed,
+                    }
+                );
             }
         }
     }
@@ -84,7 +92,10 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         for attempt in [1, 2] {
             events.start_failed("item", attempt, PlatformId::Chzzk);
-            assert_eq!(receiver.try_recv().unwrap().job_id, format!("queue:item:{attempt}"));
+            assert_eq!(
+                receiver.try_recv().unwrap().job_id,
+                format!("queue:item:{attempt}")
+            );
         }
     }
 
@@ -95,7 +106,10 @@ mod tests {
         for attempt in 0..300 {
             events.start_failed("item", attempt, PlatformId::Soop);
         }
-        assert!(matches!(receiver.try_recv(), Err(broadcast::error::TryRecvError::Lagged(_))));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(broadcast::error::TryRecvError::Lagged(_))
+        ));
         assert!(receiver.try_recv().is_ok());
     }
 }

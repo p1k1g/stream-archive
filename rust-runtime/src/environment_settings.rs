@@ -175,7 +175,9 @@ mod tests {
             validate_updates(&update("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS", value)).unwrap();
         }
         for value in ["", "TRUE", "1", "false\ntrue"] {
-            assert!(validate_updates(&update("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS", value)).is_err());
+            assert!(
+                validate_updates(&update("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS", value)).is_err()
+            );
         }
     }
 

@@ -23,7 +23,11 @@ impl VodManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
         let events = crate::download_events::DownloadEvents::default();
         Self {
-            soop: soop::vod::VodManager::new_with_events(backend_dir.clone(), logs.clone(), events.clone()),
+            soop: soop::vod::VodManager::new_with_events(
+                backend_dir.clone(),
+                logs.clone(),
+                events.clone(),
+            ),
             chzzk: chzzk::vod::VodManager::new_with_events(backend_dir, logs, events.clone()),
             events,
             selected: Mutex::new(PlatformId::Soop),
@@ -31,12 +35,15 @@ impl VodManager {
         }
     }
 
-    pub fn subscribe_download_events(&self) -> tokio::sync::broadcast::Receiver<crate::download_events::DownloadEvent> {
+    pub fn subscribe_download_events(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::download_events::DownloadEvent> {
         self.events.subscribe()
     }
 
     pub(crate) fn report_start_failure(&self, item: &crate::model::VodQueueItem) {
-        self.events.start_failed(&item.id, item.attempts, item.platform);
+        self.events
+            .start_failed(&item.id, item.attempts, item.platform);
     }
 
     async fn provider_status(&self, platform: PlatformId) -> VodJobStatus {
@@ -157,5 +164,45 @@ mod tests {
         );
         assert!(vod_platform("https://chzzk.naver.com/live/123456").is_err());
         assert!(vod_platform("https://example.com/player/123456789").is_err());
+    }
+    #[tokio::test]
+    async fn real_provider_task_failures_reach_the_shared_subscriber_offline() {
+        for (platform, url) in [
+            (PlatformId::Soop, "https://vod.sooplive.com/player/123456789"),
+            (PlatformId::Chzzk, "https://chzzk.naver.com/video/123456"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let manager = VodManager::new(dir.path().to_path_buf(), LogBuffer::new());
+            let mut receiver = manager.subscribe_download_events();
+            let missing = dir.path().join("missing-media-tool").display().to_string();
+            let started = manager
+                .download(VodDownloadRequest {
+                    vod_url: url.into(),
+                    output_directory: dir.path().join("out").display().to_string(),
+                    parts: vec![],
+                    quality: "best".into(),
+                    merge: true,
+                    cookie_mode: "SOOP_LOGIN".into(),
+                    cookie_file: String::new(),
+                    browser_name: "firefox".into(),
+                    yt_dlp_path: missing.clone(),
+                    ffmpeg_path: missing,
+                    max_retries: 0,
+                })
+                .await
+                .unwrap();
+            let event = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(event.platform, platform);
+            assert_eq!(Some(event.job_id.as_str()), started.job_id.as_deref());
+            assert!(!event.completed);
+            assert!(receiver.try_recv().is_err());
+            assert_eq!(
+                manager.terminal_status(&event.job_id).await.unwrap().state,
+                "FAILED"
+            );
+        }
     }
 }

@@ -22,13 +22,20 @@ impl Tracker {
         let mut summary = Summary::default();
         for event in events {
             let key = (event.platform, event.job_id);
-            if self.seen.contains(&key) { continue; }
-            if self.seen.len() == 256 { self.seen.pop_front(); }
+            if self.seen.contains(&key) {
+                continue;
+            }
+            if self.seen.len() == 256 {
+                self.seen.pop_front();
+            }
             self.seen.push_back(key);
             // Disabled results are consumed, never replayed on re-enable.
             if enabled {
-                if event.completed { summary.completed += 1; }
-                else { summary.failed += 1; }
+                if event.completed {
+                    summary.completed += 1;
+                } else {
+                    summary.failed += 1;
+                }
             }
         }
         summary
@@ -46,7 +53,9 @@ pub struct NoticeQueue {
 #[cfg(any(windows, test))]
 impl NoticeQueue {
     pub fn add(&mut self, summary: Summary, now: std::time::Instant) {
-        if summary.is_empty() { return; }
+        if summary.is_empty() {
+            return;
+        }
         self.pending.completed = self.pending.completed.saturating_add(summary.completed);
         self.pending.failed = self.pending.failed.saturating_add(summary.failed);
         self.first_pending.get_or_insert(now);
@@ -58,16 +67,22 @@ impl NoticeQueue {
         self.in_flight = false;
     }
 
-    pub fn closed(&mut self) { self.in_flight = false; }
+    pub fn closed(&mut self) {
+        self.in_flight = false;
+    }
 
     pub fn take(&mut self, now: std::time::Instant) -> Option<Summary> {
         use std::time::Duration;
         let first = self.first_pending?;
-        if now.duration_since(first) < Duration::from_secs(2) { return None; }
+        if now.duration_since(first) < Duration::from_secs(2) {
+            return None;
+        }
         if let Some(submitted) = self.submitted {
             let elapsed = now.duration_since(submitted);
             // Shell suppression may produce no balloon lifecycle callback.
-            if elapsed < Duration::from_secs(10) || (self.in_flight && elapsed < Duration::from_secs(45)) {
+            if elapsed < Duration::from_secs(10)
+                || (self.in_flight && elapsed < Duration::from_secs(45))
+            {
                 return None;
             }
         }
@@ -82,21 +97,38 @@ impl NoticeQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stream_archive_server::support::platform::PlatformId;
     use std::time::{Duration, Instant};
+    use stream_archive_server::support::platform::PlatformId;
     fn event(id: &str, completed: bool) -> DownloadEvent {
-        DownloadEvent { job_id: id.into(), platform: PlatformId::Soop, completed }
+        DownloadEvent {
+            job_id: id.into(),
+            platform: PlatformId::Soop,
+            completed,
+        }
     }
 
     #[test]
     fn duplicates_disabled_results_and_retries() {
         let mut tracker = Tracker::default();
-        assert_eq!(tracker.collect(vec![event("1", true), event("1", true), event("2", false)], true),
-            Summary { completed: 1, failed: 1 });
+        assert_eq!(
+            tracker.collect(
+                vec![event("1", true), event("1", true), event("2", false)],
+                true
+            ),
+            Summary {
+                completed: 1,
+                failed: 1
+            }
+        );
         assert!(tracker.collect(vec![event("3", true)], false).is_empty());
         assert!(tracker.collect(vec![event("3", true)], true).is_empty());
-        assert_eq!(tracker.collect(vec![event("retry", true)], true).completed, 1);
-        for id in 0..1000 { tracker.collect(vec![event(&id.to_string(), true)], false); }
+        assert_eq!(
+            tracker.collect(vec![event("retry", true)], true).completed,
+            1
+        );
+        for id in 0..1000 {
+            tracker.collect(vec![event(&id.to_string(), true)], false);
+        }
         assert_eq!(tracker.seen.len(), 256);
     }
 
@@ -104,18 +136,54 @@ mod tests {
     fn batches_bursts_spaces_balloons_and_recovers_without_callbacks() {
         let now = Instant::now();
         let mut queue = NoticeQueue::default();
-        queue.add(Summary { completed: 1, failed: 0 }, now);
-        queue.add(Summary { completed: 1, failed: 1 }, now);
+        queue.add(
+            Summary {
+                completed: 1,
+                failed: 0,
+            },
+            now,
+        );
+        queue.add(
+            Summary {
+                completed: 1,
+                failed: 1,
+            },
+            now,
+        );
         assert!(queue.take(now).is_none());
-        assert_eq!(queue.take(now + Duration::from_secs(2)), Some(Summary { completed: 2, failed: 1 }));
-        queue.add(Summary { completed: 1, failed: 0 }, now + Duration::from_secs(3));
+        assert_eq!(
+            queue.take(now + Duration::from_secs(2)),
+            Some(Summary {
+                completed: 2,
+                failed: 1
+            })
+        );
+        queue.add(
+            Summary {
+                completed: 1,
+                failed: 0,
+            },
+            now + Duration::from_secs(3),
+        );
         assert!(queue.take(now + Duration::from_secs(15)).is_none());
         assert!(queue.take(now + Duration::from_secs(47)).is_some());
-        queue.add(Summary { completed: 1, failed: 0 }, now + Duration::from_secs(48));
+        queue.add(
+            Summary {
+                completed: 1,
+                failed: 0,
+            },
+            now + Duration::from_secs(48),
+        );
         queue.closed();
         assert!(queue.take(now + Duration::from_secs(50)).is_none());
         assert!(queue.take(now + Duration::from_secs(57)).is_some());
-        queue.add(Summary { completed: 1, failed: 0 }, now + Duration::from_secs(58));
+        queue.add(
+            Summary {
+                completed: 1,
+                failed: 0,
+            },
+            now + Duration::from_secs(58),
+        );
         queue.clear();
         assert!(queue.take(now + Duration::from_secs(100)).is_none());
     }

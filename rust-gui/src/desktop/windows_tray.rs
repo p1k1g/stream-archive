@@ -1,6 +1,9 @@
 //! A hidden top-level window receives TaskbarCreated broadcasts. Message-only
 //! windows do not. Wndproc only forwards presentation events, never core commands.
-use crate::{AppState, MainWindow, QueueHistoryState, notifications::{NoticeQueue, Summary}};
+use crate::{
+    AppState, MainWindow, QueueHistoryState,
+    notifications::{NoticeQueue, Summary},
+};
 use slint::{ComponentHandle, Timer, TimerMode};
 use std::{
     cell::{Cell, RefCell},
@@ -14,8 +17,9 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Shell::{
-                NIF_ICON, NIF_MESSAGE, NIF_TIP, NIF_INFO, NIIF_INFO, NIIF_WARNING, NIIF_RESPECT_QUIET_TIME, NIN_BALLOONUSERCLICK, NIN_BALLOONHIDE, NIN_BALLOONTIMEOUT, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
-                Shell_NotifyIconW,
+                NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIIF_RESPECT_QUIET_TIME,
+                NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIN_BALLOONHIDE, NIN_BALLOONTIMEOUT,
+                NIN_BALLOONUSERCLICK, NOTIFYICONDATAW, Shell_NotifyIconW,
             },
             WindowsAndMessaging::*,
         },
@@ -65,11 +69,31 @@ impl State {
     fn show_notice(&self, summary: Summary) -> bool {
         let mut data = self.data("");
         data.uFlags = NIF_INFO;
-        data.dwInfoFlags = (if summary.failed > 0 { NIIF_WARNING } else { NIIF_INFO }) | NIIF_RESPECT_QUIET_TIME;
-        let title = if summary.failed > 0 { "Stream Archive 다운로드 결과" } else { "Stream Archive 다운로드 완료" };
-        let body = format!("SOOP / CHZZK VOD 완료 {}건 · 실패 {}건\n클릭하면 History에서 결과를 확인합니다.", summary.completed, summary.failed);
-        for (dest, src) in data.szInfoTitle.iter_mut().take(63).zip(title.encode_utf16()) { *dest = src; }
-        for (dest, src) in data.szInfo.iter_mut().take(255).zip(body.encode_utf16()) { *dest = src; }
+        data.dwInfoFlags = (if summary.failed > 0 {
+            NIIF_WARNING
+        } else {
+            NIIF_INFO
+        }) | NIIF_RESPECT_QUIET_TIME;
+        let title = if summary.failed > 0 {
+            "Stream Archive 다운로드 결과"
+        } else {
+            "Stream Archive 다운로드 완료"
+        };
+        let body = format!(
+            "SOOP / CHZZK VOD 완료 {}건 · 실패 {}건\n클릭하면 History에서 결과를 확인합니다.",
+            summary.completed, summary.failed
+        );
+        for (dest, src) in data
+            .szInfoTitle
+            .iter_mut()
+            .take(63)
+            .zip(title.encode_utf16())
+        {
+            *dest = src;
+        }
+        for (dest, src) in data.szInfo.iter_mut().take(255).zip(body.encode_utf16()) {
+            *dest = src;
+        }
         let shown = unsafe { Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() };
         self.notice_visible.set(shown);
         shown
@@ -276,16 +300,25 @@ pub fn bind(ui: &MainWindow) -> Desktop {
     });
     let weak = ui.as_weak();
     let notice_tray = tray.clone();
-    ui.global::<AppState>().on_download_notice(move |completed, failed| {
-        let Some(ui) = weak.upgrade() else { return };
-        let state = ui.global::<AppState>();
-        if !state.get_download_notifications_enabled() || state.get_desktop_exit_pending() { return; }
-        if let Some(tray) = notice_tray.as_ref().as_ref() {
-            tray.state.notices.borrow_mut().add(Summary { completed, failed }, Instant::now());
-        } else {
-            state.set_download_notifications_status("트레이 등록 실패로 알림을 표시하지 못했습니다. History에서 결과를 확인하세요.".into());
-        }
-    });
+    ui.global::<AppState>()
+        .on_download_notice(move |completed, failed| {
+            let Some(ui) = weak.upgrade() else { return };
+            let state = ui.global::<AppState>();
+            if !state.get_download_notifications_enabled() || state.get_desktop_exit_pending() {
+                return;
+            }
+            if let Some(tray) = notice_tray.as_ref().as_ref() {
+                tray.state
+                    .notices
+                    .borrow_mut()
+                    .add(Summary { completed, failed }, Instant::now());
+            } else {
+                state.set_download_notifications_status(
+                    "트레이 등록 실패로 알림을 표시하지 못했습니다. History에서 결과를 확인하세요."
+                        .into(),
+                );
+            }
+        });
     let weak = ui.as_weak();
     let close_tray = tray.clone();
     let informed = Cell::new(false);
@@ -366,9 +399,15 @@ pub fn bind(ui: &MainWindow) -> Desktop {
                 let summary = tray.state.notices.borrow_mut().take(Instant::now());
                 if let Some(summary) = summary {
                     // Best effort only; never block downloads or show a modal error.
-                    if !tray.state.ensure(&format!("Stream Archive — {}", state.get_desktop_status())) || !tray.state.show_notice(summary) {
+                    if !tray
+                        .state
+                        .ensure(&format!("Stream Archive — {}", state.get_desktop_status()))
+                        || !tray.state.show_notice(summary)
+                    {
                         tray.state.notices.borrow_mut().closed();
-                        state.set_download_notifications_status("Windows 알림 전송 실패. History에서 결과를 확인하세요.".into());
+                        state.set_download_notifications_status(
+                            "Windows 알림 전송 실패. History에서 결과를 확인하세요.".into(),
+                        );
                     } else {
                         state.set_download_notifications_status("".into());
                     }

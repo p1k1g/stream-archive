@@ -577,14 +577,18 @@ mod tests {
         let mut receiver = queue.vod.subscribe_download_events();
         let item = queue.enqueue(request("out")).await.unwrap();
         queue.claim_next().unwrap().unwrap();
-        queue.fail_start(&item.id, "private failure detail").unwrap();
+        queue
+            .fail_start(&item.id, "private failure detail")
+            .unwrap();
         let first = receiver.try_recv().unwrap();
         assert!(!first.completed);
         assert!(first.job_id.ends_with(":1"));
         assert!(receiver.try_recv().is_err());
         queue.retry(&item.id).await.unwrap();
         queue.claim_next().unwrap().unwrap();
-        queue.fail_start(&item.id, "private failure detail").unwrap();
+        queue
+            .fail_start(&item.id, "private failure detail")
+            .unwrap();
         let second = receiver.try_recv().unwrap();
         assert!(second.job_id.ends_with(":2"));
         assert_ne!(first.job_id, second.job_id);
