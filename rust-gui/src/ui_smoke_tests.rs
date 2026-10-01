@@ -1,9 +1,9 @@
 //! Exercise the compiled presentation with a headless software window. No core,
 //! provider credentials, database, or native desktop session is required.
-use crate::{AppState, MainWindow, MaintenanceState};
+use crate::{AppState, MainWindow, MaintenanceState, QueueDisplayRow, QueueHistoryState};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, PhysicalSize, Rgb8Pixel};
+use slint::{ComponentHandle, LogicalPosition, ModelRc, PhysicalSize, Rgb8Pixel, VecModel};
 use std::{cell::Cell, rc::Rc};
 
 struct UiTestPlatform(Rc<MinimalSoftwareWindow>);
@@ -104,6 +104,27 @@ fn native_navigation_and_watcher_toggle_preserve_input_guards() {
     click(&ui, 1040.0, 107.0);
     assert_eq!(state.get_settings_view(), "Manage");
     assert_eq!(maintenance.get_section(), "Backup");
+
+    let queue = ui.global::<QueueHistoryState>();
+    queue.set_queue_busy(false);
+    queue.set_queue_loaded(true);
+    let task = QueueDisplayRow {
+        id: "polling-task".into(),
+        title: "Queue task".into(),
+        platform: "SOOP".into(),
+        ..Default::default()
+    };
+    state.set_active_page("Queue".into());
+    queue.set_queue_rows(ModelRc::new(VecModel::from(vec![task.clone()])));
+    render(&window, 1120, 720);
+    click(&ui, 1060.0, 240.0);
+    assert_eq!(queue.get_expanded_queue_id(), "polling-task");
+    // Polling replaces the whole display model. A repeated row must recover its
+    // expanded state by ID, so the next click closes it rather than reopens it.
+    queue.set_queue_rows(ModelRc::new(VecModel::from(vec![task])));
+    render(&window, 1120, 720);
+    click(&ui, 1060.0, 240.0);
+    assert!(queue.get_expanded_queue_id().is_empty());
 
     // Every page must still construct and render at the existing minimum size.
     ui.window().set_size(PhysicalSize::new(1000, 650));

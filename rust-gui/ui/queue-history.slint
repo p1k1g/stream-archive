@@ -47,6 +47,8 @@ export struct HistoryCalendarDay {
 
 export global QueueHistoryState {
     in-out property <[QueueDisplayRow]> queue-rows;
+    // Presentation-only selection survives the controller's polling snapshots.
+    in-out property <string> expanded-queue-id: "";
     in-out property <bool> queue-busy: true;
     in-out property <bool> queue-loaded: false;
     in-out property <string> queue-message: "VOD 대기열을 불러오는 중...";
@@ -82,7 +84,7 @@ export global QueueHistoryState {
 
 component QueueTask inherits Rectangle {
     in property <QueueDisplayRow> task;
-    private property <bool> expanded: false;
+    private property <bool> expanded: QueueHistoryState.expanded-queue-id == root.task.id;
     min-height: max(116px, task-content.min-height); vertical-stretch: 0;
     background: Theme.surface; border-radius: 8px;
     border-width: 1px; border-color: Theme.border;
@@ -105,7 +107,11 @@ component QueueTask inherits Rectangle {
         HorizontalLayout {
             min-height: 30px; vertical-stretch: 0; spacing: 7px;
             Text { text: root.task.percent-label + " · " + root.task.part-progress + " · 시도 " + root.task.attempts; color: Theme.muted; font-size: 11px; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
-            Button { text: root.expanded ? "상세 닫기" : "상세"; selected: root.expanded; clicked => { root.expanded = !root.expanded; } }
+            Button {
+                text: root.expanded ? "상세 닫기" : "상세";
+                selected: root.expanded;
+                clicked => { QueueHistoryState.expanded-queue-id = root.expanded ? "" : root.task.id; }
+            }
             if root.task.can-cancel: Button { text: "취소"; enabled: !QueueHistoryState.queue-busy; clicked => { QueueHistoryState.queue-action(root.task.id, "cancel"); } }
             if root.task.can-retry: Button { text: "재시도"; enabled: !QueueHistoryState.queue-busy; clicked => { QueueHistoryState.queue-action(root.task.id, "retry"); } }
             if root.task.can-remove: Button { text: "삭제"; enabled: !QueueHistoryState.queue-busy; clicked => { QueueHistoryState.queue-action(root.task.id, "remove"); } }

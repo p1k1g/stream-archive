@@ -13,7 +13,7 @@
 - 채널 이미지는 provider badge로 표현합니다. 채널 프로필 이미지를 조회하거나 저장하지 않습니다.
 - Channels에서는 플랫폼·방송 감시 사용 여부·이름·ID·저장 폴더를 편집합니다. 기본 창 크기에서 고정 폭 입력들이 잘리지 않도록 두 줄로 배치합니다. 추가·이름 조회·삭제·저장·다시 불러오기 동작을 유지합니다.
 - VOD는 URL 분석 → 실제 metadata → 화질 / PART / 저장 경로 / 병합 → 다운로드 또는 Queue 추가 순서입니다. 실제 단일 다운로드 상태·취소·새로고침을 유지합니다.
-- Queue는 제목·provider·상태·progress·PART·시도 횟수·기존 cancel/retry/remove 조건을 compact row로 표시합니다. URL·경로·시각은 상세에서 확인하며 오류 메시지는 항상 보입니다. 작업은 기존 자동 실행 방식입니다.
+- Queue는 제목·provider·상태·progress·PART·시도 횟수·기존 cancel/retry/remove 조건을 compact row로 표시합니다. URL·경로·시각은 상세에서 확인하며 오류 메시지는 항상 보입니다. 상세 펼침은 작업 ID를 기준으로 유지해 polling snapshot이 목록을 교체해도 닫히지 않습니다. 작업은 기존 자동 실행 방식입니다.
 - History의 ALL / LIVE / VOD, 검색·상태·날짜·달력·조회 건수·읽기 전용 기록을 유지합니다. VOD 분석 기록도 조회 범위에 남습니다.
 - Settings는 기존 runtime/provider 설정과 Backup/Restore를 담당합니다. 닫기 동작·다운로드 결과 알림의 저장 후 적용 원칙과 secret 입력칸의 비워두기 동작을 유지합니다.
 - Diagnostics는 기존 읽기 전용 preflight와 런타임 로그를 표시합니다. Worker 네트워크 성공이나 실제 credential 검증을 새로 주장하지 않습니다. 로그 auto-refresh는 이 화면을 보고 있을 때만 기존 bounded 주기로 실행합니다.
@@ -26,7 +26,7 @@ Slint의 localhost HTTP / direct SQLite / child process 제어는 추가하지 �
 
 ## 검증
 
-Slint compile, 기존 Rust fmt/unit/check/clippy, RuntimeContracts 및 Windows/Linux/macOS package 검증은 [PR #112](https://github.com/p1k1g/stream-archive/pull/112)의 최신 CI 결과로 확인합니다. `ui_smoke_tests`는 기존 software renderer의 headless window에서 감시 버튼 분기·busy 차단·Space 입력·Diagnostics/Logs/Backup navigation과 최소 창 크기의 7개 화면 렌더링을 검증합니다. 로컬 GUI 테스트는 41개 통과했습니다. Slint 1.18 interpreter의 예시 데이터 화면과 입력 smoke도 Linux 가상 디스플레이에서 확인했습니다. 이 검증은 실제 Windows shell·DPI·서비스 QA를 대신하지 않습니다. 시각 검증용 예시 데이터는 제품 코드에 포함하지 않으며 실제 provider 성공을 뜻하지 않습니다. 아래 항목은 Windows에서 따로 확인해야 합니다.
+Slint compile, 기존 Rust fmt/unit/check/clippy, RuntimeContracts 및 Windows/Linux/macOS package 검증은 [PR #112](https://github.com/p1k1g/stream-archive/pull/112)의 최신 CI 결과로 확인합니다. `ui_smoke_tests`는 기존 software renderer의 headless window에서 감시 버튼 분기·busy 차단·Space 입력·Diagnostics/Logs/Backup navigation, Queue 목록 갱신 후 상세 유지와 최소 창 크기의 7개 화면 렌더링을 검증합니다. 로컬 GUI 테스트는 41개 통과했습니다. Slint 1.18 interpreter의 예시 데이터 화면과 입력 smoke도 Linux 가상 디스플레이에서 확인했습니다. 이 검증은 실제 Windows shell·DPI·서비스 QA를 대신하지 않습니다. 시각 검증용 예시 데이터는 제품 코드에 포함하지 않으며 실제 provider 성공을 뜻하지 않습니다. 아래 항목은 Windows에서 따로 확인해야 합니다.
 
 ## Windows 최종 수동 QA — 미수행
 
