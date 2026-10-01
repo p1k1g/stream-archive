@@ -30,11 +30,17 @@ impl DownloadEvents {
     }
 
     pub fn epoch(&self) -> u64 {
-        *self.epoch.lock().unwrap_or_else(|poison| poison.into_inner())
+        *self
+            .epoch
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     pub fn invalidate(&self) {
-        let mut epoch = self.epoch.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut epoch = self
+            .epoch
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         *epoch = epoch.wrapping_add(1);
     }
 
@@ -44,7 +50,10 @@ impl DownloadEvents {
         }
         // Serialize epoch validation + send against successful Restore.
         // An old task may be idle already but still waiting on its terminal cache.
-        let current = self.epoch.lock().unwrap_or_else(|poison| poison.into_inner());
+        let current = self
+            .epoch
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         if *current != epoch {
             return;
         }
@@ -58,7 +67,10 @@ impl DownloadEvents {
     }
 
     pub fn start_failed(&self, id: &str, attempt: u32, platform: PlatformId) {
-        let _epoch = self.epoch.lock().unwrap_or_else(|poison| poison.into_inner());
+        let _epoch = self
+            .epoch
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let _ = self.sender.send(DownloadEvent {
             job_id: format!("queue:{id}:{attempt}"),
             platform,
