@@ -949,7 +949,9 @@ fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a str {
         }
         "YT_DLP_PATH" => "yt-dlp 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
         "FFMPEG_PATH" => "FFmpeg 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
-        "OUTPUT_DIR" => "LIVE 기본 저장 폴더입니다. 비워두면 런타임 기본값을 사용합니다.",
+        "OUTPUT_DIR" => {
+            "LIVE 및 VOD 기본 저장 폴더입니다. VOD에서는 개별 경로를 지정할 수 있습니다."
+        }
         "CHECK_INTERVAL" => "LIVE 상태 확인 간격(초)입니다. 허용 범위: 1~86400.",
         "MIN_FREE_SPACE_GB" => "최소 여유 디스크 공간(GB)입니다. 허용 범위: 0~1000000.",
         "QUALITY" => "LIVE 화질입니다. 예: best",
