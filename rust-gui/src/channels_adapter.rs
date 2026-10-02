@@ -51,12 +51,14 @@ impl ChannelsDraft {
         }
     }
 
-    pub fn toggle_platform(&mut self, index: usize) {
+    pub fn select_platform(&mut self, index: usize, value: &str) {
+        let platform = match value {
+            "SOOP" => PlatformId::Soop,
+            "CHZZK" => PlatformId::Chzzk,
+            _ => return,
+        };
         if let Some(channel) = self.rows.get_mut(index) {
-            channel.platform = match channel.platform {
-                PlatformId::Soop => PlatformId::Chzzk,
-                PlatformId::Chzzk => PlatformId::Soop,
-            };
+            channel.platform = platform;
         }
     }
 
@@ -87,7 +89,7 @@ mod tests {
 
         draft.edit(0, "name", "Renamed".into());
         assert!(draft.dirty());
-        draft.toggle_platform(0);
+        draft.select_platform(0, "CHZZK");
         assert_eq!(draft.rows[0].platform, PlatformId::Chzzk);
         draft.set_enabled(0, false);
         assert!(!draft.rows[0].enabled);
@@ -102,12 +104,25 @@ mod tests {
     }
 
     #[test]
+    fn selecting_current_or_unknown_platform_does_not_modify_channel() {
+        let mut draft = ChannelsDraft::default();
+        draft.load(vec![channel()]);
+        draft.select_platform(0, "SOOP");
+        draft.select_platform(0, "unknown");
+        assert!(!draft.dirty());
+        draft.select_platform(0, "CHZZK");
+        draft.select_platform(0, "CHZZK");
+        assert_eq!(draft.rows[0].platform, PlatformId::Chzzk);
+        assert_eq!(draft.rows[0].account, "example");
+    }
+
+    #[test]
     fn stale_indices_are_ignored() {
         let mut draft = ChannelsDraft::default();
         draft.load(vec![channel()]);
         draft.edit(99, "name", "ignored".into());
         draft.set_enabled(99, false);
-        draft.toggle_platform(99);
+        draft.select_platform(99, "CHZZK");
         draft.remove(99);
         assert!(!draft.dirty());
     }

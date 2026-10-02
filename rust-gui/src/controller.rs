@@ -949,7 +949,9 @@ fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a str {
         }
         "YT_DLP_PATH" => "yt-dlp 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
         "FFMPEG_PATH" => "FFmpeg 실행 파일 경로입니다. 비워두면 런타임에서 자동 탐색합니다.",
-        "OUTPUT_DIR" => "LIVE 기본 저장 폴더입니다. 비워두면 런타임 기본값을 사용합니다.",
+        "OUTPUT_DIR" => {
+            "LIVE 및 VOD 기본 저장 폴더입니다. VOD에서는 개별 경로를 지정할 수 있습니다."
+        }
         "CHECK_INTERVAL" => "LIVE 상태 확인 간격(초)입니다. 허용 범위: 1~86400.",
         "MIN_FREE_SPACE_GB" => "최소 여유 디스크 공간(GB)입니다. 허용 범위: 0~1000000.",
         "QUALITY" => "LIVE 화질입니다. 예: best",
@@ -1598,14 +1600,14 @@ pub fn bind(ui: &MainWindow) -> Controller {
 
     let weak = ui.as_weak();
     let platform_channels = channels_draft.clone();
-    state.on_channel_toggle_platform(move |index| {
+    state.on_channel_select_platform(move |index, value| {
         if let Some(ui) = weak.upgrade() {
             if index < 0 || ui.global::<AppState>().get_config_busy() {
                 return;
             }
             platform_channels
                 .borrow_mut()
-                .toggle_platform(index as usize);
+                .select_platform(index as usize, value.as_str());
             render_channels(&ui, &platform_channels.borrow());
         }
     });
@@ -2346,6 +2348,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     let has_settings_snapshot = fields.is_some();
                     let startup_failed = !state.get_live_loaded() && fields.is_none();
                     if let Some(fields) = fields {
+                        let default_output = fields.iter()
+                            .find(|field| field.key == "OUTPUT_DIR")
+                            .map(|field| field.value.as_str()).unwrap_or("");
+                        response_vod_draft.borrow_mut().sync_default_output(default_output);
+                        render_vod_draft(&ui, &response_vod_draft.borrow());
                         state.set_download_notifications_enabled(fields.iter().any(|f|
                             f.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" && f.value == "true"
                         ));

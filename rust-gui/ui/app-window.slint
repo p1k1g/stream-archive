@@ -86,7 +86,7 @@ export global AppState {
     callback channel-remove(int);
     callback channel-edited(int, string, string);
     callback channel-toggle-enabled(int);
-    callback channel-toggle-platform(int);
+    callback channel-select-platform(int, string);
     callback channel-resolve(int);
     callback save-channels();
     callback reload-configuration();
@@ -251,14 +251,14 @@ export component MainWindow inherits Window {
                     Text { text: "Stream Archive"; color: Theme.text; font-size: 15px; font-weight: 700; vertical-alignment: center; }
                 }
                 NavItem { label: "LIVE"; page: "LIVE"; nav-icon: @image-url("../assets/navigation/live.svg"); }
-                NavItem { label: "Channels"; page: "Channels"; nav-icon: @image-url("../assets/navigation/channels.svg"); }
+                NavItem { label: "채널"; page: "Channels"; nav-icon: @image-url("../assets/navigation/channels.svg"); }
                 Rectangle { height: 12px; vertical-stretch: 0; background: transparent; }
-                NavItem { label: "VOD"; page: "VOD"; nav-icon: @image-url("../assets/navigation/vod.svg"); }
-                NavItem { label: "Queue"; page: "Queue"; nav-icon: @image-url("../assets/navigation/queue.svg"); }
-                NavItem { label: "History"; page: "History"; nav-icon: @image-url("../assets/navigation/history.svg"); }
+                NavItem { label: "VOD 다운로드"; page: "VOD"; nav-icon: @image-url("../assets/navigation/vod.svg"); }
+                NavItem { label: "대기열"; page: "Queue"; nav-icon: @image-url("../assets/navigation/queue.svg"); }
+                NavItem { label: "기록"; page: "History"; nav-icon: @image-url("../assets/navigation/history.svg"); }
                 Rectangle { height: 12px; vertical-stretch: 0; background: transparent; }
-                NavItem { label: "Settings"; page: "Settings"; nav-icon: @image-url("../assets/navigation/settings.svg"); }
-                NavItem { label: "Diagnostics"; page: "Diagnostics"; nav-icon: @image-url("../assets/navigation/diagnostics.svg"); }
+                NavItem { label: "설정"; page: "Settings"; nav-icon: @image-url("../assets/navigation/settings.svg"); }
+                NavItem { label: "진단"; page: "Diagnostics"; nav-icon: @image-url("../assets/navigation/diagnostics.svg"); }
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 Text { text: "v1.0.0"; color: Theme.muted; font-size: 11px; }
             }
@@ -274,7 +274,7 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     height: 56px; vertical-stretch: 0; spacing: 4px;
                     Text {
-                        text: AppState.active-page == "Channels" ? "채널 관리" : AppState.active-page == "Queue" ? "다운로드 대기열" : AppState.active-page == "History" ? "기록" : AppState.active-page == "Settings" ? "설정" : AppState.active-page == "Diagnostics" ? "진단" : AppState.active-page;
+                        text: AppState.active-page == "VOD" ? "VOD 다운로드" : AppState.active-page == "Channels" ? "채널 관리" : AppState.active-page == "Queue" ? "다운로드 대기열" : AppState.active-page == "History" ? "기록" : AppState.active-page == "Settings" ? "설정" : AppState.active-page == "Diagnostics" ? "진단" : AppState.active-page;
                         color: Theme.text; font-size: 25px; font-weight: 700;
                     }
                     Text {
@@ -510,7 +510,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 height: 28px; vertical-stretch: 0; spacing: 8px;
                                 Text { text: "저장 공간"; color: Theme.text; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
-                                Text { text: "최소 여유 " + AppState.storage-threshold + " · DB " + AppState.storage-database-size; color: Theme.muted; font-size: 11px; vertical-alignment: center; }
+                                Text { text: "최소 여유 " + AppState.storage-threshold; color: Theme.muted; font-size: 11px; vertical-alignment: center; }
                                 Button { text: "새로고침"; enabled: !AppState.storage-busy; clicked => { AppState.storage-refresh(); } }
                             }
                             Text { text: AppState.storage-message; color: Theme.muted; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
@@ -528,7 +528,6 @@ export component MainWindow inherits Window {
                                             VerticalLayout {
                                                 horizontal-stretch: 1; spacing: 2px;
                                                 Text { text: row.capacity + " · 사용률 " + row.used; color: Theme.secondary; font-size: 11px; wrap: word-wrap; }
-                                                Text { text: row.roles + " · " + row.paths; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                                                 if row.detail != "": Text { text: row.detail; color: row.status-tone == "error" ? Theme.danger : Theme.warning; font-size: 11px; wrap: word-wrap; }
                                             }
                                             StatusPill { text: row.status; tone: row.status-tone; }
@@ -564,9 +563,9 @@ export component MainWindow inherits Window {
                                     HorizontalLayout {
                                         height: 50px; vertical-stretch: 0; spacing: 8px;
                                         VerticalLayout {
-                                            width: 72px; spacing: 3px;
+                                            width: 106px; spacing: 3px;
                                             Text { text: "플랫폼"; color: Theme.muted; font-size: 11px; }
-                                            Button { text: row.platform; enabled: !AppState.config-busy; clicked => { AppState.channel-toggle-platform(index); } }
+                                            ComboBox { model: ["SOOP", "CHZZK"]; current-index: row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
                                         }
                                         VerticalLayout {
                                             width: 90px; spacing: 3px;
@@ -673,7 +672,7 @@ export component MainWindow inherits Window {
                                 content-3 := VerticalLayout {
                                     padding: 11px;
                                     spacing: 4px;
-                                    Text { text: AppState.vod-title != "" ? AppState.vod-title : "VOD metadata"; color: Theme.text; font-size: 15px; font-weight: 700; wrap: word-wrap; }
+                                    Text { text: AppState.vod-title != "" ? AppState.vod-title : "VOD 정보"; color: Theme.text; font-size: 15px; font-weight: 700; wrap: word-wrap; }
                                     Text { text: "스트리머: " + AppState.vod-streamer + (AppState.vod-streamer-id != "" ? "  ·  " + AppState.vod-streamer-id : ""); color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                                     Text { text: "PART 수: " + AppState.vod-part-count; color: Theme.muted; font-size: 11px; }
                                 }
@@ -816,14 +815,14 @@ export component MainWindow inherits Window {
                                         height: 34px;
                                         vertical-stretch: 0;
                                         spacing: 8px;
-                                        Text { text: "다운로드"; color: Theme.text; font-size: 15px; font-weight: 700; vertical-alignment: center; }
+                                        Text { text: "저장 경로"; color: Theme.text; font-size: 15px; font-weight: 700; vertical-alignment: center; }
                                         LineEdit {
                                             height: 34px;
                                             vertical-stretch: 0;
                                             horizontal-stretch: 1;
                                             text <=> AppState.vod-output-directory;
                                             enabled: !AppState.vod-busy && !AppState.vod-running;
-                                            placeholder-text: "저장 폴더";
+                                            placeholder-text: "기본 설정 경로 또는 직접 지정";
                                             edited(value) => { AppState.vod-output-edited(value); }
                                         }
                                         Button {
@@ -1039,7 +1038,7 @@ export component MainWindow inherits Window {
                                         padding: 12px;
                                         spacing: 6px;
                                         if row.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" && AppState.download-notifications-status != "": Text { text: AppState.download-notifications-status; wrap: word-wrap; color: Theme.muted; font-size: 11px; }
-                                        Text { text: row.key == "OUTPUT_DIR" ? "기본 녹화 저장 경로" : row.key == "QUALITY" ? "LIVE 기본 화질" : row.key == "CHECK_INTERVAL" ? "방송 감시 간격 (초)" : row.key == "MIN_FREE_SPACE_GB" ? "최소 여유 공간 (GB)" : row.key == "STREAMLINK_PATH" ? "Streamlink 경로" : row.key == "STREAMLINK_FALLBACK" ? "Streamlink 대체 경로" : row.key == "YT_DLP_PATH" ? "yt-dlp 경로" : row.key == "FFMPEG_PATH" ? "FFmpeg 경로" : row.key == "STREAM_ARCHIVE_CLOSE_ACTION" ? "창을 닫을 때" : row.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" ? "다운로드 완료·실패 알림" : row.key; color: Theme.text; font-weight: 600; font-size: 12px; }
+                                        Text { text: row.key == "OUTPUT_DIR" ? "기본 저장 경로 (LIVE / VOD)" : row.key == "QUALITY" ? "LIVE 기본 화질" : row.key == "CHECK_INTERVAL" ? "방송 감시 간격 (초)" : row.key == "MIN_FREE_SPACE_GB" ? "최소 여유 공간 (GB)" : row.key == "STREAMLINK_PATH" ? "Streamlink 경로" : row.key == "STREAMLINK_FALLBACK" ? "Streamlink 대체 경로" : row.key == "YT_DLP_PATH" ? "yt-dlp 경로" : row.key == "FFMPEG_PATH" ? "FFmpeg 경로" : row.key == "STREAM_ARCHIVE_CLOSE_ACTION" ? "창을 닫을 때" : row.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" ? "다운로드 완료·실패 알림" : row.key; color: Theme.text; font-weight: 600; font-size: 12px; }
                                         HorizontalLayout {
                                             height: 34px;
                                             vertical-stretch: 0;
