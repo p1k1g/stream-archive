@@ -1598,14 +1598,14 @@ pub fn bind(ui: &MainWindow) -> Controller {
 
     let weak = ui.as_weak();
     let platform_channels = channels_draft.clone();
-    state.on_channel_toggle_platform(move |index| {
+    state.on_channel_select_platform(move |index, value| {
         if let Some(ui) = weak.upgrade() {
             if index < 0 || ui.global::<AppState>().get_config_busy() {
                 return;
             }
             platform_channels
                 .borrow_mut()
-                .toggle_platform(index as usize);
+                .select_platform(index as usize, value.as_str());
             render_channels(&ui, &platform_channels.borrow());
         }
     });
@@ -2346,6 +2346,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     let has_settings_snapshot = fields.is_some();
                     let startup_failed = !state.get_live_loaded() && fields.is_none();
                     if let Some(fields) = fields {
+                        let default_output = fields.iter()
+                            .find(|field| field.key == "OUTPUT_DIR")
+                            .map(|field| field.value.as_str()).unwrap_or("");
+                        response_vod_draft.borrow_mut().sync_default_output(default_output);
+                        render_vod_draft(&ui, &response_vod_draft.borrow());
                         state.set_download_notifications_enabled(fields.iter().any(|f|
                             f.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" && f.value == "true"
                         ));

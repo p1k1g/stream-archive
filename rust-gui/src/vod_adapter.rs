@@ -33,6 +33,7 @@ pub struct VodDraft {
     pub qualities: Vec<QualityChoice>,
     pub parts: Vec<PartChoice>,
     analyzed_url: Option<String>,
+    output_overridden: bool,
 }
 
 impl Default for VodDraft {
@@ -44,6 +45,7 @@ impl Default for VodDraft {
             qualities: Vec::new(),
             parts: Vec::new(),
             analyzed_url: None,
+            output_overridden: false,
         }
     }
 }
@@ -59,7 +61,14 @@ impl VodDraft {
         self.parts.clear();
     }
 
+    pub fn sync_default_output(&mut self, value: &str) {
+        if !self.output_overridden {
+            self.output_directory = value.to_string();
+        }
+    }
+
     pub fn edit_output_directory(&mut self, value: String) {
+        self.output_overridden = true;
         self.output_directory = value;
     }
 
@@ -67,7 +76,7 @@ impl VodDraft {
         let Some(value) = value else {
             return false;
         };
-        self.output_directory = value;
+        self.edit_output_directory(value);
         true
     }
 
@@ -340,6 +349,24 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn saved_default_tracks_settings_until_explicit_override() {
+        let mut draft = VodDraft::default();
+        draft.sync_default_output(r"D:\Media");
+        assert_eq!(draft.output_directory, r"D:\Media");
+        draft.sync_default_output(r"E:\Media");
+        assert_eq!(draft.output_directory, r"E:\Media");
+        assert!(!draft.accept_output_selection(None));
+        draft.sync_default_output(r"F:\Media");
+        assert_eq!(draft.output_directory, r"F:\Media");
+        assert!(draft.accept_output_selection(Some(r"G:\Selected".into())));
+        draft.sync_default_output(r"D:\Media");
+        assert_eq!(draft.output_directory, r"G:\Selected");
+        draft.edit_output_directory(String::new());
+        draft.sync_default_output(r"D:\Media");
+        assert!(draft.output_directory.is_empty());
     }
 
     #[test]

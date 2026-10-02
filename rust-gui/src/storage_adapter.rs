@@ -15,7 +15,12 @@ pub struct StorageRowView {
 }
 
 pub fn rows(snapshot: &StorageSnapshot) -> Vec<StorageRowView> {
-    snapshot.volumes.iter().map(row).collect()
+    snapshot
+        .volumes
+        .iter()
+        .filter(|volume| volume.roles.iter().any(|role| role != "SQLite 데이터"))
+        .map(row)
+        .collect()
 }
 
 fn row(volume: &StorageVolume) -> StorageRowView {
@@ -44,7 +49,13 @@ fn row(volume: &StorageVolume) -> StorageRowView {
     };
     StorageRowView {
         volume: volume_label,
-        roles: volume.roles.join(" · "),
+        roles: volume
+            .roles
+            .iter()
+            .filter(|role| role.as_str() != "SQLite 데이터")
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" · "),
         paths: volume.paths.join(" · "),
         capacity,
         used: if volume.total_bytes == 0 {
@@ -54,11 +65,7 @@ fn row(volume: &StorageVolume) -> StorageRowView {
         },
         status: status.into(),
         status_tone: status_tone.into(),
-        detail: if error.is_empty() {
-            volume.paths.join(" · ")
-        } else {
-            error
-        },
+        detail: error,
     }
 }
 
@@ -111,6 +118,35 @@ mod tests {
         assert_eq!(rows[0].status, "정상");
         assert_eq!(rows[0].used, "69%");
         assert!(rows[0].capacity.contains("640.0 GiB"));
+    }
+
+    #[test]
+    fn live_view_hides_database_only_volume_and_duplicate_paths() {
+        let mut volume = StorageVolume {
+            roles: vec!["SQLite 데이터".into()],
+            paths: vec![r"C:\App\data".into()],
+            probe_path: r"C:\App\data".into(),
+            total_bytes: 100,
+            free_bytes: 60,
+            used_percent: 40.0,
+            threshold_gb: 0.0,
+            status: "OK".into(),
+            error: None,
+        };
+        let mut snapshot = StorageSnapshot {
+            threshold_gb: 0.0,
+            database_size_bytes: 10,
+            volumes: vec![volume.clone()],
+        };
+        assert!(rows(&snapshot).is_empty());
+        volume.roles.push("LIVE 기본".into());
+        volume.paths.push(r"C:\Media".into());
+        snapshot.volumes.push(volume);
+        let display = rows(&snapshot);
+        assert_eq!(display.len(), 1);
+        assert_eq!(display[0].roles, "LIVE 기본");
+        assert!(display[0].detail.is_empty());
+        assert_eq!(snapshot.volumes.len(), 2); // Core snapshot remains intact.
     }
 
     #[test]
