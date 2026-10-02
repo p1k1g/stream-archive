@@ -528,7 +528,6 @@ export component MainWindow inherits Window {
                                             VerticalLayout {
                                                 horizontal-stretch: 1; spacing: 2px;
                                                 Text { text: row.capacity + " · 사용률 " + row.used; color: Theme.secondary; font-size: 11px; wrap: word-wrap; }
-                                                Text { text: row.roles; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                                                 if row.detail != "": Text { text: row.detail; color: row.status-tone == "error" ? Theme.danger : Theme.warning; font-size: 11px; wrap: word-wrap; }
                                             }
                                             StatusPill { text: row.status; tone: row.status-tone; }

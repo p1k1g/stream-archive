@@ -2,7 +2,7 @@
 
 상태: 구현 PR 검증 중. 실제 Windows 수동 QA는 미수행입니다.
 
-- LIVE 저장 공간에서 SQLite 전용 볼륨과 SQLite 역할·DB 크기·긴 경로의 중복 표기를 숨깁니다. 녹화용 볼륨의 용량·사용률·역할·상태와 오류는 유지합니다. core storage snapshot과 Diagnostics는 변경하지 않습니다.
+- LIVE 저장 공간에서 SQLite 전용 볼륨과 SQLite 역할·DB 크기·긴 경로의 중복 표기를 숨깁니다. 녹화용 볼륨의 용량·사용률·상태와 오류는 유지합니다. 사용량 아래의 채널명·사용 목적 줄도 표시하지 않습니다. core storage snapshot과 Diagnostics는 변경하지 않습니다.
 - Channels의 플랫폼 버튼을 SOOP / CHZZK 선택 드롭다운으로 바꿉니다. 기존 저장·busy 조건과 채널 데이터는 유지합니다.
 - VOD 저장 경로는 저장된 기본 설정 `OUTPUT_DIR`을 적용합니다. 직접 입력하거나 찾아보기로 선택한 경로는 현재 앱 세션의 VOD draft에만 적용하며 설정을 변경하지 않습니다. 개별 지정 후 설정을 다시 불러와도 덮어쓰지 않습니다. 기본 설정이 비어 있으면 저장 경로를 직접 선택해야 합니다.
 - charcoal / mint 색상의 archive + play 아이콘을 사용합니다. 편집 원본은 `rust-gui/assets/stream-archive-icon.svg`, canonical build 입력은 동일한 이름의 PNG입니다. PNG는 원본 SVG를 1024×1024로 렌더링합니다. build.rs의 16/24/32/48/64/128/256 ICO frame 및 winresource embedding은 그대로 유지합니다.
