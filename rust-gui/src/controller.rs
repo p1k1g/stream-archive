@@ -1074,8 +1074,14 @@ fn render_channels(ui: &MainWindow, draft: &ChannelsDraft) {
     state.set_channels_dirty(draft.dirty());
 }
 
-fn live_poll_needed(page: &str, busy: bool, in_flight: bool, thumbnail_tracking: bool) -> bool {
-    (page == "LIVE" || thumbnail_tracking) && !busy && !in_flight
+fn live_poll_needed(
+    page: &str,
+    visible: bool,
+    busy: bool,
+    in_flight: bool,
+    thumbnail_tracking: bool,
+) -> bool {
+    ((page == "LIVE" && visible) || thumbnail_tracking) && !busy && !in_flight
 }
 
 fn request_thumbnails(
@@ -1083,7 +1089,7 @@ fn request_thumbnails(
     thumbnails: &mut crate::thumbnail_adapter::Thumbnails,
     sender: &mpsc::Sender<Request>,
 ) {
-    if ui.global::<AppState>().get_active_page().as_str() != "LIVE" {
+    if !ui.window().is_visible() || ui.global::<AppState>().get_active_page().as_str() != "LIVE" {
         return;
     }
     for (token, platform, account, broadcast_id, completion_revision) in thumbnails.requests() {
@@ -2902,6 +2908,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
             let state = ui.global::<AppState>();
             if !live_poll_needed(
                 state.get_active_page().as_str(),
+                ui.window().is_visible(),
                 state.get_live_busy(),
                 live_poll_flag.get(),
                 thumbnail_tracking.get(),
@@ -3096,12 +3103,78 @@ mod thumbnail_poll_tests {
     use super::live_poll_needed;
     #[test]
     fn cached_images_observe_completion_even_on_other_tabs_without_duplicate_polls() {
-        assert!(live_poll_needed("LIVE", false, false, false));
+        assert!(live_poll_needed("LIVE", true, false, false, false));
+        assert!(!live_poll_needed("LIVE", false, false, false, false));
+        assert!(live_poll_needed("LIVE", false, false, false, true));
         for page in ["Channels", "Queue", "History", "Settings", "Diagnostics"] {
-            assert!(!live_poll_needed(page, false, false, false));
-            assert!(live_poll_needed(page, false, false, true));
-            assert!(!live_poll_needed(page, true, false, true));
-            assert!(!live_poll_needed(page, false, true, true));
+            assert!(!live_poll_needed(page, true, false, false, false));
+            assert!(live_poll_needed(page, true, false, false, true));
+            assert!(!live_poll_needed(page, true, true, false, true));
+            assert!(!live_poll_needed(page, true, false, true, true));
         }
+    }
+    #[test]
+    fn hidden_live_window_does_not_fetch_or_drain_thumbnails_until_reopened() {
+        use super::*;
+        use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+        use slint::platform::{Platform, WindowAdapter};
+        use stream_archive_server::model::ChannelRuntimeStatus;
+        struct TestPlatform(Rc<MinimalSoftwareWindow>);
+        impl Platform for TestPlatform {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(TestPlatform(window))).unwrap();
+        let ui = MainWindow::new().unwrap();
+        ui.global::<AppState>().set_active_page("LIVE".into());
+        let mut status = NativeWatcherStatus {
+            running: true,
+            channels: (0..4)
+                .map(|index| ChannelRuntimeStatus {
+                    platform: PlatformId::Soop,
+                    account: format!("test{index}"),
+                    status: "RECORDING".into(),
+                    bno: Some("1".into()),
+                    thumbnail_url: Some("https://fixture.invalid/thumbnail.jpg".into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut thumbnails = crate::thumbnail_adapter::Thumbnails::default();
+        thumbnails.sync(&status, false);
+        let (sender, receiver) = mpsc::channel();
+        assert!(!ui.window().is_visible());
+        request_thumbnails(&ui, &mut thumbnails, &sender);
+        assert!(receiver.try_recv().is_err());
+        ui.show().unwrap();
+        request_thumbnails(&ui, &mut thumbnails, &sender);
+        let tokens: Vec<_> = receiver
+            .try_iter()
+            .map(|request| {
+                let Request::Thumbnail { token, .. } = request else {
+                    panic!("thumbnail");
+                };
+                token
+            })
+            .collect();
+        assert_eq!(tokens.len(), 2);
+        ui.hide().unwrap(); // Tray hide retains active_page == LIVE.
+        assert_eq!(ui.global::<AppState>().get_active_page(), "LIVE");
+        for token in tokens {
+            thumbnails.complete(token, None);
+            request_thumbnails(&ui, &mut thumbnails, &sender);
+            assert!(receiver.try_recv().is_err()); // Do not drain the remaining backlog.
+        }
+        status.channels[0].bno = Some("2".into());
+        thumbnails.sync(&status, false);
+        request_thumbnails(&ui, &mut thumbnails, &sender);
+        assert!(receiver.try_recv().is_err()); // A new broadcast must not fetch while hidden.
+        ui.show().unwrap();
+        request_thumbnails(&ui, &mut thumbnails, &sender);
+        assert_eq!(receiver.try_iter().count(), 2);
+        ui.hide().unwrap();
     }
 }
