@@ -15,6 +15,7 @@ pub struct ChzzkBroadcast {
     pub channel_name: String,
     pub title: String,
     pub requires_auth: bool,
+    pub thumbnail_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +145,11 @@ fn parse_probe_content(channel_id: &str, value: &Value, auth: &ChzzkAuth) -> Res
         channel_name,
         title,
         requires_auth,
+        thumbnail_url: content
+            .get("liveImageUrl")
+            .and_then(Value::as_str)
+            .filter(|url| !url.trim().is_empty())
+            .map(|url| url.replace("{type}", "270")),
     }))
 }
 
@@ -195,6 +201,10 @@ fn auth_failure(auth: &ChzzkAuth) -> Result<ChzzkProbe> {
     }
 }
 
+pub(crate) fn valid_thumbnail_url(url: &url::Url) -> bool {
+    url.host_str() == Some("livecloud-thumb.akamaized.net") && url.path().starts_with("/chzzk/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +248,25 @@ mod tests {
         let message = session.recover_auth().unwrap_err().to_string();
         assert!(message.contains("CHZZK 인증"));
         assert!(message.contains("NID_AUT/NID_SES"));
+    }
+
+    #[test]
+    fn thumbnail_uses_existing_probe_metadata_and_handles_null() {
+        let mut value = open_live(false, None, Some("{}"));
+        let auth = ChzzkAuth::from_plain("", "");
+        let ChzzkProbe::Live(live) = parse_probe_content(CHANNEL, &value, &auth).unwrap() else {
+            panic!("live");
+        };
+        assert!(live.thumbnail_url.is_none());
+        value["content"]["liveImageUrl"] =
+            "https://livecloud-thumb.akamaized.net/chzzk/live/123/image_{type}.jpg".into();
+        let ChzzkProbe::Live(live) = parse_probe_content(CHANNEL, &value, &auth).unwrap() else {
+            panic!("live");
+        };
+        assert_eq!(
+            live.thumbnail_url.as_deref(),
+            Some("https://livecloud-thumb.akamaized.net/chzzk/live/123/image_270.jpg")
+        );
     }
 
     #[test]

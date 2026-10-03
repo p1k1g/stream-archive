@@ -293,3 +293,32 @@ fn compact(text: &str, max: usize) -> String {
         compact
     }
 }
+
+/// The public player uses this broadcast-scoped snapshot path.
+pub(crate) fn thumbnail_url(bno: &str) -> Option<String> {
+    (!bno.is_empty() && bno.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| format!("https://liveimg.sooplive.com/m/{bno}"))
+}
+
+pub(crate) fn valid_thumbnail_url(url: &url::Url) -> bool {
+    url.host_str() == Some("liveimg.sooplive.com")
+        && url
+            .path()
+            .strip_prefix("/m/")
+            .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+#[cfg(test)]
+mod thumbnail_tests {
+    use super::*;
+    #[test]
+    fn snapshot_is_broadcast_scoped_and_rejects_path_injection() {
+        assert_eq!(
+            thumbnail_url("123").as_deref(),
+            Some("https://liveimg.sooplive.com/m/123")
+        );
+        for id in ["", "../123", "123?a=b", "https://evil.test"] {
+            assert!(thumbnail_url(id).is_none());
+        }
+    }
+}

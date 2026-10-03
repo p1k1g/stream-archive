@@ -192,11 +192,11 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
             ..Default::default()
         },
         LiveChannelRow {
-            profile_image: slint::Image::from_rgba8(
+            thumbnail_image: slint::Image::from_rgba8(
                 slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &vec![128u8; 200 * 200 * 4],
-                    200,
-                    200,
+                    &vec![128u8; 320 * 180 * 4],
+                    320,
+                    180,
                 ),
             ),
             target: "SOOP:recording".into(),
@@ -223,6 +223,11 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
     let folders = Rc::new(Cell::new(0));
     let observed = folders.clone();
     state.on_live_open_folder(move |_| observed.set(observed.get() + 1));
+    let picked_channels = Rc::new(RefCell::new(BTreeSet::new()));
+    let observed = picked_channels.clone();
+    state.on_channel_pick_output(move |index| {
+        observed.borrow_mut().insert(index);
+    });
     for (width, height) in [(1000, 650), (1120, 720), (1440, 900)] {
         ui.window().set_size(PhysicalSize::new(width, height));
         render(&window, width as usize, height as usize);
@@ -293,6 +298,27 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
                 .len(),
             32
         );
+        picked_channels.borrow_mut().clear();
+        for y in (175..410).step_by(5) {
+            for x in (width - 300..width - 15).step_by(5) {
+                click(&ui, x as f32, y as f32);
+            }
+        }
+        assert_eq!(
+            *picked_channels.borrow(),
+            BTreeSet::from([0, 1]),
+            "{width}x{height}: both folder buttons must remain accessible"
+        );
+        state.set_config_busy(true);
+        picked_channels.borrow_mut().clear();
+        render(&window, width as usize, height as usize);
+        for y in (175..410).step_by(5) {
+            for x in (width - 300..width - 15).step_by(5) {
+                click(&ui, x as f32, y as f32);
+            }
+        }
+        assert!(picked_channels.borrow().is_empty());
+        state.set_config_busy(false);
         state.set_active_page("LIVE".into());
     }
     state.set_close_dialog_visible(true);

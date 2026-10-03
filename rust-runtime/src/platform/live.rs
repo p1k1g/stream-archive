@@ -11,6 +11,23 @@ pub struct LiveBroadcast {
     pub(crate) payload: BroadcastPayload,
 }
 
+impl LiveBroadcast {
+    /// Metadata from the existing provider probe; no additional API request.
+    pub fn thumbnail_url(&self) -> Option<String> {
+        match &self.payload {
+            BroadcastPayload::Soop(value) => soop::live::thumbnail_url(&value.bno),
+            BroadcastPayload::Chzzk(value) => value.thumbnail_url.clone(),
+        }
+    }
+}
+
+pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bool {
+    match platform {
+        PlatformId::Soop => soop::live::valid_thumbnail_url(url),
+        PlatformId::Chzzk => chzzk::live::valid_thumbnail_url(url),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum BroadcastPayload {
     Soop(soop::live::SoopBroadcast),

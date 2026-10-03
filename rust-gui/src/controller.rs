@@ -32,10 +32,12 @@ use stream_archive_server::{
 use vod_adapter::{AnalysisSync, VodDraft};
 
 enum Request {
-    Profile {
-        target: String,
+    Thumbnail {
+        token: u64,
         platform: PlatformId,
         account: String,
+        broadcast_id: String,
+        completion_revision: u64,
     },
     Refresh,
     DesktopStatus,
@@ -47,6 +49,11 @@ enum Request {
     Pick(usize, SettingKind, String),
     ConfigReload,
     ChannelsSave(Vec<Channel>),
+    ChannelPickOutput {
+        index: usize,
+        expected: Vec<Channel>,
+        initial: String,
+    },
     ChannelResolve {
         index: usize,
         platform: PlatformId,
@@ -61,6 +68,7 @@ enum Request {
     LiveStatus {
         poll: bool,
     },
+    LiveRefresh,
     LiveStart,
     LiveStop,
     LiveAction {
@@ -115,9 +123,9 @@ enum Request {
 }
 
 enum Response {
-    Profile {
-        target: String,
-        image: Option<stream_archive_server::profile_service::ProfileImage>,
+    Thumbnail {
+        token: u64,
+        image: Option<stream_archive_server::thumbnail_service::ThumbnailImage>,
     },
     RememberedClose(Result<String, String>),
     Snapshot {
@@ -133,6 +141,11 @@ enum Response {
         secrets: BTreeMap<String, bool>,
         message: String,
     },
+    ChannelPicked {
+        index: usize,
+        expected: Vec<Channel>,
+        path: Option<String>,
+    },
     ChannelResolved {
         index: usize,
         account: String,
@@ -143,6 +156,7 @@ enum Response {
     Picked(usize, Option<String>),
     Live {
         status: NativeWatcherStatus,
+        refresh_thumbnails: bool,
         message: Option<String>,
         poll: bool,
     },
@@ -297,6 +311,7 @@ fn live_status(
     match runtime.block_on(core.watcher_status()) {
         Ok(status) => Response::Live {
             status,
+            refresh_thumbnails: false,
             message: None,
             poll,
         },
@@ -559,16 +574,21 @@ fn worker_loop(
             break;
         }
         let response = match request {
-            Request::Profile {
-                target,
+            Request::Thumbnail {
+                token,
                 platform,
                 account,
+                broadcast_id,
+                completion_revision,
             } => {
                 let core = core.clone();
                 let responses = responses.clone();
                 runtime.spawn(async move {
-                    let image = core.channel_profile(platform, &account).await.ok();
-                    let _ = responses.send(Response::Profile { target, image });
+                    let image = core
+                        .live_thumbnail(platform, &account, &broadcast_id, completion_revision)
+                        .await
+                        .ok();
+                    let _ = responses.send(Response::Thumbnail { token, image });
                 });
                 continue;
             }
@@ -629,6 +649,18 @@ fn worker_loop(
                 "저장된 채널 및 공급자 인증 정보를 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.",
             ),
             Request::ChannelsSave(channels) => save_channels(core, runtime, channels),
+            Request::ChannelPickOutput {
+                index,
+                expected,
+                initial,
+            } => match native_picker::pick_directory(&initial) {
+                Ok(path) => Response::ChannelPicked {
+                    index,
+                    expected,
+                    path,
+                },
+                Err(message) => Response::ConfigError(message),
+            },
             Request::ChannelResolve {
                 index,
                 platform,
@@ -669,10 +701,21 @@ fn worker_loop(
                 }
             },
             Request::LiveStatus { poll } => live_status(core, runtime, poll),
+            Request::LiveRefresh => {
+                let mut response = live_status(core, runtime, false);
+                if let Response::Live {
+                    refresh_thumbnails, ..
+                } = &mut response
+                {
+                    *refresh_thumbnails = true;
+                }
+                response
+            }
             Request::StorageLoad { poll } => storage_status(core, poll),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
                 Ok(status) => Response::Live {
                     status,
+                    refresh_thumbnails: false,
                     message: Some("LIVE Watcher를 시작했습니다".into()),
                     poll: false,
                 },
@@ -684,6 +727,7 @@ fn worker_loop(
             Request::LiveStop => match runtime.block_on(core.stop_watcher()) {
                 Ok(status) => Response::Live {
                     status,
+                    refresh_thumbnails: false,
                     message: Some("LIVE Watcher를 중지했습니다".into()),
                     poll: false,
                 },
@@ -704,6 +748,7 @@ fn worker_loop(
                     Ok(()) => match runtime.block_on(core.watcher_status()) {
                         Ok(status) => Response::Live {
                             status,
+                            refresh_thumbnails: false,
                             message: Some(match action {
                                 "stop" => "현재 방송은 방송이 바뀔 때까지 제외됩니다".into(),
                                 "resume" => "채널 모니터링을 재개했습니다".into(),
@@ -729,6 +774,7 @@ fn worker_loop(
                     Ok(()) => match runtime.block_on(core.watcher_status()) {
                         Ok(status) => Response::Live {
                             status,
+                            refresh_thumbnails: false,
                             message: Some(
                                 "비밀번호를 메모리에 전달하고 채널 다시 확인을 요청했습니다".into(),
                             ),
@@ -1028,22 +1074,24 @@ fn render_channels(ui: &MainWindow, draft: &ChannelsDraft) {
     state.set_channels_dirty(draft.dirty());
 }
 
-fn request_profiles(
+fn request_thumbnails(
     ui: &MainWindow,
-    profiles: &mut crate::profile_adapter::Profiles,
+    thumbnails: &mut crate::thumbnail_adapter::Thumbnails,
     sender: &mpsc::Sender<Request>,
 ) {
-    let rows: Vec<_> = ui.global::<AppState>().get_live_rows().iter().collect();
-    for (target, platform, account) in profiles.requests(&rows) {
+    let _ = ui;
+    for (token, platform, account, broadcast_id, completion_revision) in thumbnails.requests() {
         if sender
-            .send(Request::Profile {
-                target: target.clone(),
+            .send(Request::Thumbnail {
+                token,
                 platform,
                 account,
+                broadcast_id,
+                completion_revision,
             })
             .is_err()
         {
-            profiles.complete(target, None);
+            thumbnails.complete(token, None);
         }
     }
 }
@@ -1051,14 +1099,14 @@ fn request_profiles(
 fn render_live(
     ui: &MainWindow,
     status: NativeWatcherStatus,
-    profiles: &crate::profile_adapter::Profiles,
+    thumbnails: &crate::thumbnail_adapter::Thumbnails,
 ) {
     let view = live_adapter::view(status);
     let rows: Vec<_> = view
         .channels
         .into_iter()
         .map(|row| LiveChannelRow {
-            profile_image: profiles.image(&row.target),
+            thumbnail_image: thumbnails.image(&row.target),
             target: row.target.into(),
             platform: row.platform.into(),
             name: row.name.into(),
@@ -1696,6 +1744,31 @@ pub fn bind(ui: &MainWindow) -> Controller {
     });
 
     let weak = ui.as_weak();
+    let pick_channels = channels_draft.clone();
+    let pick_sender = sender.clone();
+    state.on_channel_pick_output(move |index| {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        if index < 0 || ui.global::<AppState>().get_config_busy() {
+            return;
+        }
+        let draft = pick_channels.borrow();
+        let Some(channel) = draft.rows.get(index as usize) else {
+            return;
+        };
+        send_config(
+            &ui,
+            &pick_sender,
+            Request::ChannelPickOutput {
+                index: index as usize,
+                expected: draft.snapshot(),
+                initial: channel.outdir.clone(),
+            },
+        );
+    });
+
+    let weak = ui.as_weak();
     let resolve_channels = channels_draft.clone();
     let resolve_sender = sender.clone();
     state.on_channel_resolve(move |index| {
@@ -1810,7 +1883,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let live_sender = sender.clone();
     state.on_live_refresh(move || {
         if let Some(ui) = weak.upgrade() {
-            send_live(&ui, &live_sender, Request::LiveStatus { poll: false });
+            send_live(&ui, &live_sender, Request::LiveRefresh);
         }
     });
 
@@ -2375,8 +2448,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     });
     let response_exit_sender = sender.clone();
     let mut download_tracker = crate::notifications::Tracker::default();
-    let mut profiles = crate::profile_adapter::Profiles::default();
-    let profile_sender = sender.clone();
+    let mut thumbnails = crate::thumbnail_adapter::Thumbnails::default();
+    let thumbnail_sender = sender.clone();
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
@@ -2385,14 +2458,14 @@ pub fn bind(ui: &MainWindow) -> Controller {
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
-                Response::Profile { target, image } => {
-                    profiles.complete(target, image);
+                Response::Thumbnail { token, image } => {
+                    thumbnails.complete(token, image);
                     let rows: Vec<_> = state.get_live_rows().iter().map(|mut row| {
-                        row.profile_image = profiles.image(&row.target);
+                        row.thumbnail_image = thumbnails.image(&row.target);
                         row
                     }).collect();
                     state.set_live_rows(ModelRc::new(VecModel::from(rows)));
-                    request_profiles(&ui, &mut profiles, &profile_sender);
+                    request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
                 }
                 Response::RememberedClose(result) => {
                     state.set_close_choice_busy(false);
@@ -2521,6 +2594,20 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_config_loaded(true);
                     state.set_config_message(message.into());
                 }
+                Response::ChannelPicked { index, expected, path } => {
+                    state.set_config_busy(false);
+                    match path {
+                        Some(path) => {
+                            if response_channels.borrow_mut().apply_selected_path(index, &expected, path) {
+                                render_channels(&ui, &response_channels.borrow());
+                                state.set_config_message("저장 폴더를 선택했습니다. 채널 저장을 누르면 반영됩니다.".into());
+                            } else {
+                                state.set_config_message("채널 목록이 변경되어 선택한 경로를 반영하지 않았습니다.".into());
+                            }
+                        }
+                        None => state.set_config_message("폴더 선택을 취소했습니다. 편집 내용은 유지됩니다.".into()),
+                    }
+                }
                 Response::ChannelResolved {
                     index,
                     account,
@@ -2571,6 +2658,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 }
                 Response::Live {
                     status,
+                    refresh_thumbnails,
                     message,
                     poll,
                 } => {
@@ -2579,8 +2667,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     } else {
                         state.set_live_busy(false);
                     }
-                    render_live(&ui, status, &profiles);
-                    request_profiles(&ui, &mut profiles, &profile_sender);
+                    thumbnails.sync(&status, refresh_thumbnails);
+                    render_live(&ui, status, &thumbnails);
+                    request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
                     if let Some(message) = message {
                         state.set_live_message(message.into());
                     } else if !poll {
