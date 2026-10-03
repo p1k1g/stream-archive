@@ -1,5 +1,5 @@
 import { Theme, ActionButton as Button, StatusPill, PlatformBadge } from "design-system.slint";
-import { ComboBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
+import { ComboBox, LineEdit, ScrollView, Palette, CheckBox } from "std-widgets.slint";
 import { QueuePage, HistoryPage, QueueHistoryState as QueueHistoryLocal } from "queue-history.slint";
 import { MaintenancePage, MaintenanceState } from "maintenance.slint";
 export { QueueHistoryState } from "queue-history.slint";
@@ -55,9 +55,60 @@ export struct VodPartRow {
     selected: bool,
 }
 
+component LiveActions inherits HorizontalLayout {
+    in property <LiveChannelRow> channel;
+    spacing: 8px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    alignment: center;
+    StatusPill { text: root.channel.status-label; tone: root.channel.status-tone; dot: true; }
+    Rectangle { width: 1px; height: 24px; background: Theme.border; vertical-stretch: 0; }
+    if root.channel.can-stop-once: Button {
+        height: 34px;
+        text: "저장 폴더 열기"; icon: @image-url("../assets/actions/folder.svg");
+        enabled: !AppState.live-busy && root.channel.file != "";
+        clicked => { AppState.live-open-folder(root.channel.file); }
+    }
+    if root.channel.can-stop-once: Button {
+        height: 34px;
+        text: "현재 방송 녹화 중지"; icon: @image-url("../assets/actions/stop.svg"); danger: true;
+        enabled: !AppState.live-busy;
+        clicked => { AppState.live-action(root.channel.target, "stop"); }
+    }
+    if root.channel.can-resume: Button {
+        height: 34px;
+        text: "모니터링 재개"; icon: @image-url("../assets/actions/play.svg");
+        enabled: !AppState.live-busy;
+        clicked => { AppState.live-action(root.channel.target, "resume"); }
+    }
+    if root.channel.can-recheck: Button {
+        height: 34px;
+        text: "다시 확인"; icon: @image-url("../assets/actions/refresh.svg");
+        enabled: !AppState.live-busy;
+        clicked => { AppState.live-action(root.channel.target, "recheck"); }
+    }
+    if root.channel.password-required: Button {
+        height: 34px;
+        text: "방송 비밀번호 입력";
+        enabled: !AppState.live-busy;
+        clicked => {
+            AppState.live-password-target = root.channel.target;
+            AppState.live-password-label = root.channel.platform + " · " + (root.channel.name != "" ? root.channel.name : root.channel.account);
+            AppState.live-password-draft = "";
+        }
+    }
+}
+
 export global AppState {
     in-out property <[SettingRow]> settings-rows;
     in-out property <bool> close-to-tray: false;
+    in-out property <string> close-action: "EXIT";
+    in-out property <bool> close-dialog-visible: false;
+    in-out property <bool> close-remember: false;
+    in-out property <bool> close-choice-busy: false;
+    in-out property <string> close-choice-error: "";
+    callback close-choice(string, bool);
+    callback close-apply(string);
     in-out property <bool> desktop-exit-pending: false;
     in-out property <bool> desktop-poll-pending: false;
     in-out property <string> desktop-status: "상태 확인 중";
@@ -285,7 +336,7 @@ export component MainWindow inherits Window {
                 if !AppState.runtime-ready: HorizontalLayout {
                     min-height: 32px; vertical-stretch: 0; spacing: 8px;
                     Text { text: AppState.runtime-status; color: Theme.warning; wrap: word-wrap; horizontal-stretch: 1; }
-                    Button { text: "다시 확인"; enabled: !AppState.settings-busy; clicked => { AppState.refresh-requested(); } }
+                    Button { text: "다시 확인"; icon: @image-url("../assets/actions/refresh.svg"); enabled: !AppState.settings-busy; clicked => { AppState.refresh-requested(); } }
                 }
 
                 if AppState.active-page == "LIVE": VerticalLayout {
@@ -294,11 +345,12 @@ export component MainWindow inherits Window {
                         height: 36px; vertical-stretch: 0; spacing: 8px;
                         StatusPill {
                             text: !AppState.live-loaded ? "상태 확인 중" : AppState.live-running ? "방송 감시 중" : "방송 감시 중지됨";
-                            tone: AppState.live-running ? "ok" : "neutral";
+                            tone: AppState.live-running ? "ok" : "neutral"; dot: true;
                         }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                         Button {
                             height: 34px;
+                            icon: AppState.live-running ? @image-url("../assets/actions/stop.svg") : @image-url("../assets/actions/play.svg");
                             text: AppState.live-busy ? "처리 중…" : AppState.live-running ? "방송 감시 중지" : "방송 감시 시작";
                             primary: !AppState.live-running;
                             enabled: AppState.live-loaded && !AppState.live-busy;
@@ -308,7 +360,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         Button {
-                            height: 34px; text: "새로고침";
+                            height: 34px; text: "새로고침"; icon: @image-url("../assets/actions/refresh.svg");
                             enabled: AppState.live-loaded && !AppState.live-busy && !AppState.storage-busy;
                             clicked => { AppState.live-refresh(); AppState.storage-refresh(); }
                         }
@@ -380,17 +432,14 @@ export component MainWindow inherits Window {
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
-                                min-height: max(112px, live-content.min-height);
+                                min-height: max(82px, live-content.min-height);
                                 vertical-stretch: 0;
-                                background: Theme.surface;
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: Theme.border;
-
-                                live-content := HorizontalLayout {
-                                    padding: 12px;
-                                    spacing: 12px;
-
+                                background: Theme.surface; border-radius: 8px;
+                                border-width: 1px; border-color: Theme.border;
+                                live-content := VerticalLayout {
+                                    padding: 12px; spacing: 10px;
+                                    HorizontalLayout {
+                                        spacing: 12px;
                                     PlatformBadge { platform: row.platform; }
                                     VerticalLayout {
                                         horizontal-stretch: 1;
@@ -429,73 +478,11 @@ export component MainWindow inherits Window {
                                         }
                                     }
 
-                                    VerticalLayout {
-                                        width: 158px;
-                                        horizontal-stretch: 0;
-                                        spacing: 8px;
-
-                                        StatusPill { text: row.status-label; tone: row.status-tone; }
-
-                                        Rectangle {
-                                            vertical-stretch: 1;
-                                            background: transparent;
-                                        }
-
-                                        VerticalLayout {
-                                            min-height: 32px;
-                                            vertical-stretch: 0;
-                                            spacing: 8px;
-
-                                            Rectangle {
-                                                horizontal-stretch: 1;
-                                                background: transparent;
-                                            }
-
-                                            if row.can-stop-once: Button {
-                                                width: 112px;
-                                                height: 32px;
-                                                horizontal-stretch: 0;
-                                                text: "저장 폴더 열기";
-                                                enabled: !AppState.live-busy && row.file != "";
-                                                clicked => { AppState.live-open-folder(row.file); }
-                                            }
-                                            if row.can-stop-once: Button {
-                                                width: 138px;
-                                                height: 32px;
-                                                horizontal-stretch: 0;
-                                                text: "현재 방송 녹화 중지";
-                                                enabled: !AppState.live-busy;
-                                                clicked => { AppState.live-action(row.target, "stop"); }
-                                            }
-                                            if row.can-resume: Button {
-                                                width: 126px;
-                                                height: 32px;
-                                                horizontal-stretch: 0;
-                                                text: "모니터링 재개";
-                                                enabled: !AppState.live-busy;
-                                                clicked => { AppState.live-action(row.target, "resume"); }
-                                            }
-                                            if row.can-recheck: Button {
-                                                width: 72px;
-                                                height: 32px;
-                                                horizontal-stretch: 0;
-                                                text: "다시 확인";
-                                                enabled: !AppState.live-busy;
-                                                clicked => { AppState.live-action(row.target, "recheck"); }
-                                            }
-                                            if row.password-required: Button {
-                                                width: 146px;
-                                                height: 32px;
-                                                horizontal-stretch: 0;
-                                                text: "방송 비밀번호 입력";
-                                                enabled: !AppState.live-busy;
-                                                clicked => {
-                                                    AppState.live-password-target = row.target;
-                                                    AppState.live-password-label = row.platform + " · " + (row.name != "" ? row.name : row.account);
-                                                    AppState.live-password-draft = "";
-                                                }
-                                            }
-                                        }
+                                        if root.width >= 1340px: LiveActions { channel: row; }
+                                    }
+                                    if root.width < 1340px: HorizontalLayout {
+                                        Rectangle { horizontal-stretch: 1; }
+                                        LiveActions { channel: row; }
                                     }
                                 }
                             }
@@ -555,44 +542,38 @@ export component MainWindow inherits Window {
                             spacing: 7px; alignment: start;
                             if AppState.channel-config-rows.length == 0: Text { text: "등록된 채널이 없습니다. 채널을 추가하고 저장하세요."; color: Theme.muted; wrap: word-wrap; }
                             for row[index] in AppState.channel-config-rows: Rectangle {
-                                min-height: max(122px, content-1.min-height); vertical-stretch: 0;
+                                min-height: max(72px, channel-content.min-height); vertical-stretch: 0;
                                 background: Theme.surface; border-radius: 8px;
                                 border-width: 1px; border-color: Theme.border;
-                                content-1 := VerticalLayout {
+                                channel-content := HorizontalLayout {
                                     padding: 10px; spacing: 6px;
-                                    HorizontalLayout {
-                                        height: 50px; vertical-stretch: 0; spacing: 8px;
-                                        VerticalLayout {
-                                            width: 106px; spacing: 3px;
-                                            Text { text: "플랫폼"; color: Theme.muted; font-size: 11px; }
-                                            ComboBox { model: ["SOOP", "CHZZK"]; current-index: row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
-                                        }
-                                        VerticalLayout {
-                                            width: 90px; spacing: 3px;
-                                            Text { text: "방송 감시"; color: Theme.muted; font-size: 11px; }
-                                            Button { text: row.enabled ? "사용" : "사용 안 함"; selected: row.enabled; enabled: !AppState.config-busy; clicked => { AppState.channel-toggle-enabled(index); } }
-                                        }
-                                        VerticalLayout {
-                                            horizontal-stretch: 1; spacing: 3px;
-                                            Text { text: "채널 이름"; color: Theme.muted; font-size: 11px; }
-                                            LineEdit { height: 30px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
-                                        }
-                                        VerticalLayout {
-                                            horizontal-stretch: 2; spacing: 3px;
-                                            Text { text: "계정 / 채널 ID"; color: Theme.muted; font-size: 11px; }
-                                            LineEdit { height: 30px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
-                                        }
+                                    VerticalLayout {
+                                        width: 96px; spacing: 4px;
+                                        Text { text: "플랫폼"; color: Theme.muted; font-size: 11px; }
+                                        ComboBox { model: ["SOOP", "CHZZK"]; current-index: row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
                                     }
-                                    HorizontalLayout {
-                                        height: 48px; vertical-stretch: 0; spacing: 8px;
-                                        VerticalLayout {
-                                            horizontal-stretch: 1; spacing: 3px;
-                                            Text { text: "저장 폴더"; color: Theme.muted; font-size: 11px; }
-                                            LineEdit { height: 30px; text <=> row.outdir; placeholder-text: "비워두면 기본 경로 사용"; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "outdir", value); } }
-                                        }
-                                        VerticalLayout { alignment: end; Button { text: "이름 조회"; enabled: !AppState.config-busy && row.account != ""; clicked => { AppState.channel-resolve(index); } } }
-                                        VerticalLayout { alignment: end; Button { text: "삭제"; enabled: !AppState.config-busy; clicked => { AppState.channel-remove(index); } } }
+                                    VerticalLayout {
+                                        width: 82px; spacing: 4px;
+                                        Text { text: "방송 감시"; color: Theme.muted; font-size: 11px; }
+                                        Button { text: row.enabled ? "사용" : "사용 안 함"; selected: row.enabled; enabled: !AppState.config-busy; clicked => { AppState.channel-toggle-enabled(index); } }
                                     }
+                                    VerticalLayout {
+                                        min-width: 70px; horizontal-stretch: 1; spacing: 4px;
+                                        Text { text: "채널 이름"; color: Theme.muted; font-size: 11px; }
+                                        LineEdit { width: parent.width; min-width: 0px; height: 34px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
+                                    }
+                                    VerticalLayout {
+                                        width: min(270px, 210px + max(0px, root.width - 1000px) * 0.5); spacing: 4px;
+                                        Text { text: "계정 / 채널 ID"; color: Theme.muted; font-size: 11px; }
+                                        LineEdit { width: parent.width; min-width: 0px; height: 34px; font-size: 12px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
+                                    }
+                                    VerticalLayout {
+                                        min-width: 80px; horizontal-stretch: 2; spacing: 4px;
+                                        Text { text: "저장 폴더"; color: Theme.muted; font-size: 11px; }
+                                        LineEdit { width: parent.width; min-width: 0px; height: 34px; text <=> row.outdir; placeholder-text: "기본 경로 사용"; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "outdir", value); } }
+                                    }
+                                    VerticalLayout { alignment: end; Button { text: "이름 조회"; enabled: !AppState.config-busy && row.account != ""; clicked => { AppState.channel-resolve(index); } } }
+                                    VerticalLayout { alignment: end; Button { text: "삭제"; danger: true; enabled: !AppState.config-busy; clicked => { AppState.channel-remove(index); } } }
                                 }
                             }
                         }
@@ -1045,10 +1026,10 @@ export component MainWindow inherits Window {
                                             spacing: 8px;
                                             if row.key == "STREAM_ARCHIVE_CLOSE_ACTION": ComboBox {
                                                 height: 34px;
-                                                model: ["프로그램 종료", "시스템 트레이로 이동"];
-                                                current-index: row.value == "TRAY" ? 1 : 0;
+                                                model: ["프로그램 종료", "시스템 트레이로 이동", "매번 확인"];
+                                                current-index: row.value == "ASK" ? 2 : row.value == "TRAY" ? 1 : 0;
                                                 enabled: !AppState.settings-busy;
-                                                selected(value) => { AppState.setting-edited(index, self.current-index == 1 ? "TRAY" : "EXIT"); }
+                                                selected(value) => { AppState.setting-edited(index, self.current-index == 2 ? "ASK" : self.current-index == 1 ? "TRAY" : "EXIT"); }
                                             }
                                             if row.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS": ComboBox {
                                                 height: 34px;
@@ -1091,4 +1072,35 @@ export component MainWindow inherits Window {
             }
         }
     }
+    if AppState.close-dialog-visible: Rectangle {
+        width: parent.width; height: parent.height; background: #00000099;
+        TouchArea { }
+        FocusScope {
+            width: parent.width; height: parent.height;
+            init => { self.focus(); }
+            key-pressed(event) => {
+                if event.text == Key.Escape && !AppState.close-choice-busy { AppState.close-dialog-visible = false; return accept; }
+                return reject;
+            }
+        Rectangle {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            width: 490px; height: close-content.min-height;
+            background: Theme.surface; border-radius: 10px; border-width: 1px; border-color: Theme.border;
+            close-content := VerticalLayout {
+                padding: 22px; spacing: 14px;
+                Text { text: "창을 닫을 때 어떻게 할까요?"; color: Theme.text; font-size: 18px; font-weight: 600; }
+                Text { text: "트레이로 이동하면 녹화·다운로드·방송 감시가 계속됩니다."; color: Theme.secondary; wrap: word-wrap; }
+                CheckBox { text: "이 선택을 기억하기"; checked <=> AppState.close-remember; enabled: !AppState.close-choice-busy; }
+                if AppState.close-choice-error != "": Text { text: AppState.close-choice-error; color: Theme.danger; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button { text: "트레이로 이동"; enabled: !AppState.close-choice-busy; clicked => { AppState.close-choice("TRAY", AppState.close-remember); } }
+                    Button { text: "프로그램 종료"; enabled: !AppState.close-choice-busy; clicked => { AppState.close-choice("EXIT", AppState.close-remember); } }
+                    Button { text: "취소"; enabled: !AppState.close-choice-busy; clicked => { AppState.close-dialog-visible = false; } }
+                }
+            }
+        }
+        }
+    }
+
 }

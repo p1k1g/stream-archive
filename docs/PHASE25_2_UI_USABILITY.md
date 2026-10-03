@@ -1,0 +1,63 @@
+# Phase 25.2 — UI 사용성 및 안정화
+
+상태: PR 검증 중. 배포 및 Windows 수동 QA는 아직 완료하지 않았습니다.
+
+## 변경 범위
+
+- LIVE 상태 배지와 동작 버튼을 같은 영역에 정렬합니다. 넓은 창에서는 채널 정보 옆에, 기본/작은 창에서는 채널 정보 아래에 버튼 묶음을 배치합니다. 행 높이는 실제 콘텐츠와 버튼을 포함해 계산합니다. 기존 `stop` / `resume` / `recheck`, 저장 폴더 열기 및 방송 비밀번호 입력 동작을 유지합니다.
+- 상태 배지는 dot + pill, 버튼은 같은 모서리·높이와 SVG 아이콘을 사용합니다. 녹화 중지는 옅은 경고색으로 구분합니다. canonical 앱 로고는 그대로 유지합니다.
+- 채널 편집을 한 줄로 정리합니다. 계정/채널 ID 표시 폭은 창 너비에 따라 210~270px, 이름과 폴더는 남는 폭을 사용합니다. 입력값은 자르지 않으며 긴 값은 LineEdit 내부에서 편집 가능합니다.
+- `STREAM_ARCHIVE_CLOSE_ACTION`에 `ASK`를 추가합니다. `EXIT` / `TRAY`의 기존 저장값과 기본값 `EXIT`는 유지합니다. 설정에서 `매번 확인`을 선택하고 저장하면 X를 누를 때 선택 창이 열립니다.
+- 선택 창의 `이 선택을 기억하기`는 선택한 `EXIT` 또는 `TRAY` 하나만 SQLite에 저장합니다. 다른 미저장 설정은 보존합니다. 저장 실패 시 창을 유지하며 오류를 표시합니다. 체크하지 않은 선택은 이번 닫기에만 적용됩니다.
+- 취소/Esc는 창을 유지합니다. 트레이 등록 실패 시 창을 숨기지 않습니다. 트레이 메뉴의 종료는 닫기 설정과 관계없이 기존 작업 정리·종료 확인 절차를 사용합니다. Linux/macOS CLI/headless 동작은 바뀌지 않습니다.
+- 진단 항목 제목·요약·해결 안내와 알려진 설명을 GUI에서 한국어로 표시합니다. 기술명, 경로, 설정 key, 원본 도구 출력/오류는 보존합니다. 필수/선택 구분과 판정, probe 동작은 그대로 유지합니다. 로컬 설정 완료를 실제 서비스 인증 성공으로 표시하지 않습니다.
+
+## 채널 이름 길이 조사
+
+현재 앱의 표시 이름은 사용자가 편집할 수 있습니다. 플랫폼 닉네임 정책과 동일한 입력 제한을 새로 적용하지 않습니다. CHZZK 공식 Channel 문서는 `channelId` / `channelName`을 제공하지만 이번 조사에서 SOOP/CHZZK 양쪽의 현재 이름 최대 길이를 확정할 공식 근거는 확보하지 못했습니다. 따라서 고정 글자 수 제한을 추정하지 않고, 가변 표시 폭과 기존 입력 허용 범위를 유지합니다.
+
+참고: https://chzzk.gitbook.io/chzzk/chzzk-api/channel
+
+## QHD 글자 선명도 조사 (#117)
+
+보고 조건: FHD/QHD 모두 Windows 배율 100%. Windows native 앱은 차이가 없지만 Stream Archive는 QHD에서 흐릿하게 느껴집니다.
+
+코드 확인 결과 Slint 1.18.0의 시스템 폰트를 사용하며, `default-font-family`를 명시하지 않습니다. FemtoVG/software 기능이 함께 활성화되어 있습니다. 실제 사용자 PC의 fallback 폰트 및 renderer는 아직 확인하지 못했습니다. 이 실행 환경에서는 Windows 물리 모니터로 비교할 수 없어 해결 완료로 처리하지 않습니다. renderer 변경, FemtoVG 제거, font bundling, memory trim은 하지 않습니다.
+
+동일 binary에서 비교:
+
+```powershell
+$env:SLINT_BACKEND = 'winit-software'
+.\StreamArchive.exe
+# 앱을 완전히 종료한 다음 비교합니다.
+$env:SLINT_BACKEND = 'winit-femtovg'
+.\StreamArchive.exe
+# 비교 후 기본 선택으로 복귀합니다.
+Remove-Item Env:SLINT_BACKEND
+```
+
+FHD에서 QHD로 이동한 경우와 QHD에서 직접 실행한 경우, 제목/본문/보조 설명을 같은 창 크기·동일 문구로 비교합니다. 실제 한글 폰트와 Pretendard를 동일 크기·굵기로 비교하는 작업은 후속 조사입니다. Windows ClearType과 Slint의 글꼴 rasterization 차이를 renderer 결함으로 단정하지 않습니다.
+
+참고: https://docs.slint.dev/latest/docs/slint/guide/backends-and-renderers/backend_winit/
+
+## 자동 검증
+
+결과는 PR의 최신 CI 및 최종 보고를 기준으로 확인합니다. 기존 Rust/RuntimeContracts/package guard는 유지합니다. 추가 검증은 ASK 허용 및 SQLite 재실행 보존, 기억한 닫기 선택과 미저장 설정 분리, 진단 원본 오류 보존, LIVE 상태별 실제 버튼 hit 영역 및 Esc 취소를 다룹니다.
+
+## Windows 수동 QA
+
+- [ ] 기본/최소/최대화 창에서 LIVE 녹화 중·오프라인·일시중지·비밀번호 필요 상태 확인
+- [ ] 모든 버튼이 해당 행 안에 있고 다음 채널에 가려지지 않음
+- [ ] 저장 폴더 열기 / 녹화 중지 / 모니터링 재개 / 다시 확인 / 비밀번호 입력 동작
+- [ ] 채널 한 줄 편집, 플랫폼 선택, 긴 이름·32자 ID·긴 폴더, 이름 조회·삭제·저장
+- [ ] `매번 확인` 저장 후 X 선택 창 표시, 취소/Esc 및 반복 X
+- [ ] 기억하지 않은 선택은 재실행 후 설정을 변경하지 않음
+- [ ] 기억한 선택은 재실행 및 설정 화면에 반영됨
+- [ ] 다른 미저장 설정은 기억한 닫기 선택으로 함께 저장되지 않음
+- [ ] SQLite 저장 실패 및 트레이 등록 실패 시 창 유지
+- [ ] 트레이로 이동 후 녹화/Queue 유지, 다시 열기, 트레이 메뉴 종료
+- [ ] 진행 중인 작업의 종료 확인 취소 및 승인 시 owned-process 정리
+- [ ] 진단 한국어 안내, 긴 원본 오류/경로 표시 및 비밀정보 미노출
+- [ ] FHD/QHD 100%에서 software/FemtoVG 선명도 비교; 가능한 경우 125%/150% 배치
+
+실제 SOOP/CHZZK 인증 녹화·다운로드, Windows tray shell 및 물리 QHD 선명도 검증은 이 환경에서 수행했다고 표시하지 않습니다. 프로필 이미지 추가는 이번 범위에 포함하지 않습니다.

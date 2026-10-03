@@ -80,5 +80,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - Phase 24.2 ✅ Windows 다운로드 완료·실패 알림 ([알림 정책 및 수동 QA](PHASE24_2_WINDOWS_NOTIFICATIONS.md))
 - Phase 24.3 예정: 트레이·알림 최종 수동 검증 및 릴리스 준비
 - Phase 25 ✅ Windows UI/UX Refresh ([구현 범위 및 수동 QA](PHASE25_UI_UX_REFRESH.md))
-- Phase 25.1 🚧 저장 공간·플랫폼 선택·VOD 경로·아이콘 정리 ([범위 및 수동 QA](PHASE25_1_UI_POLISH.md))
+- Phase 25.1 ✅ 저장 공간·플랫폼 선택·VOD 경로·아이콘 정리 ([범위 및 수동 QA](PHASE25_1_UI_POLISH.md))
 - Kick LIVE 지원 조사 및 구현은 별도 Phase로 재계획
+
+- Phase 25.2 🚧 UI 사용성 및 안정화 ([범위 및 수동 QA](PHASE25_2_UI_USABILITY.md))

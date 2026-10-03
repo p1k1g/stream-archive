@@ -38,6 +38,7 @@ enum Request {
     Shutdown,
     Reload,
     Save(BTreeMap<String, String>),
+    RememberClose(String),
     Pick(usize, SettingKind, String),
     ConfigReload,
     ChannelsSave(Vec<Channel>),
@@ -109,6 +110,7 @@ enum Request {
 }
 
 enum Response {
+    RememberedClose(Result<String, String>),
     Snapshot {
         fields: Option<Vec<EnvironmentSetting>>,
         diagnostics: DiagnosticsSnapshot,
@@ -571,6 +573,15 @@ fn worker_loop(
                 core,
                 true,
                 "저장된 설정을 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.",
+            ),
+            Request::RememberClose(action) => Response::RememberedClose(
+                runtime
+                    .block_on(core.update_environment_settings(&BTreeMap::from([(
+                        "STREAM_ARCHIVE_CLOSE_ACTION".into(),
+                        action.clone(),
+                    )])))
+                    .map(|_| action)
+                    .map_err(|error| format!("닫기 동작 저장 실패: {error:#}")),
             ),
             Request::Save(patch) => {
                 match runtime.block_on(core.update_environment_settings(&patch)) {
@@ -1501,6 +1512,34 @@ pub fn bind(ui: &MainWindow) -> Controller {
     });
 
     let weak = ui.as_weak();
+    let close_sender = sender.clone();
+    state.on_close_choice(move |action, remember| {
+        let Some(ui) = weak.upgrade() else { return };
+        let state = ui.global::<AppState>();
+        if !matches!(action.as_str(), "EXIT" | "TRAY")
+            || state.get_close_choice_busy()
+            || state.get_settings_busy()
+        {
+            return;
+        }
+        state.set_close_choice_error("".into());
+        if remember {
+            state.set_close_choice_busy(true);
+            state.set_settings_busy(true);
+            if close_sender
+                .send(Request::RememberClose(action.to_string()))
+                .is_err()
+            {
+                state.set_close_choice_busy(false);
+                state.set_settings_busy(false);
+                state.set_close_choice_error("런타임 Worker를 사용할 수 없습니다".into());
+            }
+        } else {
+            state.invoke_close_apply(action);
+        }
+    });
+
+    let weak = ui.as_weak();
     let reload_sender = sender.clone();
     state.on_reload_settings(move || {
         if let Some(ui) = weak.upgrade() {
@@ -2300,6 +2339,20 @@ pub fn bind(ui: &MainWindow) -> Controller {
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
+                Response::RememberedClose(result) => {
+                    state.set_close_choice_busy(false);
+                    state.set_settings_busy(false);
+                    match result {
+                        Ok(action) => {
+                            draft.borrow_mut().accept_saved_value("STREAM_ARCHIVE_CLOSE_ACTION", &action);
+                            render_draft(&ui, &draft.borrow());
+                            state.set_close_action(action.clone().into());
+                            state.set_close_to_tray(action == "TRAY");
+                            state.invoke_close_apply(action.into());
+                        }
+                        Err(message) => state.set_close_choice_error(message.into()),
+                    }
+                }
                 Response::ClearNotices => {
                     download_tracker.clear();
                     state.invoke_clear_download_notices();
@@ -2356,6 +2409,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_download_notifications_enabled(fields.iter().any(|f|
                             f.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS" && f.value == "true"
                         ));
+                        state.set_close_action(fields.iter().find(|f| f.key == "STREAM_ARCHIVE_CLOSE_ACTION")
+                            .map(|f| f.value.as_str()).unwrap_or("EXIT").into());
                         state.set_close_to_tray(fields.iter().any(|f|
                             f.key == "STREAM_ARCHIVE_CLOSE_ACTION" && f.value == "TRAY"
                         ));

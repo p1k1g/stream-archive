@@ -62,7 +62,7 @@ const FIELDS: &[(&str, SettingKind, &str)] = &[
     (
         "STREAM_ARCHIVE_CLOSE_ACTION",
         SettingKind::Text,
-        "Windows close action: EXIT (default) or TRAY; Unix headless is unaffected",
+        "Windows close action: EXIT (default), TRAY or ASK; Unix headless is unaffected",
     ),
     (
         "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS",
@@ -161,9 +161,10 @@ mod tests {
     }
 
     #[test]
-    fn windows_close_action_accepts_only_explicit_exit_or_tray() {
+    fn windows_close_action_accepts_only_explicit_exit_tray_or_ask() {
         validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", "EXIT")).unwrap();
         validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", "TRAY")).unwrap();
+        validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", "ASK")).unwrap();
         for value in ["", "tray", "MINIMIZE", "TRAY\nEXIT"] {
             assert!(validate_updates(&update("STREAM_ARCHIVE_CLOSE_ACTION", value)).is_err());
         }

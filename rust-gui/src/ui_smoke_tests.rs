@@ -3,8 +3,11 @@
 use crate::{AppState, MainWindow, MaintenanceState, QueueDisplayRow, QueueHistoryState};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, ModelRc, PhysicalSize, Rgb8Pixel, VecModel};
+use slint::{ComponentHandle, LogicalPosition, Model, ModelRc, PhysicalSize, Rgb8Pixel, VecModel};
 use std::{cell::Cell, rc::Rc};
+
+#[path = "../tests/support/ui_snapshot.rs"]
+mod ui_snapshot;
 
 struct UiTestPlatform(Rc<MinimalSoftwareWindow>);
 
@@ -32,6 +35,7 @@ fn render(window: &MinimalSoftwareWindow, width: usize, height: usize) {
     assert!(window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, width);
     }));
+    ui_snapshot::save(&pixels, width, height);
 }
 
 #[test]
@@ -140,5 +144,110 @@ fn native_navigation_and_watcher_toggle_preserve_input_guards() {
         state.set_active_page(page.into());
         render(&window, 1000, 650);
     }
+    ui.hide().unwrap();
+}
+
+#[test]
+fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size() {
+    use crate::{ChannelConfigRow, LiveChannelRow};
+    use std::{cell::RefCell, collections::BTreeSet};
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    slint::platform::set_platform(Box::new(UiTestPlatform(window.clone()))).unwrap();
+    let ui = MainWindow::new().unwrap();
+    ui.show().unwrap();
+    let state = ui.global::<AppState>();
+    state.set_runtime_ready(true);
+    state.set_live_loaded(true);
+    state.set_live_busy(false);
+    state.set_settings_busy(false);
+    state.set_live_rows(ModelRc::new(VecModel::from(vec![
+        LiveChannelRow {
+            target: "CHZZK:paused".into(),
+            platform: "CHZZK".into(),
+            name: "일시중지 채널".into(),
+            account: "0123456789abcdef0123456789abcdef".into(),
+            status_label: "일시중지".into(),
+            status_tone: "warn".into(),
+            suppressed: true,
+            can_resume: true,
+            can_recheck: true,
+            ..Default::default()
+        },
+        LiveChannelRow {
+            target: "SOOP:recording".into(),
+            platform: "SOOP".into(),
+            name: "녹화 중 채널".into(),
+            account: "recording".into(),
+            status_label: "녹화 중".into(),
+            status_tone: "ok".into(),
+            title: "긴 방송 제목을 표시해도 동작 버튼이 다음 행에 가려지면 안 됩니다".into(),
+            file: "G:/archive/recording.ts".into(),
+            size: "1.2 GB".into(),
+            can_stop_once: true,
+            can_recheck: true,
+            ..Default::default()
+        },
+    ])));
+    let actions = Rc::new(RefCell::new(BTreeSet::new()));
+    let observed = actions.clone();
+    state.on_live_action(move |target, action| {
+        observed
+            .borrow_mut()
+            .insert((target.to_string(), action.to_string()));
+    });
+    let folders = Rc::new(Cell::new(0));
+    let observed = folders.clone();
+    state.on_live_open_folder(move |_| observed.set(observed.get() + 1));
+    for (width, height) in [(1000, 650), (1120, 720), (1440, 900)] {
+        ui.window().set_size(PhysicalSize::new(width, height));
+        render(&window, width as usize, height as usize);
+        actions.borrow_mut().clear();
+        folders.set(0);
+        // Exercise the visible hit regions rather than invoking callbacks directly.
+        for y in (185..height.min(550)).step_by(6) {
+            for x in (220..width - 20).step_by(6) {
+                click(&ui, x as f32, y as f32);
+            }
+        }
+        for (target, action) in [
+            ("CHZZK:paused", "resume"),
+            ("CHZZK:paused", "recheck"),
+            ("SOOP:recording", "stop"),
+            ("SOOP:recording", "recheck"),
+        ] {
+            assert!(
+                actions.borrow().contains(&(target.into(), action.into())),
+                "{width}x{height}: missing {target}/{action}"
+            );
+        }
+        assert!(folders.get() > 0);
+        state.set_active_page("Channels".into());
+        state.set_config_busy(false);
+        state.set_channel_config_rows(ModelRc::new(VecModel::from(vec![ChannelConfigRow {
+            platform: "CHZZK".into(),
+            enabled: true,
+            name: "길이가 긴 채널 이름도 보존".into(),
+            account: "0123456789abcdef0123456789abcdef".into(),
+            outdir: "G:/archive/a/long/path/that/remains/editable".into(),
+        }])));
+        render(&window, width as usize, height as usize);
+        assert_eq!(
+            state
+                .get_channel_config_rows()
+                .row_data(0)
+                .unwrap()
+                .account
+                .len(),
+            32
+        );
+        state.set_active_page("LIVE".into());
+    }
+    state.set_close_dialog_visible(true);
+    render(&window, 1440, 900);
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: "\u{1b}".into(),
+    });
+    assert!(!state.get_close_dialog_visible());
+    assert_eq!(state.get_close_action(), "EXIT");
     ui.hide().unwrap();
 }

@@ -63,13 +63,72 @@ fn diagnostic_row(item: &DiagnosticItem) -> DiagnosticRowView {
     DiagnosticRowView {
         category: diagnostic_category_label(item.category).into(),
         requirement: diagnostic_requirement_label(item.requirement).into(),
-        name: item.name.clone(),
+        name: localized_name(item),
         status: diagnostic_status_label(item.status).into(),
-        summary: item.summary.clone(),
-        detail: item.detail.clone(),
-        remediation: item.remediation.clone(),
+        summary: localized_summary(item),
+        detail: localized_detail(item),
+        remediation: crate::diagnostic_text::text(&item.remediation),
         status_tone: diagnostic_tone(item.status).into(),
     }
+}
+
+fn localized_name(item: &DiagnosticItem) -> String {
+    if item.id.starts_with("tool.")
+        && let Some(name) = item.name.strip_suffix(" executable")
+    {
+        return format!("{name} 실행 파일");
+    }
+    crate::diagnostic_text::text(&item.name)
+}
+
+fn localized_summary(item: &DiagnosticItem) -> String {
+    if item.id.starts_with("tool.")
+        && let Some(version) = item.summary.strip_prefix("Executable probe passed (")
+    {
+        return format!("실행 파일 확인 성공 ({version}");
+    }
+    crate::diagnostic_text::text(&item.summary)
+}
+
+fn localized_detail(item: &DiagnosticItem) -> String {
+    // Translate only known wrappers, never arbitrary probe output or filesystem errors.
+    let detail = crate::diagnostic_text::text(&item.detail);
+    if item.id.starts_with("provider.") {
+        return detail
+            .replace("not configured", "미설정")
+            .replace("configured", "설정됨");
+    }
+    for (suffix, translated) in [
+        (" — exists", " — 존재함"),
+        (" — missing or not a directory", " — 없거나 디렉터리가 아님"),
+        (
+            " — missing or not a regular file",
+            " — 없거나 일반 파일이 아님",
+        ),
+        (
+            "; Secret Service session is not probed",
+            "; Secret Service 세션은 검사하지 않음",
+        ),
+    ] {
+        if let Some(path) = detail.strip_suffix(suffix) {
+            return format!("{path}{translated}");
+        }
+    }
+    if item.id.starts_with("tool.") {
+        for (wrapper, translated) in [
+            ("; active local version probe: ", "; 로컬 버전 실행 확인: "),
+            ("; active probe error: ", "; 실행 확인 오류: "),
+            (
+                "; passive filesystem discovery only; active local version probing is opt-in. ",
+                "; 파일 탐색만 수행함. 로컬 버전 실행 확인은 별도 요청 시 수행함. ",
+            ),
+        ] {
+            if let Some((path, raw)) = detail.split_once(wrapper) {
+                return format!("{path}{translated}{raw}");
+            }
+        }
+    }
+    detail
 }
 
 pub fn log_rows(lines: Vec<String>, max_lines: usize) -> Vec<LogRowView> {
@@ -206,5 +265,31 @@ mod tests {
         assert_eq!(diagnostic_tone(DiagnosticStatus::Ok), "ok");
         assert_eq!(diagnostic_tone(DiagnosticStatus::Warning), "warn");
         assert_eq!(diagnostic_tone(DiagnosticStatus::Error), "error");
+    }
+    #[test]
+    fn diagnostic_translation_preserves_probe_output_errors_and_classification() {
+        let mut item = DiagnosticItem {
+            id: "tool.streamlink".into(), category: DiagnosticCategory::Tools,
+            requirement: DiagnosticRequirement::Required,
+            name: "streamlink executable".into(), status: DiagnosticStatus::Error,
+            summary: "Executable probe could not complete".into(),
+            detail: "D:/Tools/streamlink.exe [PATH]; active probe error: Directory is unavailable".into(),
+            remediation: "Verify the executable path and local process permissions, then retry the active probe.".into(),
+        };
+        let row = diagnostic_row(&item);
+        assert_eq!(row.name, "streamlink 실행 파일");
+        assert_eq!(row.summary, "실행 파일 확인을 완료하지 못했습니다");
+        assert_eq!(
+            row.detail,
+            "D:/Tools/streamlink.exe [PATH]; 실행 확인 오류: Directory is unavailable"
+        );
+        assert_eq!(row.status_tone, "error");
+        assert_eq!(row.requirement, "필수");
+        item.id = "unknown".into();
+        item.name = "Future diagnostic".into();
+        item.detail = "Unrecognized error: configured".into();
+        let row = diagnostic_row(&item);
+        assert_eq!(row.name, item.name);
+        assert_eq!(row.detail, item.detail);
     }
 }
