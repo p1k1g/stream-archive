@@ -146,7 +146,11 @@ mod tests {
                 assert!(socket.read(&mut request).await.unwrap() > 0);
                 socket.write_all(payload.as_bytes()).await.unwrap();
             });
-            let response = reqwest::Client::new()
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .unwrap()
                 .get(format!("http://{address}"))
                 .send()
                 .await
