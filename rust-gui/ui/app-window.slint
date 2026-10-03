@@ -560,17 +560,17 @@ export component MainWindow inherits Window {
                                     VerticalLayout {
                                         min-width: 70px; horizontal-stretch: 1; spacing: 4px;
                                         Text { text: "채널 이름"; color: Theme.muted; font-size: 11px; }
-                                        LineEdit { width: parent.width; min-width: 0px; height: 34px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
+                                        LineEdit { min-width: 0px; height: 34px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
                                     }
                                     VerticalLayout {
                                         width: min(270px, 210px + max(0px, root.width - 1000px) * 0.5); spacing: 4px;
                                         Text { text: "계정 / 채널 ID"; color: Theme.muted; font-size: 11px; }
-                                        LineEdit { width: parent.width; min-width: 0px; height: 34px; font-size: 12px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
+                                        LineEdit { min-width: 0px; height: 34px; font-size: 12px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
                                     }
                                     VerticalLayout {
                                         min-width: 80px; horizontal-stretch: 2; spacing: 4px;
                                         Text { text: "저장 폴더"; color: Theme.muted; font-size: 11px; }
-                                        LineEdit { width: parent.width; min-width: 0px; height: 34px; text <=> row.outdir; placeholder-text: "기본 경로 사용"; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "outdir", value); } }
+                                        LineEdit { min-width: 0px; height: 34px; text <=> row.outdir; placeholder-text: "기본 경로 사용"; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "outdir", value); } }
                                     }
                                     VerticalLayout { alignment: end; Button { text: "이름 조회"; enabled: !AppState.config-busy && row.account != ""; clicked => { AppState.channel-resolve(index); } } }
                                     VerticalLayout { alignment: end; Button { text: "삭제"; danger: true; enabled: !AppState.config-busy; clicked => { AppState.channel-remove(index); } } }
