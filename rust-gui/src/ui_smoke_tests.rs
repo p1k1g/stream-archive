@@ -271,6 +271,12 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
             },
         ])));
         render(&window, width as usize, height as usize);
+        if width == 1120 {
+            assert_eq!(ui.get_channel_name_column_width(), 180.0);
+        } else if width == 1440 {
+            assert!(ui.get_channel_name_column_width() > 180.0);
+            assert!(ui.get_channel_name_column_width() <= 320.0);
+        }
         assert_eq!(
             state
                 .get_channel_config_rows()

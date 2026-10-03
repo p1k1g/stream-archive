@@ -276,6 +276,7 @@ component NavItem inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
+    out property <length> channel-name-column-width: min(max(180px, channel-name-measure.min-width + 24px), max(70px, min(320px, root.width - 940px)));
     channel-name-measure := VerticalLayout {
         visible: false;
         for row in AppState.channel-config-rows: Text { text: row.name; font-size: 13px; }
@@ -565,7 +566,7 @@ export component MainWindow inherits Window {
                                         Button { text: row.enabled ? "사용" : "사용 안 함"; selected: row.enabled; enabled: !AppState.config-busy; clicked => { AppState.channel-toggle-enabled(index); } }
                                     }
                                     VerticalLayout {
-                                        width: min(max(180px, channel-name-measure.min-width + 24px), max(70px, min(320px, root.width - 960px))); spacing: 4px;
+                                        width: root.channel-name-column-width; spacing: 4px;
                                         Text { text: "채널 이름"; color: Theme.muted; font-size: 12px; }
                                         LineEdit { min-width: 0px; height: 34px; font-size: 13px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
                                     }
