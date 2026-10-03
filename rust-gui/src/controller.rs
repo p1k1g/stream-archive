@@ -1516,10 +1516,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     state.on_close_choice(move |action, remember| {
         let Some(ui) = weak.upgrade() else { return };
         let state = ui.global::<AppState>();
-        if !matches!(action.as_str(), "EXIT" | "TRAY")
-            || state.get_close_choice_busy()
-            || state.get_settings_busy()
-        {
+        if !matches!(action.as_str(), "EXIT" | "TRAY") || state.get_close_choice_busy() {
             return;
         }
         state.set_close_choice_error("".into());

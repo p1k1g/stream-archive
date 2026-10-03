@@ -68,3 +68,34 @@ pub fn confirm_exit(_ui: &crate::MainWindow) -> bool {
 pub fn notify(_ui: &crate::MainWindow, message: &str) {
     eprintln!("{message}");
 }
+
+// Loaded settings work must not make X/Alt+F4 silently stop responding.
+#[cfg(any(windows, test))]
+fn close_request_blocked(
+    settings_loaded: bool,
+    settings_busy: bool,
+    close_choice_busy: bool,
+    dialog_visible: bool,
+    exit_pending: bool,
+) -> bool {
+    (!settings_loaded && settings_busy) || close_choice_busy || dialog_visible || exit_pending
+}
+
+#[cfg(test)]
+mod tests {
+    use super::close_request_blocked;
+
+    #[test]
+    fn loaded_settings_work_does_not_block_close() {
+        assert!(!close_request_blocked(true, true, false, false, false));
+        assert!(!close_request_blocked(true, false, false, false, false));
+    }
+
+    #[test]
+    fn initial_loading_and_active_close_transactions_block_reentry() {
+        assert!(close_request_blocked(false, true, false, false, false));
+        assert!(close_request_blocked(true, false, true, false, false));
+        assert!(close_request_blocked(true, false, false, true, false));
+        assert!(close_request_blocked(true, false, false, false, true));
+    }
+}

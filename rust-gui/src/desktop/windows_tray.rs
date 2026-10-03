@@ -327,6 +327,7 @@ pub fn bind(ui: &MainWindow) -> Desktop {
         });
     let weak = ui.as_weak();
     let apply_tray = tray.clone();
+    let informed = Cell::new(false);
     ui.global::<AppState>().on_close_apply(move |action| {
         let Some(ui) = weak.upgrade() else { return };
         let state = ui.global::<AppState>();
@@ -339,10 +340,27 @@ pub fn bind(ui: &MainWindow) -> Desktop {
                     .state
                     .ensure(&format!("Stream Archive — {}", state.get_desktop_status()))
             {
-                match ui.hide() {
-                    Ok(()) => state.set_close_dialog_visible(false),
-                    Err(error) => state
-                        .set_close_choice_error(format!("창을 숨기지 못했습니다: {error}").into()),
+                if !informed.get() {
+                    super::notify(&ui, "창을 닫아도 녹화·다운로드·채널 감시가 계속 실행됩니다.\n앱을 종료하려면 트레이 메뉴의 ‘종료’를 선택하세요.");
+                }
+                // Explorer may restart while the information dialog is open.
+                if tray
+                    .state
+                    .ensure(&format!("Stream Archive — {}", state.get_desktop_status()))
+                {
+                    match ui.hide() {
+                        Ok(()) => {
+                            informed.set(true);
+                            state.set_close_dialog_visible(false);
+                        }
+                        Err(error) => {
+                            state.set_close_choice_error(format!("창을 숨기지 못했습니다: {error}").into());
+                            state.set_close_dialog_visible(true);
+                        }
+                    }
+                } else {
+                    state.set_close_choice_error("트레이 아이콘을 등록하지 못해 창을 유지합니다.".into());
+                    state.set_close_dialog_visible(true);
                 }
             } else {
                 state.set_close_choice_error(
@@ -361,10 +379,13 @@ pub fn bind(ui: &MainWindow) -> Desktop {
             return slint::CloseRequestResponse::KeepWindowShown;
         };
         let state = ui.global::<AppState>();
-        if state.get_desktop_exit_pending()
-            || state.get_settings_busy()
-            || state.get_close_dialog_visible()
-        {
+        if super::close_request_blocked(
+            state.get_settings_loaded(),
+            state.get_settings_busy(),
+            state.get_close_choice_busy(),
+            state.get_close_dialog_visible(),
+            state.get_desktop_exit_pending(),
+        ) {
             return slint::CloseRequestResponse::KeepWindowShown;
         }
         if state.get_close_action() == "ASK" {
