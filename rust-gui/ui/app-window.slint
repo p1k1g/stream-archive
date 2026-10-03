@@ -497,21 +497,21 @@ export component MainWindow inherits Window {
                         }
                     }
                     Rectangle {
-                        height: AppState.storage-rows.length < 2 ? 142px : 184px; vertical-stretch: 0;
+                        height: storage-content.min-height; vertical-stretch: 0;
                         background: Theme.surface; border-radius: 8px;
                         border-width: 1px; border-color: Theme.border;
-                        VerticalLayout {
+                        storage-content := VerticalLayout {
                             padding: 12px; spacing: 12px;
                             HorizontalLayout {
-                                height: 28px; vertical-stretch: 0; spacing: 8px;
+                                height: 34px; vertical-stretch: 0; spacing: 8px;
                                 Text { text: "저장 공간"; color: Theme.text; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
                                 Text { text: "최소 여유 " + AppState.storage-threshold; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                                 Button { text: "새로고침"; enabled: !AppState.storage-busy; clicked => { AppState.storage-refresh(); } }
                             }
                             if AppState.storage-message != "": Text { text: AppState.storage-message; color: Theme.muted; font-size: 12px; wrap: word-wrap; vertical-stretch: 0; }
                             ScrollView {
-                                vertical-stretch: 1;
-                                VerticalLayout {
+                                height: min(126px, storage-volumes.min-height); vertical-stretch: 0;
+                                storage-volumes := VerticalLayout {
                                     spacing: 12px; alignment: start;
                                     if AppState.storage-rows.length == 0: Text { text: "표시할 저장소가 없습니다."; color: Theme.muted; }
                                     for row in AppState.storage-rows: Rectangle {
@@ -521,9 +521,9 @@ export component MainWindow inherits Window {
                                             spacing: 14px;
                                             Text { width: 42px; vertical-alignment: center; text: row.volume; color: Theme.text; font-weight: 600; wrap: word-wrap; }
                                             VerticalLayout {
-                                                horizontal-stretch: 1; spacing: 2px;
-                                                Text { text: row.capacity + " · 사용률 " + row.used; color: Theme.secondary; font-size: 12px; wrap: word-wrap; }
-                                                if row.detail != "": Text { text: row.detail; color: row.status-tone == "error" ? Theme.danger : Theme.warning; font-size: 12px; wrap: word-wrap; }
+                                                horizontal-stretch: 1; alignment: center; spacing: 2px;
+                                                Text { text: row.capacity + " · 사용률 " + row.used; color: Theme.secondary; font-size: 12px; wrap: word-wrap; vertical-stretch: 0; }
+                                                if row.detail != "": Text { text: row.detail; color: row.status-tone == "error" ? Theme.danger : Theme.warning; font-size: 12px; wrap: word-wrap; vertical-stretch: 0; }
                                             }
                                             StatusPill { text: row.status; tone: row.status-tone; boxed: true; }
                                         }
