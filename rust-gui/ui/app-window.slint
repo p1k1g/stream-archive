@@ -15,6 +15,7 @@ export struct ChannelConfigRow {
     outdir: string,
 }
 export struct LiveChannelRow {
+    profile-image: image,
     target: string,
     platform: string,
     name: string,
@@ -448,7 +449,22 @@ export component MainWindow inherits Window {
                                     padding: 12px; spacing: 10px;
                                     HorizontalLayout {
                                         spacing: 12px;
-                                    PlatformBadge { platform: row.platform; }
+                                    VerticalLayout {
+                                        width: 54px; horizontal-stretch: 0; vertical-stretch: 0; spacing: 5px;
+                                        if row.profile-image.width > 0: HorizontalLayout {
+                                            alignment: center; vertical-stretch: 0;
+                                            Rectangle {
+                                                width: 40px; height: 40px; border-radius: 6px;
+                                                clip: true; background: Theme.surface;
+                                                Image { source: row.profile-image; image-fit: contain; }
+                                            }
+                                        }
+                                        if row.profile-image.width == 0: PlatformBadge { platform: row.platform; }
+                                        if row.profile-image.width > 0: Text {
+                                            text: row.platform; height: 14px; vertical-stretch: 0; font-size: 10px; color: Theme.muted;
+                                            horizontal-alignment: center;
+                                        }
+                                    }
                                     VerticalLayout {
                                         horizontal-stretch: 1;
                                         spacing: 5px;

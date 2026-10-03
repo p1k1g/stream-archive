@@ -11,6 +11,7 @@ mod maintenance_adapter;
 mod native_picker;
 mod native_shell;
 mod notifications;
+mod profile_adapter;
 mod queue_adapter;
 mod settings_adapter;
 mod storage_adapter;

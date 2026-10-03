@@ -6,7 +6,7 @@ use crate::{
     maintenance_adapter, native_picker, native_shell, queue_adapter,
     settings_adapter::SettingsDraft, storage_adapter, vod_adapter,
 };
-use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -32,6 +32,11 @@ use stream_archive_server::{
 use vod_adapter::{AnalysisSync, VodDraft};
 
 enum Request {
+    Profile {
+        target: String,
+        platform: PlatformId,
+        account: String,
+    },
     Refresh,
     DesktopStatus,
     PrepareExit,
@@ -110,6 +115,10 @@ enum Request {
 }
 
 enum Response {
+    Profile {
+        target: String,
+        image: Option<stream_archive_server::profile_service::ProfileImage>,
+    },
     RememberedClose(Result<String, String>),
     Snapshot {
         fields: Option<Vec<EnvironmentSetting>>,
@@ -550,6 +559,19 @@ fn worker_loop(
             break;
         }
         let response = match request {
+            Request::Profile {
+                target,
+                platform,
+                account,
+            } => {
+                let core = core.clone();
+                let responses = responses.clone();
+                runtime.spawn(async move {
+                    let image = core.channel_profile(platform, &account).await.ok();
+                    let _ = responses.send(Response::Profile { target, image });
+                });
+                continue;
+            }
             Request::Shutdown => break,
             Request::DesktopStatus => {
                 let status = runtime.block_on(desktop_snapshot(core));
@@ -1006,12 +1028,37 @@ fn render_channels(ui: &MainWindow, draft: &ChannelsDraft) {
     state.set_channels_dirty(draft.dirty());
 }
 
-fn render_live(ui: &MainWindow, status: NativeWatcherStatus) {
+fn request_profiles(
+    ui: &MainWindow,
+    profiles: &mut crate::profile_adapter::Profiles,
+    sender: &mpsc::Sender<Request>,
+) {
+    let rows: Vec<_> = ui.global::<AppState>().get_live_rows().iter().collect();
+    for (target, platform, account) in profiles.requests(&rows) {
+        if sender
+            .send(Request::Profile {
+                target: target.clone(),
+                platform,
+                account,
+            })
+            .is_err()
+        {
+            profiles.complete(target, None);
+        }
+    }
+}
+
+fn render_live(
+    ui: &MainWindow,
+    status: NativeWatcherStatus,
+    profiles: &crate::profile_adapter::Profiles,
+) {
     let view = live_adapter::view(status);
     let rows: Vec<_> = view
         .channels
         .into_iter()
         .map(|row| LiveChannelRow {
+            profile_image: profiles.image(&row.target),
             target: row.target.into(),
             platform: row.platform.into(),
             name: row.name.into(),
@@ -2328,6 +2375,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     });
     let response_exit_sender = sender.clone();
     let mut download_tracker = crate::notifications::Tracker::default();
+    let mut profiles = crate::profile_adapter::Profiles::default();
+    let profile_sender = sender.clone();
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
@@ -2336,6 +2385,15 @@ pub fn bind(ui: &MainWindow) -> Controller {
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
+                Response::Profile { target, image } => {
+                    profiles.complete(target, image);
+                    let rows: Vec<_> = state.get_live_rows().iter().map(|mut row| {
+                        row.profile_image = profiles.image(&row.target);
+                        row
+                    }).collect();
+                    state.set_live_rows(ModelRc::new(VecModel::from(rows)));
+                    request_profiles(&ui, &mut profiles, &profile_sender);
+                }
                 Response::RememberedClose(result) => {
                     state.set_close_choice_busy(false);
                     state.set_settings_busy(false);
@@ -2521,7 +2579,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     } else {
                         state.set_live_busy(false);
                     }
-                    render_live(&ui, status);
+                    render_live(&ui, status, &profiles);
+                    request_profiles(&ui, &mut profiles, &profile_sender);
                     if let Some(message) = message {
                         state.set_live_message(message.into());
                     } else if !poll {
