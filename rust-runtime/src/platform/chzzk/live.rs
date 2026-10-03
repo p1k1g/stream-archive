@@ -149,6 +149,12 @@ fn parse_probe_content(channel_id: &str, value: &Value, auth: &ChzzkAuth) -> Res
             .get("liveImageUrl")
             .and_then(Value::as_str)
             .filter(|url| !url.trim().is_empty())
+            .or_else(|| {
+                content
+                    .get("defaultThumbnailImageUrl")
+                    .and_then(Value::as_str)
+                    .filter(|url| !url.trim().is_empty())
+            })
             .map(|url| url.replace("{type}", "270")),
     }))
 }
@@ -202,7 +208,11 @@ fn auth_failure(auth: &ChzzkAuth) -> Result<ChzzkProbe> {
 }
 
 pub(crate) fn valid_thumbnail_url(url: &url::Url) -> bool {
-    url.host_str() == Some("livecloud-thumb.akamaized.net") && url.path().starts_with("/chzzk/")
+    match url.host_str() {
+        Some("livecloud-thumb.akamaized.net") => url.path().starts_with("/chzzk/"),
+        Some("nng-phinf.pstatic.net") => true,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -258,6 +268,15 @@ mod tests {
             panic!("live");
         };
         assert!(live.thumbnail_url.is_none());
+        value["content"]["defaultThumbnailImageUrl"] =
+            "https://nng-phinf.pstatic.net/broadcast.jpg".into();
+        let ChzzkProbe::Live(live) = parse_probe_content(CHANNEL, &value, &auth).unwrap() else {
+            panic!("live");
+        };
+        assert_eq!(
+            live.thumbnail_url.as_deref(),
+            Some("https://nng-phinf.pstatic.net/broadcast.jpg")
+        );
         value["content"]["liveImageUrl"] =
             "https://livecloud-thumb.akamaized.net/chzzk/live/123/image_{type}.jpg".into();
         let ChzzkProbe::Live(live) = parse_probe_content(CHANNEL, &value, &auth).unwrap() else {

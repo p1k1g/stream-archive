@@ -30,12 +30,17 @@ fn click(ui: &MainWindow, x: f32, y: f32) {
 }
 
 fn render(window: &MinimalSoftwareWindow, width: usize, height: usize) {
+    let _ = render_pixels(window, width, height);
+}
+
+fn render_pixels(window: &MinimalSoftwareWindow, width: usize, height: usize) -> Vec<Rgb8Pixel> {
     window.request_redraw();
     let mut pixels = vec![Rgb8Pixel::default(); width * height];
     assert!(window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, width);
     }));
     ui_snapshot::save(&pixels, width, height);
+    pixels
 }
 
 #[test]
@@ -230,7 +235,20 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
     });
     for (width, height) in [(1000, 650), (1120, 720), (1440, 900)] {
         ui.window().set_size(PhysicalSize::new(width, height));
-        render(&window, width as usize, height as usize);
+        let pixels = render_pixels(&window, width as usize, height as usize);
+        // The entire CHZZK glyph must fit inside its 40px tile. A naturally sized
+        // 512px child clipped by the tile renders a solid mint square instead.
+        let mint_pixels = (200..400)
+            .flat_map(|y| (224..264).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                let p = pixels[*y * width as usize + *x];
+                p.g > 200 && p.r < 30 && p.b < 200
+            })
+            .count();
+        assert!(
+            (100..1100).contains(&mint_pixels),
+            "{width}x{height}: clipped platform logo ({mint_pixels} mint pixels)"
+        );
         actions.borrow_mut().clear();
         folders.set(0);
         // Exercise the visible hit regions rather than invoking callbacks directly.

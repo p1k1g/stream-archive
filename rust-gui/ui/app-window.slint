@@ -457,8 +457,9 @@ export component MainWindow inherits Window {
                                             width: parent.width;
                                             height: row.thumbnail-image.width > 0 ? 67.5px : 40px;
                                             border-radius: 6px; clip: true; background: Theme.surface;
-                                            if row.thumbnail-image.width > 0: Image { source: row.thumbnail-image; image-fit: contain; }
+                                            if row.thumbnail-image.width > 0: Image { width: parent.width; height: parent.height; source: row.thumbnail-image; image-fit: contain; }
                                             if row.thumbnail-image.width == 0: Image {
+                                                width: parent.width; height: parent.height;
                                                 source: row.platform == "CHZZK" ? @image-url("../assets/platform-chzzk.png") : @image-url("../assets/platform-soop.png");
                                                 image-fit: contain;
                                             }

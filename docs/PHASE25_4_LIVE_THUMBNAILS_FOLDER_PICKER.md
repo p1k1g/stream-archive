@@ -6,7 +6,7 @@
 
 - 오프라인: SOOP / CHZZK 플랫폼 로고를 40×40 논리 픽셀 영역에 비율 유지하여 표시합니다. 채널 프로필 이미지는 사용하지 않습니다.
 - 방송 감지 후: 기존 LIVE 조회에서 얻은 방송 식별자와 공개 썸네일 정보를 사용합니다. 120×67.5 논리 픽셀의 16:9 영역에 전체 이미지를 표시하며 중앙 자르기를 하지 않습니다.
-- SOOP은 현재 player가 사용하는 방송별 `https://liveimg.sooplive.com/m/{bno}` 경로를 사용합니다. CHZZK는 기존 `live-detail`의 `liveImageUrl`을 사용하고 `{type}`을 `270`으로 치환합니다.
+- SOOP은 현재 player가 사용하는 방송별 `https://liveimg.sooplive.com/m/{bno}` 경로를 사용합니다. CHZZK는 기존 `live-detail`의 `liveImageUrl`을 사용하고 `{type}`을 `270`으로 치환합니다. 해당 값이 없으면 같은 응답의 `defaultThumbnailImageUrl`을 사용합니다.
 - CHZZK 썸네일 URL이 없거나 이미지 다운로드 / 형식 검증에 실패하면 플랫폼 로고를 표시합니다. 인증 쿠키, 비밀번호, Worker API key를 이미지 요청에 전달하지 않습니다.
 - 기존 방송 제목, 상태, 녹화 크기, 저장 경로 및 채널별 동작은 유지합니다. 채널 관리에 LIVE 대시보드를 복제하지 않습니다.
 
