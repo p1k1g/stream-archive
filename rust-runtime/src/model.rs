@@ -14,6 +14,10 @@ pub struct Channel {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ChannelRuntimeStatus {
+    /// Public LIVE snapshot metadata only; never persisted in SQLite or backups.
+    pub thumbnail_url: Option<String>,
+    pub completed_broadcast_id: Option<String>,
+    pub completion_revision: u64,
     pub platform: PlatformId,
     pub account: String,
     pub name: String,

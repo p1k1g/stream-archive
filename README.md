@@ -186,4 +186,4 @@ Phase 24.2에서 Windows 다운로드 완료·실패 알림을 추가했습니�
 
 Phase 25에서 dark theme·mint accent와 화면별 정보 구성을 정리하고 있습니다. LIVE의 방송 감시 버튼 통합, 복수 저장 볼륨 표시, Queue 진행 목록과 별도 Diagnostics 메뉴가 포함됩니다. 기존 기능과 공유 Rust runtime은 유지합니다. [구현 범위 및 수동 QA](docs/PHASE25_UI_UX_REFRESH.md)를 참고하세요. 현재 README screenshot은 Phase 25 이전 UI입니다.
 
-Phase 25.2에서 LIVE 상태·버튼, 저장 공간 배치, 채널 관리와 닫기 선택을 정리했습니다. Phase 25.3은 LIVE의 SOOP / CHZZK 프로필 이미지를 준비 중입니다. 이미지는 작은 플랫폼 기준으로 정규화하고, 조회 실패 시 플랫폼 표시를 유지합니다. [범위 및 수동 QA](docs/PHASE25_3_CHANNEL_PROFILE_IMAGES.md)를 참고하세요.
+Phase 25.2에서 LIVE 상태·버튼, 저장 공간 배치, 채널 관리와 닫기 선택을 정리했고, Phase 25.3에서 채널 프로필 이미지를 추가했습니다. Phase 25.4에서는 이를 오프라인 플랫폼 로고 / 방송 중 썸네일로 전환하고 채널 저장 폴더 선택을 추가하고 있습니다. [캐시 정책 및 수동 QA](docs/PHASE25_4_LIVE_THUMBNAILS_FOLDER_PICKER.md)를 참고하세요.
