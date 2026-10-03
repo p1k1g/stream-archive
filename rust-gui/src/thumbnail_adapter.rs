@@ -29,6 +29,10 @@ impl Thumbnails {
         self.sequence += 1;
         self.sequence
     }
+    pub fn is_tracking(&self) -> bool {
+        !self.entries.is_empty() || !self.pending.is_empty()
+    }
+
     pub fn image(&self, target: &str) -> Image {
         self.entries
             .get(target)
@@ -230,7 +234,9 @@ mod tests {
                 _ => state.channels[0].status = "OFFLINE".into(),
             }
             cache.sync(&state, false);
+            assert!(cache.is_tracking()); // Retired in-flight requests still need draining.
             cache.complete(t, Some(image()));
+            assert!(!cache.is_tracking());
             assert!(cache.entries.is_empty());
             assert!(cache.pending.is_empty());
         }

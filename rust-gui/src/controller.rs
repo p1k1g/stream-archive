@@ -1074,12 +1074,18 @@ fn render_channels(ui: &MainWindow, draft: &ChannelsDraft) {
     state.set_channels_dirty(draft.dirty());
 }
 
+fn live_poll_needed(page: &str, busy: bool, in_flight: bool, thumbnail_tracking: bool) -> bool {
+    (page == "LIVE" || thumbnail_tracking) && !busy && !in_flight
+}
+
 fn request_thumbnails(
     ui: &MainWindow,
     thumbnails: &mut crate::thumbnail_adapter::Thumbnails,
     sender: &mpsc::Sender<Request>,
 ) {
-    let _ = ui;
+    if ui.global::<AppState>().get_active_page().as_str() != "LIVE" {
+        return;
+    }
     for (token, platform, account, broadcast_id, completion_revision) in thumbnails.requests() {
         if sender
             .send(Request::Thumbnail {
@@ -2449,6 +2455,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let response_exit_sender = sender.clone();
     let mut download_tracker = crate::notifications::Tracker::default();
     let mut thumbnails = crate::thumbnail_adapter::Thumbnails::default();
+    let thumbnail_tracking = Rc::new(Cell::new(false));
+    let response_thumbnail_tracking = thumbnail_tracking.clone();
     let thumbnail_sender = sender.clone();
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
@@ -2466,6 +2474,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     }).collect();
                     state.set_live_rows(ModelRc::new(VecModel::from(rows)));
                     request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
+                    response_thumbnail_tracking.set(thumbnails.is_tracking());
                 }
                 Response::RememberedClose(result) => {
                     state.set_close_choice_busy(false);
@@ -2670,6 +2679,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     thumbnails.sync(&status, refresh_thumbnails);
                     render_live(&ui, status, &thumbnails);
                     request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
+                    response_thumbnail_tracking.set(thumbnails.is_tracking());
                     if let Some(message) = message {
                         state.set_live_message(message.into());
                     } else if !poll {
@@ -2890,10 +2900,12 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 return;
             };
             let state = ui.global::<AppState>();
-            if state.get_active_page().as_str() != "LIVE"
-                || state.get_live_busy()
-                || live_poll_flag.get()
-            {
+            if !live_poll_needed(
+                state.get_active_page().as_str(),
+                state.get_live_busy(),
+                live_poll_flag.get(),
+                thumbnail_tracking.get(),
+            ) {
                 return;
             }
             if live_poll_sender
@@ -3076,5 +3088,20 @@ mod desktop_lifecycle_tests {
                 drop(core);
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_poll_tests {
+    use super::live_poll_needed;
+    #[test]
+    fn cached_images_observe_completion_even_on_other_tabs_without_duplicate_polls() {
+        assert!(live_poll_needed("LIVE", false, false, false));
+        for page in ["Channels", "Queue", "History", "Settings", "Diagnostics"] {
+            assert!(!live_poll_needed(page, false, false, false));
+            assert!(live_poll_needed(page, false, false, true));
+            assert!(!live_poll_needed(page, true, false, true));
+            assert!(!live_poll_needed(page, false, true, true));
+        }
     }
 }
