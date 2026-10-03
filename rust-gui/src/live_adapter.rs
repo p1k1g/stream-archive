@@ -58,7 +58,8 @@ fn status_presentation(status: &str) -> (&str, &str) {
         "RECORDING" => ("녹화 중", "ok"),
         "PASSWORD_REQUIRED" => ("비밀번호 필요", "warn"),
         "DISABLED" => ("사용 안 함", "muted"),
-        "WATCHER_STOPPED" => ("Watcher 중지됨", "muted"),
+        "WATCHER_STOPPED" => ("방송 감시 중지됨", "muted"),
+        "PAUSED" => ("일시중지", "warn"),
         "ERROR" => ("오류", "error"),
         other => (other, "warn"),
     }

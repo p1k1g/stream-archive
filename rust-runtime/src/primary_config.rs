@@ -23,8 +23,8 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
         }
         validate_single_line(value, 2048, &format!("setting {key}"))?;
         match key.as_str() {
-            "STREAM_ARCHIVE_CLOSE_ACTION" if !matches!(value.as_str(), "EXIT" | "TRAY") => {
-                bail!("STREAM_ARCHIVE_CLOSE_ACTION must be EXIT or TRAY");
+            "STREAM_ARCHIVE_CLOSE_ACTION" if !matches!(value.as_str(), "EXIT" | "TRAY" | "ASK") => {
+                bail!("STREAM_ARCHIVE_CLOSE_ACTION must be EXIT, TRAY or ASK");
             }
             "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"
                 if !matches!(value.as_str(), "true" | "false") =>

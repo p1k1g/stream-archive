@@ -33,6 +33,14 @@ impl SettingsDraft {
         }
     }
 
+    // A remembered close choice persists one key without committing unrelated edits.
+    pub fn accept_saved_value(&mut self, key: &str, value: &str) {
+        if let Some(field) = self.fields.iter_mut().find(|field| field.key == key) {
+            field.value = value.into();
+            self.original.insert(key.into(), value.into());
+        }
+    }
+
     pub fn patch(&self) -> BTreeMap<String, String> {
         self.fields
             .iter()
@@ -82,5 +90,33 @@ mod tests {
         assert_eq!(draft.patch()["STREAMLINK_PATH"], "selected.exe");
         assert!(!draft.accept_selection(0, None));
         assert_eq!(draft.patch()["STREAMLINK_PATH"], "selected.exe");
+    }
+    #[test]
+    fn remembered_close_choice_preserves_other_unsaved_settings() {
+        let mut draft = SettingsDraft::default();
+        draft.load(snapshot(&BTreeMap::from([(
+            "STREAM_ARCHIVE_CLOSE_ACTION".into(),
+            "ASK".into(),
+        )])));
+        let index = draft
+            .fields
+            .iter()
+            .position(|f| f.key == "CHECK_INTERVAL")
+            .unwrap();
+        draft.edit(index, "45".into());
+        draft.accept_saved_value("STREAM_ARCHIVE_CLOSE_ACTION", "TRAY");
+        assert_eq!(
+            draft.patch(),
+            BTreeMap::from([("CHECK_INTERVAL".into(), "45".into())])
+        );
+        assert_eq!(
+            draft
+                .fields
+                .iter()
+                .find(|f| f.key == "STREAM_ARCHIVE_CLOSE_ACTION")
+                .unwrap()
+                .value,
+            "TRAY"
+        );
     }
 }

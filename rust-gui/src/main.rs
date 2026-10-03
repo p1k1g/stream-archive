@@ -3,6 +3,7 @@
 mod channels_adapter;
 mod controller;
 mod desktop;
+mod diagnostic_text;
 mod formatting;
 mod history_adapter;
 mod live_adapter;

@@ -54,3 +54,7 @@
 - [ ] 장시간 숨김 및 반복 복원 후 private memory / handles / threads 안정화
 
 credential이 필요한 실제 서비스 항목은 적절한 환경에서 사용자가 검증합니다.
+
+## Phase 25.2 확장
+
+닫기 동작의 `매번 확인`(`ASK`)과 선택 기억 기능은 [Phase 25.2](PHASE25_2_UI_USABILITY.md)를 참고하세요. 기존 `EXIT` / `TRAY` 설정은 유지합니다.
