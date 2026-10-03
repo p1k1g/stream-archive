@@ -149,7 +149,7 @@ fn native_navigation_and_watcher_toggle_preserve_input_guards() {
 
 #[test]
 fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size() {
-    use crate::{ChannelConfigRow, LiveChannelRow};
+    use crate::{ChannelConfigRow, LiveChannelRow, StorageDisplayRow};
     use std::{cell::RefCell, collections::BTreeSet};
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(UiTestPlatform(window.clone()))).unwrap();
@@ -160,6 +160,24 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
     state.set_live_loaded(true);
     state.set_live_busy(false);
     state.set_settings_busy(false);
+    state.set_storage_rows(ModelRc::new(VecModel::from(vec![
+        StorageDisplayRow {
+            volume: "C:\\".into(),
+            capacity: "여유 120 GB / 전체 500 GB".into(),
+            used: "76%".into(),
+            status: "정상".into(),
+            status_tone: "ok".into(),
+            ..Default::default()
+        },
+        StorageDisplayRow {
+            volume: "G:\\".into(),
+            capacity: "여유 1.2 TB / 전체 4 TB".into(),
+            used: "70%".into(),
+            status: "정상".into(),
+            status_tone: "ok".into(),
+            ..Default::default()
+        },
+    ])));
     state.set_live_rows(ModelRc::new(VecModel::from(vec![
         LiveChannelRow {
             target: "CHZZK:paused".into(),
@@ -209,6 +227,19 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
                 click(&ui, x as f32, y as f32);
             }
         }
+        // Multiple storage volumes reduce the LIVE viewport; the remaining
+        // actions must still be reachable by scrolling inside the channel list.
+        ui.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(500.0, 350.0),
+            delta_x: 0.0,
+            delta_y: -250.0,
+        });
+        render(&window, width as usize, height as usize);
+        for y in (215..height.min(440)).step_by(6) {
+            for x in (220..width - 20).step_by(6) {
+                click(&ui, x as f32, y as f32);
+            }
+        }
         for (target, action) in [
             ("CHZZK:paused", "resume"),
             ("CHZZK:paused", "recheck"),
@@ -223,13 +254,22 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
         assert!(folders.get() > 0);
         state.set_active_page("Channels".into());
         state.set_config_busy(false);
-        state.set_channel_config_rows(ModelRc::new(VecModel::from(vec![ChannelConfigRow {
-            platform: "CHZZK".into(),
-            enabled: true,
-            name: "길이가 긴 채널 이름도 보존".into(),
-            account: "0123456789abcdef0123456789abcdef".into(),
-            outdir: "G:/archive/a/long/path/that/remains/editable".into(),
-        }])));
+        state.set_channel_config_rows(ModelRc::new(VecModel::from(vec![
+            ChannelConfigRow {
+                platform: "CHZZK".into(),
+                enabled: true,
+                name: "길이가 긴 채널 이름도 모두 온전히 보존합니다".into(),
+                account: "0123456789abcdef0123456789abcdef".into(),
+                outdir: "G:/archive/a/long/path/that/remains/editable".into(),
+            },
+            ChannelConfigRow {
+                platform: "SOOP".into(),
+                enabled: true,
+                name: "명아츄".into(),
+                account: "1004ysus".into(),
+                outdir: "G:/archive".into(),
+            },
+        ])));
         render(&window, width as usize, height as usize);
         assert_eq!(
             state

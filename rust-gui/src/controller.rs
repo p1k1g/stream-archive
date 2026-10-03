@@ -2550,11 +2550,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_storage_busy(false);
                     }
                     render_storage(&ui, snapshot);
-                    state.set_storage_message(
-                        message
-                            .unwrap_or_else(|| "저장 공간을 새로고침했습니다".into())
-                            .into(),
-                    );
+                    state.set_storage_message(message.unwrap_or_default().into());
                 }
                 Response::StorageError { message, poll } => {
                     if poll {

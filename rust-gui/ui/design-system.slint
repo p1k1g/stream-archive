@@ -7,7 +7,7 @@ export global Theme {
     out property <color> border: #34404b;
     out property <color> text: #edf3f5;
     out property <color> secondary: #becad2;
-    out property <color> muted: #9aaab6;
+    out property <color> muted: #aebbc5;
     out property <color> accent: #32d5bf;
     out property <color> accent-ink: #092822;
     out property <color> selected: #203b3c;
@@ -52,7 +52,7 @@ export component ActionButton inherits Rectangle {
         height: parent.height;
         text: root.text;
         color: root.primary ? Theme.accent-ink : root.danger ? Theme.danger : root.selected ? Theme.accent : Theme.text;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: root.primary ? 600 : 400;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -79,14 +79,15 @@ export component StatusPill inherits Rectangle {
     in property <string> text;
     in property <string> tone;
     in property <bool> dot: false;
-    height: 26px;
+    in property <bool> boxed: false;
+    height: root.boxed ? 34px : 26px;
     min-width: label.preferred-width + (root.dot ? 36px : 22px);
     horizontal-stretch: 0;
     vertical-stretch: 0;
-    border-radius: 13px;
+    border-radius: root.boxed ? 8px : 13px;
     background: root.tone == "error" ? Theme.danger-surface : root.tone == "warn" ? Theme.warning-surface : root.tone == "ok" ? Theme.success-surface : Theme.raised;
     if root.dot: Rectangle {
-        x: 11px; y: 9px; width: 8px; height: 8px; border-radius: 4px;
+        x: 11px; y: (parent.height - 8px) / 2; width: 8px; height: 8px; border-radius: 4px;
         background: root.tone == "error" ? Theme.danger : root.tone == "warn" ? Theme.warning : root.tone == "ok" ? Theme.success : Theme.muted;
     }
     label := Text {
@@ -95,7 +96,7 @@ export component StatusPill inherits Rectangle {
         height: parent.height;
         text: root.text;
         color: root.tone == "error" ? Theme.danger : root.tone == "warn" ? Theme.warning : root.tone == "ok" ? Theme.success : Theme.secondary;
-        font-size: 11px;
+        font-size: root.boxed ? 13px : 11px;
         vertical-alignment: center;
         horizontal-alignment: center;
     }
