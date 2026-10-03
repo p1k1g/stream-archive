@@ -550,7 +550,7 @@ export component MainWindow inherits Window {
                                     VerticalLayout {
                                         width: 96px; spacing: 4px;
                                         Text { text: "플랫폼"; color: Theme.muted; font-size: 11px; }
-                                        ComboBox { min-width: 0px; model: ["SOOP", "CHZZK"]; current-index: row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
+                                        ComboBox { model: ["SOOP", "CHZZK"]; min-width: 0px; current-index: row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
                                     }
                                     VerticalLayout {
                                         width: 82px; spacing: 4px;
