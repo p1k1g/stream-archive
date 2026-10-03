@@ -70,6 +70,14 @@ impl PlatformProvider for SoopProvider {
         Ok(name.to_string())
     }
 
+    fn profile_image_url(&self, account: &str, _metadata: Option<&Value>) -> Result<Url> {
+        self.validate_account(account)?;
+        let prefix = &account[..account.len().min(2)];
+        Ok(Url::parse(&format!(
+            "https://stimg.sooplive.com/LOGO/{prefix}/{account}/{account}.jpg"
+        ))?)
+    }
+
     fn accepts_vod_url(&self, url: &Url) -> bool {
         matches!(
             url.host_str(),

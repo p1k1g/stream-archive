@@ -192,6 +192,13 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
             ..Default::default()
         },
         LiveChannelRow {
+            profile_image: slint::Image::from_rgba8(
+                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    &vec![128u8; 200 * 200 * 4],
+                    200,
+                    200,
+                ),
+            ),
             target: "SOOP:recording".into(),
             platform: "SOOP".into(),
             name: "녹화 중 채널".into(),

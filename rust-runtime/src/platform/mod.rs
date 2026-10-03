@@ -65,6 +65,7 @@ pub trait PlatformProvider: Send + Sync {
     fn validate_account(&self, account: &str) -> Result<()>;
     fn channel_lookup_request(&self, client: &Client, account: &str) -> RequestBuilder;
     fn parse_channel_name(&self, account: &str, value: &Value) -> Result<String>;
+    fn profile_image_url(&self, account: &str, metadata: Option<&Value>) -> Result<Url>;
     fn accepts_vod_url(&self, url: &Url) -> bool;
 }
 

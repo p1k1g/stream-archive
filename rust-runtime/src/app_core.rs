@@ -360,6 +360,15 @@ impl StreamArchiveCore {
         self.store.channels()
     }
 
+    /// Public profile image only; no credentials, persistence or watcher side effects.
+    pub async fn channel_profile(
+        &self,
+        platform: PlatformId,
+        account: &str,
+    ) -> Result<crate::profile_service::ProfileImage> {
+        crate::profile_service::load(platform, account).await
+    }
+
     pub async fn resolve_channel_name(
         &self,
         platform: PlatformId,

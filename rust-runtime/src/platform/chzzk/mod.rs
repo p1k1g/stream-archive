@@ -69,6 +69,25 @@ impl PlatformProvider for ChzzkProvider {
         Ok(name.to_string())
     }
 
+    fn profile_image_url(&self, account: &str, metadata: Option<&Value>) -> Result<Url> {
+        self.validate_account(account)?;
+        let value = metadata.ok_or_else(|| anyhow::anyhow!("CHZZK 채널 정보가 없습니다."))?;
+        self.parse_channel_name(account, value)?;
+        if !value
+            .pointer("/content/channelId")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.eq_ignore_ascii_case(account))
+        {
+            bail!("CHZZK 프로필 채널 ID가 요청과 다릅니다.");
+        }
+        Ok(Url::parse(
+            value
+                .pointer("/content/channelImageUrl")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        )?)
+    }
+
     fn accepts_vod_url(&self, url: &Url) -> bool {
         if !url
             .host_str()
