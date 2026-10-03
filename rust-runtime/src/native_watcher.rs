@@ -1629,7 +1629,7 @@ mod thumbnail_completion_tests {
         };
         let mut state = ChannelState::new(channel);
         state.last_broadcast_id = Some("123".into());
-        state.thumbnail_url = Some("https://liveimg.sooplive.com/m/123".into());
+        state.thumbnail_url = Some("https://fixture.invalid/thumbnail.jpg".into());
         state.recording_finished("123");
         let first = state.completion_revision;
         state.recording_finished("123");

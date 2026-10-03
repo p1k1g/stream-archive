@@ -588,12 +588,12 @@ export component MainWindow inherits Window {
                                         LineEdit { min-width: 0px; height: 34px; font-size: 13px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
                                     }
                                     VerticalLayout {
-                                        width: min(270px, 210px + max(0px, root.width - 1000px) * 0.5); spacing: 4px;
+                                        width: min(230px, 210px + max(0px, root.width - 1000px) / 6); spacing: 4px;
                                         Text { text: "계정 / 채널 ID"; color: Theme.muted; font-size: 12px; }
                                         LineEdit { min-width: 0px; height: 34px; font-size: 12px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
                                     }
                                     VerticalLayout {
-                                        min-width: 80px; horizontal-stretch: 2; spacing: 4px;
+                                        min-width: 120px; horizontal-stretch: 2; spacing: 4px;
                                         Text { text: "저장 폴더"; color: Theme.muted; font-size: 12px; }
                                         HorizontalLayout {
                                             spacing: 4px;

@@ -155,7 +155,10 @@ fn native_navigation_and_watcher_toggle_preserve_input_guards() {
 #[test]
 fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size() {
     use crate::{ChannelConfigRow, LiveChannelRow, StorageDisplayRow};
-    use std::{cell::RefCell, collections::BTreeSet};
+    use std::{
+        cell::RefCell,
+        collections::{BTreeMap, BTreeSet},
+    };
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(UiTestPlatform(window.clone()))).unwrap();
     let ui = MainWindow::new().unwrap();
@@ -230,8 +233,17 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
     state.on_live_open_folder(move |_| observed.set(observed.get() + 1));
     let picked_channels = Rc::new(RefCell::new(BTreeSet::new()));
     let observed = picked_channels.clone();
+    let pick_widths = Rc::new(RefCell::new(BTreeMap::<i32, BTreeSet<u32>>::new()));
+    let observed_widths = pick_widths.clone();
+    let pointer_x = Rc::new(Cell::new(0u32));
+    let observed_x = pointer_x.clone();
     state.on_channel_pick_output(move |index| {
         observed.borrow_mut().insert(index);
+        observed_widths
+            .borrow_mut()
+            .entry(index)
+            .or_default()
+            .insert(observed_x.get());
     });
     for (width, height) in [(1000, 650), (1120, 720), (1440, 900)] {
         ui.window().set_size(PhysicalSize::new(width, height));
@@ -317,8 +329,10 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
             32
         );
         picked_channels.borrow_mut().clear();
+        pick_widths.borrow_mut().clear();
         for y in (175..410).step_by(5) {
             for x in (width - 300..width - 15).step_by(5) {
+                pointer_x.set(x);
                 click(&ui, x as f32, y as f32);
             }
         }
@@ -327,6 +341,15 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
             BTreeSet::from([0, 1]),
             "{width}x{height}: both folder buttons must remain accessible"
         );
+        for index in [0, 1] {
+            assert!(
+                pick_widths
+                    .borrow()
+                    .get(&index)
+                    .is_some_and(|xs| xs.len() >= 12),
+                "{width}x{height}: folder button {index} must expose at least 60px of its width without overlapping another action"
+            );
+        }
         state.set_config_busy(true);
         picked_channels.borrow_mut().clear();
         render(&window, width as usize, height as usize);
