@@ -9,6 +9,12 @@ use platform::{PlatformId, default_platform, provider};
 
 pub async fn resolve_channel_name(account: &str) -> Result<String> {
     let account = account.trim();
+    if let Some(value) = account
+        .strip_prefix("KICK:")
+        .or_else(|| account.strip_prefix("kick:"))
+    {
+        return resolve_channel_name_for(PlatformId::Kick, value).await;
+    }
     if let Some(value) = account.strip_prefix("CHZZK:") {
         return resolve_channel_name_for(PlatformId::Chzzk, value).await;
     }

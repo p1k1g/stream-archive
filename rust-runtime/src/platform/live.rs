@@ -1,4 +1,4 @@
-use super::{PlatformId, chzzk, soop};
+use super::{PlatformId, chzzk, kick, soop};
 use anyhow::{Result, bail};
 use reqwest::Client;
 
@@ -17,6 +17,7 @@ impl LiveBroadcast {
         match &self.payload {
             BroadcastPayload::Soop(value) => soop::live::thumbnail_url(&value.bno),
             BroadcastPayload::Chzzk(value) => value.thumbnail_url.clone(),
+            BroadcastPayload::Kick(value) => value.thumbnail_url.clone(),
         }
     }
 }
@@ -25,6 +26,7 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
     match platform {
         PlatformId::Soop => soop::live::valid_thumbnail_url(url),
         PlatformId::Chzzk => chzzk::live::valid_thumbnail_url(url),
+        PlatformId::Kick => kick::live::valid_thumbnail_url(url),
     }
 }
 
@@ -32,6 +34,7 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
 pub(crate) enum BroadcastPayload {
     Soop(soop::live::SoopBroadcast),
     Chzzk(chzzk::live::ChzzkBroadcast),
+    Kick(kick::live::KickBroadcast),
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +79,7 @@ pub enum LiveProbe {
 pub enum LiveSession {
     Soop(soop::live::SoopLiveSession),
     Chzzk(chzzk::live::ChzzkLiveSession),
+    Kick(kick::live::KickLiveSession),
 }
 
 impl LiveSession {
@@ -83,6 +87,7 @@ impl LiveSession {
         match platform {
             PlatformId::Soop => Ok(Self::Soop(soop::live::SoopLiveSession::new(client))),
             PlatformId::Chzzk => Ok(Self::Chzzk(chzzk::live::ChzzkLiveSession::new(client))),
+            PlatformId::Kick => Ok(Self::Kick(kick::live::KickLiveSession::new(client))),
         }
     }
 
@@ -90,6 +95,7 @@ impl LiveSession {
         match self {
             Self::Soop(session) => session.login(username, password).await,
             Self::Chzzk(_) => bail!("CHZZK는 ID/PW 로그인을 사용하지 않습니다."),
+            Self::Kick(_) => bail!("KICK은 공개 LIVE만 지원하며 ID/PW 로그인을 사용하지 않습니다."),
         }
     }
 
@@ -97,6 +103,7 @@ impl LiveSession {
         match self {
             Self::Soop(session) => session.login(username, password).await,
             Self::Chzzk(session) => session.recover_auth(),
+            Self::Kick(session) => session.recover_auth(),
         }
     }
 
@@ -122,6 +129,16 @@ impl LiveSession {
                     title: value.title.clone(),
                     password_required: false,
                     payload: BroadcastPayload::Chzzk(value),
+                })),
+            },
+            Self::Kick(session) => match session.probe(account).await? {
+                kick::live::KickProbe::Offline => Ok(LiveProbe::Offline),
+                kick::live::KickProbe::Live(value) => Ok(LiveProbe::Live(LiveBroadcast {
+                    id: value.live_id.clone(),
+                    channel_name: value.channel_name.clone(),
+                    title: value.title.clone(),
+                    password_required: false,
+                    payload: BroadcastPayload::Kick(value),
                 })),
             },
         }
@@ -162,6 +179,12 @@ impl LiveSession {
                     input: stream.input,
                 })
             }
+            (Self::Kick(session), BroadcastPayload::Kick(value)) => Ok(ResolvedStream {
+                quality: "best".into(),
+                cdn: "streamlink-plugin".into(),
+                host: "kick.com".into(),
+                input: session.resolve_stream(account, value)?,
+            }),
             _ => bail!("LIVE 세션과 방송 payload 플랫폼이 일치하지 않습니다."),
         }
     }

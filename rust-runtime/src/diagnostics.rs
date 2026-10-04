@@ -765,6 +765,16 @@ fn provider_checks(
 
     vec![
         check!(
+            "provider.kick",
+            DiagnosticCategory::Providers,
+            DiagnosticRequirement::Informational,
+            "KICK LIVE 사용 조건",
+            DiagnosticStatus::Ok,
+            "공개 LIVE 지원 조건 안내 (연결 미검증)",
+            "KICK은 공개 LIVE만 지원합니다. 최신 Streamlink KICK 플러그인이 필요하며, JS challenge 처리에 Chromium 계열 브라우저가 필요할 수 있습니다. 이 항목은 연결 성공이나 브라우저 설치를 검증하지 않습니다.",
+            "API 403/429 또는 녹화 시작 실패 시 LIVE 상세 오류와 런타임 로그를 확인하세요. Streamlink·브라우저는 공식 패키지에 포함되지 않습니다.",
+        ),
+        check!(
             "provider.soop",
             DiagnosticCategory::Providers,
             DiagnosticRequirement::Optional,
