@@ -32,6 +32,11 @@ use stream_archive_server::{
 use vod_adapter::{AnalysisSync, VodDraft};
 
 enum Request {
+    VodThumbnail {
+        generation: u64,
+        job_id: String,
+        url: String,
+    },
     Thumbnail {
         token: u64,
         platform: PlatformId,
@@ -123,6 +128,12 @@ enum Request {
 }
 
 enum Response {
+    VodThumbnail {
+        generation: u64,
+        job_id: String,
+        url: String,
+        image: Option<stream_archive_server::thumbnail_service::ThumbnailImage>,
+    },
     Thumbnail {
         token: u64,
         image: Option<stream_archive_server::thumbnail_service::ThumbnailImage>,
@@ -574,6 +585,24 @@ fn worker_loop(
             break;
         }
         let response = match request {
+            Request::VodThumbnail {
+                generation,
+                job_id,
+                url,
+            } => {
+                let core = core.clone();
+                let responses = responses.clone();
+                runtime.spawn(async move {
+                    let image = core.vod_thumbnail(&job_id, &url).await.ok();
+                    let _ = responses.send(Response::VodThumbnail {
+                        generation,
+                        job_id,
+                        url,
+                        image,
+                    });
+                });
+                continue;
+            }
             Request::Thumbnail {
                 token,
                 platform,
@@ -1203,6 +1232,10 @@ fn render_vod_draft(ui: &MainWindow, draft: &VodDraft) {
     state.set_vod_part_rows(ModelRc::new(VecModel::from(parts)));
     state.set_vod_can_analyze(draft.can_analyze());
     state.set_vod_can_download(draft.can_download());
+    if !draft.analysis_matches_current_url() {
+        state.set_vod_thumbnail_image(slint::Image::default());
+        state.set_vod_thumbnail_job_id("".into());
+    }
 }
 
 fn render_vod_status(ui: &MainWindow, draft: &mut VodDraft, status: VodJobStatus) -> AnalysisSync {
@@ -2002,12 +2035,19 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let vod_sender = sender.clone();
     state.on_vod_analyze(move || {
         if let Some(ui) = weak.upgrade() {
+            if ui.global::<AppState>().get_vod_busy()
+                || ui.global::<AppState>().get_desktop_exit_pending()
+            {
+                return;
+            }
             let url = analyze_draft.borrow().url.trim().to_string();
             if url.is_empty() {
                 ui.global::<AppState>()
                     .set_vod_message("SOOP 또는 CHZZK VOD URL을 먼저 입력하세요.".into());
                 return;
             }
+            analyze_draft.borrow_mut().begin_analysis();
+            render_vod_draft(&ui, &analyze_draft.borrow());
             send_vod(&ui, &vod_sender, Request::VodAnalyze { url });
         }
     });
@@ -2464,6 +2504,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let thumbnail_tracking = Rc::new(Cell::new(false));
     let response_thumbnail_tracking = thumbnail_tracking.clone();
     let thumbnail_sender = sender.clone();
+    let mut vod_thumbnail_pending = false;
+    let mut vod_thumbnail_attempt: Option<(u64, String)> = None;
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
@@ -2472,6 +2514,16 @@ pub fn bind(ui: &MainWindow) -> Controller {
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
+                Response::VodThumbnail { generation, job_id, url, image } => {
+                    vod_thumbnail_pending = false;
+                    let draft = response_vod_draft.borrow();
+                    if draft.thumbnail_is_current(generation, &url)
+                        && state.get_vod_thumbnail_job_id().as_str() == job_id
+                        && let Some(image) = image {
+                            let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&image.rgba, image.width, image.height);
+                            state.set_vod_thumbnail_image(slint::Image::from_rgba8(pixels));
+                    }
+                }
                 Response::Thumbnail { token, image } => {
                     thumbnails.complete(token, image);
                     let rows: Vec<_> = state.get_live_rows().iter().map(|mut row| {
@@ -2726,12 +2778,28 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     message,
                     poll,
                 } => {
+                    let thumbnail_job = status.job_id.clone();
+                    let thumbnail_url = status.analysis.as_ref().filter(|analysis| analysis.thumbnail_url.is_some()).map(|analysis| analysis.vod_url.clone());
                     if poll {
                         response_vod_poll_flag.set(false);
                     } else {
                         state.set_vod_busy(false);
                     }
                     let sync = render_vod_status(&ui, &mut response_vod_draft.borrow_mut(), status);
+                    if sync != AnalysisSync::Stale
+                        && let (Some(job_id), Some(url)) = (thumbnail_job, thumbnail_url) {
+                            let generation = response_vod_draft.borrow().thumbnail_generation;
+                            let key = (generation, job_id.clone());
+                            if state.get_vod_thumbnail_job_id().as_str() != job_id {
+                                state.set_vod_thumbnail_image(slint::Image::default());
+                                state.set_vod_thumbnail_job_id(job_id.clone().into());
+                            }
+                            if !vod_thumbnail_pending && vod_thumbnail_attempt.as_ref() != Some(&key)
+                                && thumbnail_sender.send(Request::VodThumbnail { generation, job_id, url }).is_ok() {
+                                vod_thumbnail_pending = true;
+                                vod_thumbnail_attempt = Some(key);
+                            }
+                    }
                     if sync == AnalysisSync::Stale {
                         state.set_vod_message(
                             "이전 URL의 분석 결과는 무시했습니다. 현재 URL을 다시 분석하세요."

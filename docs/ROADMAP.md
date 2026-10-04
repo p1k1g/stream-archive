@@ -86,4 +86,6 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - Phase 25.2 ✅ UI 사용성 및 안정화 ([범위 및 수동 QA](PHASE25_2_UI_USABILITY.md))
 - Phase 25.3 ✅ LIVE 채널 프로필 이미지 ([범위 및 수동 QA](PHASE25_3_CHANNEL_PROFILE_IMAGES.md))
 
-- Phase 25.4 🚧 LIVE 방송 썸네일 / 플랫폼 로고 및 채널 폴더 선택 ([범위 및 수동 QA](PHASE25_4_LIVE_THUMBNAILS_FOLDER_PICKER.md))
+- Phase 25.4 ✅ LIVE 방송 썸네일 / 플랫폼 로고 및 채널 폴더 선택 ([범위 및 수동 QA](PHASE25_4_LIVE_THUMBNAILS_FOLDER_PICKER.md))
+- Phase 25.5 ✅ SOOP VOD 분석 및 인증 흐름 정리 ([범위 및 수동 QA](PHASE25_5_SOOP_VOD_STABILIZATION.md))
+- Phase 25.6 🚧 VOD 인증 만료 후 이어받기 및 분석 썸네일 ([범위 및 수동 QA](PHASE25_6_VOD_RESUME_THUMBNAILS.md))

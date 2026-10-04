@@ -316,12 +316,25 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
             let marker = Path::new(output).with_extension("retried");
             if !marker.exists() {
                 fs::write(marker, "first attempt").unwrap();
-                write_sized_file(Path::new(output), 1024);
-                eprintln!("fixture transient download failure");
+                fs::write(format!("{output}.part"), b"retained first fragments").unwrap();
+                fs::write(format!("{output}.ytdl"), b"fragment checkpoint 209").unwrap();
+                println!("[download] 20.9%");
+                eprintln!("HTTP Error 403: Forbidden (fixture expired authorization)");
                 process::exit(7);
             }
+            assert_eq!(fs::read(format!("{output}.part")).unwrap(), b"retained first fragments");
+            assert_eq!(fs::read(format!("{output}.ytdl")).unwrap(), b"fragment checkpoint 209");
+            assert!(has_arg(args, "--continue"));
+            fs::rename(format!("{output}.part"), output).unwrap();
+            fs::remove_file(format!("{output}.ytdl")).unwrap();
+            println!("[download] Resuming at fragment 209");
         }
-        write_sized_file(Path::new(output), 128 * 1024);
+        if mode == "single-video-retry" || mode == "single-video-signed-retry" {
+            use std::io::Write;
+            fs::OpenOptions::new().append(true).open(output).unwrap().write_all(&vec![b'A'; 128 * 1024]).unwrap();
+        } else {
+            write_sized_file(Path::new(output), 128 * 1024);
+        }
         println!("[download] 50.0%");
         println!("[download] 100.0%");
         return;

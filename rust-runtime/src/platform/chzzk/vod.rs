@@ -62,11 +62,19 @@ struct ChzzkTools {
 #[derive(Debug, Clone)]
 struct Metadata {
     title: String,
+    thumbnail_url: Option<String>,
     streamer: String,
     streamer_id: String,
     date: String,
     duration_seconds: u64,
     qualities: Vec<VodQualityOption>,
+}
+
+pub(crate) fn valid_thumbnail_url(url: &url::Url) -> bool {
+    matches!(
+        url.host_str(),
+        Some("nng-phinf.pstatic.net" | "video-phinf.pstatic.net")
+    ) || super::live::valid_thumbnail_url(url)
 }
 
 struct JobRuntime {
@@ -688,6 +696,12 @@ fn metadata_from_chzzk_content(content: &Value) -> Result<Metadata> {
         .unwrap_or_else(today_short_date);
     Ok(Metadata {
         title,
+        thumbnail_url: content
+            .get("thumbnailImageUrl")
+            .or_else(|| content.get("videoImageUrl"))
+            .and_then(Value::as_str)
+            .filter(|url| !url.trim().is_empty())
+            .map(str::to_string),
         streamer,
         streamer_id,
         date,
@@ -702,6 +716,7 @@ fn metadata_from_chzzk_content(content: &Value) -> Result<Metadata> {
 fn analysis_view(vod_url: &str, metadata: &Metadata) -> VodAnalysisView {
     VodAnalysisView {
         vod_url: vod_url.to_string(),
+        thumbnail_url: metadata.thumbnail_url.clone(),
         title: metadata.title.clone(),
         streamer: metadata.streamer.clone(),
         streamer_id: metadata.streamer_id.clone(),
@@ -1996,6 +2011,7 @@ mod tests {
         let content = serde_json::json!({
             "videoTitle": "테스트 VOD",
             "duration": 29856,
+            "thumbnailImageUrl": "https://video-phinf.pstatic.net/fixture.jpg",
             "publishDate": "2026-09-13 10:00:00",
             "channel": {
                 "channelName": "테스트 채널",
@@ -2010,6 +2026,10 @@ mod tests {
         let view = analysis_view("https://chzzk.naver.com/video/15185683", &metadata);
         assert_eq!(view.part_count, 1);
         assert_eq!(view.parts[0].duration_seconds, 29856);
+        assert_eq!(
+            view.thumbnail_url.as_deref(),
+            Some("https://video-phinf.pstatic.net/fixture.jpg")
+        );
     }
 
     #[test]
@@ -2323,6 +2343,7 @@ mod provider_e2e {
         let req = request(&output_dir, &ffmpeg);
         let metadata = Metadata {
             title: "Fixture CHZZK VOD".into(),
+            thumbnail_url: None,
             streamer: "Fixture Channel".into(),
             streamer_id: "fixture-channel".into(),
             date: "260923".into(),

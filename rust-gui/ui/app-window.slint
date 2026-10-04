@@ -202,6 +202,8 @@ export global AppState {
     in-out property <string> vod-message: "VOD 런타임을 불러오는 중...";
     in-out property <string> vod-runtime-message: "";
     in-out property <string> vod-title: "";
+    in-out property <image> vod-thumbnail-image;
+    in-out property <string> vod-thumbnail-job-id: "";
     in-out property <string> vod-streamer: "";
     in-out property <string> vod-streamer-id: "";
     in-out property <string> vod-current-part: "0";
@@ -679,12 +681,30 @@ export component MainWindow inherits Window {
                                 border-radius: 8px;
                                 border-width: 1px;
                                 border-color: Theme.border;
-                                content-3 := VerticalLayout {
+                                content-3 := HorizontalLayout {
                                     padding: 11px;
-                                    spacing: 4px;
-                                    Text { text: AppState.vod-title != "" ? AppState.vod-title : "VOD 정보"; color: Theme.text; font-size: 15px; font-weight: 700; wrap: word-wrap; }
-                                    Text { text: "스트리머: " + AppState.vod-streamer + (AppState.vod-streamer-id != "" ? "  ·  " + AppState.vod-streamer-id : ""); color: Theme.muted; font-size: 11px; wrap: word-wrap; }
-                                    Text { text: "PART 수: " + AppState.vod-part-count; color: Theme.muted; font-size: 11px; }
+                                    spacing: 12px;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: 4px;
+                                        Text { text: AppState.vod-title != "" ? AppState.vod-title : "VOD 정보"; color: Theme.text; font-size: 15px; font-weight: 700; wrap: word-wrap; }
+                                        Text { text: "스트리머: " + AppState.vod-streamer + (AppState.vod-streamer-id != "" ? "  ·  " + AppState.vod-streamer-id : ""); color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                                        Text { text: "PART 수: " + AppState.vod-part-count; color: Theme.muted; font-size: 11px; }
+                                    }
+                                    Rectangle {
+                                        width: 136px; height: 76.5px;
+                                        horizontal-stretch: 0;
+                                        background: Theme.raised; border-radius: 6px; clip: true;
+                                        if AppState.vod-thumbnail-image.width > 0: Image {
+                                            width: parent.width; height: parent.height;
+                                            source: AppState.vod-thumbnail-image; image-fit: contain;
+                                        }
+                                        if AppState.vod-thumbnail-image.width == 0: Image {
+                                            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                            width: 40px; height: 40px; image-fit: contain;
+                                            source: AppState.vod-platform == "CHZZK" ? @image-url("../assets/platform-chzzk.png") : @image-url("../assets/platform-soop.png");
+                                        }
+                                    }
                                 }
                             }
 

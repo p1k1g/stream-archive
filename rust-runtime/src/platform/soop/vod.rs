@@ -64,6 +64,7 @@ struct Tools {
 #[derive(Debug, Clone)]
 struct VodMetadata {
     title: String,
+    thumbnail_url: Option<String>,
     streamer: String,
     streamer_id: String,
     date: String,
@@ -75,6 +76,19 @@ struct VodMetadata {
 struct VodEntry {
     manifest_url: String,
     duration_seconds: u64,
+}
+
+struct PartialDownloadGuard {
+    output: PathBuf,
+    completed: bool,
+}
+
+impl Drop for PartialDownloadGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            cleanup_incomplete(&self.output);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -560,8 +574,14 @@ async fn run_download(
             ),
             ".mp4",
         )?;
+        let mut partial = PartialDownloadGuard {
+            output: output.clone(),
+            completed: false,
+        };
         let mut complete = false;
         let mut last_error = String::new();
+        let mut expired_download_auth = false;
+        let mut resume_identity: Option<(String, usize, String)> = None;
         for attempt in 1..=req.max_retries {
             if cancel.load(Ordering::SeqCst) {
                 cleanup_incomplete(&output);
@@ -601,6 +621,40 @@ async fn run_download(
                 .map(|e| e.manifest_url.clone())
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| anyhow!("PART {part} URL이 없습니다."))?;
+            let mut media_url = Url::parse(&url)?;
+            media_url.set_query(None);
+            media_url.set_fragment(None);
+            let identity = (
+                refreshed.streamer_id.clone(),
+                refreshed.entries.len(),
+                media_url.to_string(),
+            );
+            if resume_identity
+                .as_ref()
+                .is_some_and(|previous| previous != &identity)
+            {
+                bail!(
+                    "PART {part} 영상 주소나 목록이 변경되어 기존 조각을 안전하게 이어받을 수 없습니다. 다시 분석해 주세요."
+                );
+            }
+            resume_identity = Some(identity);
+            if expired_download_auth
+                && refreshed.requires_private_auth
+                && jar.has_login()
+                && let Err(error) = refresh_authorization(
+                    &req.vod_url,
+                    &refreshed.streamer_id,
+                    &url,
+                    &mut jar,
+                    attempt,
+                    logs,
+                )
+                .await
+            {
+                last_error = error.to_string();
+                sleep_retry(attempt, cancel).await;
+                continue;
+            }
             if let Err(err) =
                 prepare_manifest(&req.vod_url, &refreshed, &url, &mut jar, attempt, logs).await
             {
@@ -638,6 +692,7 @@ async fn run_download(
                     files.push(output.clone());
                     last_error.clear();
                     complete = true;
+                    partial.completed = true;
                     break;
                 }
                 Ok(()) => {
@@ -646,7 +701,11 @@ async fn run_download(
                 }
                 Err(err) => {
                     last_error = err.to_string();
-                    cleanup_incomplete(&output);
+                    expired_download_auth = download_authorization_expired(&last_error);
+                    // A nonzero postprocessor exit may leave a corrupt final file.
+                    // Keep fragment checkpoints, but never let --no-overwrites
+                    // mistake that failed final output for a successful download.
+                    let _ = fs::remove_file(&output);
                     logs.push(format!(
                         "[VOD:WARN] PART {part} retry {attempt}/{}: {}",
                         req.max_retries,
@@ -687,6 +746,12 @@ async fn run_download(
     logs.push(format!("[VOD] completed file={}", final_file.display()))
         .await;
     Ok(())
+}
+
+fn download_authorization_expired(error: &str) -> bool {
+    Regex::new(r"(?i)(?:HTTP(?: Error| status)?[:\s]+(?:401|403)\b|\bForbidden\b|\bUnauthorized\b)")
+        .unwrap()
+        .is_match(error)
 }
 
 async fn init_cookie(
@@ -1022,6 +1087,8 @@ fn parse_metadata(info: &Value) -> Result<VodMetadata> {
         .collect();
     Ok(VodMetadata {
         title,
+        thumbnail_url: extractor_thumbnail(info)
+            .or_else(|| entries.iter().find_map(|entry| extractor_thumbnail(entry))),
         streamer,
         streamer_id,
         date,
@@ -1042,6 +1109,31 @@ fn extractor_requires_private_auth(value: &Value) -> bool {
                 .and_then(Value::as_array)
                 .is_some_and(|formats| formats.iter().any(extractor_requires_private_auth))
         })
+}
+
+pub(crate) fn valid_thumbnail_url(url: &Url) -> bool {
+    matches!(
+        url.host_str(),
+        Some(
+            "videoimg.sooplive.com"
+                | "stimg.sooplive.com"
+                | "videoimg.sooplive.co.kr"
+                | "stimg.sooplive.co.kr"
+                | "videoimg.afreecatv.com"
+                | "stimg.afreecatv.com"
+        )
+    )
+}
+
+fn extractor_thumbnail(value: &Value) -> Option<String> {
+    str_field(value, "thumbnail").or_else(|| {
+        value
+            .get("thumbnails")?
+            .as_array()?
+            .iter()
+            .rev()
+            .find_map(|item| str_field(item, "url"))
+    })
 }
 
 async fn load_metadata(
@@ -1155,6 +1247,9 @@ fn complete_api_metadata(mut metadata: VodMetadata, api: VodMetadata) -> VodMeta
         }
     }
     metadata.requires_private_auth |= api.requires_private_auth;
+    if metadata.thumbnail_url.is_none() {
+        metadata.thumbnail_url = api.thumbnail_url;
+    }
     metadata
 }
 
@@ -1236,6 +1331,7 @@ fn parse_api_metadata(value: &Value) -> Result<VodMetadata> {
         .unwrap_or_else(|| Utc::now().format("%y%m%d").to_string());
     Ok(VodMetadata {
         title: str_field(data, "title").unwrap_or_else(|| "UNKNOWN".into()),
+        thumbnail_url: str_field(data, "thumb"),
         streamer: str_field(data, "writer_nick").unwrap_or_else(|| streamer_id.clone()),
         streamer_id,
         date,
@@ -1396,7 +1492,7 @@ async fn run_progress(
     let err_lines = Arc::new(Mutex::new(Vec::<String>::new()));
     let err_copy = err_lines.clone();
     let log_copy = logs.clone();
-    tokio::spawn(async move {
+    let mut stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let redacted = redact(&line);
@@ -1415,6 +1511,7 @@ async fn run_progress(
     loop {
         if cancel.load(Ordering::SeqCst) {
             owned_tree.terminate(&mut child).await?;
+            stderr_task.abort();
             return Ok(());
         }
         tokio::select! {
@@ -1434,6 +1531,13 @@ async fn run_progress(
         }
         if let Some(exit) = child.try_wait()? {
             owned_tree.terminate_now()?;
+            // Include the terminal HTTP/auth failure before classifying retry.
+            if tokio::time::timeout(Duration::from_secs(2), &mut stderr_task)
+                .await
+                .is_err()
+            {
+                stderr_task.abort();
+            }
             if exit.success() {
                 return Ok(());
             }
@@ -1663,6 +1767,7 @@ fn analysis_view(
 ) -> VodAnalysisView {
     VodAnalysisView {
         vod_url: url.into(),
+        thumbnail_url: metadata.thumbnail_url.clone(),
         title: metadata.title.clone(),
         streamer: metadata.streamer.clone(),
         streamer_id: metadata.streamer_id.clone(),
@@ -2048,6 +2153,51 @@ fn ffconcat_line(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn download_auth_error_classification_and_terminal_partial_cleanup() {
+        assert!(download_authorization_expired(
+            "yt-dlp exit=1: HTTP Error 403: Forbidden"
+        ));
+        assert!(download_authorization_expired("HTTP 401 Unauthorized"));
+        assert!(!download_authorization_expired(
+            "HTTP Error 500: server error"
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("owned.mp4");
+        let part = output.with_extension("mp4.part");
+        let checkpoint = output.with_extension("mp4.ytdl");
+        fs::write(&part, b"fragments").unwrap();
+        fs::write(&checkpoint, b"209").unwrap();
+        {
+            let _guard = PartialDownloadGuard {
+                output,
+                completed: false,
+            };
+        }
+        assert!(!part.exists());
+        assert!(!checkpoint.exists());
+    }
+
+    #[test]
+    fn analysis_thumbnail_uses_extractor_or_api_without_changing_download_metadata() {
+        let metadata = parse_metadata(&serde_json::json!({
+            "title": "영상", "uploader_id": "fixture", "url": "https://cdn.example/master.m3u8", "duration": 60,
+            "thumbnails": [{"url": "https://videoimg.sooplive.com/thumb.php?id=123"}]
+        })).unwrap();
+        assert_eq!(
+            analysis_view("https://vod.sooplive.com/player/123", &metadata, vec![])
+                .thumbnail_url
+                .as_deref(),
+            Some("https://videoimg.sooplive.com/thumb.php?id=123")
+        );
+        let mut api = api_fixture();
+        api["data"]["thumb"] = serde_json::json!("https://stimg.sooplive.com/a.jpg");
+        assert_eq!(
+            parse_api_metadata(&api).unwrap().thumbnail_url.as_deref(),
+            Some("https://stimg.sooplive.com/a.jpg")
+        );
+    }
+
     #[tokio::test]
     async fn restore_epoch_blocks_a_result_waiting_after_idle_is_observable() {
         let dir = tempfile::tempdir().unwrap();
@@ -2666,6 +2816,11 @@ mod provider_e2e {
             assert!(Path::new(state.output_file.as_deref().unwrap()).is_file());
             if mode.ends_with("-retry") {
                 assert!(fixture.invocations().matches("--dump-single-json").count() >= 4);
+                assert!(
+                    fs::read(state.output_file.as_deref().unwrap())
+                        .unwrap()
+                        .starts_with(b"retained first fragments")
+                );
             }
         }
     }
@@ -2753,6 +2908,7 @@ mod provider_e2e {
         };
         let metadata = VodMetadata {
             title: "Fixture".into(),
+            thumbnail_url: None,
             streamer: "FixtureBJ".into(),
             streamer_id: "fixture".into(),
             date: "260923".into(),
