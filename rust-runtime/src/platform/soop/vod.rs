@@ -460,8 +460,7 @@ async fn run_analysis(
     if first.is_empty() {
         bail!("첫 번째 PART manifest URL이 없습니다.");
     }
-    let qualities =
-        prepare_manifest(&req.vod_url, &metadata, &first, &mut jar, 1, false, logs).await?;
+    let qualities = prepare_manifest(&req.vod_url, &metadata, &first, &mut jar, 1, logs).await?;
     jar.write_file(&cookie_file)?;
     let view = analysis_view(&req.vod_url, &metadata, qualities);
     {
@@ -602,16 +601,8 @@ async fn run_download(
                 .map(|e| e.manifest_url.clone())
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| anyhow!("PART {part} URL이 없습니다."))?;
-            if let Err(err) = prepare_manifest(
-                &req.vod_url,
-                &refreshed,
-                &url,
-                &mut jar,
-                attempt,
-                attempt > 1,
-                logs,
-            )
-            .await
+            if let Err(err) =
+                prepare_manifest(&req.vod_url, &refreshed, &url, &mut jar, attempt, logs).await
             {
                 last_error = err.to_string();
                 logs.push(format!(
@@ -932,20 +923,18 @@ async fn probe_manifest(
 
 // Metadata from the authorized provider/extractor decides whether signed
 // cookies are required. A public HLS response must not require private_auth.
-#[allow(clippy::too_many_arguments)]
 async fn prepare_manifest(
     vod_url: &str,
     metadata: &VodMetadata,
     url: &str,
     jar: &mut CookieJar,
     attempt: u32,
-    force_refresh: bool,
     logs: &LogBuffer,
 ) -> Result<Vec<VodQualityOption>> {
     if jar.has_cloudfront() {
         jar.repair_cloudfront_scope(url)?;
     }
-    if metadata.requires_private_auth && (!jar.has_cloudfront() || force_refresh) {
+    if metadata.requires_private_auth && !jar.has_cloudfront() {
         if !jar.has_login() {
             bail!(
                 "구독 VOD 인증을 갱신할 수 없습니다. 구독 계정으로 로그인하거나 새 signed Cookie 파일을 선택해 주세요."
@@ -2237,7 +2226,6 @@ mod tests {
             manifest.url(),
             &mut jar,
             2,
-            true,
             &LogBuffer::new(),
         )
         .await
@@ -2303,7 +2291,6 @@ mod tests {
             manifest.url(),
             &mut CookieJar::default(),
             1,
-            false,
             &LogBuffer::new(),
         )
         .await
@@ -2335,7 +2322,6 @@ mod tests {
                 manifest.url(),
                 &mut CookieJar::default(),
                 1,
-                false,
                 &LogBuffer::new(),
             )
             .await
@@ -2404,7 +2390,12 @@ mod provider_e2e {
 
     #[tokio::test]
     async fn single_part_public_and_subscriber_cookie_refresh_complete_full_pipeline() {
-        for mode in ["single-video", "single-video-signed", "single-video-retry"] {
+        for mode in [
+            "single-video",
+            "single-video-signed",
+            "single-video-retry",
+            "single-video-signed-retry",
+        ] {
             let fixture = ProviderFixture::new();
             let manifest = crate::test_support::LocalManifestServer::start();
             let yt_dlp = fixture.tool(ToolKind::YtDlp);
@@ -2439,7 +2430,7 @@ mod provider_e2e {
             let output = fixture.root().join("out");
             let mut req = request(&output, &yt_dlp, &ffmpeg);
             req.cookie_file = cookie.display().to_string();
-            if mode == "single-video-retry" {
+            if mode.ends_with("-retry") {
                 req.max_retries = 2;
             }
             run_download(
@@ -2454,7 +2445,7 @@ mod provider_e2e {
             let state = status.read().await;
             assert_eq!(state.state, "COMPLETED", "{mode}: {}", state.message);
             assert!(Path::new(state.output_file.as_deref().unwrap()).is_file());
-            if mode == "single-video-retry" {
+            if mode.ends_with("-retry") {
                 assert!(fixture.invocations().matches("--dump-single-json").count() >= 4);
             }
         }

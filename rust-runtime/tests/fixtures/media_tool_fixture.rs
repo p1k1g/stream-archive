@@ -296,7 +296,7 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
             println!(r#"{{"title":"Fixture VOD","uploader":"Fixture BJ","uploader_id":"fixture","upload_date":"20260923","formats":[{{"manifest_url":"{manifest}"}}],"duration":60}}"#);
             return;
         }
-        if mode == "single-video-signed" {
+        if mode == "single-video-signed" || mode == "single-video-signed-retry" {
             let cookie_path = arg_after(args, "--cookies").unwrap();
             fs::write(cookie_path, concat!("# Netscape HTTP Cookie File\n",
                 "fixture.invalid\tFALSE\t/\tFALSE\t4102444800\tCloudFront-Key-Pair-Id\tkey\n",
@@ -312,7 +312,7 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
     }
 
     if let Some(output) = arg_after(args, "-o") {
-        if mode == "single-video-retry" {
+        if mode == "single-video-retry" || mode == "single-video-signed-retry" {
             let marker = Path::new(output).with_extension("retried");
             if !marker.exists() {
                 fs::write(marker, "first attempt").unwrap();
