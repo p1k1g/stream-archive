@@ -140,6 +140,13 @@ pub(crate) struct LocalManifestServer {
 
 impl LocalManifestServer {
     pub(crate) fn start() -> Self {
+        Self::start_with_response(
+            200,
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080\nfixture.ts\n",
+        )
+    }
+
+    pub(crate) fn start_with_response(status: u16, body: &str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind local manifest fixture");
         let address = listener
             .local_addr()
@@ -149,19 +156,37 @@ impl LocalManifestServer {
             .expect("configure local manifest fixture");
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
+        let body = body.to_owned();
         let thread = thread::spawn(move || {
-            let body =
-                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080\nfixture.ts\n";
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         if thread_stop.load(Ordering::Acquire) {
                             break;
                         }
-                        let mut request = [0u8; 4096];
-                        let _ = stream.read(&mut request);
+                        // Accepted sockets may inherit nonblocking mode on some
+                        // systems. Never send a response before the GET headers
+                        // have arrived; partial reads otherwise race Hyper.
+                        if stream.set_nonblocking(false).is_err()
+                            || stream
+                                .set_read_timeout(Some(Duration::from_secs(2)))
+                                .is_err()
+                        {
+                            continue;
+                        }
+                        let mut request = Vec::new();
+                        let mut chunk = [0u8; 1024];
+                        while request.len() < 16 * 1024 && !request.ends_with(b"\r\n\r\n") {
+                            match stream.read(&mut chunk) {
+                                Ok(0) | Err(_) => break,
+                                Ok(size) => request.extend_from_slice(&chunk[..size]),
+                            }
+                        }
+                        if !request.ends_with(b"\r\n\r\n") {
+                            continue;
+                        }
                         let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            "HTTP/1.1 {status} Fixture\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             body.len(),
                             body
                         );

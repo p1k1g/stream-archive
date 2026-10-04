@@ -13,7 +13,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use regex::Regex;
 use reqwest::{
-    Client, Response,
+    Client, Response, StatusCode,
     header::{COOKIE, REFERER, SET_COOKIE},
 };
 use serde_json::Value;
@@ -68,6 +68,7 @@ struct VodMetadata {
     streamer_id: String,
     date: String,
     entries: Vec<VodEntry>,
+    requires_private_auth: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -190,10 +191,13 @@ impl CookieJar {
     }
 
     fn has_cloudfront(&self) -> bool {
+        let now = Utc::now().timestamp();
         CF_NAMES.iter().all(|name| {
-            self.items
-                .iter()
-                .any(|c| c.name.eq_ignore_ascii_case(name) && !c.value.is_empty())
+            self.items.iter().any(|c| {
+                c.name.eq_ignore_ascii_case(name)
+                    && !c.value.is_empty()
+                    && (c.expires <= 0 || c.expires >= now)
+            })
         })
     }
 
@@ -203,23 +207,6 @@ impl CookieJar {
                 .iter()
                 .any(|c| c.name.eq_ignore_ascii_case(name) && !c.value.is_empty())
         })
-    }
-
-    fn cloudfront_header(&self) -> Result<String> {
-        let mut map = HashMap::new();
-        for c in &self.items {
-            if CF_NAMES.iter().any(|n| c.name.eq_ignore_ascii_case(n)) {
-                map.insert(c.name.to_ascii_lowercase(), c.value.clone());
-            }
-        }
-        let mut parts = Vec::new();
-        for name in CF_NAMES {
-            let value = map
-                .get(&name.to_ascii_lowercase())
-                .ok_or_else(|| anyhow!("{name} Cookie가 없습니다."))?;
-            parts.push(format!("{name}={value}"));
-        }
-        Ok(parts.join("; "))
     }
 
     fn repair_cloudfront_scope(&mut self, manifest_url: &str) -> Result<()> {
@@ -462,10 +449,8 @@ async fn run_analysis(
     .await?;
     let cookie_file = job_dir.join("cookies.txt");
     jar.write_file(&cookie_file)?;
-    let mut metadata = get_metadata(&tools, &req.vod_url, &cookie_file, cancel, logs).await?;
-    complete_metadata_from_api(&req.vod_url, &mut metadata, &jar)
-        .await
-        .ok();
+    let metadata =
+        load_metadata(&tools, &req.vod_url, &cookie_file, &mut jar, cancel, logs).await?;
     let first = metadata
         .entries
         .first()
@@ -475,20 +460,7 @@ async fn run_analysis(
     if first.is_empty() {
         bail!("첫 번째 PART manifest URL이 없습니다.");
     }
-    if !jar.has_cloudfront() {
-        refresh_authorization(
-            &req.vod_url,
-            &metadata.streamer_id,
-            &first,
-            &mut jar,
-            1,
-            logs,
-        )
-        .await?;
-    } else {
-        jar.repair_cloudfront_scope(&first)?;
-    }
-    let qualities = probe_manifest(&req.vod_url, &first, &jar).await?;
+    let qualities = prepare_manifest(&req.vod_url, &metadata, &first, &mut jar, 1, logs).await?;
     jar.write_file(&cookie_file)?;
     let view = analysis_view(&req.vod_url, &metadata, qualities);
     {
@@ -556,10 +528,8 @@ async fn run_download(
     .await?;
     let cookie_file = job_dir.join("cookies.txt");
     jar.write_file(&cookie_file)?;
-    let mut metadata = get_metadata(&tools, &req.vod_url, &cookie_file, cancel, logs).await?;
-    complete_metadata_from_api(&req.vod_url, &mut metadata, &jar)
-        .await
-        .ok();
+    let metadata =
+        load_metadata(&tools, &req.vod_url, &cookie_file, &mut jar, cancel, logs).await?;
     let selected = resolve_parts(&req.parts, metadata.entries.len())?;
     {
         let mut s = status.write().await;
@@ -623,48 +593,17 @@ async fn run_download(
                     req.max_retries
                 );
             }
-            let mut refreshed =
-                get_metadata(&tools, &req.vod_url, &cookie_file, cancel, logs).await?;
-            complete_metadata_from_api(&req.vod_url, &mut refreshed, &jar)
-                .await
-                .ok();
+            let refreshed =
+                load_metadata(&tools, &req.vod_url, &cookie_file, &mut jar, cancel, logs).await?;
             let url = refreshed
                 .entries
                 .get(part - 1)
                 .map(|e| e.manifest_url.clone())
                 .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    metadata
-                        .entries
-                        .get(part - 1)
-                        .map(|e| e.manifest_url.clone())
-                        .filter(|s| !s.is_empty())
-                })
                 .ok_or_else(|| anyhow!("PART {part} URL이 없습니다."))?;
-            if attempt == 1 && jar.has_cloudfront() {
-                jar.repair_cloudfront_scope(&url)?;
-            } else {
-                if req.cookie_mode.eq_ignore_ascii_case("FILE") && !jar.has_login() {
-                    last_error = "CloudFront Cookie가 만료되었습니다. 새 signed Cookie 파일 또는 재사용 가능한 SOOP 로그인 Cookie가 필요합니다.".into();
-                    break;
-                }
-                jar.remove_cloudfront();
-                if let Err(err) = refresh_authorization(
-                    &req.vod_url,
-                    &refreshed.streamer_id,
-                    &url,
-                    &mut jar,
-                    attempt,
-                    logs,
-                )
-                .await
-                {
-                    last_error = err.to_string();
-                    sleep_retry(attempt, cancel).await;
-                    continue;
-                }
-            }
-            if let Err(err) = probe_manifest(&req.vod_url, &url, &jar).await {
+            if let Err(err) =
+                prepare_manifest(&req.vod_url, &refreshed, &url, &mut jar, attempt, logs).await
+            {
                 last_error = err.to_string();
                 logs.push(format!(
                     "[VOD:WARN] PART {part} manifest/auth retry {attempt}/{}: {}",
@@ -918,21 +857,49 @@ async fn probe_manifest(
     jar: &CookieJar,
 ) -> Result<Vec<VodQualityOption>> {
     let client = http_client()?;
-    let cookie = jar.cloudfront_header()?;
-    let response = client
+    let cookie = jar.header_for(url)?;
+    let mut request = client
         .get(url)
         .header(REFERER, vod_url)
-        .header("Origin", "https://vod.sooplive.com")
-        .header(COOKIE, cookie)
+        .header("Origin", "https://vod.sooplive.com");
+    let direct_mp4 = Url::parse(url)?
+        .path()
+        .to_ascii_lowercase()
+        .ends_with(".mp4");
+    if direct_mp4 {
+        request = request.header(reqwest::header::RANGE, "bytes=0-63");
+    }
+    if !cookie.is_empty() {
+        request = request.header(COOKIE, cookie);
+    }
+    let mut response = request
         .send()
-        .await?;
-    let response_status = response.status();
-    let text = response.text().await.unwrap_or_default();
-    if !response_status.is_success() {
-        bail!(
-            "manifest authorization check failed: HTTP {response_status}, host={}",
-            Url::parse(url)?.host_str().unwrap_or("")
-        );
+        .await?
+        .error_for_status()
+        .map_err(|error| error.without_url())?;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > 1024 * 1024 {
+            bail!("VOD manifest가 최대 크기(1 MiB)를 초과했습니다.");
+        }
+        body.extend_from_slice(&chunk);
+        if direct_mp4 && body.len() >= 12 {
+            if body.get(4..8) != Some(b"ftyp") {
+                bail!("영상 주소가 정상 MP4 파일을 반환하지 않았습니다.");
+            }
+            return Ok(vec![VodQualityOption {
+                value: "best".into(),
+                label: "최고 화질 (자동)".into(),
+            }]);
+        }
+    }
+    let text = String::from_utf8(body).context("VOD manifest가 올바른 UTF-8 텍스트가 아닙니다.")?;
+    if !text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with("#EXTM3U")
+    {
+        bail!("영상 주소가 정상 HLS manifest를 반환하지 않았습니다.");
     }
     let mut heights = Regex::new(r"RESOLUTION=\d+x(?P<h>\d+)")
         .unwrap()
@@ -954,6 +921,49 @@ async fn probe_manifest(
     Ok(out)
 }
 
+// Metadata from the authorized provider/extractor decides whether signed
+// cookies are required. A public HLS response must not require private_auth.
+async fn prepare_manifest(
+    vod_url: &str,
+    metadata: &VodMetadata,
+    url: &str,
+    jar: &mut CookieJar,
+    attempt: u32,
+    logs: &LogBuffer,
+) -> Result<Vec<VodQualityOption>> {
+    if jar.has_cloudfront() {
+        jar.repair_cloudfront_scope(url)?;
+    }
+    if metadata.requires_private_auth && !jar.has_cloudfront() {
+        if !jar.has_login() {
+            bail!(
+                "구독 VOD 인증을 갱신할 수 없습니다. 구독 계정으로 로그인하거나 새 signed Cookie 파일을 선택해 주세요."
+            );
+        }
+        refresh_authorization(vod_url, &metadata.streamer_id, url, jar, attempt, logs).await?;
+    }
+    match probe_manifest(vod_url, url, jar).await {
+        Ok(qualities) => Ok(qualities),
+        Err(error)
+            if error
+                .downcast_ref::<reqwest::Error>()
+                .and_then(|e| e.status())
+                .is_some_and(|s| {
+                    s == reqwest::StatusCode::UNAUTHORIZED || s == reqwest::StatusCode::FORBIDDEN
+                }) =>
+        {
+            if !jar.has_login() {
+                bail!(
+                    "영상 접근 인증이 만료되었거나 권한이 없습니다. SOOP 로그인 또는 Cookie를 확인해 주세요."
+                );
+            }
+            refresh_authorization(vod_url, &metadata.streamer_id, url, jar, attempt, logs).await?;
+            probe_manifest(vod_url, url, jar).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
 async fn get_metadata(
     tools: &Tools,
     vod_url: &str,
@@ -972,23 +982,30 @@ async fn get_metadata(
     ];
     let output = run_capture(&tools.yt_dlp, &args, cancel, logs, "yt-dlp metadata").await?;
     let info: Value = serde_json::from_str(&output).context("VOD JSON 파싱 실패")?;
-    let entries = info
-        .get("entries")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("VOD PART를 찾지 못했습니다."))?;
+    parse_metadata(&info)
+}
+
+fn parse_metadata(info: &Value) -> Result<VodMetadata> {
+    // Current yt-dlp returns a video object for one PART, a playlist for many.
+    let entries = match info.get("entries") {
+        Some(Value::Array(entries)) => entries.iter().collect::<Vec<_>>(),
+        Some(_) => bail!("yt-dlp VOD PART 목록 형식이 올바르지 않습니다."),
+        None if !entry_url(info).is_empty() => vec![info],
+        None => bail!("yt-dlp 결과에 재생 가능한 VOD PART가 없습니다."),
+    };
     if entries.is_empty() {
         bail!("VOD PART를 찾지 못했습니다.");
     }
-    let streamer_id = str_field(&info, "uploader_id")
+    let streamer_id = str_field(info, "uploader_id")
         .or_else(|| entries.first().and_then(|v| str_field(v, "uploader_id")))
         .ok_or_else(|| anyhow!("VOD BJ ID를 찾지 못했습니다."))?;
-    let streamer = str_field(&info, "uploader")
+    let streamer = str_field(info, "uploader")
         .or_else(|| entries.first().and_then(|v| str_field(v, "uploader")))
         .unwrap_or_else(|| streamer_id.clone());
-    let title = str_field(&info, "title")
+    let title = str_field(info, "title")
         .or_else(|| entries.first().and_then(|v| str_field(v, "title")))
         .unwrap_or_else(|| "UNKNOWN".into());
-    let raw_date = str_field(&info, "upload_date")
+    let raw_date = str_field(info, "upload_date")
         .or_else(|| entries.first().and_then(|v| str_field(v, "upload_date")))
         .unwrap_or_else(|| Utc::now().format("%Y%m%d").to_string());
     let date = if raw_date.len() == 8 && raw_date.chars().all(|c| c.is_ascii_digit()) {
@@ -1009,26 +1026,145 @@ async fn get_metadata(
         streamer_id,
         date,
         entries: parsed,
+        requires_private_auth: extractor_requires_private_auth(info)
+            || entries
+                .iter()
+                .any(|entry| extractor_requires_private_auth(entry)),
     })
 }
 
-async fn complete_metadata_from_api(
+fn extractor_requires_private_auth(value: &Value) -> bool {
+    value.get("protocol").and_then(Value::as_str) == Some("soopvod")
+        || value.get("_cookie_refresh_params").is_some()
+        || ["formats", "requested_formats"].iter().any(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_array)
+                .is_some_and(|formats| formats.iter().any(extractor_requires_private_auth))
+        })
+}
+
+async fn load_metadata(
+    tools: &Tools,
     vod_url: &str,
-    metadata: &mut VodMetadata,
-    jar: &CookieJar,
-) -> Result<()> {
-    if metadata
+    cookie_file: &Path,
+    jar: &mut CookieJar,
+    cancel: &AtomicBool,
+    logs: &LogBuffer,
+) -> Result<VodMetadata> {
+    let extracted = get_metadata(tools, vod_url, cookie_file, cancel, logs).await;
+    if cancel.load(Ordering::SeqCst) {
+        bail!("VOD 분석이 취소되었습니다.");
+    }
+    // yt-dlp can acquire fresh signed cookies while extracting a subscriber VOD.
+    // Keep those cookies instead of overwriting them with the pre-extraction jar.
+    *jar = CookieJar::parse_file(cookie_file)?;
+    match extracted {
+        Ok(metadata)
+            if metadata
+                .entries
+                .iter()
+                .all(|entry| !entry.manifest_url.is_empty() && entry.duration_seconds > 0) =>
+        {
+            Ok(metadata)
+        }
+        Ok(metadata) => {
+            let response = fetch_metadata_api(vod_url, jar).await;
+            if let Err(error) = &response {
+                logs.push(format!(
+                    "[VOD:WARN] metadata completion: {}",
+                    redact(&error.to_string())
+                ))
+                .await;
+            }
+            complete_api_result(metadata, response)
+        }
+        Err(error) => {
+            logs.push(format!(
+                "[VOD:WARN] metadata fallback: {}",
+                redact(&error.to_string())
+            ))
+            .await;
+            let value = fetch_metadata_api(vod_url, jar).await?;
+            parse_api_metadata(&value)
+        }
+    }
+}
+
+fn complete_api_result(mut metadata: VodMetadata, response: Result<Value>) -> Result<VodMetadata> {
+    let usable_urls = metadata
         .entries
         .iter()
-        .all(|e| !e.manifest_url.is_empty() && e.duration_seconds > 0)
-    {
-        return Ok(());
+        .all(|entry| !entry.manifest_url.is_empty());
+    match response {
+        Ok(value) => {
+            metadata.requires_private_auth |= value.get("data").is_some_and(|data| {
+                str_field(data, "sub_upload_type").is_some_and(|kind| !kind.is_empty())
+            });
+            match parse_api_metadata(&value) {
+                Ok(api) => Ok(complete_api_metadata(metadata, api)),
+                Err(_) if usable_urls && !api_access_denied(&value) => Ok(metadata),
+                Err(error) => Err(error),
+            }
+        }
+        Err(error)
+            if usable_urls
+                && !error.chain().any(|cause| {
+                    cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+                        error.status().is_some_and(|status| {
+                            status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN
+                        })
+                    })
+                }) =>
+        {
+            // Duration enrichment is optional. Manifest probing and signed-cookie
+            // validation still run before analysis or download can proceed.
+            Ok(metadata)
+        }
+        Err(error) => Err(error),
     }
+}
+
+fn api_access_denied(value: &Value) -> bool {
+    let Some(data) = value.get("data") else {
+        return false;
+    };
+    let no_files = data
+        .get("files")
+        .and_then(Value::as_array)
+        .is_none_or(|files| files.is_empty());
+    matches!(api_integer(data.get("code")), Some(-6221 | -6205))
+        || api_integer(data.get("subscribed_view")).is_some_and(|code| code < 0)
+        || (no_files
+            && (data.get("adult_status").and_then(Value::as_str) == Some("notLogin")
+                || str_field(data, "sub_upload_type").is_some_and(|kind| !kind.is_empty())))
+}
+
+fn complete_api_metadata(mut metadata: VodMetadata, api: VodMetadata) -> VodMetadata {
+    // An authorized API response is authoritative if the PART list changed.
+    // Otherwise retain fresh extractor URLs and fill only absent fields.
+    if metadata.entries.len() != api.entries.len() || metadata.streamer_id != api.streamer_id {
+        return api;
+    }
+    for (entry, api_entry) in metadata.entries.iter_mut().zip(api.entries) {
+        if entry.manifest_url.is_empty() {
+            entry.manifest_url = api_entry.manifest_url;
+        }
+        if entry.duration_seconds == 0 {
+            entry.duration_seconds = api_entry.duration_seconds;
+        }
+    }
+    metadata.requires_private_auth |= api.requires_private_auth;
+    metadata
+}
+
+async fn fetch_metadata_api(vod_url: &str, jar: &CookieJar) -> Result<Value> {
     let client = http_client()?;
     let title = title_no(vod_url)?;
-    let cookie = jar.header_for("https://api.m.sooplive.co.kr/")?;
+    // Use the current SOOP domain so the login cookies retain their real scope.
+    let cookie = jar.header_for("https://api.m.sooplive.com/")?;
     let mut request = client
-        .post("https://api.m.sooplive.co.kr/station/video/a/view")
+        .post("https://api.m.sooplive.com/station/video/a/view")
         .header(REFERER, vod_url);
     if !cookie.is_empty() {
         request = request.header(COOKIE, cookie);
@@ -1038,21 +1174,78 @@ async fn complete_metadata_from_api(
         .send()
         .await?
         .error_for_status()?;
-    let value: Value = response.json().await?;
-    let files = value
-        .pointer("/data/files")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for (idx, file) in files.iter().enumerate().take(metadata.entries.len()) {
-        if metadata.entries[idx].manifest_url.is_empty() {
-            metadata.entries[idx].manifest_url = api_file_url(file);
-        }
-        if metadata.entries[idx].duration_seconds == 0 {
-            metadata.entries[idx].duration_seconds = entry_duration(file);
-        }
+    Ok(response.json().await?)
+}
+
+fn parse_api_metadata(value: &Value) -> Result<VodMetadata> {
+    let data = value
+        .get("data")
+        .ok_or_else(|| anyhow!("SOOP VOD API 응답에 data가 없습니다."))?;
+    match api_integer(data.get("code")) {
+        Some(-6221) => bail!("삭제되었거나 존재하지 않는 SOOP VOD입니다."),
+        Some(-6205) => bail!("비공개 SOOP VOD입니다. 현재 계정의 접근 권한을 확인해 주세요."),
+        Some(code) if code < 0 => bail!("SOOP VOD 접근 실패 code={code}"),
+        _ => {}
     }
-    Ok(())
+    if api_integer(data.get("subscribed_view")).is_some_and(|code| code < 0) {
+        bail!("구독 VOD 접근 권한이 없습니다. 앱의 SOOP 계정이 구독한 계정인지 확인해 주세요.");
+    }
+    if api_integer(value.get("result")) != Some(1) {
+        bail!(
+            "SOOP VOD API 요청 실패: {}",
+            redact(&data.get("message").map(value_as_string).unwrap_or_default())
+        );
+    }
+    let files = data
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("SOOP VOD API 응답에 PART 목록이 없습니다."))?;
+    if files.is_empty() {
+        if data.get("adult_status").and_then(Value::as_str) == Some("notLogin") {
+            bail!("성인 인증된 SOOP 계정으로 로그인해야 볼 수 있는 VOD입니다.");
+        }
+        if str_field(data, "sub_upload_type").is_some_and(|value| !value.is_empty()) {
+            bail!("구독 VOD 접근 권한이 없습니다. 앱의 SOOP 로그인 계정을 확인해 주세요.");
+        }
+        bail!("SOOP VOD API에서 재생 가능한 PART를 찾지 못했습니다.");
+    }
+    let entries = files
+        .iter()
+        .map(|file| {
+            let manifest_url = api_file_url(file);
+            if !valid_media_url(&manifest_url) {
+                bail!("SOOP VOD PART 영상 주소가 없거나 올바르지 않습니다.");
+            }
+            Ok(VodEntry {
+                manifest_url,
+                // SOOP API durations are milliseconds; yt-dlp durations are seconds.
+                duration_seconds: (entry_duration(file) as f64 / 1000.0).round() as u64,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let streamer_id = str_field(data, "bj_id")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("SOOP VOD API 응답에 BJ ID가 없습니다."))?;
+    let date = api_integer(data.get("write_timestamp"))
+        .and_then(|stamp| chrono::DateTime::from_timestamp(stamp, 0))
+        .map(|date| {
+            date.with_timezone(&chrono::FixedOffset::east_opt(9 * 3600).unwrap())
+                .format("%y%m%d")
+                .to_string()
+        })
+        .unwrap_or_else(|| Utc::now().format("%y%m%d").to_string());
+    Ok(VodMetadata {
+        title: str_field(data, "title").unwrap_or_else(|| "UNKNOWN".into()),
+        streamer: str_field(data, "writer_nick").unwrap_or_else(|| streamer_id.clone()),
+        streamer_id,
+        date,
+        entries,
+        requires_private_auth: str_field(data, "sub_upload_type").is_some_and(|s| !s.is_empty()),
+    })
+}
+
+fn api_integer(value: Option<&Value>) -> Option<i64> {
+    value.and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1532,30 +1725,41 @@ fn title_no(url: &str) -> Result<String> {
 }
 
 fn entry_url(value: &Value) -> String {
-    for key in ["url", "manifest_url", "manifestUrl", "hls_url", "hlsUrl"] {
-        if let Some(s) = value.get(key).and_then(Value::as_str)
-            && (s.starts_with("https://") || (cfg!(test) && s.starts_with("http://127.0.0.1:")))
-            && !Url::parse(s)
-                .ok()
-                .is_some_and(|url| url.path().starts_with("/player/"))
+    let formats = ["formats", "requested_formats"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(Value::as_array))
+        .flatten()
+        .collect::<Vec<_>>();
+    // A selected top-level rendition can coexist with a nested master. Search
+    // every manifest field before falling back to any selected/direct URL.
+    for candidate in std::iter::once(value).chain(formats.iter().copied()) {
+        for key in ["manifest_url", "manifestUrl", "hls_url", "hlsUrl"] {
+            if let Some(s) = candidate.get(key).and_then(Value::as_str)
+                && valid_media_url(s)
+            {
+                return s.into();
+            }
+        }
+    }
+    for candidate in std::iter::once(value).chain(formats) {
+        if let Some(s) = candidate.get("url").and_then(Value::as_str)
+            && valid_media_url(s)
         {
             return s.into();
         }
     }
-    for collection in ["formats", "requested_formats"] {
-        if let Some(formats) = value.get(collection).and_then(Value::as_array) {
-            for format in formats {
-                for key in ["manifest_url", "manifestUrl", "url"] {
-                    if let Some(s) = format.get(key).and_then(Value::as_str)
-                        && s.starts_with("https://")
-                    {
-                        return s.into();
-                    }
-                }
-            }
-        }
-    }
     String::new()
+}
+
+fn valid_media_url(value: &str) -> bool {
+    Url::parse(value).ok().is_some_and(|url| {
+        (url.scheme() == "https"
+            || (cfg!(test) && url.scheme() == "http" && url.host_str() == Some("127.0.0.1")))
+            && !url.path().starts_with("/player/")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
 }
 
 fn api_file_url(value: &Value) -> String {
@@ -1946,6 +2150,437 @@ mod tests {
         let line = ffconcat_line(Path::new("C:/tmp/a'b.mp4"));
         assert_eq!(line, "file 'C:/tmp/a'\\''b.mp4'");
     }
+
+    #[test]
+    fn single_video_and_playlist_metadata_keep_part_order_and_seconds() {
+        let single = serde_json::json!({
+            "title": "한 PART", "uploader_id": "fixture", "upload_date": "20261003",
+            "formats": [{"manifest_url": "https://cdn.example/master.m3u8"}], "duration": 60
+        });
+        let parsed = parse_metadata(&single).unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].duration_seconds, 60);
+        assert_eq!(parsed.date, "261003");
+        assert!(!parsed.requires_private_auth);
+        let selected_format = serde_json::json!({
+            "uploader_id": "fixture", "manifest_url": "https://cdn.example/master.m3u8",
+            "url": "https://cdn.example/720p.m3u8"
+        });
+        assert!(
+            parse_metadata(&selected_format).unwrap().entries[0]
+                .manifest_url
+                .ends_with("master.m3u8")
+        );
+        let playlist = serde_json::json!({"uploader_id": "fixture", "entries": [
+            {"url": "https://cdn.example/first.m3u8", "duration": 20},
+            {"url": "https://cdn.example/second.m3u8", "duration": 30}
+        ]});
+        let parsed = parse_metadata(&playlist).unwrap();
+        assert_eq!(parsed.entries.len(), 2);
+        assert!(parsed.entries[1].manifest_url.ends_with("second.m3u8"));
+        assert_eq!(parsed.entries[1].duration_seconds, 30);
+    }
+
+    #[test]
+    fn extractor_subscription_marker_is_preserved() {
+        let single = serde_json::json!({"uploader_id": "fixture", "formats": [{
+            "url": "https://cdn.example/video.m3u8", "protocol": "soopvod",
+            "_cookie_refresh_params": {"video_id": "123456789"}
+        }]});
+        assert!(parse_metadata(&single).unwrap().requires_private_auth);
+        assert!(parse_metadata(&serde_json::json!({"entries": []})).is_err());
+        assert!(parse_metadata(&serde_json::json!({"uploader_id": "fixture", "url": "https://vod.sooplive.com/player/123456789"})).is_err());
+    }
+
+    #[test]
+    fn nested_master_manifest_wins_over_any_selected_rendition() {
+        for collection in ["formats", "requested_formats"] {
+            let mut value = serde_json::json!({"uploader_id": "fixture", "url": "https://cdn.example/720p.m3u8"});
+            value[collection] = serde_json::json!([
+                {"url": "https://cdn.example/1080p.m3u8"},
+                {"manifest_url": "https://cdn.example/master.m3u8", "url": "https://cdn.example/540p.m3u8"}
+            ]);
+            let parsed = parse_metadata(&value).unwrap();
+            assert_eq!(
+                parsed.entries[0].manifest_url,
+                "https://cdn.example/master.m3u8"
+            );
+        }
+    }
+
+    fn api_fixture() -> Value {
+        serde_json::json!({"result": 1, "data": {
+            "bj_id": "fixture", "title": "API 영상", "writer_nick": "채널",
+            "write_timestamp": 1791036685, "subscribed_view": 1, "sub_upload_type": "",
+            "files": [{"file": "https://cdn.example/first.m3u8", "duration": 60000},
+                      {"file": "https://cdn.example/second.m3u8", "duration": 120000}]
+        }})
+    }
+
+    #[test]
+    fn api_fallback_builds_all_parts_with_millisecond_duration() {
+        let metadata = parse_api_metadata(&api_fixture()).unwrap();
+        assert_eq!(metadata.entries.len(), 2);
+        assert_eq!(metadata.entries[0].duration_seconds, 60);
+        assert_eq!(metadata.entries[1].duration_seconds, 120);
+        assert_eq!(metadata.title, "API 영상");
+        assert_eq!(metadata.date, "261003");
+        let mut subscribed = api_fixture();
+        subscribed["data"]["sub_upload_type"] = Value::String("all_board".into());
+        assert!(
+            parse_api_metadata(&subscribed)
+                .unwrap()
+                .requires_private_auth
+        );
+    }
+
+    #[test]
+    fn api_completion_fills_missing_duration_without_replacing_valid_extractor_fields() {
+        let extracted = parse_metadata(&serde_json::json!({
+            "title": "추출 제목", "uploader_id": "fixture", "entries": [
+                {"url": "https://cdn.example/first.m3u8?fresh=1"},
+                {"url": "https://cdn.example/second.m3u8?fresh=2", "duration": 121}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(extracted.entries[0].duration_seconds, 0);
+        let mut value = api_fixture();
+        value["data"]["sub_upload_type"] = serde_json::json!("all_board");
+        let completed = complete_api_metadata(extracted, parse_api_metadata(&value).unwrap());
+        assert_eq!(completed.entries[0].duration_seconds, 60);
+        assert_eq!(completed.entries[1].duration_seconds, 121);
+        assert_eq!(
+            completed.entries[0].manifest_url,
+            "https://cdn.example/first.m3u8?fresh=1"
+        );
+        assert_eq!(completed.title, "추출 제목");
+        assert!(completed.requires_private_auth);
+    }
+
+    #[test]
+    fn duration_enrichment_failure_keeps_usable_urls_but_not_api_access_denials() {
+        let extracted = || {
+            parse_metadata(&serde_json::json!({
+                "title": "fixture", "uploader_id": "fixture",
+                "url": "https://cdn.example/master.m3u8", "protocol": "soopvod"
+            }))
+            .unwrap()
+        };
+        let retained =
+            complete_api_result(extracted(), Err(anyhow!("temporary API failure"))).unwrap();
+        assert_eq!(retained.entries[0].duration_seconds, 0);
+        assert_eq!(
+            retained.entries[0].manifest_url,
+            "https://cdn.example/master.m3u8"
+        );
+        assert!(retained.requires_private_auth);
+        let mut missing_url = extracted();
+        missing_url.entries[0].manifest_url.clear();
+        assert!(complete_api_result(missing_url, Err(anyhow!("temporary API failure"))).is_err());
+        let mut denied = api_fixture();
+        denied["data"]["subscribed_view"] = serde_json::json!(-6303);
+        assert!(complete_api_result(extracted(), Ok(denied)).is_err());
+    }
+
+    #[tokio::test]
+    async fn duration_enrichment_keeps_http_server_failures_but_rejects_http_auth_denials() {
+        for (status, allowed) in [(500, true), (401, false), (403, false)] {
+            let server = crate::test_support::LocalManifestServer::start_with_response(status, "");
+            let response = http_client()
+                .unwrap()
+                .get(server.url())
+                .send()
+                .await
+                .unwrap();
+            let error = response.error_for_status().unwrap_err();
+            let metadata = parse_metadata(&serde_json::json!({
+                "title": "fixture", "uploader_id": "fixture",
+                "url": "https://cdn.example/master.m3u8"
+            }))
+            .unwrap();
+            assert_eq!(
+                complete_api_result(metadata, Err(error.into())).is_ok(),
+                allowed
+            );
+        }
+    }
+
+    #[test]
+    fn duration_enrichment_keeps_incomplete_payloads_but_rejects_explicit_access_denials() {
+        let metadata = || {
+            parse_metadata(&serde_json::json!({
+                "title": "fixture", "uploader_id": "fixture",
+                "url": "https://cdn.example/master.m3u8", "protocol": "soopvod"
+            }))
+            .unwrap()
+        };
+        for value in [
+            serde_json::json!({"result": 0}),
+            serde_json::json!({"result": 0, "data": {"code": -9999}}),
+            serde_json::json!({"result": 1, "data": {"code": 1}}),
+            serde_json::json!({"result": 1, "data": {"files": [{}]}}),
+        ] {
+            let retained = complete_api_result(metadata(), Ok(value.clone())).unwrap();
+            assert_eq!(retained.entries[0].duration_seconds, 0);
+            assert!(retained.requires_private_auth);
+            let mut missing_url = metadata();
+            missing_url.entries[0].manifest_url.clear();
+            assert!(complete_api_result(missing_url, Ok(value)).is_err());
+        }
+        for data in [
+            serde_json::json!({"code": -6221}),
+            serde_json::json!({"code": "-6205"}),
+            serde_json::json!({"subscribed_view": "-6303"}),
+            serde_json::json!({"adult_status": "notLogin", "files": []}),
+            serde_json::json!({"sub_upload_type": "all_board", "files": []}),
+        ] {
+            assert!(
+                complete_api_result(
+                    metadata(),
+                    Ok(serde_json::json!({
+                        "result": 0, "data": data
+                    }))
+                )
+                .is_err()
+            );
+        }
+        let public = parse_metadata(&serde_json::json!({
+            "uploader_id": "fixture", "url": "https://cdn.example/master.m3u8"
+        }))
+        .unwrap();
+        let retained = complete_api_result(
+            public,
+            Ok(serde_json::json!({
+                "result": 1, "data": {"sub_upload_type": "all_board", "files": [{}]}
+            })),
+        )
+        .unwrap();
+        assert!(retained.requires_private_auth);
+    }
+
+    #[test]
+    fn api_fallback_never_uses_files_when_access_is_denied() {
+        let mut value = api_fixture();
+        value["data"]["subscribed_view"] = serde_json::json!(-6303);
+        assert!(
+            parse_api_metadata(&value)
+                .unwrap_err()
+                .to_string()
+                .contains("구독")
+        );
+        value["data"]["subscribed_view"] = serde_json::json!(1);
+        for (code, message) in [(-6221, "존재하지"), (-6205, "비공개"), (-9999, "접근 실패")]
+        {
+            value["data"]["code"] = serde_json::json!(code);
+            assert!(
+                parse_api_metadata(&value)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(message)
+            );
+        }
+        value["data"]["code"] = Value::Null;
+        value["data"]["files"] = serde_json::json!([]);
+        value["data"]["adult_status"] = serde_json::json!("notLogin");
+        assert!(
+            parse_api_metadata(&value)
+                .unwrap_err()
+                .to_string()
+                .contains("성인 인증")
+        );
+        value["data"]["adult_status"] = Value::Null;
+        value["data"]["sub_upload_type"] = serde_json::json!("all_board");
+        assert!(
+            parse_api_metadata(&value)
+                .unwrap_err()
+                .to_string()
+                .contains("구독")
+        );
+    }
+
+    #[test]
+    fn metadata_does_not_accept_player_urls_or_credentials_as_media() {
+        let mut value = api_fixture();
+        for url in [
+            "https://vod.sooplive.com/player/123",
+            "https://user:password@cdn.example/video.m3u8",
+            "file:///private/media",
+        ] {
+            value["data"]["files"][0]["file"] = serde_json::json!(url);
+            assert!(parse_api_metadata(&value).is_err());
+        }
+        let jar = CookieJar {
+            items: vec![
+                parse_set_cookie(
+                    "AuthTicket=fixture; Domain=sooplive.com; Path=/; Secure",
+                    "login.sooplive.com",
+                )
+                .unwrap(),
+            ],
+        };
+        assert!(
+            jar.header_for("https://api.m.sooplive.com/")
+                .unwrap()
+                .contains("AuthTicket=")
+        );
+        assert!(
+            jar.header_for("https://api.m.sooplive.co.kr/")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(jar.header_for("https://cdn.example/").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn public_manifest_does_not_need_private_auth_even_on_retry() {
+        let manifest = crate::test_support::LocalManifestServer::start();
+        let metadata = parse_metadata(&serde_json::json!({
+            "uploader_id": "fixture", "url": manifest.url(), "duration": 60
+        }))
+        .unwrap();
+        let mut jar = CookieJar::default();
+        let qualities = prepare_manifest(
+            "https://vod.sooplive.com/player/123456789",
+            &metadata,
+            manifest.url(),
+            &mut jar,
+            2,
+            &LogBuffer::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(qualities[1].label, "1080p");
+        assert!(!jar.has_cloudfront());
+    }
+
+    #[tokio::test]
+    async fn direct_mp4_still_supports_automatic_quality_without_loading_the_video() {
+        let server = crate::test_support::LocalManifestServer::start_with_response(
+            206,
+            "\0\0\0\u{18}ftypisomfixture",
+        );
+        let url = server.url().replace("master.m3u8", "video.mp4");
+        let qualities = probe_manifest(
+            "https://vod.sooplive.com/player/123456789",
+            &url,
+            &CookieJar::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(qualities.len(), 1);
+        assert_eq!(qualities[0].value, "best");
+    }
+
+    #[test]
+    fn manifest_fixture_waits_for_complete_request_headers() {
+        use std::io::{Read, Write};
+        let server = crate::test_support::LocalManifestServer::start();
+        let url = Url::parse(server.url()).unwrap();
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", url.port().unwrap())).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        stream
+            .write_all(b"GET /master.m3u8 HTTP/1.1\r\nHost: localhost\r\n")
+            .unwrap();
+        let mut response = [0u8; 13];
+        let error = stream.read(&mut response).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        stream.write_all(b"\r\n").unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream.read_exact(&mut response).unwrap();
+        assert_eq!(&response, b"HTTP/1.1 200 ");
+    }
+
+    #[tokio::test]
+    async fn subscription_marker_requires_auth_before_a_publicly_reachable_manifest() {
+        let manifest = crate::test_support::LocalManifestServer::start();
+        let metadata = parse_metadata(&serde_json::json!({
+            "uploader_id": "fixture", "url": manifest.url(), "protocol": "soopvod"
+        }))
+        .unwrap();
+        let error = prepare_manifest(
+            "https://vod.sooplive.com/player/123456789",
+            &metadata,
+            manifest.url(),
+            &mut CookieJar::default(),
+            1,
+            &LogBuffer::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("구독 VOD 인증"));
+    }
+
+    #[tokio::test]
+    async fn manifest_rejects_http_denial_html_and_oversized_bodies() {
+        for (status, body, expected) in [
+            (403, "denied".to_string(), "인증이 만료"),
+            (500, "server failure".to_string(), "500"),
+            (200, "<html>login</html>".to_string(), "정상 HLS"),
+            (
+                200,
+                format!("#EXTM3U\n{}", "x".repeat(1024 * 1024)),
+                "최대 크기",
+            ),
+        ] {
+            let manifest =
+                crate::test_support::LocalManifestServer::start_with_response(status, &body);
+            let metadata = parse_metadata(&serde_json::json!({
+                "uploader_id": "fixture", "url": manifest.url()
+            }))
+            .unwrap();
+            let error = prepare_manifest(
+                "https://vod.sooplive.com/player/123456789",
+                &metadata,
+                manifest.url(),
+                &mut CookieJar::default(),
+                1,
+                &LogBuffer::new(),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn api_string_codes_and_expired_signed_cookies_are_not_accepted() {
+        let mut value = api_fixture();
+        value["data"]["subscribed_view"] = serde_json::json!("-6303");
+        assert!(
+            parse_api_metadata(&value)
+                .unwrap_err()
+                .to_string()
+                .contains("구독")
+        );
+        value["data"]["subscribed_view"] = serde_json::json!("1");
+        value["result"] = serde_json::json!("1");
+        assert!(parse_api_metadata(&value).is_ok());
+        let mut jar = CookieJar::default();
+        for name in CF_NAMES {
+            jar.items.push(NetscapeCookie {
+                domain: "cdn.example".into(),
+                include_subdomains: false,
+                path: "/".into(),
+                secure: true,
+                expires: 1,
+                name: (*name).into(),
+                value: "fixture".into(),
+            });
+        }
+        assert!(!jar.has_cloudfront());
+        assert!(
+            jar.header_for("https://cdn.example/video.m3u8")
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1969,6 +2604,69 @@ mod provider_e2e {
             yt_dlp_path: yt_dlp.display().to_string(),
             ffmpeg_path: ffmpeg.display().to_string(),
             max_retries: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn single_part_public_and_subscriber_cookie_refresh_complete_full_pipeline() {
+        for mode in [
+            "single-video",
+            "single-video-signed",
+            "single-video-retry",
+            "single-video-signed-retry",
+        ] {
+            let fixture = ProviderFixture::new();
+            let manifest = crate::test_support::LocalManifestServer::start();
+            let yt_dlp = fixture.tool(ToolKind::YtDlp);
+            let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+            fixture.set_mode(&yt_dlp, mode);
+            fixture.set_manifest_url(&yt_dlp, manifest.url());
+            let backend = fixture.root().join("backend");
+            fs::create_dir_all(&backend).unwrap();
+            let cookie = fixture.root().join("input cookies.txt");
+            fs::write(&cookie, "# Netscape HTTP Cookie File\n.sooplive.com\tTRUE\t/\tTRUE\t4102444800\tfixture\tcookie\n").unwrap();
+            let analyze = VodAnalyzeRequest {
+                vod_url: "https://vod.sooplive.com/player/123456789".into(),
+                cookie_mode: "FILE".into(),
+                cookie_file: cookie.display().to_string(),
+                browser_name: "firefox".into(),
+                yt_dlp_path: yt_dlp.display().to_string(),
+                ffmpeg_path: ffmpeg.display().to_string(),
+                max_retries: 1,
+            };
+            let status = Arc::new(RwLock::new(VodJobStatus::default()));
+            let view = run_analysis(
+                &backend,
+                analyze,
+                &LogBuffer::new(),
+                &status,
+                &AtomicBool::new(false),
+            )
+            .await
+            .unwrap();
+            assert_eq!(view.part_count, 1);
+            assert_eq!(view.parts[0].duration_seconds, 60);
+            let output = fixture.root().join("out");
+            let mut req = request(&output, &yt_dlp, &ffmpeg);
+            req.cookie_file = cookie.display().to_string();
+            if mode.ends_with("-retry") {
+                req.max_retries = 2;
+            }
+            run_download(
+                &backend,
+                req,
+                &LogBuffer::new(),
+                &status,
+                &AtomicBool::new(false),
+            )
+            .await
+            .unwrap();
+            let state = status.read().await;
+            assert_eq!(state.state, "COMPLETED", "{mode}: {}", state.message);
+            assert!(Path::new(state.output_file.as_deref().unwrap()).is_file());
+            if mode.ends_with("-retry") {
+                assert!(fixture.invocations().matches("--dump-single-json").count() >= 4);
+            }
         }
     }
 
@@ -2059,6 +2757,7 @@ mod provider_e2e {
             streamer_id: "fixture".into(),
             date: "260923".into(),
             entries: Vec::new(),
+            requires_private_auth: false,
         };
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
         let cancel = AtomicBool::new(false);

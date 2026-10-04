@@ -131,6 +131,8 @@ cd stream-archive
 4. **대기열**에서 진행·실패·취소·재시도 상태를 확인합니다.
 5. **기록**에서 LIVE/VOD 작업 내역을 확인합니다.
 
+Phase 25.5에서는 SOOP VOD의 단일·다중 PART 해석, 공개 영상과 구독 영상의 인증 흐름, Cookie 갱신 및 재시도를 안정화하고 있습니다. 실제 계정 검증과 릴리스 포함 여부는 별도로 확인합니다. [변경 범위 및 수동 QA](docs/PHASE25_5_SOOP_VOD_STABILIZATION.md)를 참고하세요.
+
 ## 데이터·백업·업그레이드
 
 설정, Channels, Queue, History와 백업 정책의 기준 데이터는 `data/stream-archive.db`입니다. `STREAM_ARCHIVE_DATA_DIR`로 데이터 경로를 지정할 수 있습니다.
