@@ -1,34 +1,30 @@
-//! Bounded, public channel avatars. Provider URL mechanics stay behind providers.
-use crate::support::platform::{PlatformId, provider};
+//! Bounded, public LIVE snapshots. Provider URL mechanics stay behind providers.
+use crate::support::platform::PlatformId;
 use anyhow::{Result, bail};
 use image::{ImageReader, imageops::FilterType};
 use std::{io::Cursor, time::Duration};
 use url::Url;
 
-/// SOOP sample: 200x200; larger CHZZK images are cropped/downscaled to this ceiling.
-pub const PROFILE_SIDE: u32 = 200;
+const MAX_WIDTH: u32 = 480;
+const MAX_HEIGHT: u32 = 270;
 const MAX_BODY: usize = 8 * 1024 * 1024;
-const MAX_METADATA: usize = 256 * 1024;
 
 #[derive(Clone, Debug)]
-pub struct ProfileImage {
+pub struct ThumbnailImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
 }
 
 fn validate_image_url(platform: PlatformId, url: &Url) -> Result<()> {
-    let allowed = match platform {
-        PlatformId::Soop => url.host_str() == Some("stimg.sooplive.com"),
-        PlatformId::Chzzk => url.host_str() == Some("nng-phinf.pstatic.net"),
-    };
+    let allowed = crate::support::platform::live::validate_thumbnail_url(platform, url);
     if !allowed
         || url.scheme() != "https"
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
     {
-        bail!("허용되지 않은 프로필 이미지 주소입니다.");
+        bail!("허용되지 않은 LIVE 썸네일 이미지 주소입니다.");
     }
     Ok(())
 }
@@ -39,27 +35,25 @@ async fn bounded_body(response: reqwest::Response, maximum: usize) -> Result<Vec
         .content_length()
         .is_some_and(|size| size > maximum as u64)
     {
-        bail!("프로필 응답이 너무 큽니다.");
+        bail!("LIVE 썸네일 응답이 너무 큽니다.");
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if chunk.len() > maximum.saturating_sub(bytes.len()) {
-            bail!("프로필 응답이 너무 큽니다.");
+            bail!("LIVE 썸네일 응답이 너무 큽니다.");
         }
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
 }
 
-pub async fn load(platform: PlatformId, account: &str) -> Result<ProfileImage> {
-    // Bound the entire operation, including metadata, download and blocking decode.
-    tokio::time::timeout(Duration::from_secs(12), load_inner(platform, account)).await?
+pub async fn load(platform: PlatformId, url: &str) -> Result<ThumbnailImage> {
+    tokio::time::timeout(Duration::from_secs(12), load_inner(platform, url)).await?
 }
 
-async fn load_inner(platform: PlatformId, account: &str) -> Result<ProfileImage> {
-    let account = account.trim();
-    let provider = provider(platform);
-    provider.validate_account(account)?;
+async fn load_inner(platform: PlatformId, url: &str) -> Result<ThumbnailImage> {
+    let url = Url::parse(url)?;
+    validate_image_url(platform, &url)?;
     let client = reqwest::Client::builder()
         .user_agent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
@@ -67,28 +61,21 @@ async fn load_inner(platform: PlatformId, account: &str) -> Result<ProfileImage>
         .timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
-    let metadata = if platform == PlatformId::Chzzk {
-        let bytes = bounded_body(
-            provider
-                .channel_lookup_request(&client, account)
-                .send()
-                .await?,
-            MAX_METADATA,
-        )
-        .await?;
-        Some(serde_json::from_slice(&bytes)?)
-    } else {
-        None
-    };
-    let url = provider.profile_image_url(account, metadata.as_ref())?;
-    validate_image_url(platform, &url)?;
-    let bytes = bounded_body(client.get(url).send().await?, MAX_BODY).await?;
+    let bytes = bounded_body(
+        client
+            .get(url)
+            .header(reqwest::header::CACHE_CONTROL, "no-cache")
+            .send()
+            .await?,
+        MAX_BODY,
+    )
+    .await?;
     tokio::task::spawn_blocking(move || decode(&bytes)).await?
 }
 
-fn decode(bytes: &[u8]) -> Result<ProfileImage> {
+fn decode(bytes: &[u8]) -> Result<ThumbnailImage> {
     if bytes.len() > MAX_BODY {
-        bail!("프로필 이미지가 너무 큽니다.");
+        bail!("LIVE 썸네일 이미지가 너무 큽니다.");
     }
     let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     if !matches!(
@@ -100,7 +87,7 @@ fn decode(bytes: &[u8]) -> Result<ProfileImage> {
                 | image::ImageFormat::WebP
         )
     ) {
-        bail!("지원하지 않는 프로필 이미지 형식입니다.");
+        bail!("지원하지 않는 LIVE 썸네일 이미지 형식입니다.");
     }
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
@@ -109,16 +96,20 @@ fn decode(bytes: &[u8]) -> Result<ProfileImage> {
     reader.limits(limits);
     // GIF/WebP animations intentionally use the first frame only.
     let image = reader.decode()?;
-    let side = image.width().min(image.height()).min(PROFILE_SIDE);
-    if side == 0 {
-        bail!("빈 프로필 이미지입니다.");
+    if image.width() == 0 || image.height() == 0 {
+        bail!("빈 LIVE 썸네일 이미지입니다.");
     }
+    // Fit the whole image, preserving aspect ratio and never upscaling.
     let image = image
-        .resize_to_fill(side, side, FilterType::Triangle)
+        .resize(
+            image.width().min(MAX_WIDTH),
+            image.height().min(MAX_HEIGHT),
+            FilterType::Triangle,
+        )
         .into_rgba8();
-    Ok(ProfileImage {
-        width: side,
-        height: side,
+    Ok(ThumbnailImage {
+        width: image.width(),
+        height: image.height(),
         rgba: image.into_raw(),
     })
 }
@@ -172,15 +163,19 @@ mod tests {
     }
 
     #[test]
-    fn crop_downscale_and_no_upscale() {
-        for (width, height, expected) in [(1002, 1025, 200), (200, 200, 200), (24, 40, 24)] {
+    fn fit_downscale_and_no_upscale() {
+        for (width, height, expected) in [
+            (1920, 1080, (480, 270)),
+            (200, 200, (200, 200)),
+            (24, 40, (24, 40)),
+        ] {
             let mut bytes = Cursor::new(Vec::new());
             DynamicImage::new_rgba8(width, height)
                 .write_to(&mut bytes, ImageFormat::Png)
                 .unwrap();
             let result = decode(bytes.get_ref()).unwrap();
-            assert_eq!((result.width, result.height), (expected, expected));
-            assert_eq!(result.rgba.len(), (expected * expected * 4) as usize);
+            assert_eq!((result.width, result.height), expected);
+            assert_eq!(result.rgba.len(), (expected.0 * expected.1 * 4) as usize);
         }
     }
 
@@ -199,44 +194,27 @@ mod tests {
     #[test]
     fn restricts_public_provider_urls() {
         for raw in [
-            "http://stimg.sooplive.com/a",
+            "http://liveimg.sooplive.com/a",
             "https://localhost/a",
-            "https://stimg.sooplive.com.evil.test/a",
-            "https://user@stimg.sooplive.com/a",
-            "https://stimg.sooplive.com:8443/a",
+            "https://liveimg.sooplive.com.evil.test/a",
+            "https://user@liveimg.sooplive.com/a",
+            "https://liveimg.sooplive.com:8443/a",
         ] {
             assert!(validate_image_url(PlatformId::Soop, &Url::parse(raw).unwrap()).is_err());
         }
         assert!(
             validate_image_url(
                 PlatformId::Soop,
-                &Url::parse("https://stimg.sooplive.com/LOGO/10/1004ysus/1004ysus.jpg").unwrap()
+                &Url::parse("https://liveimg.sooplive.com/m/123").unwrap()
             )
             .is_ok()
         );
         assert!(
             validate_image_url(
                 PlatformId::Chzzk,
-                &Url::parse("https://nng-phinf.pstatic.net/a.png").unwrap()
+                &Url::parse("https://livecloud-thumb.akamaized.net/chzzk/a.jpg").unwrap()
             )
             .is_ok()
-        );
-    }
-
-    #[test]
-    fn chzzk_profile_requires_matching_identity() {
-        let account = "0123456789abcdef0123456789abcdef";
-        let mut value = serde_json::json!({"code":200,"content":{"channelId":account,"channelName":"테스트","channelImageUrl":"https://nng-phinf.pstatic.net/a.png"}});
-        assert!(
-            provider(PlatformId::Chzzk)
-                .profile_image_url(account, Some(&value))
-                .is_ok()
-        );
-        value["content"]["channelId"] = "ffffffffffffffffffffffffffffffff".into();
-        assert!(
-            provider(PlatformId::Chzzk)
-                .profile_image_url(account, Some(&value))
-                .is_err()
         );
     }
 }

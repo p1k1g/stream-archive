@@ -104,6 +104,9 @@ struct ChannelState {
     status: String,
     recording: Option<Recording>,
     last_broadcast_id: Option<String>,
+    thumbnail_url: Option<String>,
+    completed_broadcast_id: Option<String>,
+    completion_revision: u64,
     suppressed_broadcast_id: Option<String>,
     next_check: Instant,
     detail: Option<String>,
@@ -121,10 +124,22 @@ impl ChannelState {
             status: status.into(),
             recording: None,
             last_broadcast_id: None,
+            thumbnail_url: None,
+            completed_broadcast_id: None,
+            completion_revision: 0,
             suppressed_broadcast_id: None,
             next_check: Instant::now(),
             detail: None,
         }
+    }
+}
+
+impl ChannelState {
+    fn recording_finished(&mut self, broadcast_id: &str) {
+        // Process-wide sequence distinguishes rapid stop/restart and watcher restarts.
+        static REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        self.completion_revision = REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.completed_broadcast_id = Some(broadcast_id.to_owned());
     }
 }
 
@@ -594,6 +609,7 @@ fn mark_watcher_stopped(states: &mut HashMap<String, ChannelState>) {
         if state.channel.enabled {
             state.status = "WATCHER_STOPPED".into();
             state.last_broadcast_id = None;
+            state.thumbnail_url = None;
             state.suppressed_broadcast_id = None;
             state.detail = None;
         } else {
@@ -768,6 +784,7 @@ async fn poll_channels(
                 clear_stream_password(platform, &state.channel.account);
                 state.status = "OFFLINE".into();
                 state.last_broadcast_id = None;
+                state.thumbnail_url = None;
                 state.detail = None;
             }
             Ok(LiveProbe::AuthRequired) => {
@@ -778,6 +795,8 @@ async fn poll_channels(
                 }
             }
             Ok(LiveProbe::Live(live)) => {
+                state.thumbnail_url = live.thumbnail_url();
+                state.last_broadcast_id = Some(live.id.clone());
                 if state
                     .channel
                     .name
@@ -885,6 +904,7 @@ async fn check_recording_broadcasts(
                 stop_state_recording(state, "BROADCAST ENDED", recorder, logs).await;
                 state.status = "OFFLINE".into();
                 state.last_broadcast_id = None;
+                state.thumbnail_url = None;
                 state.detail = None;
                 logs.push(format!(
                     "[RUST] broadcast ended platform={platform} account={}",
@@ -896,6 +916,7 @@ async fn check_recording_broadcasts(
                 clear_stream_password(platform, &state.channel.account);
                 stop_state_recording(state, "BROADCAST CHANGED", recorder, logs).await;
                 state.status = "UNKNOWN".into();
+                state.thumbnail_url = live.thumbnail_url();
                 state.last_broadcast_id = Some(live.id);
                 state.detail = None;
                 state.next_check = Instant::now();
@@ -905,7 +926,9 @@ async fn check_recording_broadcasts(
                 ))
                 .await;
             }
-            Ok(LiveProbe::Live(_)) => {}
+            Ok(LiveProbe::Live(live)) => {
+                state.thumbnail_url = live.thumbnail_url();
+            }
             Ok(LiveProbe::AuthRequired) => {
                 logs.push(format!(
                     "[RUST:WARN] live recheck requires {platform} auth while recording {}; keeping recorder running",
@@ -956,6 +979,7 @@ async fn monitor_recordings(
                     recorder
                         .log_finished(&state.channel.name, &state.channel.account, &rec, &reason)
                         .await;
+                    state.recording_finished(&rec.bno);
                 }
                 if normal_exit {
                     state.status = "UNKNOWN".into();
@@ -1061,7 +1085,8 @@ async fn stop_state_recording(
         Ok(_) => {
             recorder
                 .log_finished(&state.channel.name, &state.channel.account, &rec, reason)
-                .await
+                .await;
+            state.recording_finished(&rec.bno);
         }
         Err(err) => {
             state.status = "ERROR".into();
@@ -1106,6 +1131,15 @@ async fn update_snapshot(
         }
         let rec = state.recording.as_ref();
         channels.push(ChannelRuntimeStatus {
+            thumbnail_url: if rec
+                .is_none_or(|rec| state.last_broadcast_id.as_deref() == Some(rec.bno.as_str()))
+            {
+                state.thumbnail_url.clone()
+            } else {
+                None
+            },
+            completed_broadcast_id: state.completed_broadcast_id.clone(),
+            completion_revision: state.completion_revision,
             platform: state.channel.platform,
             account: state.channel.account.clone(),
             name: state.channel.name.clone(),
@@ -1578,5 +1612,35 @@ mod provider_e2e {
             resolve_streamlink(fixture.root(), &settings).unwrap(),
             streamlink
         );
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_completion_tests {
+    use super::*;
+    #[tokio::test]
+    async fn completion_revision_survives_same_broadcast_restart_in_snapshots() {
+        let channel = Channel {
+            platform: PlatformId::Soop,
+            enabled: true,
+            name: "test".into(),
+            account: "test".into(),
+            outdir: String::new(),
+        };
+        let mut state = ChannelState::new(channel);
+        state.last_broadcast_id = Some("123".into());
+        state.thumbnail_url = Some("https://fixture.invalid/thumbnail.jpg".into());
+        state.recording_finished("123");
+        let first = state.completion_revision;
+        state.recording_finished("123");
+        assert!(state.completion_revision > first);
+        let snapshot = Arc::new(RwLock::new(WatcherStatus::default()));
+        update_snapshot(&HashMap::from([("SOOP:test".into(), state)]), &snapshot).await;
+        let snapshot = snapshot.read().await;
+        assert_eq!(
+            snapshot.channels[0].completed_broadcast_id.as_deref(),
+            Some("123")
+        );
+        assert!(snapshot.channels[0].completion_revision > first);
     }
 }

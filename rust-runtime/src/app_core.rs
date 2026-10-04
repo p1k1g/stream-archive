@@ -360,13 +360,48 @@ impl StreamArchiveCore {
         self.store.channels()
     }
 
-    /// Public profile image only; no credentials, persistence or watcher side effects.
-    pub async fn channel_profile(
+    /// Download only the current, already-probed broadcast's public snapshot.
+    pub async fn live_thumbnail(
         &self,
         platform: PlatformId,
         account: &str,
-    ) -> Result<crate::profile_service::ProfileImage> {
-        crate::profile_service::load(platform, account).await
+        broadcast_id: &str,
+        completion_revision: u64,
+    ) -> Result<crate::thumbnail_service::ThumbnailImage> {
+        let status = self.watcher_status().await?;
+        let url = status
+            .channels
+            .iter()
+            .find(|row| {
+                status.running
+                    && row.platform == platform
+                    && row.account == account
+                    && row.completion_revision == completion_revision
+                    && row.bno.as_deref() == Some(broadcast_id)
+                    && !matches!(
+                        row.status.as_str(),
+                        "OFFLINE" | "DISABLED" | "WATCHER_STOPPED"
+                    )
+            })
+            .and_then(|row| row.thumbnail_url.clone())
+            .ok_or_else(|| anyhow::anyhow!("현재 방송의 썸네일 정보가 없습니다."))?;
+        let image = crate::thumbnail_service::load(platform, &url).await?;
+        let current = self.watcher_status().await?;
+        if !current.running
+            || !current.channels.iter().any(|row| {
+                row.platform == platform
+                    && row.account == account
+                    && row.bno.as_deref() == Some(broadcast_id)
+                    && row.completion_revision == completion_revision
+                    && !matches!(
+                        row.status.as_str(),
+                        "OFFLINE" | "DISABLED" | "WATCHER_STOPPED"
+                    )
+            })
+        {
+            anyhow::bail!("썸네일 요청 중 방송 상태가 변경되었습니다.");
+        }
+        Ok(image)
     }
 
     pub async fn resolve_channel_name(
