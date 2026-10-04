@@ -114,7 +114,10 @@ pub(crate) fn valid_thumbnail_url(url: &Url) -> bool {
         && url.username().is_empty()
         && url.password().is_none()
         && url.port().is_none()
-        && matches!(url.host_str(), Some("images.kick.com" | "files.kick.com"))
+        && matches!(
+            url.host_str(),
+            Some("images.kick.com" | "files.kick.com" | "stream.kick.com")
+        )
 }
 
 #[cfg(test)]
@@ -142,7 +145,7 @@ mod tests {
     #[test]
     fn broadcast_metadata_and_plugin_input_are_provider_owned() {
         let value = channel(
-            serde_json::json!({"id":123,"session_title":"테스트 LIVE","thumbnail":{"url":"https://images.kick.com/video.jpg"}}),
+            serde_json::json!({"id":123,"session_title":"테스트 LIVE","thumbnail":{"url":"https://stream.kick.com/thumbnails/video.webp"}}),
         );
         let KickProbe::Live(live) = parse_probe("fixture", &value).unwrap() else {
             panic!("live");
@@ -152,7 +155,7 @@ mod tests {
         assert_eq!(live.title, "테스트 LIVE");
         assert_eq!(
             live.thumbnail_url.as_deref(),
-            Some("https://images.kick.com/video.jpg")
+            Some("https://stream.kick.com/thumbnails/video.webp")
         );
         let session = KickLiveSession::new(Client::new());
         let StreamInput::PluginUrl {
@@ -176,6 +179,7 @@ mod tests {
         for url in [
             "https://images.kick.com/a.jpg",
             "https://files.kick.com/a.webp",
+            "https://stream.kick.com/thumbnails/live.webp",
         ] {
             assert!(valid_thumbnail_url(&Url::parse(url).unwrap()));
         }
@@ -185,6 +189,10 @@ mod tests {
             "https://user:secret@images.kick.com/a",
             "https://localhost/a",
             "https://files.kick.com:8443/a",
+            "https://stream.kick.com.evil.test/thumbnails/a",
+            "http://stream.kick.com/thumbnails/a",
+            "https://user:secret@stream.kick.com/thumbnails/a",
+            "https://stream.kick.com:8443/thumbnails/a",
         ] {
             assert!(!valid_thumbnail_url(&Url::parse(url).unwrap()));
         }
