@@ -13,7 +13,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use regex::Regex;
 use reqwest::{
-    Client, Response,
+    Client, Response, StatusCode,
     header::{COOKIE, REFERER, SET_COOKIE},
 };
 use serde_json::Value;
@@ -1069,8 +1069,15 @@ async fn load_metadata(
             Ok(metadata)
         }
         Ok(metadata) => {
-            let value = fetch_metadata_api(vod_url, jar).await?;
-            Ok(complete_api_metadata(metadata, parse_api_metadata(&value)?))
+            let response = fetch_metadata_api(vod_url, jar).await;
+            if let Err(error) = &response {
+                logs.push(format!(
+                    "[VOD:WARN] metadata completion: {}",
+                    redact(&error.to_string())
+                ))
+                .await;
+            }
+            complete_api_result(metadata, response)
         }
         Err(error) => {
             logs.push(format!(
@@ -1081,6 +1088,30 @@ async fn load_metadata(
             let value = fetch_metadata_api(vod_url, jar).await?;
             parse_api_metadata(&value)
         }
+    }
+}
+
+fn complete_api_result(metadata: VodMetadata, response: Result<Value>) -> Result<VodMetadata> {
+    match response {
+        Ok(value) => Ok(complete_api_metadata(metadata, parse_api_metadata(&value)?)),
+        Err(error)
+            if metadata
+                .entries
+                .iter()
+                .all(|entry| !entry.manifest_url.is_empty())
+                && !error.chain().any(|cause| {
+                    cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+                        error.status().is_some_and(|status| {
+                            status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN
+                        })
+                    })
+                }) =>
+        {
+            // Duration enrichment is optional. Manifest probing and signed-cookie
+            // validation still run before analysis or download can proceed.
+            Ok(metadata)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -2199,6 +2230,54 @@ mod tests {
         );
         assert_eq!(completed.title, "추출 제목");
         assert!(completed.requires_private_auth);
+    }
+
+    #[test]
+    fn duration_enrichment_failure_keeps_usable_urls_but_not_api_access_denials() {
+        let extracted = || {
+            parse_metadata(&serde_json::json!({
+                "title": "fixture", "uploader_id": "fixture",
+                "url": "https://cdn.example/master.m3u8", "protocol": "soopvod"
+            }))
+            .unwrap()
+        };
+        let retained =
+            complete_api_result(extracted(), Err(anyhow!("temporary API failure"))).unwrap();
+        assert_eq!(retained.entries[0].duration_seconds, 0);
+        assert_eq!(
+            retained.entries[0].manifest_url,
+            "https://cdn.example/master.m3u8"
+        );
+        assert!(retained.requires_private_auth);
+        let mut missing_url = extracted();
+        missing_url.entries[0].manifest_url.clear();
+        assert!(complete_api_result(missing_url, Err(anyhow!("temporary API failure"))).is_err());
+        let mut denied = api_fixture();
+        denied["data"]["subscribed_view"] = serde_json::json!(-6303);
+        assert!(complete_api_result(extracted(), Ok(denied)).is_err());
+    }
+
+    #[tokio::test]
+    async fn duration_enrichment_keeps_http_server_failures_but_rejects_http_auth_denials() {
+        for (status, allowed) in [(500, true), (401, false), (403, false)] {
+            let server = crate::test_support::LocalManifestServer::start_with_response(status, "");
+            let response = http_client()
+                .unwrap()
+                .get(server.url())
+                .send()
+                .await
+                .unwrap();
+            let error = response.error_for_status().unwrap_err();
+            let metadata = parse_metadata(&serde_json::json!({
+                "title": "fixture", "uploader_id": "fixture",
+                "url": "https://cdn.example/master.m3u8"
+            }))
+            .unwrap();
+            assert_eq!(
+                complete_api_result(metadata, Err(error.into())).is_ok(),
+                allowed
+            );
+        }
     }
 
     #[test]
