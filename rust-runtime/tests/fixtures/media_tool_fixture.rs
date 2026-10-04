@@ -292,6 +292,19 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
     if has_arg(args, "--dump-single-json") {
         let manifest = provider_sidecar_value("manifest-url")
             .unwrap_or_else(|| "https://fixture.invalid/master.m3u8".into());
+        if mode == "single-video" || mode == "single-video-retry" {
+            println!(r#"{{"title":"Fixture VOD","uploader":"Fixture BJ","uploader_id":"fixture","upload_date":"20260923","formats":[{{"manifest_url":"{manifest}"}}],"duration":60}}"#);
+            return;
+        }
+        if mode == "single-video-signed" {
+            let cookie_path = arg_after(args, "--cookies").unwrap();
+            fs::write(cookie_path, concat!("# Netscape HTTP Cookie File\n",
+                "fixture.invalid\tFALSE\t/\tFALSE\t4102444800\tCloudFront-Key-Pair-Id\tkey\n",
+                "fixture.invalid\tFALSE\t/\tFALSE\t4102444800\tCloudFront-Policy\tpolicy\n",
+                "fixture.invalid\tFALSE\t/\tFALSE\t4102444800\tCloudFront-Signature\tsignature\n")).unwrap();
+            println!(r#"{{"title":"Fixture subscriber VOD","uploader_id":"fixture","formats":[{{"manifest_url":"{manifest}","protocol":"soopvod"}}],"duration":60}}"#);
+            return;
+        }
         println!(
             r#"{{"title":"Fixture VOD","uploader":"Fixture BJ","uploader_id":"fixture","upload_date":"20260923","entries":[{{"url":"{manifest}","duration":60}}]}}"#
         );
@@ -299,6 +312,15 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
     }
 
     if let Some(output) = arg_after(args, "-o") {
+        if mode == "single-video-retry" {
+            let marker = Path::new(output).with_extension("retried");
+            if !marker.exists() {
+                fs::write(marker, "first attempt").unwrap();
+                write_sized_file(Path::new(output), 1024);
+                eprintln!("fixture transient download failure");
+                process::exit(7);
+            }
+        }
         write_sized_file(Path::new(output), 128 * 1024);
         println!("[download] 50.0%");
         println!("[download] 100.0%");

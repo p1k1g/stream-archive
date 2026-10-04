@@ -140,6 +140,13 @@ pub(crate) struct LocalManifestServer {
 
 impl LocalManifestServer {
     pub(crate) fn start() -> Self {
+        Self::start_with_response(
+            200,
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080\nfixture.ts\n",
+        )
+    }
+
+    pub(crate) fn start_with_response(status: u16, body: &str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind local manifest fixture");
         let address = listener
             .local_addr()
@@ -149,9 +156,8 @@ impl LocalManifestServer {
             .expect("configure local manifest fixture");
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
+        let body = body.to_owned();
         let thread = thread::spawn(move || {
-            let body =
-                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080\nfixture.ts\n";
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
@@ -161,7 +167,7 @@ impl LocalManifestServer {
                         let mut request = [0u8; 4096];
                         let _ = stream.read(&mut request);
                         let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            "HTTP/1.1 {status} Fixture\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             body.len(),
                             body
                         );
