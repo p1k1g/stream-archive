@@ -39,3 +39,7 @@
 5. 결과에 맞게 이 체크포인트와 PR 본문을 갱신한다. PR은 merge하지 않는다.
 
 세부 정책과 수동 QA: [Phase 25.6 문서](PHASE25_6_VOD_RESUME_THUMBNAILS.md).
+
+## 장시간 PART 재시도 보완
+
+PR #122 첫 구현 commit `627727b52b`는 모든 CI와 Codex review를 통과했습니다. 이후 사용자 실측(49분 영상에서 인증 만료 2회)에 따라 같은 PART의 누적 시도 제한을 연속 실패 제한으로 보완 중입니다. `.part` 실제 보존 크기 high-water mark를 넘은 경우만 횟수를 초기화하며, 반복 만료 7회 시도 성공 및 진척 없는 5회 종료 fixture를 추가합니다. 보완 commit의 CI/재리뷰는 PR 최신 head를 기준으로 확인해야 합니다.

@@ -91,6 +91,26 @@ impl Drop for PartialDownloadGuard {
     }
 }
 
+/// A resumed PART gets a new failure budget only after retained media advances.
+#[derive(Default)]
+struct RetryBudget {
+    consecutive_failures: u32,
+    retained_bytes: u64,
+}
+
+impl RetryBudget {
+    fn failed(&mut self, output: &Path) {
+        let retained = fs::metadata(format!("{}.part", output.display()))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        if retained > self.retained_bytes {
+            self.retained_bytes = retained;
+            self.consecutive_failures = 0;
+        }
+        self.consecutive_failures += 1;
+    }
+}
+
 #[derive(Debug, Clone)]
 struct NetscapeCookie {
     domain: String,
@@ -582,7 +602,10 @@ async fn run_download(
         let mut last_error = String::new();
         let mut expired_download_auth = false;
         let mut resume_identity: Option<(String, usize, String)> = None;
-        for attempt in 1..=req.max_retries {
+        let mut budget = RetryBudget::default();
+        let mut attempt = 0u32;
+        while budget.consecutive_failures < req.max_retries {
+            attempt = attempt.saturating_add(1);
             if cancel.load(Ordering::SeqCst) {
                 cleanup_incomplete(&output);
                 return Ok(());
@@ -609,8 +632,8 @@ async fn run_download(
                 s.current_part = part;
                 s.state = "REFRESHING".into();
                 s.message = format!(
-                    "PART {part} 최신 URL/인증 갱신 중 ({attempt}/{})",
-                    req.max_retries
+                    "PART {part} 최신 URL/인증 갱신 중 (시도 {attempt}, 연속 실패 {}/{})",
+                    budget.consecutive_failures, req.max_retries
                 );
             }
             let refreshed =
@@ -652,7 +675,10 @@ async fn run_download(
                 .await
             {
                 last_error = error.to_string();
-                sleep_retry(attempt, cancel).await;
+                budget.failed(&output);
+                if budget.consecutive_failures < req.max_retries {
+                    sleep_retry(budget.consecutive_failures, cancel).await;
+                }
                 continue;
             }
             if let Err(err) =
@@ -660,12 +686,15 @@ async fn run_download(
             {
                 last_error = err.to_string();
                 logs.push(format!(
-                    "[VOD:WARN] PART {part} manifest/auth retry {attempt}/{}: {}",
+                    "[VOD:WARN] PART {part} manifest/auth attempt {attempt} (연속 실패 상한 {}): {}",
                     req.max_retries,
                     redact(&last_error)
                 ))
                 .await;
-                sleep_retry(attempt, cancel).await;
+                budget.failed(&output);
+                if budget.consecutive_failures < req.max_retries {
+                    sleep_retry(budget.consecutive_failures, cancel).await;
+                }
                 continue;
             }
             jar.write_file(&cookie_file)?;
@@ -707,12 +736,15 @@ async fn run_download(
                     // mistake that failed final output for a successful download.
                     let _ = fs::remove_file(&output);
                     logs.push(format!(
-                        "[VOD:WARN] PART {part} retry {attempt}/{}: {}",
+                        "[VOD:WARN] PART {part} attempt {attempt} (연속 실패 상한 {}): {}",
                         req.max_retries,
                         redact(&last_error)
                     ))
                     .await;
-                    sleep_retry(attempt, cancel).await;
+                    budget.failed(&output);
+                    if budget.consecutive_failures < req.max_retries {
+                        sleep_retry(budget.consecutive_failures, cancel).await;
+                    }
                 }
             }
         }
@@ -2154,6 +2186,29 @@ fn ffconcat_line(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn retry_budget_requires_a_new_retained_high_water_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("owned.mp4");
+        let partial = output.with_extension("mp4.part");
+        let mut budget = RetryBudget::default();
+        fs::write(&partial, [0; 20]).unwrap();
+        budget.failed(&output);
+        budget.failed(&output);
+        assert_eq!(budget.consecutive_failures, 2);
+        fs::write(&partial, [0; 10]).unwrap();
+        budget.failed(&output);
+        fs::write(&partial, [0; 20]).unwrap();
+        budget.failed(&output);
+        assert_eq!(budget.consecutive_failures, 4);
+        fs::write(&partial, [0; 21]).unwrap();
+        budget.failed(&output);
+        assert_eq!(budget.consecutive_failures, 1);
+        fs::remove_file(partial).unwrap();
+        budget.failed(&output);
+        assert_eq!(budget.consecutive_failures, 2);
+    }
+
+    #[test]
     fn download_auth_error_classification_and_terminal_partial_cleanup() {
         assert!(download_authorization_expired(
             "yt-dlp exit=1: HTTP Error 403: Forbidden"
@@ -2821,6 +2876,63 @@ mod provider_e2e {
                         .unwrap()
                         .starts_with(b"retained first fragments")
                 );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_expiry_resets_only_on_retained_progress_and_stalls_are_bounded() {
+        for (mode, expected_attempts, succeeds) in [
+            ("single-video-repeated-expiry", 7, true),
+            ("single-video-stalled", 5, false),
+        ] {
+            let fixture = ProviderFixture::new();
+            let manifest = crate::test_support::LocalManifestServer::start();
+            let yt_dlp = fixture.tool(ToolKind::YtDlp);
+            let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+            fixture.set_mode(&yt_dlp, mode);
+            fixture.set_manifest_url(&yt_dlp, manifest.url());
+            let backend = fixture.root().join("backend");
+            fs::create_dir_all(&backend).unwrap();
+            let cookie = fixture.root().join("cookies.txt");
+            fs::write(&cookie, "# Netscape HTTP Cookie File\n.sooplive.com\tTRUE\t/\tTRUE\t4102444800\tfixture\tcookie\n").unwrap();
+            let output = fixture.root().join("out");
+            let mut req = request(&output, &yt_dlp, &ffmpeg);
+            req.cookie_file = cookie.display().to_string();
+            req.max_retries = if succeeds { 2 } else { 5 };
+            let status = Arc::new(RwLock::new(VodJobStatus::default()));
+            let result = run_download(
+                &backend,
+                req,
+                &LogBuffer::new(),
+                &status,
+                &AtomicBool::new(false),
+            )
+            .await;
+            assert_eq!(result.is_ok(), succeeds, "{mode}: {result:?}");
+            let marker = fs::read_dir(&output)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "attempts"))
+                .unwrap();
+            assert_eq!(
+                fs::read_to_string(marker).unwrap(),
+                expected_attempts.to_string()
+            );
+            if succeeds {
+                let state = status.read().await;
+                assert_eq!(state.state, "COMPLETED");
+                assert_eq!(
+                    fs::read(state.output_file.as_ref().unwrap()).unwrap(),
+                    vec![b'R'; 6 * 1024]
+                );
+            } else {
+                assert!(fs::read_dir(&output).unwrap().all(|entry| {
+                    let path = entry.unwrap().path();
+                    !path
+                        .extension()
+                        .is_some_and(|ext| ext == "part" || ext == "ytdl" || ext == "mp4")
+                }));
             }
         }
     }
