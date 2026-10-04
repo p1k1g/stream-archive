@@ -1091,14 +1091,24 @@ async fn load_metadata(
     }
 }
 
-fn complete_api_result(metadata: VodMetadata, response: Result<Value>) -> Result<VodMetadata> {
+fn complete_api_result(mut metadata: VodMetadata, response: Result<Value>) -> Result<VodMetadata> {
+    let usable_urls = metadata
+        .entries
+        .iter()
+        .all(|entry| !entry.manifest_url.is_empty());
     match response {
-        Ok(value) => Ok(complete_api_metadata(metadata, parse_api_metadata(&value)?)),
+        Ok(value) => {
+            metadata.requires_private_auth |= value.get("data").is_some_and(|data| {
+                str_field(data, "sub_upload_type").is_some_and(|kind| !kind.is_empty())
+            });
+            match parse_api_metadata(&value) {
+                Ok(api) => Ok(complete_api_metadata(metadata, api)),
+                Err(_) if usable_urls && !api_access_denied(&value) => Ok(metadata),
+                Err(error) => Err(error),
+            }
+        }
         Err(error)
-            if metadata
-                .entries
-                .iter()
-                .all(|entry| !entry.manifest_url.is_empty())
+            if usable_urls
                 && !error.chain().any(|cause| {
                     cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
                         error.status().is_some_and(|status| {
@@ -1113,6 +1123,21 @@ fn complete_api_result(metadata: VodMetadata, response: Result<Value>) -> Result
         }
         Err(error) => Err(error),
     }
+}
+
+fn api_access_denied(value: &Value) -> bool {
+    let Some(data) = value.get("data") else {
+        return false;
+    };
+    let no_files = data
+        .get("files")
+        .and_then(Value::as_array)
+        .is_none_or(|files| files.is_empty());
+    matches!(api_integer(data.get("code")), Some(-6221 | -6205))
+        || api_integer(data.get("subscribed_view")).is_some_and(|code| code < 0)
+        || (no_files
+            && (data.get("adult_status").and_then(Value::as_str) == Some("notLogin")
+                || str_field(data, "sub_upload_type").is_some_and(|kind| !kind.is_empty())))
 }
 
 fn complete_api_metadata(mut metadata: VodMetadata, api: VodMetadata) -> VodMetadata {
@@ -2278,6 +2303,59 @@ mod tests {
                 allowed
             );
         }
+    }
+
+    #[test]
+    fn duration_enrichment_keeps_incomplete_payloads_but_rejects_explicit_access_denials() {
+        let metadata = || {
+            parse_metadata(&serde_json::json!({
+                "title": "fixture", "uploader_id": "fixture",
+                "url": "https://cdn.example/master.m3u8", "protocol": "soopvod"
+            }))
+            .unwrap()
+        };
+        for value in [
+            serde_json::json!({"result": 0}),
+            serde_json::json!({"result": 0, "data": {"code": -9999}}),
+            serde_json::json!({"result": 1, "data": {"code": 1}}),
+            serde_json::json!({"result": 1, "data": {"files": [{}]}}),
+        ] {
+            let retained = complete_api_result(metadata(), Ok(value.clone())).unwrap();
+            assert_eq!(retained.entries[0].duration_seconds, 0);
+            assert!(retained.requires_private_auth);
+            let mut missing_url = metadata();
+            missing_url.entries[0].manifest_url.clear();
+            assert!(complete_api_result(missing_url, Ok(value)).is_err());
+        }
+        for data in [
+            serde_json::json!({"code": -6221}),
+            serde_json::json!({"code": "-6205"}),
+            serde_json::json!({"subscribed_view": "-6303"}),
+            serde_json::json!({"adult_status": "notLogin", "files": []}),
+            serde_json::json!({"sub_upload_type": "all_board", "files": []}),
+        ] {
+            assert!(
+                complete_api_result(
+                    metadata(),
+                    Ok(serde_json::json!({
+                        "result": 0, "data": data
+                    }))
+                )
+                .is_err()
+            );
+        }
+        let public = parse_metadata(&serde_json::json!({
+            "uploader_id": "fixture", "url": "https://cdn.example/master.m3u8"
+        }))
+        .unwrap();
+        let retained = complete_api_result(
+            public,
+            Ok(serde_json::json!({
+                "result": 1, "data": {"sub_upload_type": "all_board", "files": [{}]}
+            })),
+        )
+        .unwrap();
+        assert!(retained.requires_private_auth);
     }
 
     #[test]
