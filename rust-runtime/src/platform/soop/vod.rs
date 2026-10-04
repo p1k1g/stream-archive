@@ -1064,22 +1064,42 @@ async fn load_metadata(
             if metadata
                 .entries
                 .iter()
-                .all(|entry| !entry.manifest_url.is_empty()) =>
+                .all(|entry| !entry.manifest_url.is_empty() && entry.duration_seconds > 0) =>
         {
             Ok(metadata)
         }
-        result => {
-            if let Err(error) = result {
-                logs.push(format!(
-                    "[VOD:WARN] metadata fallback: {}",
-                    redact(&error.to_string())
-                ))
-                .await;
-            }
+        Ok(metadata) => {
+            let value = fetch_metadata_api(vod_url, jar).await?;
+            Ok(complete_api_metadata(metadata, parse_api_metadata(&value)?))
+        }
+        Err(error) => {
+            logs.push(format!(
+                "[VOD:WARN] metadata fallback: {}",
+                redact(&error.to_string())
+            ))
+            .await;
             let value = fetch_metadata_api(vod_url, jar).await?;
             parse_api_metadata(&value)
         }
     }
+}
+
+fn complete_api_metadata(mut metadata: VodMetadata, api: VodMetadata) -> VodMetadata {
+    // An authorized API response is authoritative if the PART list changed.
+    // Otherwise retain fresh extractor URLs and fill only absent fields.
+    if metadata.entries.len() != api.entries.len() || metadata.streamer_id != api.streamer_id {
+        return api;
+    }
+    for (entry, api_entry) in metadata.entries.iter_mut().zip(api.entries) {
+        if entry.manifest_url.is_empty() {
+            entry.manifest_url = api_entry.manifest_url;
+        }
+        if entry.duration_seconds == 0 {
+            entry.duration_seconds = api_entry.duration_seconds;
+        }
+    }
+    metadata.requires_private_auth |= api.requires_private_auth;
+    metadata
 }
 
 async fn fetch_metadata_api(vod_url: &str, jar: &CookieJar) -> Result<Value> {
@@ -1649,24 +1669,27 @@ fn title_no(url: &str) -> Result<String> {
 }
 
 fn entry_url(value: &Value) -> String {
-    for key in ["manifest_url", "manifestUrl", "hls_url", "hlsUrl", "url"] {
-        if let Some(s) = value.get(key).and_then(Value::as_str)
+    let formats = ["formats", "requested_formats"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(Value::as_array))
+        .flatten()
+        .collect::<Vec<_>>();
+    // A selected top-level rendition can coexist with a nested master. Search
+    // every manifest field before falling back to any selected/direct URL.
+    for candidate in std::iter::once(value).chain(formats.iter().copied()) {
+        for key in ["manifest_url", "manifestUrl", "hls_url", "hlsUrl"] {
+            if let Some(s) = candidate.get(key).and_then(Value::as_str)
+                && valid_media_url(s)
+            {
+                return s.into();
+            }
+        }
+    }
+    for candidate in std::iter::once(value).chain(formats) {
+        if let Some(s) = candidate.get("url").and_then(Value::as_str)
             && valid_media_url(s)
         {
             return s.into();
-        }
-    }
-    for collection in ["formats", "requested_formats"] {
-        if let Some(formats) = value.get(collection).and_then(Value::as_array) {
-            for format in formats {
-                for key in ["manifest_url", "manifestUrl", "url"] {
-                    if let Some(s) = format.get(key).and_then(Value::as_str)
-                        && valid_media_url(s)
-                    {
-                        return s.into();
-                    }
-                }
-            }
         }
     }
     String::new()
@@ -2113,6 +2136,22 @@ mod tests {
         assert!(parse_metadata(&serde_json::json!({"uploader_id": "fixture", "url": "https://vod.sooplive.com/player/123456789"})).is_err());
     }
 
+    #[test]
+    fn nested_master_manifest_wins_over_any_selected_rendition() {
+        for collection in ["formats", "requested_formats"] {
+            let mut value = serde_json::json!({"uploader_id": "fixture", "url": "https://cdn.example/720p.m3u8"});
+            value[collection] = serde_json::json!([
+                {"url": "https://cdn.example/1080p.m3u8"},
+                {"manifest_url": "https://cdn.example/master.m3u8", "url": "https://cdn.example/540p.m3u8"}
+            ]);
+            let parsed = parse_metadata(&value).unwrap();
+            assert_eq!(
+                parsed.entries[0].manifest_url,
+                "https://cdn.example/master.m3u8"
+            );
+        }
+    }
+
     fn api_fixture() -> Value {
         serde_json::json!({"result": 1, "data": {
             "bj_id": "fixture", "title": "API 영상", "writer_nick": "채널",
@@ -2137,6 +2176,29 @@ mod tests {
                 .unwrap()
                 .requires_private_auth
         );
+    }
+
+    #[test]
+    fn api_completion_fills_missing_duration_without_replacing_valid_extractor_fields() {
+        let extracted = parse_metadata(&serde_json::json!({
+            "title": "추출 제목", "uploader_id": "fixture", "entries": [
+                {"url": "https://cdn.example/first.m3u8?fresh=1"},
+                {"url": "https://cdn.example/second.m3u8?fresh=2", "duration": 121}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(extracted.entries[0].duration_seconds, 0);
+        let mut value = api_fixture();
+        value["data"]["sub_upload_type"] = serde_json::json!("all_board");
+        let completed = complete_api_metadata(extracted, parse_api_metadata(&value).unwrap());
+        assert_eq!(completed.entries[0].duration_seconds, 60);
+        assert_eq!(completed.entries[1].duration_seconds, 121);
+        assert_eq!(
+            completed.entries[0].manifest_url,
+            "https://cdn.example/first.m3u8?fresh=1"
+        );
+        assert_eq!(completed.title, "추출 제목");
+        assert!(completed.requires_private_auth);
     }
 
     #[test]
