@@ -2264,6 +2264,32 @@ mod tests {
         assert_eq!(qualities[0].value, "best");
     }
 
+    #[test]
+    fn manifest_fixture_waits_for_complete_request_headers() {
+        use std::io::{Read, Write};
+        let server = crate::test_support::LocalManifestServer::start();
+        let url = Url::parse(server.url()).unwrap();
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", url.port().unwrap())).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        stream
+            .write_all(b"GET /master.m3u8 HTTP/1.1\r\nHost: localhost\r\n")
+            .unwrap();
+        let mut response = [0u8; 13];
+        let error = stream.read(&mut response).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        stream.write_all(b"\r\n").unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream.read_exact(&mut response).unwrap();
+        assert_eq!(&response, b"HTTP/1.1 200 ");
+    }
+
     #[tokio::test]
     async fn subscription_marker_requires_auth_before_a_publicly_reachable_manifest() {
         let manifest = crate::test_support::LocalManifestServer::start();
