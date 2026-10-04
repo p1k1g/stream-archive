@@ -131,7 +131,7 @@ cd stream-archive
 4. **대기열**에서 진행·실패·취소·재시도 상태를 확인합니다.
 5. **기록**에서 LIVE/VOD 작업 내역을 확인합니다.
 
-Phase 25.5에서는 SOOP VOD의 단일·다중 PART 해석, 공개 영상과 구독 영상의 인증 흐름, Cookie 갱신 및 재시도를 안정화하고 있습니다. 실제 계정 검증과 릴리스 포함 여부는 별도로 확인합니다. [변경 범위 및 수동 QA](docs/PHASE25_5_SOOP_VOD_STABILIZATION.md)를 참고하세요.
+Phase 25.5에서 SOOP VOD의 단일·다중 PART 해석과 공개·구독 인증 흐름을 정리했습니다. Phase 25.6에서는 인증 만료 후 이어받기와 SOOP/CHZZK 분석 결과 썸네일을 개선하고 있습니다. 실제 계정의 장시간 다운로드와 릴리스 포함 여부는 별도로 확인합니다. [이어받기 정책 및 수동 QA](docs/PHASE25_6_VOD_RESUME_THUMBNAILS.md)를 참고하세요.
 
 ## 데이터·백업·업그레이드
 

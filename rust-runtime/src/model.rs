@@ -198,6 +198,7 @@ pub struct VodPartInfo {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct VodAnalysisView {
     pub vod_url: String,
+    pub thumbnail_url: Option<String>,
     pub title: String,
     pub streamer: String,
     pub streamer_id: String,

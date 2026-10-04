@@ -512,6 +512,37 @@ impl StreamArchiveCore {
         self.vod.status().await
     }
 
+    /// Presentation receives only a bounded image for the current analysis job.
+    pub async fn vod_thumbnail(
+        &self,
+        job_id: &str,
+        vod_url: &str,
+    ) -> Result<crate::thumbnail_service::ThumbnailImage> {
+        let status = self.vod.status().await;
+        let analysis = status
+            .analysis
+            .as_ref()
+            .filter(|analysis| {
+                status.job_id.as_deref() == Some(job_id) && analysis.vod_url == vod_url
+            })
+            .ok_or_else(|| anyhow::anyhow!("현재 VOD 분석 결과와 일치하지 않습니다."))?;
+        let url = analysis
+            .thumbnail_url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("VOD 썸네일 정보가 없습니다."))?;
+        let image = crate::thumbnail_service::load_vod(status.platform, url).await?;
+        let current = self.vod.status().await;
+        if current.job_id.as_deref() != Some(job_id)
+            || current
+                .analysis
+                .as_ref()
+                .is_none_or(|analysis| analysis.vod_url != vod_url)
+        {
+            bail!("썸네일 요청 중 VOD 분석 결과가 변경되었습니다.");
+        }
+        Ok(image)
+    }
+
     pub async fn analyze_vod(&self, mut req: VodAnalyzeRequest) -> Result<VodJobStatus> {
         let _guard = self.lifecycle_lock.lock().await;
         let tools = self.store.vod_tool_settings()?;

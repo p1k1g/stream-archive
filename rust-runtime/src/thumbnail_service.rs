@@ -48,12 +48,37 @@ async fn bounded_body(response: reqwest::Response, maximum: usize) -> Result<Vec
 }
 
 pub async fn load(platform: PlatformId, url: &str) -> Result<ThumbnailImage> {
-    tokio::time::timeout(Duration::from_secs(12), load_inner(platform, url)).await?
+    tokio::time::timeout(Duration::from_secs(12), load_inner(platform, url, false)).await?
 }
 
-async fn load_inner(platform: PlatformId, url: &str) -> Result<ThumbnailImage> {
-    let url = Url::parse(url)?;
-    validate_image_url(platform, &url)?;
+pub async fn load_vod(platform: PlatformId, url: &str) -> Result<ThumbnailImage> {
+    tokio::time::timeout(Duration::from_secs(12), load_inner(platform, url, true)).await?
+}
+
+fn validate_vod_image_url(platform: PlatformId, url: &Url) -> Result<()> {
+    if !crate::support::platform::vod::validate_thumbnail_url(platform, url)
+        || url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        bail!("허용되지 않은 VOD 썸네일 이미지 주소입니다.");
+    }
+    Ok(())
+}
+
+async fn load_inner(platform: PlatformId, url: &str, vod: bool) -> Result<ThumbnailImage> {
+    let mut url = Url::parse(url)?;
+    if vod {
+        // Legacy provider thumbnails may use HTTP; never transmit over HTTP.
+        if url.scheme() == "http" {
+            url.set_scheme("https")
+                .map_err(|_| anyhow::anyhow!("잘못된 썸네일 주소입니다."))?;
+        }
+        validate_vod_image_url(platform, &url)?;
+    } else {
+        validate_image_url(platform, &url)?;
+    }
     let client = reqwest::Client::builder()
         .user_agent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
@@ -118,6 +143,36 @@ fn decode(bytes: &[u8]) -> Result<ThumbnailImage> {
 mod tests {
     use super::*;
     use image::{DynamicImage, ImageFormat};
+
+    #[test]
+    fn vod_images_are_limited_to_provider_cdns_without_credentials_or_custom_ports() {
+        for (platform, url) in [
+            (
+                PlatformId::Soop,
+                "https://videoimg.sooplive.com/thumb.php?id=123",
+            ),
+            (PlatformId::Chzzk, "https://video-phinf.pstatic.net/a.jpg"),
+            (PlatformId::Chzzk, "https://nng-phinf.pstatic.net/a.jpg"),
+        ] {
+            assert!(validate_vod_image_url(platform, &Url::parse(url).unwrap()).is_ok());
+        }
+        for url in [
+            "https://localhost/a",
+            "https://videoimg.sooplive.com.evil.test/a",
+            "https://user:secret@videoimg.sooplive.com/a",
+            "https://videoimg.sooplive.com:444/a",
+            "http://videoimg.sooplive.com/a",
+        ] {
+            assert!(validate_vod_image_url(PlatformId::Soop, &Url::parse(url).unwrap()).is_err());
+        }
+        assert!(
+            validate_vod_image_url(
+                PlatformId::Chzzk,
+                &Url::parse("https://videoimg.sooplive.com/a").unwrap()
+            )
+            .is_err()
+        );
+    }
 
     #[tokio::test]
     async fn rejects_declared_and_streamed_body_over_limit() {

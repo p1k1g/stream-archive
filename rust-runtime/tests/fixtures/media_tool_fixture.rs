@@ -292,7 +292,7 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
     if has_arg(args, "--dump-single-json") {
         let manifest = provider_sidecar_value("manifest-url")
             .unwrap_or_else(|| "https://fixture.invalid/master.m3u8".into());
-        if mode == "single-video" || mode == "single-video-retry" {
+        if mode == "single-video" || mode == "single-video-retry" || mode == "single-video-repeated-expiry" || mode == "single-video-stalled" {
             println!(r#"{{"title":"Fixture VOD","uploader":"Fixture BJ","uploader_id":"fixture","upload_date":"20260923","formats":[{{"manifest_url":"{manifest}"}}],"duration":60}}"#);
             return;
         }
@@ -312,16 +312,56 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
     }
 
     if let Some(output) = arg_after(args, "-o") {
+        if mode == "single-video-repeated-expiry" || mode == "single-video-stalled" {
+            use std::io::Write;
+            let marker = Path::new(output).with_extension("attempts");
+            let attempt = fs::read_to_string(&marker).ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0) + 1;
+            fs::write(&marker, attempt.to_string()).unwrap();
+            let partial = format!("{output}.part");
+            if attempt > 1 {
+                assert!(has_arg(args, "--continue"));
+                assert!(Path::new(&partial).is_file());
+                assert!(Path::new(&format!("{output}.ytdl")).is_file());
+            }
+            if mode == "single-video-stalled" || attempt <= 6 {
+                if mode != "single-video-stalled" || attempt == 1 {
+                    fs::OpenOptions::new().create(true).append(true).open(&partial).unwrap().write_all(&[b'R'; 1024]).unwrap();
+                }
+                fs::write(format!("{output}.ytdl"), b"retained checkpoint").unwrap();
+                // A misleading progress line must never reset a stalled budget.
+                println!("[download] {}%", attempt * 10);
+                eprintln!("HTTP Error 403: Forbidden (repeated expiry fixture)");
+                process::exit(7);
+            }
+            assert_eq!(fs::metadata(&partial).unwrap().len(), 6 * 1024);
+            fs::rename(&partial, output).unwrap();
+            fs::remove_file(format!("{output}.ytdl")).unwrap();
+            println!("[download] 100.0%");
+            return;
+        }
         if mode == "single-video-retry" || mode == "single-video-signed-retry" {
             let marker = Path::new(output).with_extension("retried");
             if !marker.exists() {
                 fs::write(marker, "first attempt").unwrap();
-                write_sized_file(Path::new(output), 1024);
-                eprintln!("fixture transient download failure");
+                fs::write(format!("{output}.part"), b"retained first fragments").unwrap();
+                fs::write(format!("{output}.ytdl"), b"fragment checkpoint 209").unwrap();
+                println!("[download] 20.9%");
+                eprintln!("HTTP Error 403: Forbidden (fixture expired authorization)");
                 process::exit(7);
             }
+            assert_eq!(fs::read(format!("{output}.part")).unwrap(), b"retained first fragments");
+            assert_eq!(fs::read(format!("{output}.ytdl")).unwrap(), b"fragment checkpoint 209");
+            assert!(has_arg(args, "--continue"));
+            fs::rename(format!("{output}.part"), output).unwrap();
+            fs::remove_file(format!("{output}.ytdl")).unwrap();
+            println!("[download] Resuming at fragment 209");
         }
-        write_sized_file(Path::new(output), 128 * 1024);
+        if mode == "single-video-retry" || mode == "single-video-signed-retry" {
+            use std::io::Write;
+            fs::OpenOptions::new().append(true).open(output).unwrap().write_all(&vec![b'A'; 128 * 1024]).unwrap();
+        } else {
+            write_sized_file(Path::new(output), 128 * 1024);
+        }
         println!("[download] 50.0%");
         println!("[download] 100.0%");
         return;

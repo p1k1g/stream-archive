@@ -7,6 +7,13 @@ use anyhow::{Result, bail};
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 
+pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bool {
+    match platform {
+        PlatformId::Soop => soop::vod::valid_thumbnail_url(url),
+        PlatformId::Chzzk => chzzk::vod::valid_thumbnail_url(url),
+    }
+}
+
 /// Platform-neutral VOD facade.
 ///
 /// Queue/history/UI code talks only to this type. Platform-specific metadata,

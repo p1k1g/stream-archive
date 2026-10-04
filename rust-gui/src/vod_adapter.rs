@@ -34,6 +34,7 @@ pub struct VodDraft {
     pub parts: Vec<PartChoice>,
     analyzed_url: Option<String>,
     output_overridden: bool,
+    pub thumbnail_generation: u64,
 }
 
 impl Default for VodDraft {
@@ -46,6 +47,7 @@ impl Default for VodDraft {
             parts: Vec::new(),
             analyzed_url: None,
             output_overridden: false,
+            thumbnail_generation: 0,
         }
     }
 }
@@ -56,9 +58,20 @@ impl VodDraft {
             return;
         }
         self.url = value;
+        self.begin_analysis();
+    }
+
+    pub fn begin_analysis(&mut self) {
+        self.thumbnail_generation += 1;
         self.analyzed_url = None;
         self.qualities.clear();
         self.parts.clear();
+    }
+
+    pub fn thumbnail_is_current(&self, generation: u64, url: &str) -> bool {
+        self.thumbnail_generation == generation
+            && normalize(&self.url) == normalize(url)
+            && self.analysis_matches_current_url()
     }
 
     pub fn sync_default_output(&mut self, value: &str) {
@@ -184,7 +197,7 @@ impl VodDraft {
         })
     }
 
-    fn analysis_matches_current_url(&self) -> bool {
+    pub(crate) fn analysis_matches_current_url(&self) -> bool {
         self.analyzed_url
             .as_deref()
             .is_some_and(|url| normalize(url) == normalize(&self.url))
@@ -321,9 +334,29 @@ fn state_tone(state: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn reanalysis_and_url_round_trip_reject_previous_thumbnail_generations() {
+        let mut draft = VodDraft::default();
+        draft.edit_url("https://vod.sooplive.com/player/123".into());
+        draft.sync_analysis(&analysis(&draft.url.clone()));
+        let first = draft.thumbnail_generation;
+        assert!(draft.thumbnail_is_current(first, &draft.url));
+        draft.begin_analysis();
+        assert!(!draft.thumbnail_is_current(first, &draft.url));
+        draft.sync_analysis(&analysis(&draft.url.clone()));
+        assert!(!draft.thumbnail_is_current(first, &draft.url));
+        let second = draft.thumbnail_generation;
+        draft.edit_url("https://chzzk.naver.com/video/456".into());
+        draft.edit_url("https://vod.sooplive.com/player/123".into());
+        draft.sync_analysis(&analysis(&draft.url.clone()));
+        assert!(!draft.thumbnail_is_current(second, &draft.url));
+        assert!(draft.thumbnail_is_current(draft.thumbnail_generation, &draft.url));
+    }
+
     fn analysis(url: &str) -> VodAnalysisView {
         VodAnalysisView {
             vod_url: url.into(),
+            thumbnail_url: None,
             title: "Title".into(),
             streamer: "Streamer".into(),
             streamer_id: "streamer-id".into(),
