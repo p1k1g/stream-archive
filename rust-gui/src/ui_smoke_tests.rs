@@ -30,12 +30,17 @@ fn click(ui: &MainWindow, x: f32, y: f32) {
 }
 
 fn render(window: &MinimalSoftwareWindow, width: usize, height: usize) {
+    let _ = render_pixels(window, width, height);
+}
+
+fn render_pixels(window: &MinimalSoftwareWindow, width: usize, height: usize) -> Vec<Rgb8Pixel> {
     window.request_redraw();
     let mut pixels = vec![Rgb8Pixel::default(); width * height];
     assert!(window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, width);
     }));
     ui_snapshot::save(&pixels, width, height);
+    pixels
 }
 
 #[test]
@@ -150,7 +155,10 @@ fn native_navigation_and_watcher_toggle_preserve_input_guards() {
 #[test]
 fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size() {
     use crate::{ChannelConfigRow, LiveChannelRow, StorageDisplayRow};
-    use std::{cell::RefCell, collections::BTreeSet};
+    use std::{
+        cell::RefCell,
+        collections::{BTreeMap, BTreeSet},
+    };
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(UiTestPlatform(window.clone()))).unwrap();
     let ui = MainWindow::new().unwrap();
@@ -192,11 +200,11 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
             ..Default::default()
         },
         LiveChannelRow {
-            profile_image: slint::Image::from_rgba8(
+            thumbnail_image: slint::Image::from_rgba8(
                 slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &vec![128u8; 200 * 200 * 4],
-                    200,
-                    200,
+                    &vec![128u8; 320 * 180 * 4],
+                    320,
+                    180,
                 ),
             ),
             target: "SOOP:recording".into(),
@@ -223,9 +231,36 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
     let folders = Rc::new(Cell::new(0));
     let observed = folders.clone();
     state.on_live_open_folder(move |_| observed.set(observed.get() + 1));
+    let picked_channels = Rc::new(RefCell::new(BTreeSet::new()));
+    let observed = picked_channels.clone();
+    let pick_widths = Rc::new(RefCell::new(BTreeMap::<i32, BTreeSet<u32>>::new()));
+    let observed_widths = pick_widths.clone();
+    let pointer_x = Rc::new(Cell::new(0u32));
+    let observed_x = pointer_x.clone();
+    state.on_channel_pick_output(move |index| {
+        observed.borrow_mut().insert(index);
+        observed_widths
+            .borrow_mut()
+            .entry(index)
+            .or_default()
+            .insert(observed_x.get());
+    });
     for (width, height) in [(1000, 650), (1120, 720), (1440, 900)] {
         ui.window().set_size(PhysicalSize::new(width, height));
-        render(&window, width as usize, height as usize);
+        let pixels = render_pixels(&window, width as usize, height as usize);
+        // The entire CHZZK glyph must fit inside its 40px tile. A naturally sized
+        // 512px child clipped by the tile renders a solid mint square instead.
+        let mint_pixels = (200..400)
+            .flat_map(|y| (224..264).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                let p = pixels[*y * width as usize + *x];
+                p.g > 200 && p.r < 30 && p.b < 200
+            })
+            .count();
+        assert!(
+            (100..1100).contains(&mint_pixels),
+            "{width}x{height}: clipped platform logo ({mint_pixels} mint pixels)"
+        );
         actions.borrow_mut().clear();
         folders.set(0);
         // Exercise the visible hit regions rather than invoking callbacks directly.
@@ -293,6 +328,38 @@ fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size()
                 .len(),
             32
         );
+        picked_channels.borrow_mut().clear();
+        pick_widths.borrow_mut().clear();
+        for y in (175..410).step_by(5) {
+            for x in (width - 300..width - 15).step_by(5) {
+                pointer_x.set(x);
+                click(&ui, x as f32, y as f32);
+            }
+        }
+        assert_eq!(
+            *picked_channels.borrow(),
+            BTreeSet::from([0, 1]),
+            "{width}x{height}: both folder buttons must remain accessible"
+        );
+        for index in [0, 1] {
+            assert!(
+                pick_widths
+                    .borrow()
+                    .get(&index)
+                    .is_some_and(|xs| xs.len() >= 12),
+                "{width}x{height}: folder button {index} must expose at least 60px of its width without overlapping another action"
+            );
+        }
+        state.set_config_busy(true);
+        picked_channels.borrow_mut().clear();
+        render(&window, width as usize, height as usize);
+        for y in (175..410).step_by(5) {
+            for x in (width - 300..width - 15).step_by(5) {
+                click(&ui, x as f32, y as f32);
+            }
+        }
+        assert!(picked_channels.borrow().is_empty());
+        state.set_config_busy(false);
         state.set_active_page("LIVE".into());
     }
     state.set_close_dialog_visible(true);

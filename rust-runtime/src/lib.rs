@@ -10,13 +10,13 @@ pub mod model;
 pub mod native_watcher;
 pub mod platform_runtime;
 pub mod primary_config;
-pub mod profile_service;
 pub mod queue_service;
 pub mod recorder;
 pub mod security;
 pub mod storage_service;
 pub mod store;
 pub mod support;
+pub mod thumbnail_service;
 pub mod tool_discovery;
 pub mod vod;
 

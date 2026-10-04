@@ -1,5 +1,7 @@
 # Phase 25.3 — LIVE 채널 프로필 이미지
 
+> 이 문서는 Phase 25.3 구현 당시의 정책입니다. Phase 25.4에서는 채널 프로필 이미지를 플랫폼 로고 / 방송 썸네일로 전환합니다. [현재 정책](PHASE25_4_LIVE_THUMBNAILS_FOLDER_PICKER.md)을 참고하세요.
+
 상태: 구현 완료, PR 검토 중. 자동 검증 결과는 PR CI에서 확인하며 Windows 수동 QA는 미완료입니다. merge는 사용자가 결정합니다.
 
 ## 범위

@@ -171,3 +171,16 @@ mod tests {
         assert!(!CHZZK.accepts_vod_url(&Url::parse("https://example.com/video/6325166").unwrap()));
     }
 }
+
+#[cfg(test)]
+mod profile_identity_tests {
+    #[test]
+    fn chzzk_profile_requires_matching_identity() {
+        let account = "0123456789abcdef0123456789abcdef";
+        let mut value = serde_json::json!({"code":200,"content":{"channelId":account,"channelName":"테스트","channelImageUrl":"https://nng-phinf.pstatic.net/a.png"}});
+        let provider = super::super::provider(super::super::PlatformId::Chzzk);
+        assert!(provider.profile_image_url(account, Some(&value)).is_ok());
+        value["content"]["channelId"] = "ffffffffffffffffffffffffffffffff".into();
+        assert!(provider.profile_image_url(account, Some(&value)).is_err());
+    }
+}

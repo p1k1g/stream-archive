@@ -62,6 +62,19 @@ impl ChannelsDraft {
         }
     }
 
+    pub fn apply_selected_path(
+        &mut self,
+        index: usize,
+        expected: &[Channel],
+        path: String,
+    ) -> bool {
+        if self.rows != expected || index >= self.rows.len() {
+            return false;
+        }
+        self.edit(index, "outdir", path);
+        true
+    }
+
     pub fn snapshot(&self) -> Vec<Channel> {
         self.rows.clone()
     }
@@ -125,5 +138,25 @@ mod tests {
         draft.select_platform(99, "CHZZK");
         draft.remove(99);
         assert!(!draft.dirty());
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    #[test]
+    fn picker_updates_only_matching_draft_and_does_not_persist() {
+        let mut draft = ChannelsDraft::default();
+        draft.add();
+        let before = draft.snapshot();
+        assert!(draft.apply_selected_path(0, &before, "G:\\한글 폴더".into()));
+        assert!(draft.dirty());
+        assert_eq!(draft.rows[0].outdir, "G:\\한글 폴더");
+        assert!(!draft.apply_selected_path(0, &before, "stale".into()));
+        let before = draft.snapshot();
+        draft.remove(0);
+        draft.add();
+        assert!(!draft.apply_selected_path(0, &before, "wrong row".into()));
+        assert!(draft.rows[0].outdir.is_empty());
     }
 }

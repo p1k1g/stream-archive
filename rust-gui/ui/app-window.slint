@@ -15,7 +15,7 @@ export struct ChannelConfigRow {
     outdir: string,
 }
 export struct LiveChannelRow {
-    profile-image: image,
+    thumbnail-image: image,
     target: string,
     platform: string,
     name: string,
@@ -140,6 +140,7 @@ export global AppState {
     callback channel-toggle-enabled(int);
     callback channel-select-platform(int, string);
     callback channel-resolve(int);
+    callback channel-pick-output(int);
     callback save-channels();
     callback reload-configuration();
 
@@ -450,20 +451,20 @@ export component MainWindow inherits Window {
                                     HorizontalLayout {
                                         spacing: 12px;
                                     VerticalLayout {
-                                        width: 54px; horizontal-stretch: 0; vertical-stretch: 0; spacing: 5px;
-                                        if row.profile-image.width > 0: HorizontalLayout {
-                                            alignment: center; vertical-stretch: 0;
-                                            Rectangle {
-                                                width: 40px; height: 40px; border-radius: 6px;
-                                                clip: true; background: Theme.surface;
-                                                Image { source: row.profile-image; image-fit: contain; }
+                                        width: row.thumbnail-image.width > 0 ? 120px : 40px;
+                                        horizontal-stretch: 0; vertical-stretch: 0; spacing: 4px;
+                                        Rectangle {
+                                            width: parent.width;
+                                            height: row.thumbnail-image.width > 0 ? 67.5px : 40px;
+                                            border-radius: 6px; clip: true; background: Theme.surface;
+                                            if row.thumbnail-image.width > 0: Image { width: parent.width; height: parent.height; source: row.thumbnail-image; image-fit: contain; }
+                                            if row.thumbnail-image.width == 0: Image {
+                                                width: parent.width; height: parent.height;
+                                                source: row.platform == "CHZZK" ? @image-url("../assets/platform-chzzk.png") : @image-url("../assets/platform-soop.png");
+                                                image-fit: contain;
                                             }
                                         }
-                                        if row.profile-image.width == 0: PlatformBadge { platform: row.platform; }
-                                        if row.profile-image.width > 0: Text {
-                                            text: row.platform; height: 14px; vertical-stretch: 0; font-size: 10px; color: Theme.muted;
-                                            horizontal-alignment: center;
-                                        }
+                                        Text { text: row.platform; height: 14px; vertical-stretch: 0; font-size: 10px; color: Theme.muted; horizontal-alignment: center; }
                                     }
                                     VerticalLayout {
                                         horizontal-stretch: 1;
@@ -587,14 +588,18 @@ export component MainWindow inherits Window {
                                         LineEdit { min-width: 0px; height: 34px; font-size: 13px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
                                     }
                                     VerticalLayout {
-                                        width: min(270px, 210px + max(0px, root.width - 1000px) * 0.5); spacing: 4px;
+                                        width: min(230px, 210px + max(0px, root.width - 1000px) / 6); spacing: 4px;
                                         Text { text: "계정 / 채널 ID"; color: Theme.muted; font-size: 12px; }
                                         LineEdit { min-width: 0px; height: 34px; font-size: 12px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
                                     }
                                     VerticalLayout {
-                                        min-width: 80px; horizontal-stretch: 2; spacing: 4px;
+                                        min-width: 120px; horizontal-stretch: 2; spacing: 4px;
                                         Text { text: "저장 폴더"; color: Theme.muted; font-size: 12px; }
-                                        LineEdit { min-width: 0px; height: 34px; font-size: 13px; text <=> row.outdir; placeholder-text: "기본 경로 사용"; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "outdir", value); } }
+                                        HorizontalLayout {
+                                            spacing: 4px;
+                                            LineEdit { min-width: 40px; horizontal-stretch: 1; height: 34px; font-size: 13px; text <=> row.outdir; placeholder-text: "기본 경로 사용"; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "outdir", value); } }
+                                            Button { text: "폴더 선택"; width: 76px; height: 34px; enabled: !AppState.config-busy; clicked => { AppState.channel-pick-output(index); } }
+                                        }
                                     }
                                     VerticalLayout { alignment: end; Button { text: "이름 조회"; enabled: !AppState.config-busy && row.account != ""; clicked => { AppState.channel-resolve(index); } } }
                                     VerticalLayout { alignment: end; Button { text: "삭제"; danger: true; enabled: !AppState.config-busy; clicked => { AppState.channel-remove(index); } } }
