@@ -55,6 +55,7 @@ impl ChannelsDraft {
         let platform = match value {
             "SOOP" => PlatformId::Soop,
             "CHZZK" => PlatformId::Chzzk,
+            "KICK" => PlatformId::Kick,
             _ => return,
         };
         if let Some(channel) = self.rows.get_mut(index) {
@@ -92,6 +93,17 @@ mod tests {
             account: "example".into(),
             outdir: String::new(),
         }
+    }
+
+    #[test]
+    fn kick_selection_retains_channel_fields() {
+        let mut draft = ChannelsDraft::default();
+        draft.add();
+        draft.edit(0, "account", "fixture".into());
+        draft.select_platform(0, "KICK");
+        assert_eq!(draft.rows[0].platform, PlatformId::Kick);
+        assert_eq!(draft.rows[0].account, "fixture");
+        assert!(draft.dirty());
     }
 
     #[test]

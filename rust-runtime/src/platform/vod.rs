@@ -11,6 +11,7 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
     match platform {
         PlatformId::Soop => soop::vod::valid_thumbnail_url(url),
         PlatformId::Chzzk => chzzk::vod::valid_thumbnail_url(url),
+        PlatformId::Kick => false,
     }
 }
 
@@ -79,6 +80,12 @@ impl VodManager {
         match platform {
             PlatformId::Soop => self.soop.status().await,
             PlatformId::Chzzk => self.chzzk.status().await,
+            PlatformId::Kick => VodJobStatus {
+                platform,
+                state: "UNSUPPORTED".into(),
+                message: "KICK VOD는 아직 지원하지 않습니다.".into(),
+                ..Default::default()
+            },
         }
     }
 
@@ -115,6 +122,7 @@ impl VodManager {
         let primary = match selected {
             PlatformId::Soop => self.soop.terminal_status(job_id).await,
             PlatformId::Chzzk => self.chzzk.terminal_status(job_id).await,
+            PlatformId::Kick => None,
         };
         if primary.is_some() {
             return primary;
@@ -122,6 +130,7 @@ impl VodManager {
         match selected {
             PlatformId::Soop => self.chzzk.terminal_status(job_id).await,
             PlatformId::Chzzk => self.soop.terminal_status(job_id).await,
+            PlatformId::Kick => None,
         }
     }
 
@@ -133,6 +142,7 @@ impl VodManager {
         match platform {
             PlatformId::Soop => self.soop.analyze(req).await,
             PlatformId::Chzzk => self.chzzk.analyze(req).await,
+            PlatformId::Kick => bail!("KICK VOD는 아직 지원하지 않습니다."),
         }
     }
 
@@ -144,6 +154,7 @@ impl VodManager {
         match platform {
             PlatformId::Soop => self.soop.download(req).await,
             PlatformId::Chzzk => self.chzzk.download(req).await,
+            PlatformId::Kick => bail!("KICK VOD는 아직 지원하지 않습니다."),
         }
     }
 
@@ -158,6 +169,7 @@ impl VodManager {
         match platform {
             PlatformId::Soop => self.soop.cancel().await,
             PlatformId::Chzzk => self.chzzk.cancel().await,
+            PlatformId::Kick => bail!("KICK VOD는 아직 지원하지 않습니다."),
         }
     }
 }
@@ -166,6 +178,7 @@ pub(crate) fn validate_download_request(req: &VodDownloadRequest) -> Result<()> 
     match vod_platform(&req.vod_url)? {
         PlatformId::Soop => soop::vod::validate_download_request(req),
         PlatformId::Chzzk => chzzk::vod::validate_download_request(req),
+        PlatformId::Kick => bail!("KICK VOD는 아직 지원하지 않습니다."),
     }
 }
 
@@ -203,6 +216,7 @@ mod tests {
             let (status, token) = match platform {
                 PlatformId::Soop => manager.soop.notification_state(),
                 PlatformId::Chzzk => manager.chzzk.notification_state(),
+                PlatformId::Kick => unreachable!("this test only iterates VOD providers"),
             };
             let finished = VodJobStatus {
                 platform,

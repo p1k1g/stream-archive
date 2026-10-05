@@ -847,6 +847,56 @@ mod tests {
     }
 
     #[test]
+    fn kick_channels_and_live_history_survive_backup_restore_without_schema_changes() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();
+        let kick = Channel {
+            platform: PlatformId::Kick,
+            enabled: true,
+            name: "KICK 방송자".into(),
+            account: "fixture".into(),
+            outdir: "KICK 저장".into(),
+        };
+        let soop = Channel {
+            platform: PlatformId::Soop,
+            ..kick.clone()
+        };
+        store.sync_channels(&[kick.clone(), soop]).unwrap();
+        store
+            .start_live(&LiveHistoryItem {
+                platform: PlatformId::Kick,
+                id: "kick-live".into(),
+                account: "fixture".into(),
+                channel_name: kick.name.clone(),
+                bno: Some("123".into()),
+                title: Some("방송 제목".into()),
+                started_at: "2026-10-04T00:00:00Z".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .finish_live(
+                "kick-live",
+                "2026-10-04T01:00:00Z",
+                3600,
+                1024,
+                "BROADCAST ENDED",
+                "COMPLETED",
+            )
+            .unwrap();
+        let backup = dir.path().join("backup.db");
+        store.backup_to(&backup).unwrap();
+        store.sync_channels(&[]).unwrap();
+        store.restore_from(&backup).unwrap();
+        assert!(store.channels().unwrap().contains(&kick));
+        assert_eq!(store.channels().unwrap().len(), 2);
+        let history =
+            crate::history_service::load_history(store.path(), &Default::default()).unwrap();
+        assert_eq!(history.live[0].platform, PlatformId::Kick);
+        assert_eq!(history.live[0].title.as_deref(), Some("방송 제목"));
+    }
+
+    #[test]
     fn fresh_store_is_first_run_until_user_configuration_is_written() {
         let dir = tempdir().unwrap();
         let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();

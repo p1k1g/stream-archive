@@ -757,6 +757,48 @@ mod provider_e2e {
     }
 
     #[tokio::test]
+    async fn kick_live_plugin_records_without_cookies_or_chzzk_remux() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        let manager = RecorderManager::new(LogBuffer::new());
+        let config = recorder_config(streamlink);
+        let input = StreamInput::PluginUrl {
+            url: "https://kick.com/fixture".into(),
+            cookies: Vec::new(),
+            start_at_zero: false,
+        };
+        let mut recording = manager
+            .start(
+                &config,
+                PlatformId::Kick,
+                &input,
+                fixture.root().join("KICK 한글 녹화.ts"),
+                "123".into(),
+                "방송 제목".into(),
+                "fixture",
+                "fixture",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            wait_for_exit(&manager, &mut recording, &config).await,
+            Some(0)
+        );
+        assert!(recording.file.is_file());
+        let invocation = fixture.invocations();
+        assert!(invocation.contains("--can-handle-url"));
+        assert!(invocation.contains("https://kick.com/fixture"));
+        assert!(invocation.contains("--output"));
+        assert!(
+            invocation
+                .lines()
+                .any(|line| line.starts_with("argv[") && line.ends_with("=best"))
+        );
+        assert!(!invocation.contains("--http-cookies-file"));
+        assert!(!invocation.contains("--player-args"));
+    }
+
+    #[tokio::test]
     async fn live_provider_e2e_maps_nonzero_and_spawn_failure() {
         let fixture = ProviderFixture::new();
         let streamlink = fixture.tool(ToolKind::Streamlink);
@@ -819,6 +861,47 @@ mod provider_e2e {
                 &config,
                 PlatformId::Soop,
                 &StreamInput::DirectHls("https://fixture.invalid/cancel.m3u8".into()),
+                fixture.root().join("cancel.ts"),
+                "bno".into(),
+                "title".into(),
+                "channel",
+                "account",
+            )
+            .await
+            .unwrap();
+        fixture
+            .wait_for_path(&fixture.child_ready_path(&streamlink))
+            .await;
+        manager.stop(&mut recording).await.unwrap();
+        fixture.assert_child_stopped(&streamlink).await;
+
+        let unrelated_pid = unrelated.id();
+        assert!(
+            test_process_running(unrelated_pid),
+            "unrelated process must survive LIVE owned cancellation"
+        );
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+    }
+    #[tokio::test]
+    async fn kick_live_cancel_preserves_unrelated_process() {
+        let fixture = ProviderFixture::new();
+        let streamlink = fixture.tool(ToolKind::Streamlink);
+        fixture.set_mode(&streamlink, "run-spawn-child");
+        let manager = RecorderManager::new(LogBuffer::new());
+        let config = recorder_config(streamlink.clone());
+        let mut unrelated = fixture.spawn_unrelated();
+        fixture.wait_for_unrelated().await;
+
+        let mut recording = manager
+            .start(
+                &config,
+                PlatformId::Kick,
+                &StreamInput::PluginUrl {
+                    url: "https://kick.com/fixture".into(),
+                    cookies: Vec::new(),
+                    start_at_zero: false,
+                },
                 fixture.root().join("cancel.ts"),
                 "bno".into(),
                 "title".into(),

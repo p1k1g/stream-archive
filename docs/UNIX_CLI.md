@@ -580,3 +580,17 @@ plaintext fallback.
 
 Public release/version/tag decisions and real provider/session QA remain Phase
 23.7 Release Candidate / Final QA.
+
+
+## KICK 공개 LIVE (Phase 26.1)
+
+KICK 채널은 URL 전체 대신 마지막 이름(slug)을 등록합니다. VOD/Queue 및 제한 콘텐츠 인증은 지원하지 않습니다.
+
+```bash
+stream-archive-cli channels add kick xqc "xQc" "/srv/archive/kick"
+stream-archive-cli channels action kick xqc recheck
+stream-archive-cli channels action kick xqc stop
+stream-archive-cli serve --watch
+```
+
+최신 Streamlink KICK 플러그인이 필요합니다. API/JS challenge 및 Chromium 브라우저 요구 조건, headless 환경 제한은 [KICK LIVE 사용 조건](PHASE26_1_KICK_LIVE.md)을 확인하세요. API 접근 오류를 오프라인으로 간주하지 않습니다.

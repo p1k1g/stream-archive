@@ -6,6 +6,7 @@ use std::{fmt, str::FromStr};
 use url::Url;
 
 pub mod chzzk;
+pub mod kick;
 pub mod live;
 pub mod soop;
 pub mod vod;
@@ -16,6 +17,7 @@ pub enum PlatformId {
     #[default]
     Soop,
     Chzzk,
+    Kick,
 }
 
 impl PlatformId {
@@ -23,6 +25,7 @@ impl PlatformId {
         match self {
             Self::Soop => "SOOP",
             Self::Chzzk => "CHZZK",
+            Self::Kick => "KICK",
         }
     }
 
@@ -30,6 +33,7 @@ impl PlatformId {
         match self {
             Self::Soop => "ts",
             Self::Chzzk => "ts",
+            Self::Kick => "ts",
         }
     }
 }
@@ -47,6 +51,7 @@ impl FromStr for PlatformId {
         match value.trim().to_ascii_uppercase().as_str() {
             "" | "SOOP" => Ok(Self::Soop),
             "CHZZK" => Ok(Self::Chzzk),
+            "KICK" => Ok(Self::Kick),
             other => bail!("지원하지 않는 플랫폼입니다: {other}"),
         }
     }
@@ -73,6 +78,7 @@ pub fn provider(id: PlatformId) -> &'static dyn PlatformProvider {
     match id {
         PlatformId::Soop => &soop::SOOP,
         PlatformId::Chzzk => &chzzk::CHZZK,
+        PlatformId::Kick => &kick::KICK,
     }
 }
 

@@ -1496,6 +1496,29 @@ mod tests {
     }
 
     #[test]
+    fn kick_session_and_scoped_commands_do_not_require_soop_credentials() {
+        let kick = Channel {
+            platform: PlatformId::Kick,
+            enabled: true,
+            account: "fixture".into(),
+            name: "KICK".into(),
+            outdir: String::new(),
+        };
+        assert!(!channels_require_soop(std::slice::from_ref(&kick)));
+        let sessions = create_sessions(std::slice::from_ref(&kick), &Client::new()).unwrap();
+        assert!(sessions.contains_key(&PlatformId::Kick));
+        let states = HashMap::from([(
+            channel_key(PlatformId::Kick, "fixture"),
+            ChannelState::new(kick),
+        )]);
+        assert_eq!(
+            command_state_key(&states, "KICK:FIXTURE").unwrap(),
+            "KICK:fixture"
+        );
+        assert!(command_state_key(&states, "SOOP:fixture").is_err());
+    }
+
+    #[test]
     fn soop_worker_credentials_are_needed_only_for_enabled_soop_channels() {
         assert!(!channels_require_soop(&[chzzk_channel(true)]));
 

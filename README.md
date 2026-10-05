@@ -1,6 +1,6 @@
 # Stream Archive
 
-**SOOP과 CHZZK의 LIVE 자동 녹화와 VOD 다운로드를 관리하는 로컬 아카이브 도구입니다.**
+**SOOP·CHZZK의 LIVE 자동 녹화와 VOD 다운로드, KICK 공개 LIVE 녹화를 관리하는 로컬 아카이브 도구입니다.**
 
 Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행을 제공합니다. Queue, History, 백업·복구, Diagnostics를 한곳에서 관리할 수 있습니다.
 
@@ -23,7 +23,7 @@ Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행�
 
 ### 채널
 
-SOOP/CHZZK 녹화 채널을 등록하고 관리합니다.
+SOOP/CHZZK/KICK 녹화 채널을 등록하고 관리합니다. KICK은 공개 LIVE만 지원하며 VOD는 지원하지 않습니다.
 
 ![Stream Archive Windows Native 채널 화면](docs/images/channels.png)
 
@@ -57,7 +57,7 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
 SOOP LIVE를 사용하려면 [backend/worker.js](backend/worker.js)를 본인의 Cloudflare Workers에 배포하고 앱에 Worker URL과 API key를 설정해야 합니다. **Worker URL에는 `/soop/url`을 포함**하고, **앱의 Worker API key는 Worker secret `API_SECRET`과 같은 값**을 입력합니다. Cloudflare 계정의 API Token을 입력하는 항목이 아닙니다.
 
-생성·배포·secret 설정과 연결 확인은 [Cloudflare Worker 설정 가이드](docs/CLOUDFLARE_WORKER.md)를 따라 진행하세요. CHZZK만 사용하는 경우 이 단계는 필요하지 않습니다(SOOP 채널은 비활성화). SOOP VOD 다운로드 경로에도 이 Worker를 사용하지 않습니다.
+생성·배포·secret 설정과 연결 확인은 [Cloudflare Worker 설정 가이드](docs/CLOUDFLARE_WORKER.md)를 따라 진행하세요. CHZZK/KICK만 사용하는 경우 이 단계는 필요하지 않습니다(SOOP 채널은 비활성화). SOOP VOD 다운로드 경로에도 이 Worker를 사용하지 않습니다.
 
 ### Windows
 
@@ -97,13 +97,13 @@ cd stream-archive
 
 ## 주요 기능 및 지원 범위
 
-| 기능 | SOOP | CHZZK |
-|---|:---:|:---:|
-| LIVE 자동 녹화 | ✅ | ✅ |
-| VOD 분석·다운로드 | ✅ | ✅ |
-| Queue / History | ✅ | ✅ |
-| 취소·재시도 | ✅ | ✅ |
-| 클립 / CATCH / 쇼츠 / 기타 별도 콘텐츠 | 미지원 | 미지원 |
+| 기능 | SOOP | CHZZK | KICK |
+|---|:---:|:---:|:---:|
+| LIVE 자동 녹화 | ✅ | ✅ | 공개 LIVE (Phase 26.1) |
+| VOD 분석·다운로드 | ✅ | ✅ | 미지원 |
+| Queue / History | ✅ | ✅ | LIVE History만 |
+| 취소·재시도 | ✅ | ✅ | LIVE 중지·재확인 |
+| 클립 / CATCH / 쇼츠 / 기타 별도 콘텐츠 | 미지원 | 미지원 | 미지원 |
 
 - Windows Native UI에서 채널·녹화·다운로드 관리
 - 저장 경로·품질 설정 및 LIVE 저장공간 확인
@@ -111,7 +111,7 @@ cd stream-archive
 - 자동 백업 정책, Backup / Restore, Diagnostics / Runtime Logs
 - Windows DPAPI / Linux Secret Service / macOS Keychain을 통한 비밀정보 보호
 
-지원 대상은 SOOP/CHZZK의 일반 LIVE/VOD입니다. 클립, CATCH, 쇼츠·짧은 영상, 별도 게시물·커뮤니티 콘텐츠 등은 지원하지 않습니다.
+지원 대상은 SOOP/CHZZK의 일반 LIVE/VOD 및 KICK 공개 LIVE입니다. KICK은 채널 URL의 마지막 이름(slug)을 등록합니다. API 차단은 오프라인으로 처리하지 않으며, 최신 Streamlink 및 JS challenge 처리용 Chromium 계열 브라우저가 필요할 수 있습니다. 개발 브랜치의 실제 환경 검증과 배포 포함 여부는 별도로 확인합니다. [KICK LIVE 사용 조건과 수동 QA](docs/PHASE26_1_KICK_LIVE.md)를 참고하세요. 클립, CATCH, 쇼츠·짧은 영상, 별도 게시물·커뮤니티 콘텐츠 등은 지원하지 않습니다.
 
 ## 기본 사용법
 
@@ -172,7 +172,7 @@ Windows Slint UI와 Unix CLI·headless는 공통 `StreamArchiveCore`를 사용�
 
 ## 프로젝트 안내 및 라이선스
 
-Stream Archive는 독립적인 오픈소스 프로젝트이며 SOOP, NAVER, CHZZK, Streamlink, FFmpeg, yt-dlp와 제휴·승인·후원 관계가 없습니다. 명칭과 상표는 해당 권리자에게 귀속됩니다.
+Stream Archive는 독립적인 오픈소스 프로젝트이며 SOOP, NAVER, CHZZK, KICK, Streamlink, FFmpeg, yt-dlp와 제휴·승인·후원 관계가 없습니다. 명칭과 상표는 해당 권리자에게 귀속됩니다.
 
 사용자는 적용되는 법률·저작권 규정·각 서비스 이용약관을 준수해야 합니다. 이 프로젝트는 콘텐츠 이용 권한이나 서비스 접근 제한을 우회할 권리를 부여하지 않습니다.
 
