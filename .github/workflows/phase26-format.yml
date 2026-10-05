@@ -15,7 +15,11 @@ jobs:
           cargo fmt --manifest-path rust-runtime/Cargo.toml
           cargo fmt --manifest-path rust-gui/Cargo.toml
           git diff --binary > phase26-format.patch
+          cp "$(rustup which rustfmt)" rustfmt-linux
+          gzip rustfmt-linux
       - uses: actions/upload-artifact@v4
         with:
           name: phase26-format
-          path: phase26-format.patch
+          path: |
+            phase26-format.patch
+            rustfmt-linux.gz

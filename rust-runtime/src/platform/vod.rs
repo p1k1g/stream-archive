@@ -1,4 +1,4 @@
-use super::{PlatformId, chzzk, detect_vod_platform, provider, soop, kick};
+use super::{PlatformId, chzzk, detect_vod_platform, kick, provider, soop};
 use crate::{
     backend::LogBuffer,
     model::{VodAnalyzeRequest, VodDownloadRequest, VodJobStatus},
@@ -37,7 +37,11 @@ impl VodManager {
                 logs.clone(),
                 events.clone(),
             ),
-            chzzk: chzzk::vod::VodManager::new_with_events(backend_dir.clone(), logs.clone(), events.clone()),
+            chzzk: chzzk::vod::VodManager::new_with_events(
+                backend_dir.clone(),
+                logs.clone(),
+                events.clone(),
+            ),
             kick: kick::vod::VodManager::new_with_events(backend_dir, logs, events.clone()),
             events,
             selected: Mutex::new(PlatformId::Soop),
@@ -66,7 +70,9 @@ impl VodManager {
         if soop.running {
             soop_epoch.store(epoch, std::sync::atomic::Ordering::Release);
         }
-        if kick.running { kick_epoch.store(epoch, std::sync::atomic::Ordering::Release); }
+        if kick.running {
+            kick_epoch.store(epoch, std::sync::atomic::Ordering::Release);
+        }
         if chzzk.running {
             chzzk_epoch.store(epoch, std::sync::atomic::Ordering::Release);
         }
@@ -99,7 +105,9 @@ impl VodManager {
             return Some((PlatformId::Chzzk, chzzk));
         }
         let kick = self.kick.status().await;
-        if kick.running { return Some((PlatformId::Kick, kick)); }
+        if kick.running {
+            return Some((PlatformId::Kick, kick));
+        }
         None
     }
 
@@ -135,7 +143,9 @@ impl VodManager {
                 PlatformId::Chzzk => self.chzzk.terminal_status(job_id).await,
                 PlatformId::Kick => self.kick.terminal_status(job_id).await,
             };
-            if result.is_some() { return result; }
+            if result.is_some() {
+                return result;
+            }
         }
         None
     }

@@ -1876,7 +1876,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
         if let Some(ui) = weak.upgrade() {
             let state = ui.global::<AppState>();
             let secrets = BTreeMap::from([
-                ("KICK_SESSION_TOKEN".into(), state.get_kick_session_token_draft().to_string()),
+                (
+                    "KICK_SESSION_TOKEN".into(),
+                    state.get_kick_session_token_draft().to_string(),
+                ),
                 (
                     "SOOP_PASSWORD".into(),
                     state.get_soop_password_draft().to_string(),
@@ -1909,7 +1912,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let weak = ui.as_weak();
     let provider_sender = sender.clone();
     state.on_clear_kick_token(move || {
-        if let Some(ui) = weak.upgrade() { send_config(&ui, &provider_sender, Request::ClearKickToken); }
+        if let Some(ui) = weak.upgrade() {
+            send_config(&ui, &provider_sender, Request::ClearKickToken);
+        }
     });
 
     let weak = ui.as_weak();

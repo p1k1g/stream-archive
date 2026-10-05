@@ -382,6 +382,15 @@ fn run_ffmpeg_fixture(args: &[std::ffi::OsString], mode: &str) {
         .map(|value| value.to_string_lossy().into_owned())
         .find(|value| !value.starts_with('-') && !value.starts_with("pipe:"));
 
+    if mode == "kick-direct-success" || mode == "kick-direct-truncated" {
+        if let Some(target) = target.as_deref() {
+            fs::write(target, b"\x00\x00\x00\x18ftypisomfixture-mp4").unwrap();
+        }
+        println!("out_time_us={}", if mode == "kick-direct-success" { 60000000 } else { 1000000 });
+        println!("progress=end");
+        return;
+    }
+
     if mode == "run-partial-fail" {
         if let Some(target) = target.as_deref() {
             write_sized_file(Path::new(target), 64 * 1024);
