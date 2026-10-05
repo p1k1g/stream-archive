@@ -17,7 +17,7 @@
 
 - FFmpeg `-c copy`로 다운로드하면서 실제 fragmented MP4를 기록합니다. H.264/AAC 입력에서 `aac_adtstoasc`로 AAC 컨테이너 형식을 맞춥니다.
 - 별도의 TS 원본과 전체 MP4 복사본을 만들지 않습니다. 최종 발행은 Windows에서 기존 파일을 덮어쓰지 않는 MoveFileW, Unix에서 같은 디스크의 hard-link 후 임시 이름 제거로 처리합니다. Unix 저장 파일시스템은 hard-link를 지원해야 합니다.
-- 정상 종료, 비어 있지 않은 출력, 영상 끝까지의 진행률을 확인한 뒤 COMPLETED / History / 완료 알림을 처리합니다.
+- 정상 종료, MP4 `ftyp` 헤더와 비어 있지 않은 출력, 영상 끝까지의 진행률을 확인한 뒤 COMPLETED / History / 완료 알림을 처리합니다.
 - 실행 중에는 고유한 `*.partial.mp4`에 기록합니다. 취소·실패 시 부분 파일을 보존하며 기존 파일을 덮어쓰지 않습니다.
 - 취소는 소유한 FFmpeg에 `q`를 보내고 5초 내 끝나지 않으면 소유한 process tree만 종료합니다.
 - **이번 단계는 FFmpeg MP4 이어 쓰기를 지원하지 않습니다. Queue 재시도는 새 파일로 처음부터 시작합니다.** 중단된 fragment를 자동 병합하거나 이어받았다고 표시하지 않습니다. `max_retries` 설정에 맞춰 파일을 반복 삭제·재다운로드하지 않습니다.
@@ -28,7 +28,7 @@
 
 - URL/영상 identity, 인증 헤더 인코딩·주입 거부, DRM/CDN 거부, HLS 화질 선택·목록 순서 변경, FFmpeg 명령의 MP4/stream-copy/인증 미전달을 검증합니다.
 - 공통 notification epoch 전환에 KICK을 포함하며 기존 SOOP/CHZZK 검증을 유지합니다.
-- 로컬 FFmpeg에서 생성한 H.264/AAC HLS의 직접 fragmented MP4 저장, ffprobe 컨테이너·코덱, JPEG 프레임 추출을 확인했습니다. 실제 provider 테스트로 간주하지 않습니다.
+- 로컬 FFmpeg에서 생성한 H.264/AAC HLS의 직접 fragmented MP4 저장, ffprobe 컨테이너·코덱, JPEG 프레임 추출을 확인했습니다. 15초 테스트 입력을 다운로드 중 강제 종료했을 때 기록이 끝난 fragment는 ffprobe로 읽을 수 있었습니다. 첫 fragment 완료 전 종료는 재생을 보장하지 않습니다. 실제 provider 테스트로 간주하지 않습니다.
 
 ## 수동 RC
 
