@@ -14,6 +14,7 @@ const SECRET_KEYS: &[&str] = &[
     "CLOUDFLARE_API_KEY",
     "CHZZK_NID_AUT",
     "CHZZK_NID_SES",
+    "KICK_SESSION_TOKEN",
 ];
 
 #[cfg(test)]

@@ -89,5 +89,6 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - Phase 25.5 ✅ SOOP VOD 분석 및 인증 흐름 정리 ([범위 및 수동 QA](PHASE25_5_SOOP_VOD_STABILIZATION.md))
 - Phase 25.6 ✅ VOD 인증 만료 후 이어받기 및 분석 썸네일 ([범위 및 수동 QA](PHASE25_6_VOD_RESUME_THUMBNAILS.md))
 
-- Phase 26.1 🚧 KICK 공개 LIVE 지원 ([사용 조건 및 수동 QA](PHASE26_1_KICK_LIVE.md))
-- Phase 26.2 예정: KICK VOD 분석·다운로드 (별도 범위 확정)
+- Phase 26.1 ✅ KICK 공개 LIVE 지원 ([사용 조건 및 수동 QA](PHASE26_1_KICK_LIVE.md))
+
+- 🚧 Phase 26.2 — KICK VOD: playback 인증, 화질 선택, FFmpeg 직접 MP4 저장. [범위 및 수동 RC](PHASE26_2_KICK_VOD.md)

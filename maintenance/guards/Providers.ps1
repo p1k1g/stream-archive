@@ -134,13 +134,18 @@ Assert-NotMatch $guiSources '\baxum::|https?://127\.0\.0\.1|https?://localhost' 
 # Shared diagnostics/tool discovery must retain the official Streamlink FFmpeg candidate.
 Assert-Match $soopVod 'C:\\Program Files\\Streamlink\\ffmpeg\\ffmpeg\.exe' 'SOOP VOD AUTO FFmpeg does not include Streamlink bundled FFmpeg.'
 
-# KICK is public LIVE only; preserve the shared provider/recorder boundary.
+# KICK LIVE remains public; VOD authentication is provider-owned. preserve the shared provider/recorder boundary.
 $kick = Read-RepoFile 'rust-runtime/src/platform/kick/mod.rs'
 $kickLive = Read-RepoFile 'rust-runtime/src/platform/kick/live.rs'
 Assert-Match $platform 'PlatformId::Kick\s*=>\s*&kick::KICK' 'KICK provider dispatch is missing.'
 Assert-Match $platform 'Self::Kick\s*=>\s*"ts"' 'KICK LIVE output must remain .ts.'
 Assert-Match $kick 'live:\s*true' 'KICK LIVE capability must remain enabled.'
-Assert-Match $kick 'vod:\s*false' 'Phase 26.1 must not enable KICK VOD.'
+Assert-Match $kick 'vod:\s*true' 'KICK VOD capability must be enabled.'
+$kickVod = Read-RepoFile 'rust-runtime/src/platform/kick/vod.rs'
+Assert-Match $kickVod 'playback_url/vod' 'KICK VOD must use the authenticated playback response.'
+Assert-Match $kickVod 'spawn_owned' 'KICK FFmpeg must retain owned-process lifecycle.'
+Assert-Match $backend '"KICK_SESSION_TOKEN"' 'KICK token must be a hidden secret.'
+Assert-NotMatch $kickVod 'Command::new\([^)]*yt.dlp' 'KICK direct MP4 must not use yt-dlp page extraction.'
 Assert-Match $kick 'https://kick\.com/api/v2/channels/' 'KICK lookup must use its canonical channel endpoint.'
 Assert-Match $kickLive 'StreamInput::PluginUrl' 'KICK recording must use the shared Streamlink plugin boundary.'
 Assert-Match $kickLive 'cookies:\s*Vec::new\(\)' 'Public KICK LIVE must not forward provider cookies.'

@@ -43,6 +43,7 @@ const NATIVE_PROVIDER_SECRET_KEYS: &[&str] = &[
     "CLOUDFLARE_API_KEY",
     "CHZZK_NID_AUT",
     "CHZZK_NID_SES",
+    "KICK_SESSION_TOKEN",
 ];
 
 #[derive(Clone)]
@@ -280,6 +281,13 @@ impl StreamArchiveCore {
                 .await;
         }
         self.store.configured_secrets()
+    }
+
+    /// Explicit deletion; empty provider drafts continue to preserve saved values.
+    pub async fn clear_kick_token(&self) -> Result<()> {
+        let _guard = self.config_write_lock.lock().await;
+        self.store.sync_settings(&BTreeMap::from([("KICK_SESSION_TOKEN".into(), String::new())]), "native-provider")?;
+        Ok(())
     }
 
     /// Verify the currently saved SOOP login and Cloudflare Worker credentials.

@@ -70,6 +70,7 @@ enum Request {
         secrets: BTreeMap<String, String>,
     },
     ProviderTestSoop,
+    ClearKickToken,
     LiveStatus {
         poll: bool,
     },
@@ -723,6 +724,10 @@ fn worker_loop(
                     )),
                 }
             }
+            Request::ClearKickToken => match runtime.block_on(core.clear_kick_token()) {
+                Ok(()) => configuration_snapshot(core, "KICK 인증정보를 삭제했습니다."),
+                Err(error) => Response::ConfigError(format!("KICK 인증정보 삭제 실패: {error:#}")),
+            },
             Request::ProviderTestSoop => match runtime.block_on(core.test_soop_auth()) {
                 Ok(message) => Response::ConfigMessage(message),
                 Err(error) => {
@@ -1871,6 +1876,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         if let Some(ui) = weak.upgrade() {
             let state = ui.global::<AppState>();
             let secrets = BTreeMap::from([
+                ("KICK_SESSION_TOKEN".into(), state.get_kick_session_token_draft().to_string()),
                 (
                     "SOOP_PASSWORD".into(),
                     state.get_soop_password_draft().to_string(),
@@ -1898,6 +1904,12 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 },
             );
         }
+    });
+
+    let weak = ui.as_weak();
+    let provider_sender = sender.clone();
+    state.on_clear_kick_token(move || {
+        if let Some(ui) = weak.upgrade() { send_config(&ui, &provider_sender, Request::ClearKickToken); }
     });
 
     let weak = ui.as_weak();
@@ -2658,6 +2670,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_cloudflare_key_draft("".into());
                     state.set_chzzk_nid_aut_draft("".into());
                     state.set_chzzk_nid_ses_draft("".into());
+                    state.set_kick_session_token_draft("".into());
+                    state.set_kick_session_token_configured(secrets.get("KICK_SESSION_TOKEN").copied().unwrap_or(false));
                     state.set_config_loaded(true);
                     state.set_config_message(message.into());
                 }

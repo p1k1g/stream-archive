@@ -23,7 +23,7 @@ Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행�
 
 ### 채널
 
-SOOP/CHZZK/KICK 녹화 채널을 등록하고 관리합니다. KICK은 공개 LIVE만 지원하며 VOD는 지원하지 않습니다.
+SOOP/CHZZK/KICK 녹화 채널을 등록하고 관리합니다. KICK 공개 LIVE를 지원하며 Phase 26.2에서는 공개·구독 VOD 분석과 다운로드를 추가합니다.
 
 ![Stream Archive Windows Native 채널 화면](docs/images/channels.png)
 
@@ -111,7 +111,7 @@ cd stream-archive
 - 자동 백업 정책, Backup / Restore, Diagnostics / Runtime Logs
 - Windows DPAPI / Linux Secret Service / macOS Keychain을 통한 비밀정보 보호
 
-지원 대상은 SOOP/CHZZK의 일반 LIVE/VOD 및 KICK 공개 LIVE입니다. KICK은 채널 URL의 마지막 이름(slug)을 등록합니다. API 차단은 오프라인으로 처리하지 않으며, 최신 Streamlink 및 JS challenge 처리용 Chromium 계열 브라우저가 필요할 수 있습니다. 개발 브랜치의 실제 환경 검증과 배포 포함 여부는 별도로 확인합니다. [KICK LIVE 사용 조건과 수동 QA](docs/PHASE26_1_KICK_LIVE.md)를 참고하세요. 클립, CATCH, 쇼츠·짧은 영상, 별도 게시물·커뮤니티 콘텐츠 등은 지원하지 않습니다.
+지원 대상은 SOOP/CHZZK의 일반 LIVE/VOD, KICK 공개 LIVE 및 Phase 26.2의 KICK VOD입니다. KICK은 채널 URL의 마지막 이름(slug)을 등록합니다. API 차단은 오프라인으로 처리하지 않으며, 최신 Streamlink 및 JS challenge 처리용 Chromium 계열 브라우저가 필요할 수 있습니다. 개발 브랜치의 실제 환경 검증과 배포 포함 여부는 별도로 확인합니다. [KICK LIVE 사용 조건과 수동 QA](docs/PHASE26_1_KICK_LIVE.md)를 참고하세요. 클립, CATCH, 쇼츠·짧은 영상, 별도 게시물·커뮤니티 콘텐츠 등은 지원하지 않습니다.
 
 ## 기본 사용법
 
@@ -189,3 +189,7 @@ Phase 24.2에서 Windows 다운로드 완료·실패 알림을 추가했습니�
 Phase 25에서 dark theme·mint accent와 화면별 정보 구성을 정리하고 있습니다. LIVE의 방송 감시 버튼 통합, 복수 저장 볼륨 표시, Queue 진행 목록과 별도 Diagnostics 메뉴가 포함됩니다. 기존 기능과 공유 Rust runtime은 유지합니다. [구현 범위 및 수동 QA](docs/PHASE25_UI_UX_REFRESH.md)를 참고하세요. 현재 README screenshot은 Phase 25 이전 UI입니다.
 
 Phase 25.2에서 LIVE 상태·버튼, 저장 공간 배치, 채널 관리와 닫기 선택을 정리했고, Phase 25.3에서 채널 프로필 이미지를 추가했습니다. Phase 25.4에서는 이를 오프라인 플랫폼 로고 / 방송 중 썸네일로 전환하고 채널 저장 폴더 선택을 추가하고 있습니다. [캐시 정책 및 수동 QA](docs/PHASE25_4_LIVE_THUMBNAILS_FOLDER_PICKER.md)를 참고하세요.
+
+### Phase 26.2 — KICK VOD
+
+🚧 KICK 공개·구독 VOD 분석, `session_token` 보호 저장, FFmpeg 직접 MP4 저장을 추가합니다. 재시도는 새 파일로 시작하며 FFmpeg MP4 이어받기는 지원하지 않습니다. [구현 범위 및 수동 검증](docs/PHASE26_2_KICK_VOD.md)

@@ -594,3 +594,7 @@ stream-archive-cli serve --watch
 ```
 
 최신 Streamlink KICK 플러그인이 필요합니다. API/JS challenge 및 Chromium 브라우저 요구 조건, headless 환경 제한은 [KICK LIVE 사용 조건](PHASE26_1_KICK_LIVE.md)을 확인하세요. API 접근 오류를 오프라인으로 간주하지 않습니다.
+
+## KICK VOD 인증
+
+`KICK_SESSION_TOKEN`은 기존 provider secret 입력 절차로 저장합니다. 명령행 인수에 토큰을 직접 넣지 않습니다. KICK VOD는 FFmpeg로 직접 MP4를 저장하고, Queue 재시도는 새 파일로 시작합니다. [Phase 26.2 제한 및 수동 검증](PHASE26_2_KICK_VOD.md)을 확인하세요.

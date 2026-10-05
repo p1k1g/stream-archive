@@ -88,7 +88,7 @@ pub const fn default_platform() -> PlatformId {
 
 pub fn detect_vod_platform(raw_url: &str) -> Result<PlatformId> {
     let url = Url::parse(raw_url)?;
-    for id in [PlatformId::Soop, PlatformId::Chzzk] {
+    for id in [PlatformId::Soop, PlatformId::Chzzk, PlatformId::Kick] {
         let provider = provider(id);
         if provider.capabilities().vod && provider.accepts_vod_url(&url) {
             return Ok(id);

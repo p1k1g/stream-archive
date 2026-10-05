@@ -26,6 +26,7 @@ const PROVIDER_SECRET_KEYS: &[&str] = &[
     "CLOUDFLARE_API_KEY",
     "CHZZK_NID_AUT",
     "CHZZK_NID_SES",
+    "KICK_SESSION_TOKEN",
 ];
 
 pub async fn run_management(command: &str, args: &[String]) -> Result<()> {
@@ -255,7 +256,7 @@ fn print_provider_status(core: &StreamArchiveCore, json_mode: bool) -> Result<()
             "worker_url_configured": configured_setting(&settings, "CLOUDFLARE_WORKER_URL"),
             "worker_key_configured": configured_secret(&secrets, "CLOUDFLARE_API_KEY"),
         },
-        "KICK": { "live_supported": true, "vod_supported": false, "authentication": "public_only" },
+        "KICK": { "live_supported": true, "vod_supported": true, "session_token_configured": configured_secret(&secrets, "KICK_SESSION_TOKEN") },
         "CHZZK": {
             "nid_aut_configured": configured_secret(&secrets, "CHZZK_NID_AUT"),
             "nid_ses_configured": configured_secret(&secrets, "CHZZK_NID_SES"),
@@ -265,7 +266,7 @@ fn print_provider_status(core: &StreamArchiveCore, json_mode: bool) -> Result<()
         print_json(&value)?;
     } else {
         println!("provider configuration");
-        println!("KICK                : public LIVE only (connection not verified)");
+        println!("KICK                : public LIVE / VOD (connection not verified)");
         println!(
             "SOOP username       : {}",
             yes_no(configured_setting(&settings, "SOOP_USERNAME"))

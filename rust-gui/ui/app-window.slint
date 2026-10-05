@@ -154,7 +154,10 @@ export global AppState {
     in-out property <string> cloudflare-key-draft: "";
     in-out property <string> chzzk-nid-aut-draft: "";
     in-out property <string> chzzk-nid-ses-draft: "";
+    in-out property <string> kick-session-token-draft: "";
+    in-out property <bool> kick-session-token-configured: false;
     callback save-provider();
+    callback clear-kick-token();
     callback test-soop-auth();
 
     in-out property <[LiveChannelRow]> live-rows;
@@ -661,7 +664,7 @@ export component MainWindow inherits Window {
                                 vertical-stretch: 0;
                                 text <=> AppState.vod-url;
                                 enabled: !AppState.vod-busy && !AppState.vod-running;
-                                placeholder-text: "SOOP / CHZZK VOD URL";
+                                placeholder-text: "SOOP / CHZZK / KICK VOD URL";
                                 edited(value) => { AppState.vod-url-edited(value); }
                                 accepted => { AppState.vod-analyze(); }
                             }
@@ -702,7 +705,7 @@ export component MainWindow inherits Window {
                                         if AppState.vod-thumbnail-image.width == 0: Image {
                                             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                             width: 40px; height: 40px; image-fit: contain;
-                                            source: AppState.vod-platform == "CHZZK" ? @image-url("../assets/platform-chzzk.png") : @image-url("../assets/platform-soop.png");
+                                            source: AppState.vod-platform == "KICK" ? @image-url("../assets/platform-kick.svg") : AppState.vod-platform == "CHZZK" ? @image-url("../assets/platform-chzzk.png") : @image-url("../assets/platform-soop.png");
                                         }
                                     }
                                 }
@@ -1015,6 +1018,13 @@ export component MainWindow inherits Window {
                                                 LineEdit { height: 34px; text <=> AppState.chzzk-nid-ses-draft; input-type: password; enabled: !AppState.config-busy; }
                                             }
                                         }
+                                        VerticalLayout {
+                                            height: 58px; vertical-stretch: 0; spacing: 4px;
+                                            Text { text: "KICK session_token · " + (AppState.kick-session-token-configured ? "설정됨" : "미설정"); color: AppState.kick-session-token-configured ? Theme.success : Theme.warning; font-size: 11px; }
+                                            LineEdit { height: 34px; text <=> AppState.kick-session-token-draft; input-type: password; enabled: !AppState.config-busy; }
+                                        }
+                                        Text { text: "KICK 구독 VOD는 브라우저의 session_token을 입력하세요. 갱신은 새 값을 저장하고, 삭제는 아래 버튼을 사용합니다."; color: Theme.muted; wrap: word-wrap; font-size: 11px; }
+                                        Button { text: "KICK 인증정보 삭제"; enabled: !AppState.config-busy && AppState.kick-session-token-configured; clicked => { AppState.clear-kick-token(); } }
                                         Text {
                                             text: "비밀 값 입력칸을 비워두면 기존 저장값을 유지합니다. 비밀 값은 플랫폼 보안 저장소에서 보호되며 UI로 다시 읽어오지 않습니다.";
                                             color: Theme.muted;
