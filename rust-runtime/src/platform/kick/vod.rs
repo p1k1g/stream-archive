@@ -5,7 +5,7 @@ use crate::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
     },
-    platform::PlatformId,
+    support::platform::PlatformId,
 };
 use anyhow::{Result, bail};
 use chrono::Utc;
@@ -140,7 +140,9 @@ impl VodManager {
         let download = matches!(&kind, VodJobKind::Download(_));
         let task = tokio::spawn(async move {
             let result = match kind {
-                VodJobKind::Analyze(req) => run_analysis(&backend, req, &logs, &status, &cancel).await,
+                VodJobKind::Analyze(req) => {
+                    run_analysis(&backend, req, &logs, &status, &cancel).await
+                }
                 VodJobKind::Download(req) => {
                     run_download(&backend, req, &logs, &status, &cancel).await
                 }
@@ -225,7 +227,7 @@ pub(crate) fn parse_url(raw: &str) -> Result<(String, String)> {
     {
         bail!("KICK VOD URL은 https://kick.com/채널/videos/UUID 형식이어야 합니다.");
     }
-    use crate::platform::PlatformProvider;
+    use crate::support::platform::PlatformProvider;
     super::KICK.validate_account(parts[1])?;
     Ok((parts[1].to_ascii_lowercase(), parts[3].to_ascii_lowercase()))
 }
@@ -590,7 +592,12 @@ async fn run_download(
         return Ok(());
     }
     // No-copy publication; Windows MoveFileW also supports exFAT and refuses replacement.
-    let final_path = dir.join(format!("{}_{}_{}.mp4", safe_name(&metadata.view.streamer), safe_name(&metadata.view.title), id));
+    let final_path = dir.join(format!(
+        "{}_{}_{}.mp4",
+        safe_name(&metadata.view.streamer),
+        safe_name(&metadata.view.title),
+        id
+    ));
     publish_mp4(&output, &final_path)?;
     let mut state = status.write().await;
     state.state = "COMPLETED".into();
@@ -607,13 +614,18 @@ fn publish_mp4(source: &Path, target: &Path) -> Result<()> {
         let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
         let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
         // MoveFileW has no replace-existing flag; existing files are never overwritten.
-        if unsafe { windows_sys::Win32::Storage::FileSystem::MoveFileW(source.as_ptr(), target.as_ptr()) } == 0 {
+        if unsafe {
+            windows_sys::Win32::Storage::FileSystem::MoveFileW(source.as_ptr(), target.as_ptr())
+        } == 0
+        {
             bail!("KICK MP4 저장 마무리 실패. partial.mp4 파일은 보존됩니다.");
         }
     }
     #[cfg(not(windows))]
     {
-        std::fs::hard_link(source, target).map_err(|_| anyhow::anyhow!("KICK MP4 저장 마무리 실패. partial.mp4 파일은 보존됩니다."))?;
+        std::fs::hard_link(source, target).map_err(|_| {
+            anyhow::anyhow!("KICK MP4 저장 마무리 실패. partial.mp4 파일은 보존됩니다.")
+        })?;
         std::fs::remove_file(source)?;
     }
     Ok(())
@@ -670,6 +682,8 @@ fn ffmpeg_command(ffmpeg: &Path, source: &Url, output: &Path) -> tokio::process:
             "make_zero",
             "-movflags",
             "+frag_keyframe+empty_moov+default_base_moof",
+            "-flush_packets",
+            "1",
             "-f",
             "mp4",
             "-progress",
@@ -694,7 +708,9 @@ async fn download_mp4(
     cancel: &AtomicBool,
 ) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    if cancel.load(Ordering::Acquire) { return Ok(()); }
+    if cancel.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let (mut child, mut tree) =
         crate::platform_runtime::spawn_owned(&mut ffmpeg_command(ffmpeg, source, output))
             .await
@@ -788,7 +804,9 @@ async fn download_mp4(
     use std::io::Read;
     let mut header = [0u8; 12];
     std::fs::File::open(output)?.read_exact(&mut header)?;
-    if &header[4..8] != b"ftyp" { bail!("KICK 출력이 실제 MP4가 아닙니다. 부분 파일은 보존됩니다."); }
+    if &header[4..8] != b"ftyp" {
+        bail!("KICK 출력이 실제 MP4가 아닙니다. 부분 파일은 보존됩니다.");
+    }
     Ok(())
 }
 
@@ -915,22 +933,27 @@ mod tests {
         let source = media_url("https://stream.kick.com/hls/index.m3u8").unwrap();
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
         let cancel = AtomicBool::new(false);
-        for (mode, success) in [("kick-direct-success",true),("kick-direct-truncated",false),("run-partial-fail",false)] {
-            fixture.set_mode(&ffmpeg,mode);
+        for (mode, success) in [
+            ("kick-direct-success", true),
+            ("kick-direct-truncated", false),
+            ("run-partial-fail", false),
+        ] {
+            fixture.set_mode(&ffmpeg, mode);
             let output = fixture.root().join(format!("{mode}.partial.mp4"));
-            let result = download_mp4(&ffmpeg,&source,&output,60,&status,&cancel).await;
-            assert_eq!(result.is_ok(),success,"{mode}");
-            assert!(output.exists(),"partial output must be preserved");
+            let result = download_mp4(&ffmpeg, &source, &output, 60, &status, &cancel).await;
+            assert_eq!(result.is_ok(), success, "{mode}");
+            assert!(output.exists(), "partial output must be preserved");
         }
         assert!(!fixture.invocations().contains("session_token"));
         let source = fixture.root().join("kick-direct-success.partial.mp4");
         let target = fixture.root().join("complete.mp4");
-        publish_mp4(&source,&target).unwrap();
-        assert!(!source.exists()); assert!(target.exists());
+        publish_mp4(&source, &target).unwrap();
+        assert!(!source.exists());
+        assert!(target.exists());
         let another = fixture.root().join("another.mp4");
-        std::fs::write(&another,b"other").unwrap();
-        assert!(publish_mp4(&another,&target).is_err());
-        assert_eq!(std::fs::read(&another).unwrap(),b"other");
+        std::fs::write(&another, b"other").unwrap();
+        assert!(publish_mp4(&another, &target).is_err());
+        assert_eq!(std::fs::read(&another).unwrap(), b"other");
     }
 
     #[tokio::test]
@@ -938,23 +961,25 @@ mod tests {
         use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
         let fixture = ProviderFixture::new();
         let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
-        fixture.set_mode(&ffmpeg,"run-spawn-child");
+        fixture.set_mode(&ffmpeg, "run-spawn-child");
         let mut unrelated = fixture.spawn_unrelated();
         fixture.wait_for_unrelated().await;
         let source = media_url("https://stream.kick.com/hls/index.m3u8").unwrap();
         let output = fixture.root().join("cancel.partial.mp4");
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
         let cancel = AtomicBool::new(false);
-        let operation = download_mp4(&ffmpeg,&source,&output,60,&status,&cancel);
+        let operation = download_mp4(&ffmpeg, &source, &output, 60, &status, &cancel);
         let trigger = async {
-            fixture.wait_for_path(&fixture.child_ready_path(&ffmpeg)).await;
-            cancel.store(true,Ordering::Release);
+            fixture
+                .wait_for_path(&fixture.child_ready_path(&ffmpeg))
+                .await;
+            cancel.store(true, Ordering::Release);
         };
-        let (result,()) = tokio::join!(operation,trigger);
+        let (result, ()) = tokio::join!(operation, trigger);
         result.unwrap();
         fixture.assert_child_stopped(&ffmpeg).await;
         assert!(unrelated.try_wait().unwrap().is_none());
-        unrelated.kill().unwrap(); unrelated.wait().unwrap();
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
     }
-
 }

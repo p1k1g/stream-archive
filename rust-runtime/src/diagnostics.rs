@@ -780,7 +780,15 @@ fn provider_checks(
             DiagnosticRequirement::Informational,
             "KICK VOD 인증",
             DiagnosticStatus::Ok,
-            if configured_secrets.get("KICK_SESSION_TOKEN").copied().unwrap_or(false) { "session_token 저장됨 (권한 미검증)" } else { "session_token 미설정 (공개 VOD 조회 가능)" },
+            if configured_secrets
+                .get("KICK_SESSION_TOKEN")
+                .copied()
+                .unwrap_or(false)
+            {
+                "session_token 저장됨 (권한 미검증)"
+            } else {
+                "session_token 미설정 (공개 VOD 조회 가능)"
+            },
             "구독 VOD는 session_token을 저장하세요. 이 항목은 토큰 유효성이나 구독 권한을 검증하지 않습니다. 다운로드에는 FFmpeg를 사용합니다.",
             "VOD 분석 실패 시 만료·구독 권한·HTTP 오류 안내를 확인하세요.",
         ),
