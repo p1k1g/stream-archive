@@ -140,9 +140,7 @@ impl VodManager {
         let download = matches!(&kind, VodJobKind::Download(_));
         let task = tokio::spawn(async move {
             let result = match kind {
-                VodJobKind::Analyze(req) => run_analysis(&backend, req, &logs, &status, &cancel)
-                    .await
-                    .map(|_| ()),
+                VodJobKind::Analyze(req) => run_analysis(&backend, req, &logs, &status, &cancel).await,
                 VodJobKind::Download(req) => {
                     run_download(&backend, req, &logs, &status, &cancel).await
                 }
@@ -222,6 +220,7 @@ pub(crate) fn parse_url(raw: &str) -> Result<(String, String)> {
         || url.port().is_some()
         || parts.len() != 4
         || parts[2] != "videos"
+        || parts[3].len() != 36
         || Uuid::parse_str(parts[3]).is_err()
     {
         bail!("KICK VOD URL은 https://kick.com/채널/videos/UUID 형식이어야 합니다.");
@@ -695,6 +694,7 @@ async fn download_mp4(
     cancel: &AtomicBool,
 ) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    if cancel.load(Ordering::Acquire) { return Ok(()); }
     let (mut child, mut tree) =
         crate::platform_runtime::spawn_owned(&mut ffmpeg_command(ffmpeg, source, output))
             .await

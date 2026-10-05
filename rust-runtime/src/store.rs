@@ -1180,4 +1180,13 @@ mod tests {
         assert_eq!(vod_state, "DOWNLOADING");
         assert_eq!(queue_state, "RUNNING");
     }
+    #[test]
+    fn kick_token_is_hidden_from_safe_settings_and_preflight_values() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.db")).unwrap();
+        store.sync_settings(&BTreeMap::from([("KICK_SESSION_TOKEN".into(),"native-secret:v1:configured".into())]),"test").unwrap();
+        assert!(!store.safe_settings().unwrap().contains_key("KICK_SESSION_TOKEN"));
+        assert_eq!(store.configured_secrets().unwrap().get("KICK_SESSION_TOKEN"),Some(&true));
+    }
+
 }
