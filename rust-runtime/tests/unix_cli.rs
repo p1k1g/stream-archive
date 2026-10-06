@@ -453,7 +453,7 @@ fn provider_clear_removes_scoped_native_entry_and_retains_cleanup_on_helper_fail
     let helper = layout.fake_bin.join("secret-tool");
     fs::write(
         &helper,
-        "#!/bin/sh\ncase \"$1\" in\nclear)\n[ \"$2\" = application ] && [ \"$3\" = stream-archive ] && [ \"$4\" = reference ] || exit 23\n[ \"$FAKE_DELETE_FAIL\" = 1 ] && exit 1\n[ -f \"$FAKE_SECRET_DIR/$5\" ] || exit 1\nrm -- \"$FAKE_SECRET_DIR/$5\";;\nsearch)\n[ \"$2\" = --all ] && [ \"$3\" = application ] && [ \"$4\" = stream-archive ] && [ \"$5\" = reference ] || exit 23\n[ ! -f \"$FAKE_SECRET_DIR/$6\" ] || printf '[fixture] secret metadata\\n'\nexit 0;;\n*) exit 23;;\nesac\n",
+        "#!/bin/sh\ncase \"$1\" in\nclear)\n[ \"$2\" = application ] && [ \"$3\" = stream-archive ] && [ \"$4\" = reference ] || exit 23\n[ \"$FAKE_DELETE_FAIL\" = 1 ] && exit 1\n[ \"$FAKE_LOCKED\" = 1 ] && exit 1\n[ -f \"$FAKE_SECRET_DIR/$5\" ] || exit 1\nrm -- \"$FAKE_SECRET_DIR/$5\";;\nsearch)\n[ \"$2\" = --all ] && [ \"$3\" = --unlock ] && [ \"$4\" = application ] && [ \"$5\" = stream-archive ] && [ \"$6\" = reference ] || exit 23\nif [ \"$FAKE_UNLOCK_FAIL\" = 1 ]; then printf 'unlock cancelled\\n' >&2; exit 1; fi\n[ ! -f \"$FAKE_SECRET_DIR/$7\" ] || printf '[fixture] secret metadata\\n'\nexit 0;;\n*) exit 23;;\nesac\n",
     )
     .unwrap();
     fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
@@ -461,16 +461,24 @@ fn provider_clear_removes_scoped_native_entry_and_retains_cleanup_on_helper_fail
     let unrelated = layout.fake_bin.join("unrelated-secret");
     fs::write(&credential, "fixture-secret").unwrap();
     fs::write(&unrelated, "other").unwrap();
-    for fail in [true, false] {
+    for (fail, locked, unlock_failure) in [
+        (true, false, false),
+        (false, true, false),
+        (false, true, true),
+        (false, false, false),
+    ] {
+        let pending_cleanup = fail || locked || unlock_failure;
         let output = layout
             .command(CLI)
             .args(["providers", "clear-secret", "KICK_SESSION_TOKEN"])
             .env("FAKE_DELETE_FAIL", if fail { "1" } else { "0" })
+            .env("FAKE_LOCKED", if locked { "1" } else { "0" })
+            .env("FAKE_UNLOCK_FAIL", if unlock_failure { "1" } else { "0" })
             .env("FAKE_SECRET_DIR", &layout.fake_bin)
             .output()
             .unwrap();
-        assert_eq!(output.status.success(), !fail);
-        assert_eq!(credential.exists(), fail);
+        assert_eq!(output.status.success(), !pending_cleanup);
+        assert_eq!(credential.exists(), pending_cleanup);
         assert!(unrelated.exists());
         let stored: String = conn
             .query_row(
@@ -488,7 +496,14 @@ fn provider_clear_removes_scoped_native_entry_and_retains_cleanup_on_helper_fail
             )
             .unwrap();
         let pending: Vec<String> = serde_json::from_str(&pending).unwrap();
-        assert_eq!(pending, if fail { vec![value.clone()] } else { vec![] });
+        assert_eq!(
+            pending,
+            if pending_cleanup {
+                vec![value.clone()]
+            } else {
+                vec![]
+            }
+        );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-secret"));
     }
 }

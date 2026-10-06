@@ -309,11 +309,12 @@ mod linux_secret_service {
             .stderr(Stdio::null())
             .output()
             .with_context(|| helper_context("delete"))?;
-        // clear can skip locked items; verify absence, including already-missing entries.
+        // clear can skip locked items; request unlock so verification cannot skip them.
         let mut probe = command()
             .args([
                 "search",
                 "--all",
+                "--unlock",
                 "application",
                 APPLICATION_ATTRIBUTE,
                 "reference",
