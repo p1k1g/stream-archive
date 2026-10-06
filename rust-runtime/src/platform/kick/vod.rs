@@ -158,7 +158,7 @@ impl VodManager {
                 } else if let Err(err) = result {
                     current.state = "FAILED".into();
                     current.message = format!("{err:#}");
-                    logs.push(format!("[VOD:KICK:ERR] {}", current.message))
+                    logs.push(format!("[VOD:KICK:ERR] job={terminal_job_id} {}", current.message))
                         .await;
                 }
                 current.clone()
@@ -317,15 +317,15 @@ fn parse_playback(raw: &str, value: &serde_json::Value, authenticated: bool) -> 
             .is_some_and(|s| s.eq_ignore_ascii_case(&channel))
         || session["video_stream_status"].as_str() != Some("vod")
     {
-        bail!("KICK 응답이 요청한 VOD와 일치하지 않습니다.");
+        bail!("[playback.identity] KICK 응답이 요청한 VOD와 일치하지 않습니다.");
     }
     if session["video_encryption_type"].as_str() != Some("NONE") {
-        bail!("암호화된 KICK VOD는 지원하지 않습니다.");
+        bail!("[playback.encryption] 암호화된 KICK VOD는 지원하지 않습니다.");
     }
     let source = value.pointer("/playback_url/vod").and_then(serde_json::Value::as_str).filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!(if authenticated {
-            "KICK 재생 주소가 없습니다. session_token 만료 또는 해당 채널의 구독 권한을 확인하세요."
-        } else { "KICK 재생 주소가 없습니다. 구독 전용 영상이면 설정에서 session_token을 저장하세요." }))?;
+            "[playback.vod_missing] KICK 재생 주소가 없습니다. 계정의 시청 권한, session_token 유효성 또는 API 응답 변경을 확인하세요."
+        } else { "[playback.vod_missing] KICK 재생 주소가 없습니다. 구독 전용 영상이면 설정에서 session_token을 저장하세요." }))?;
     let duration = session["video_duration"]
         .as_u64()
         .filter(|n| *n > 0)
@@ -365,7 +365,7 @@ async fn body(response: reqwest::Response) -> Result<Vec<u8>> {
     let mut response = response;
     if !response.status().is_success() {
         match response.status().as_u16() {
-            401 => bail!("KICK 인증이 만료되었습니다. session_token을 갱신하세요 (HTTP 401)."),
+            401 => bail!("KICK 인증을 확인하지 못했습니다. 세션 유효성 또는 계정 권한을 확인하세요 (HTTP 401)."),
             403 => bail!(
                 "KICK 접근이 거부되었습니다. 시청 권한 또는 Cloudflare 제한을 확인하세요 (HTTP 403)."
             ),
@@ -396,6 +396,20 @@ fn refresh_token_setting(store: &crate::store::Store) -> Result<String> {
     Ok(store.setting_value(TOKEN_KEY)?.unwrap_or_default())
 }
 
+fn request_failure(stage: &str, error: &reqwest::Error) -> anyhow::Error {
+    let reason = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_builder() {
+        "request_config"
+    } else {
+        "transport"
+    };
+    // reqwest errors can carry credential-bearing URLs; log only fixed categories.
+    anyhow::anyhow!("[{stage}] KICK 요청 실패 ({reason})")
+}
+
 async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
     let (channel, id) = parse_url(raw)?;
     let token = crate::security::unprotect_secret(
@@ -421,11 +435,17 @@ async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
             request
                 .send()
                 .await
-                .map_err(|_| anyhow::anyhow!("KICK playback 요청 실패"))?,
+                .map_err(|error| request_failure("playback.request", &error))?,
         )
-        .await?;
-        let value = serde_json::from_slice(&bytes)
-            .map_err(|_| anyhow::anyhow!("KICK playback JSON 형식이 변경되었습니다."))?;
+        .await
+        .map_err(|error| error.context("[playback.http]"))?;
+        let value = serde_json::from_slice(&bytes).map_err(|error| {
+            anyhow::anyhow!(
+                "[playback.json] KICK 응답 JSON 형식 오류 (line={}, column={})",
+                error.line(),
+                error.column()
+            )
+        })?;
         let mut metadata = parse_playback(raw, &value, !token.is_empty())?;
         // Never attach account credentials to CDN requests.
         let bytes = body(
@@ -434,9 +454,10 @@ async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
                 .header("Referer", "https://kick.com/")
                 .send()
                 .await
-                .map_err(|_| anyhow::anyhow!("KICK HLS 조회 실패"))?,
+                .map_err(|error| request_failure("cdn.hls.request", &error))?,
         )
-        .await?;
+        .await
+        .map_err(|error| error.context("[cdn.hls.http]"))?;
         let playlist =
             std::str::from_utf8(&bytes).map_err(|_| anyhow::anyhow!("KICK HLS 형식 오류"))?;
         metadata.variants = parse_variants(&metadata.source, playlist)?;
@@ -763,8 +784,9 @@ async fn download_mp4(
                     break Ok(());
                 }
                 if !exit.success() {
+                    let size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
                     break Err(anyhow::anyhow!(
-                        "KICK FFmpeg 다운로드 실패. partial.mp4는 보존됩니다. 재시도는 처음부터 새 파일로 시작합니다."
+                        "[download.ffmpeg.exit] KICK FFmpeg 다운로드 실패 (exit={exit}, bytes={size}, media_seconds={seconds:.1}). partial.mp4는 보존됩니다. 재시도는 새 파일로 시작합니다."
                     ));
                 }
                 break Ok(());
@@ -803,7 +825,7 @@ async fn download_mp4(
     if std::fs::metadata(output).map(|m| m.len()).unwrap_or(0) == 0
         || seconds + 10.0 < duration as f64
     {
-        bail!("KICK 다운로드가 영상 끝까지 도달하지 못했습니다. partial.mp4는 보존됩니다.");
+        bail!("[download.incomplete] KICK 다운로드가 영상 끝까지 도달하지 못했습니다. partial.mp4는 보존됩니다.");
     }
     use std::io::Read;
     let mut header = [0u8; 12];
@@ -817,6 +839,20 @@ async fn download_mp4(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_error_diagnostics_never_echo_urls_or_tokens() {
+        let error = reqwest::Client::new()
+            .get("https://example.invalid/?token=private-value")
+            .header("authorization", "invalid\nprivate-value")
+            .build()
+            .unwrap_err();
+        let message = request_failure("playback.request", &error).to_string();
+        assert!(message.contains("[playback.request]"));
+        assert!(message.contains("request_config"));
+        assert!(!message.contains("private-value"));
+        assert!(!message.contains("example.invalid"));
+    }
 
     #[test]
     fn observer_token_changes_reach_owner_without_watcher() {

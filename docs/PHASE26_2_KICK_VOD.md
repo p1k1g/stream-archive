@@ -25,6 +25,12 @@
 - fragmented MP4의 Windows Explorer 썸네일과 강제 종료 후 부분 재생은 실제 PC에서 확인해야 합니다. 일반 MP4의 `+faststart` 후처리나 전체 remux를 자동 추가하지 않습니다.
 - 내부 web playback API와 player version 필드는 공개 API 계약이 아니며, KICK 변경 시 분석이 실패할 수 있습니다. 로그인 자동화·Cloudflare 우회는 추가하지 않습니다.
 
+## 오류 로그
+
+진단의 런타임 로그에 `[VOD:KICK:ERR]`와 job ID, 실패 단계, HTTP 상태 또는 안전한 오류 분류를 남깁니다. `playback.request` / `playback.http` / `playback.json` / `playback.vod_missing`, `cdn.hls.request` / `cdn.hls.http`, `download.ffmpeg.exit` / `download.incomplete`로 조회·CDN·파일 기록 실패를 구분합니다. FFmpeg 실패는 exit 상태, 기록 바이트와 진행 시간을 함께 남깁니다.
+
+Cookie의 expiry가 길어도 세션 무효화·시청 권한·API 변경은 별개의 문제이므로 HTTP 401이나 빈 재생 주소를 만료로 단정하지 않습니다. Cookie/Bearer, 재생 URL, 원본 응답 JSON과 FFmpeg stderr는 로그에 출력하지 않습니다. 런타임 로그는 메모리의 제한된 최근 기록이며 자동 영구 파일 로그로 간주하지 않습니다.
+
 ## 자동 검증
 
 - URL/영상 identity, 인증 헤더 인코딩·주입 거부, DRM/CDN 거부, HLS 화질 선택·목록 순서 변경, FFmpeg 명령의 MP4/stream-copy/인증 미전달을 검증합니다.
