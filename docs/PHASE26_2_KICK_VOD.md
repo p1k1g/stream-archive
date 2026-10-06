@@ -76,4 +76,4 @@ HTTP 403은 `cf-mitigated: challenge`가 확인되면 `reason=cloudflare_challen
 
 썸네일 실패는 플랫폼 로고로 대체하며, 진단 런타임 로그에 `[LIVE:THUMBNAIL:ERR] platform=KICK reason=http_403` 등의 안전한 분류를 남깁니다. 인증정보·썸네일 URL·원본 오류 본문은 기록하지 않습니다. 기존 LIVE 새로 고침 재시도와 방송 종료 시 캐시 정리를 유지합니다. 임의 URL 변경, 구독 토큰의 이미지 CDN 전달, Cloudflare 우회는 추가하지 않습니다. 실제 PC에서 새로 고침 후 결과와 이 로그를 확인해야 하며, 이번 관측으로 썸네일 복구 완료를 주장하지 않습니다.
 
-KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 잠금을 획득한 뒤 cache refresh와 native secret 조회를 함께 수행합니다. 조회 중 참조 삭제를 막고 HTTP 요청 전에 잠금을 해제합니다. 경합 시 잠시 후 재시도를 안내하며 기존 try-lock 계약을 유지합니다. 회귀 테스트는 writer 경합, 교체·삭제 반영, 복호화 중 잠금 유지와 복호화 실패 뒤 잠금 해제를 검증합니다.
+KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 잠금을 획득한 뒤 cache refresh와 native secret 조회를 함께 수행합니다. 조회 중 참조 삭제를 막고 HTTP 요청 전에 잠금을 해제합니다. 저장·삭제는 기존 즉시 try-lock 계약을 유지하고, 분석의 읽기 잠금은 shared lock으로 최대 5초 기다립니다. 짧은 credential 갱신 때문에 Queue를 즉시 실패 처리하지 않으며, 동시 읽기는 허용합니다. 대기는 blocking worker에서 수행하여 async executor를 막지 않습니다. 시간 초과나 다른 I/O 오류는 실패로 안내합니다. 회귀 테스트는 writer 경합, 교체·삭제 반영, 복호화 중 잠금 유지와 복호화 실패 뒤 잠금 해제를 검증합니다.

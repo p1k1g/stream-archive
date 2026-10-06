@@ -23,7 +23,7 @@ fn is_protected(value: &str) -> bool {
     normalized.starts_with(DPAPI_PREFIX) || normalized.starts_with(NATIVE_SECRET_PREFIX)
 }
 
-pub(crate) fn kick_secret_guard(store: &crate::store::Store) -> Result<std::fs::File> {
+fn kick_secret_lock_file(store: &crate::store::Store) -> Result<std::fs::File> {
     let mut path = store.path().as_os_str().to_os_string();
     path.push(".kick-secret.lock");
     let mut options = std::fs::OpenOptions::new();
@@ -36,9 +36,34 @@ pub(crate) fn kick_secret_guard(store: &crate::store::Store) -> Result<std::fs::
     let file = options
         .open(std::path::PathBuf::from(path))
         .context("KICK 인증정보 잠금 파일을 열지 못했습니다.")?;
+    Ok(file)
+}
+
+pub(crate) fn kick_secret_guard(store: &crate::store::Store) -> Result<std::fs::File> {
+    let file = kick_secret_lock_file(store)?;
     fs2::FileExt::try_lock_exclusive(&file)
         .context("다른 프로세스가 KICK 인증정보를 사용 중입니다. 잠시 후 재시도하세요.")?;
     Ok(file)
+}
+
+fn kick_secret_read_guard(
+    store: &crate::store::Store,
+    timeout: std::time::Duration,
+) -> Result<std::fs::File> {
+    let file = kick_secret_lock_file(store)?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match fs2::FileExt::try_lock_shared(&file) {
+            Ok(()) => return Ok(file),
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+                if std::time::Instant::now() >= deadline {
+                    bail!("KICK 인증정보 잠금 대기 시간이 초과되었습니다. 잠시 후 재시도하세요.");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(error).context("KICK 인증정보 읽기 잠금 실패"),
+        }
+    }
 }
 
 pub(crate) fn read_kick_token(store: &crate::store::Store) -> Result<String> {
@@ -49,7 +74,7 @@ fn read_kick_token_with(
     store: &crate::store::Store,
     unprotect: impl FnOnce(&str) -> Result<String>,
 ) -> Result<String> {
-    let _guard = kick_secret_guard(store)?;
+    let _guard = kick_secret_read_guard(store, std::time::Duration::from_secs(5))?;
     // Keep the same cross-process lock through native lookup, then release before HTTP.
     store.refresh_config_cache()?;
     let reference = store
@@ -667,7 +692,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kick_lookup_holds_writer_lock_through_unprotection_and_releases_on_error() {
+    fn kick_lookup_waits_for_writer_and_holds_shared_lock_through_unprotection() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.db");
         let owner = crate::store::Store::open(path.clone()).unwrap();
@@ -683,19 +708,40 @@ mod tests {
                     "test-observer",
                 )
                 .unwrap();
-            assert!(read_kick_token_with(&owner, |_| Ok("unreachable".into())).is_err());
+            let reader_owner = owner.clone();
+            let reader_observer = observer.clone();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                let result = read_kick_token_with(&reader_owner, |reference| {
+                    assert_eq!(reference, value);
+                    assert!(kick_secret_guard(&reader_observer).is_err());
+                    assert!(kick_secret_read_guard(&reader_observer, std::time::Duration::ZERO).is_ok());
+                    Ok(reference.into())
+                });
+                done_tx.send(result).unwrap();
+            });
+            started_rx.recv().unwrap();
+            assert!(done_rx.recv_timeout(std::time::Duration::from_millis(50)).is_err());
             drop(writer);
-            let result = read_kick_token_with(&owner, |reference| {
-                assert_eq!(reference, value);
-                assert!(kick_secret_guard(&observer).is_err());
-                Ok(reference.into())
-            })
-            .unwrap();
-            assert_eq!(result, value);
+            assert_eq!(
+                done_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().unwrap(),
+                value
+            );
+            reader.join().unwrap();
             assert!(kick_secret_guard(&observer).is_ok());
         }
         assert!(read_kick_token_with(&owner, |_| bail!("native lookup failed")).is_err());
         assert!(kick_secret_guard(&observer).is_ok());
+    }
+
+    #[test]
+    fn kick_read_lock_timeout_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(dir.path().join("test.db")).unwrap();
+        let _writer = kick_secret_guard(&store).unwrap();
+        assert!(kick_secret_read_guard(&store, std::time::Duration::from_millis(20)).is_err());
     }
 
     #[test]
