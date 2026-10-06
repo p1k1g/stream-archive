@@ -552,6 +552,9 @@ impl Store {
         {
             pending.push(reference);
         }
+        if let Some(value) = values.get(secret_key) {
+            pending.retain(|reference| reference != value);
+        }
         let pending = serde_json::to_string(&pending)?;
         let now = Utc::now().to_rfc3339();
         for (key, value) in values {
@@ -1368,5 +1371,70 @@ mod tests {
                 .get("KICK_SESSION_TOKEN"),
             Some(&true)
         );
+    }
+    #[test]
+    fn kick_native_creation_requires_durable_intent_and_survives_readonly_commit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("readonly.db");
+        let store = Store::open(path.clone()).unwrap();
+        let cleanup_key = "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS";
+        let protected = crate::security::protect_native_secret_with(
+            "fixture-token",
+            |reference| store.retain_secret_cleanup(cleanup_key, reference),
+            |reference, _| {
+                assert_eq!(
+                    store.pending_secret_cleanup(cleanup_key)?,
+                    vec![format!("native-secret:v1:{reference}")]
+                );
+                store.conn()?.execute_batch("PRAGMA query_only=ON")?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        let error = store
+            .sync_settings_retiring_secret(
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), protected.clone())]),
+                "test",
+                "KICK_SESSION_TOKEN",
+                cleanup_key,
+                |_| Ok(None),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<rusqlite::Error>()
+                .unwrap()
+                .sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ReadOnly)
+        );
+        assert!(store.retain_secret_cleanup(cleanup_key, &protected).is_err());
+        assert!(store.finish_secret_cleanup(cleanup_key, &protected).is_err());
+        drop(store);
+        let reopened = Store::open(path).unwrap();
+        assert_eq!(
+            reopened.pending_secret_cleanup(cleanup_key).unwrap(),
+            vec![protected.clone()]
+        );
+        reopened
+            .finish_secret_cleanup(cleanup_key, &protected)
+            .unwrap();
+        assert!(
+            reopened
+                .pending_secret_cleanup(cleanup_key)
+                .unwrap()
+                .is_empty()
+        );
+
+        reopened
+            .conn()
+            .unwrap()
+            .execute_batch("PRAGMA query_only=ON")
+            .unwrap();
+        let result = crate::security::protect_native_secret_with(
+            "fixture-token",
+            |reference| reopened.retain_secret_cleanup(cleanup_key, reference),
+            |_, _| panic!("native credential must not be created before durable intent"),
+        );
+        assert!(result.is_err());
     }
 }

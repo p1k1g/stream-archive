@@ -67,6 +67,24 @@ pub struct CoreOpenResult {
 
 const KICK_CLEANUP_KEY: &str = "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS";
 
+fn kick_secret_write_guard(store: &Store) -> Result<std::fs::File> {
+    let mut path = store.path().as_os_str().to_os_string();
+    path.push(".kick-secret.lock");
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(PathBuf::from(path))
+        .context("KICK 인증정보 변경 잠금 파일을 열지 못했습니다.")?;
+    fs2::FileExt::try_lock_exclusive(&file)
+        .context("다른 프로세스가 KICK 인증정보를 변경 중입니다. 잠시 후 재시도하세요.")?;
+    Ok(file)
+}
+
 fn cleanup_kick_secrets(store: &Store, delete: &mut impl FnMut(&str) -> Result<()>) -> Result<()> {
     for reference in store.pending_secret_cleanup(KICK_CLEANUP_KEY)? {
         delete(&reference).context(
@@ -89,18 +107,14 @@ fn commit_kick_configuration(
         KICK_CLEANUP_KEY,
         |value| crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN"),
     ) {
-        if let Some(value) = updates.get("KICK_SESSION_TOKEN")
-            && let Err(cleanup_error) = delete(value)
-        {
+        if let Some(value) = updates.get("KICK_SESSION_TOKEN") {
+            delete(value)
+                .context("KICK 저장 실패 후 새 native credential 정리가 필요합니다.")?;
             if let Some(reference) =
                 crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN")?
             {
-                store
-                    .retain_secret_cleanup(KICK_CLEANUP_KEY, &reference)
-                    .context("KICK 저장 실패 후 정리 대기 참조도 저장하지 못했습니다.")?;
+                store.finish_secret_cleanup(KICK_CLEANUP_KEY, &reference)?;
             }
-            return Err(cleanup_error)
-                .context("KICK 저장 실패 후 새 native credential 정리가 필요합니다.");
         }
         return Err(error);
     }
@@ -321,6 +335,11 @@ impl StreamArchiveCore {
         let kick = secrets
             .get("KICK_SESSION_TOKEN")
             .filter(|value| !value.is_empty());
+        let _secret_guard = if kick.is_some() {
+            Some(kick_secret_write_guard(&self.store)?)
+        } else {
+            None
+        };
         if kick.is_some() {
             cleanup_kick_secrets(&self.store, &mut delete)?;
         }
@@ -332,7 +351,10 @@ impl StreamArchiveCore {
         }
         // Create KICK last so another provider's protection failure cannot orphan it.
         if let Some(value) = kick {
-            updates.insert("KICK_SESSION_TOKEN".into(), protect_secret(value)?);
+            let protected = crate::security::protect_secret_with_cleanup_intent(value, |reference| {
+                self.store.retain_secret_cleanup(KICK_CLEANUP_KEY, reference)
+            })?;
+            updates.insert("KICK_SESSION_TOKEN".into(), protected);
         }
         if !updates.is_empty() {
             if kick.is_some() {
@@ -353,6 +375,7 @@ impl StreamArchiveCore {
     /// Explicit deletion; empty provider drafts continue to preserve saved values.
     pub async fn clear_kick_token(&self) -> Result<()> {
         let _guard = self.config_write_lock.lock().await;
+        let _secret_guard = kick_secret_write_guard(&self.store)?;
         let mut delete =
             |value: &str| crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN");
         clear_kick_token_in_store(&self.store, delete)?;
@@ -807,6 +830,9 @@ mod tests {
                 "test",
             )
             .unwrap();
+        store
+            .retain_secret_cleanup(KICK_CLEANUP_KEY, NEW_KICK_REFERENCE)
+            .unwrap();
         let updates = BTreeMap::from([("KICK_SESSION_TOKEN".into(), NEW_KICK_REFERENCE.into())]);
         let mut deleted = Vec::new();
         commit_kick_configuration(&store, &updates, &mut |reference| {
@@ -865,6 +891,18 @@ mod tests {
     }
 
     #[test]
+    fn kick_secret_guard_serializes_observer_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let owner = Store::open(path.clone()).unwrap();
+        let observer = Store::open_observer(path).unwrap();
+        let guard = kick_secret_write_guard(&owner).unwrap();
+        assert!(kick_secret_write_guard(&observer).is_err());
+        drop(guard);
+        assert!(kick_secret_write_guard(&observer).is_ok());
+    }
+
+    #[test]
     fn kick_failed_save_retains_new_reference_when_rollback_cleanup_fails() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("test.db")).unwrap();
@@ -873,6 +911,9 @@ mod tests {
                 &BTreeMap::from([("KICK_SESSION_TOKEN".into(), OLD_KICK_REFERENCE.into())]),
                 "test",
             )
+            .unwrap();
+        store
+            .retain_secret_cleanup(KICK_CLEANUP_KEY, NEW_KICK_REFERENCE)
             .unwrap();
         let conn = rusqlite::Connection::open(store.path()).unwrap();
         conn.execute_batch(

@@ -110,6 +110,41 @@ pub fn protect_secret(value: &str) -> Result<String> {
     }
 }
 
+/// Persist an opaque cleanup intent before creating a KICK native credential.
+pub(crate) fn protect_secret_with_cleanup_intent(
+    value: &str,
+    retain: impl FnOnce(&str) -> Result<()>,
+) -> Result<String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        protect_native_secret_with(value, retain, native_secret_store)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = retain;
+        protect_secret(value)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+pub(crate) fn protect_native_secret_with(
+    value: &str,
+    retain: impl FnOnce(&str) -> Result<()>,
+    store: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<String> {
+    if value.contains('\r') || value.contains('\n') || value.contains('\0') {
+        bail!("secret must be a single line");
+    }
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let reference = Uuid::new_v4().hyphenated().to_string();
+    let protected = format!("{NATIVE_SECRET_PREFIX}{reference}");
+    retain(&protected).context("KICK native cleanup intent could not be saved")?;
+    store(&reference, value).context("native secret store failed")?;
+    Ok(protected)
+}
+
 fn parse_native_reference<'a>(value: &'a str, name: &str) -> Result<&'a str> {
     let value = value.trim();
     Uuid::parse_str(value).with_context(|| format!("{name} native secret reference is invalid"))?;

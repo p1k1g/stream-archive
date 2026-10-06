@@ -57,3 +57,5 @@ Cookie의 expiry가 길어도 세션 무효화·시청 권한·API 변경은 별
 - [ ] SOOP/CHZZK LIVE/VOD와 KICK LIVE regression
 
 사용자가 수행한 Cookie+Bearer playback 성공과 Cookie 없는 HLS 다운로드는 설계 근거입니다. 새 앱 binary에서의 성공으로 기록하지 않습니다.
+
+KICK native credential은 생성 전에 opaque cleanup 참조를 SQLite에 기록합니다. 새 값 commit 시 해당 참조를 cleanup 목록에서 원자적으로 제거하므로 DB가 이후 쓰기 불가능해져도 rollback 정리 대상을 복구할 수 있습니다. KICK 등록·교체·삭제는 DB별 파일 잠금으로 CLI observer 간 충돌을 막으며, 잠금 실패 시 재시도를 안내합니다.
