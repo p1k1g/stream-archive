@@ -29,7 +29,7 @@
 
 KICK 토큰 교체는 새 참조와 이전 native 참조의 정리 대기 기록을 기존 SQLite `settings` 테이블에 함께 commit합니다. commit 실패 시 새로 만든 KICK native credential을 회수합니다. commit 후 이전 항목을 삭제하고, 삭제 실패 시 opaque 참조만 정리 대기로 보존하여 다음 저장/삭제에서 재시도합니다. 정리 대기에는 평문 토큰을 저장하지 않으며 DB schema migration은 없습니다.
 
-native 항목을 교체/삭제한 뒤 이전 참조를 가진 오래된 Backup을 Restore하면 해당 토큰을 다시 입력해야 할 수 있습니다. SQLite 데이터 복구와 native secret의 생명주기는 같지 않습니다.
+Linux/macOS에서 Backup을 Restore할 때 `KICK_SESSION_TOKEN`과 native 정리 대기 참조는 복원 직전 canonical DB의 현재 상태를 유지합니다. 토큰을 교체했다면 현재 토큰을 사용하고, 삭제했거나 설정하지 않았다면 미설정을 유지합니다. 오래된 백업의 native 참조로 되돌리지 않습니다. 나머지 설정·채널·History 등은 기존대로 복원하며 Windows DPAPI 복원 방식은 변경하지 않습니다.
 
 ## 오류 로그
 
@@ -81,3 +81,9 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 멈춘 native 조회의 시간 초과/취소 후 잠금 해제, 무관한 프로세스 생존, helper 응답 실패·크기 초과·UTF-8 오류의 안전한 처리, Linux fake secret-tool을 이용한 실제 Queue 취소 및 runtime 종료를 회귀 테스트로 검증합니다. 실제 Secret Service / Keychain 세션 수동 QA는 위 RC 항목으로 남깁니다.
 
 내부 helper는 OS가 확인한 직접 부모가 동일 실행 이미지인 경우에만 native 조회를 허용합니다. Linux는 /proc의 실행 이미지 device/inode, macOS는 실행 경로와 커널 CDHash를 비교하며, 확인 실패 시 DB/native 조회나 stdout 토큰 전달을 수행하지 않습니다. 내부 명령을 외부 프로세스에서 직접 실행하는 경우는 거부합니다.
+
+## KICK 인증정보와 Restore 정책
+
+사용자 선택에 따라 Linux/macOS Restore는 현재 KICK 인증정보와 cleanup journal을 유지합니다. 동일 DB별 인증정보 잠금 아래에서 최신 canonical 행을 읽고, SQLite 내부 임시 DB에 복원 대상과 현재 두 행을 먼저 구성한 뒤 canonical DB로 복원합니다. 원본 백업과 체크섬은 변경하지 않고 native secret을 복호화하거나 다시 저장하지 않습니다. 준비 실패나 인증정보 잠금 경합 시 복원하지 않으며, 복원 도중 오래된 토큰/cleanup 참조가 되살아나는 중간 상태를 만들지 않습니다. 기존 safety backup과 runtime-owner/LIVE/VOD/Queue 사전 조건을 유지합니다.
+
+자동 테스트는 현재 토큰 교체·삭제·미설정, 오래된 owning-store cache와 최신 observer 값, cleanup journal 유지, 다른 provider 설정의 정상 복원, 원본 백업 불변, 준비 실패/잠금 경합 시 live DB 보존, managed Restore와 safety backup을 검증합니다. 실제 native store 세션 수동 QA는 완료 처리하지 않습니다.

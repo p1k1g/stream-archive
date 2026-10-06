@@ -471,6 +471,8 @@ short-lived CLI process cannot overwrite SQLite underneath an active
 watcher/downloader/Queue worker. Existing LIVE/VOD/Queue safety checks still
 apply after exclusive ownership is obtained.
 
+Linux/macOS에서 Restore는 현재 `KICK_SESSION_TOKEN`과 native 정리 대기 참조를 유지합니다. 현재 토큰이 교체됐다면 새 값을 사용하고, 삭제 또는 미설정 상태라면 그대로 유지합니다. 나머지 백업 데이터는 기존대로 복원하며, 원본 백업 파일·체크섬과 native secret store 항목을 변경하지 않습니다. 인증정보 변경/조회가 진행 중이면 잠금 경합으로 Restore가 거부될 수 있으므로 종료 후 재시도하세요.
+
 ## Storage and logs
 
 ~~~bash
