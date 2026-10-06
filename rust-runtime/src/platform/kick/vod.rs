@@ -970,11 +970,14 @@ mod tests {
         *request.url_mut() = Url::parse(&format!("http://{address}/playback")).unwrap();
         assert_eq!(client.execute(request).await.unwrap().status(), 200);
         assert_eq!(
-            media_request(&client, Url::parse(&format!("http://{address}/cdn")).unwrap())
-                .send()
-                .await
-                .unwrap()
-                .status(),
+            media_request(
+                &client,
+                Url::parse(&format!("http://{address}/cdn")).unwrap()
+            )
+            .send()
+            .await
+            .unwrap()
+            .status(),
             200
         );
         tokio::time::timeout(Duration::from_secs(5), server)
