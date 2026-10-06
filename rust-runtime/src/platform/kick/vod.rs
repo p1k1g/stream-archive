@@ -453,6 +453,13 @@ fn playback_request(
     Ok(request)
 }
 
+fn media_request(client: &reqwest::Client, url: Url) -> reqwest::RequestBuilder {
+    client
+        .get(url)
+        .header("Origin", "https://kick.com")
+        .header("Referer", "https://kick.com/")
+}
+
 async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
     let (channel, id) = parse_url(raw)?;
     let token = crate::security::unprotect_secret(
@@ -482,9 +489,7 @@ async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
         let mut metadata = parse_playback(raw, &value, !token.is_empty())?;
         // Never attach account credentials to CDN requests.
         let bytes = body(
-            client
-                .get(metadata.source.clone())
-                .header("Referer", "https://kick.com/")
+            media_request(&client, metadata.source.clone())
                 .send()
                 .await
                 .map_err(|error| request_failure("cdn.hls.request", &error))?,
@@ -965,8 +970,7 @@ mod tests {
         *request.url_mut() = Url::parse(&format!("http://{address}/playback")).unwrap();
         assert_eq!(client.execute(request).await.unwrap().status(), 200);
         assert_eq!(
-            client
-                .get(format!("http://{address}/cdn"))
+            media_request(&client, Url::parse(&format!("http://{address}/cdn")).unwrap())
                 .send()
                 .await
                 .unwrap()
