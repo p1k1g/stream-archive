@@ -108,8 +108,7 @@ fn commit_kick_configuration(
         |value| crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN"),
     ) {
         if let Some(value) = updates.get("KICK_SESSION_TOKEN") {
-            delete(value)
-                .context("KICK 저장 실패 후 새 native credential 정리가 필요합니다.")?;
+            delete(value).context("KICK 저장 실패 후 새 native credential 정리가 필요합니다.")?;
             if let Some(reference) =
                 crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN")?
             {
@@ -351,9 +350,11 @@ impl StreamArchiveCore {
         }
         // Create KICK last so another provider's protection failure cannot orphan it.
         if let Some(value) = kick {
-            let protected = crate::security::protect_secret_with_cleanup_intent(value, |reference| {
-                self.store.retain_secret_cleanup(KICK_CLEANUP_KEY, reference)
-            })?;
+            let protected =
+                crate::security::protect_secret_with_cleanup_intent(value, |reference| {
+                    self.store
+                        .retain_secret_cleanup(KICK_CLEANUP_KEY, reference)
+                })?;
             updates.insert("KICK_SESSION_TOKEN".into(), protected);
         }
         if !updates.is_empty() {

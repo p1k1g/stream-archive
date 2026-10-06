@@ -1407,8 +1407,16 @@ mod tests {
                 .sqlite_error_code(),
             Some(rusqlite::ErrorCode::ReadOnly)
         );
-        assert!(store.retain_secret_cleanup(cleanup_key, &protected).is_err());
-        assert!(store.finish_secret_cleanup(cleanup_key, &protected).is_err());
+        assert!(
+            store
+                .retain_secret_cleanup(cleanup_key, &protected)
+                .is_err()
+        );
+        assert!(
+            store
+                .finish_secret_cleanup(cleanup_key, &protected)
+                .is_err()
+        );
         drop(store);
         let reopened = Store::open(path).unwrap();
         assert_eq!(
