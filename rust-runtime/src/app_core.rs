@@ -65,6 +65,49 @@ pub struct CoreOpenResult {
     pub migrated_legacy_db: bool,
 }
 
+const KICK_CLEANUP_KEY: &str = "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS";
+
+fn cleanup_kick_secrets(store: &Store, delete: &mut impl FnMut(&str) -> Result<()>) -> Result<()> {
+    for reference in store.pending_secret_cleanup(KICK_CLEANUP_KEY)? {
+        delete(&reference).context(
+            "KICK 이전 인증정보 정리가 필요합니다. 저장된 정리 대기 참조로 재시도하세요.",
+        )?;
+        store.finish_secret_cleanup(KICK_CLEANUP_KEY, &reference)?;
+    }
+    Ok(())
+}
+
+fn commit_kick_configuration(
+    store: &Store,
+    updates: &BTreeMap<String, String>,
+    delete: &mut impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    if let Err(error) = store.sync_settings_retiring_secret(
+        updates,
+        "native-provider",
+        "KICK_SESSION_TOKEN",
+        KICK_CLEANUP_KEY,
+        |value| crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN"),
+    ) {
+        if let Some(value) = updates.get("KICK_SESSION_TOKEN")
+            && let Err(cleanup_error) = delete(value)
+        {
+            if let Some(reference) =
+                crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN")?
+            {
+                store
+                    .retain_secret_cleanup(KICK_CLEANUP_KEY, &reference)
+                    .context("KICK 저장 실패 후 정리 대기 참조도 저장하지 못했습니다.")?;
+            }
+            return Err(cleanup_error)
+                .context("KICK 저장 실패 후 새 native credential 정리가 필요합니다.");
+        }
+        return Err(error);
+    }
+    cleanup_kick_secrets(store, delete)
+        .context("KICK 새 인증정보는 저장됐지만 이전 native credential 정리가 완료되지 않았습니다.")
+}
+
 fn clear_kick_token_in_store(store: &Store, delete: impl FnOnce(&str) -> Result<()>) -> Result<()> {
     store.refresh_config_cache()?;
     let value = store
@@ -272,16 +315,32 @@ impl StreamArchiveCore {
         validate_setting_updates(settings)?;
         validate_secret_updates(secrets)?;
 
+        let _guard = self.config_write_lock.lock().await;
+        let mut delete = |value: &str| {
+            crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN")
+        };
+        let kick = secrets
+            .get("KICK_SESSION_TOKEN")
+            .filter(|value| !value.is_empty());
+        if kick.is_some() {
+            cleanup_kick_secrets(&self.store, &mut delete)?;
+        }
         let mut updates = settings.clone();
         for (key, value) in secrets {
-            if !value.is_empty() {
+            if key != "KICK_SESSION_TOKEN" && !value.is_empty() {
                 updates.insert(key.clone(), protect_secret(value)?);
             }
         }
-
-        let _guard = self.config_write_lock.lock().await;
+        // Create KICK last so another provider's protection failure cannot orphan it.
+        if let Some(value) = kick {
+            updates.insert("KICK_SESSION_TOKEN".into(), protect_secret(value)?);
+        }
         if !updates.is_empty() {
-            self.store.sync_settings(&updates, "native-provider")?;
+            if kick.is_some() {
+                commit_kick_configuration(&self.store, &updates, &mut delete)?;
+            } else {
+                self.store.sync_settings(&updates, "native-provider")?;
+            }
             self.logs
                 .push(format!(
                     "[CORE] native provider configuration updated: {}",
@@ -295,9 +354,11 @@ impl StreamArchiveCore {
     /// Explicit deletion; empty provider drafts continue to preserve saved values.
     pub async fn clear_kick_token(&self) -> Result<()> {
         let _guard = self.config_write_lock.lock().await;
-        clear_kick_token_in_store(&self.store, |value| {
+        let mut delete = |value: &str| {
             crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN")
-        })
+        };
+        clear_kick_token_in_store(&self.store, &mut delete)?;
+        cleanup_kick_secrets(&self.store, &mut delete)
     }
 
     /// Verify the currently saved SOOP login and Cloudflare Worker credentials.
@@ -734,6 +795,148 @@ impl StreamArchiveCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const OLD_KICK_REFERENCE: &str = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
+    const NEW_KICK_REFERENCE: &str = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
+
+    #[test]
+    fn kick_replacement_removes_previous_native_item_only_after_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), OLD_KICK_REFERENCE.into())]),
+                "test",
+            )
+            .unwrap();
+        let updates = BTreeMap::from([("KICK_SESSION_TOKEN".into(), NEW_KICK_REFERENCE.into())]);
+        let mut deleted = Vec::new();
+        commit_kick_configuration(&store, &updates, &mut |reference| {
+            assert_eq!(
+                store.setting_value("KICK_SESSION_TOKEN")?.unwrap(),
+                NEW_KICK_REFERENCE
+            );
+            deleted.push(reference.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(deleted, vec![OLD_KICK_REFERENCE]);
+        assert!(
+            store
+                .pending_secret_cleanup(KICK_CLEANUP_KEY)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn kick_replacement_cleans_new_native_item_on_sqlite_commit_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), OLD_KICK_REFERENCE.into())]),
+                "test",
+            )
+            .unwrap();
+        let conn = rusqlite::Connection::open(store.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_kick_update BEFORE UPDATE ON settings WHEN NEW.key='KICK_SESSION_TOKEN' BEGIN SELECT RAISE(ABORT,'fixture write failure'); END;",
+        )
+        .unwrap();
+        let mut deleted = Vec::new();
+        let updates = BTreeMap::from([("KICK_SESSION_TOKEN".into(), NEW_KICK_REFERENCE.into())]);
+        assert!(
+            commit_kick_configuration(&store, &updates, &mut |reference| {
+                deleted.push(reference.to_string());
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(deleted, vec![NEW_KICK_REFERENCE]);
+        assert_eq!(
+            store.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            OLD_KICK_REFERENCE
+        );
+        assert!(
+            store
+                .pending_secret_cleanup(KICK_CLEANUP_KEY)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn kick_failed_save_retains_new_reference_when_rollback_cleanup_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), OLD_KICK_REFERENCE.into())]),
+                "test",
+            )
+            .unwrap();
+        let conn = rusqlite::Connection::open(store.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_kick_update BEFORE UPDATE ON settings WHEN NEW.key='KICK_SESSION_TOKEN' BEGIN SELECT RAISE(ABORT,'fixture write failure'); END;",
+        )
+        .unwrap();
+        let updates = BTreeMap::from([("KICK_SESSION_TOKEN".into(), NEW_KICK_REFERENCE.into())]);
+        assert!(commit_kick_configuration(&store, &updates, &mut |_| bail!("locked")).is_err());
+        assert_eq!(
+            store.pending_secret_cleanup(KICK_CLEANUP_KEY).unwrap(),
+            vec![NEW_KICK_REFERENCE]
+        );
+        cleanup_kick_secrets(&store, &mut |reference| {
+            assert_eq!(reference, NEW_KICK_REFERENCE);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            store.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            OLD_KICK_REFERENCE
+        );
+    }
+
+    #[test]
+    fn kick_retired_native_cleanup_failure_survives_reopen_and_is_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let store = Store::open(path.clone()).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), OLD_KICK_REFERENCE.into())]),
+                "test",
+            )
+            .unwrap();
+        let updates = BTreeMap::from([("KICK_SESSION_TOKEN".into(), NEW_KICK_REFERENCE.into())]);
+        assert!(commit_kick_configuration(&store, &updates, &mut |_| bail!("locked")).is_err());
+        drop(store);
+        let reopened = Store::open(path).unwrap();
+        assert_eq!(
+            reopened.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            NEW_KICK_REFERENCE
+        );
+        assert_eq!(
+            reopened.pending_secret_cleanup(KICK_CLEANUP_KEY).unwrap(),
+            vec![OLD_KICK_REFERENCE]
+        );
+        cleanup_kick_secrets(&reopened, &mut |reference| {
+            assert_eq!(reference, OLD_KICK_REFERENCE);
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            reopened
+                .pending_secret_cleanup(KICK_CLEANUP_KEY)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            reopened.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            NEW_KICK_REFERENCE
+        );
+    }
 
     #[test]
     fn kick_clear_deletes_latest_reference_before_db_and_preserves_it_on_failure() {

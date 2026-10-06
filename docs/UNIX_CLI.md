@@ -584,7 +584,7 @@ Public release/version/tag decisions and real provider/session QA remain Phase
 
 ## KICK 공개 LIVE (Phase 26.1)
 
-KICK 채널은 URL 전체 대신 마지막 이름(slug)을 등록합니다. VOD/Queue 및 제한 콘텐츠 인증은 지원하지 않습니다.
+KICK LIVE 채널은 URL 전체 대신 마지막 이름(slug)을 등록합니다. Phase 26.1의 공개 LIVE 범위와 별도로, Phase 26.2에서는 공개/구독 VOD 분석·다운로드, VOD Queue / History와 `session_token` 인증을 지원합니다. 제한된 LIVE 콘텐츠 인증은 지원하지 않습니다.
 
 ```bash
 stream-archive-cli channels add kick xqc "xQc" "/srv/archive/kick"
@@ -598,7 +598,6 @@ stream-archive-cli serve --watch
 ## KICK VOD 인증
 
 `KICK_SESSION_TOKEN`은 기존 provider secret 입력 절차로 저장합니다. 명령행 인수에 토큰을 직접 넣지 않습니다. KICK VOD는 FFmpeg로 직접 MP4를 저장하고, Queue 재시도는 새 파일로 시작합니다. [Phase 26.2 제한 및 수동 검증](PHASE26_2_KICK_VOD.md)을 확인하세요.
-
 
 KICK 인증정보 삭제는 shared core를 통해 native secret store의 참조 항목을 먼저 삭제한 뒤 SQLite 설정을 비웁니다. 삭제 실패 시 설정 참조를 유지하고 오류를 반환합니다.
 

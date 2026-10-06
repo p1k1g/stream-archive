@@ -52,6 +52,16 @@ pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
+/// Return an opaque native reference for deferred cleanup, never plaintext or DPAPI data.
+pub(crate) fn native_cleanup_reference(value: &str, name: &str) -> Result<Option<String>> {
+    let value = value.trim();
+    if value.to_ascii_lowercase().starts_with(NATIVE_SECRET_PREFIX) {
+        let reference = parse_native_reference(&value[NATIVE_SECRET_PREFIX.len()..], name)?;
+        return Ok(Some(format!("{NATIVE_SECRET_PREFIX}{reference}")));
+    }
+    Ok(None)
+}
+
 /// Remove a referenced native credential before its SQLite reference is cleared.
 pub fn delete_protected_secret(value: &str, name: &str) -> Result<()> {
     delete_protected_secret_with(value, name, native_secret_delete)
@@ -251,7 +261,7 @@ mod linux_secret_service {
     }
 
     pub(super) fn delete(reference: &str) -> Result<()> {
-        let output = command()
+        let _output = command()
             .args([
                 "clear",
                 "application",
@@ -264,7 +274,25 @@ mod linux_secret_service {
             .stderr(Stdio::null())
             .output()
             .with_context(|| helper_context("delete"))?;
-        if !output.status.success() {
+        // clear can skip locked items; verify absence, including already-missing entries.
+        let mut probe = command()
+            .args([
+                "search",
+                "--all",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "reference",
+                reference,
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| helper_context("deletion verification"))?;
+        let absent = probe.status.success() && probe.stdout.is_empty() && probe.stderr.is_empty();
+        // search may return a secret with item metadata; never expose captured output.
+        probe.stdout.fill(0);
+        probe.stderr.fill(0);
+        if !absent {
             bail!(
                 "{}; unlock the credential store and retry",
                 helper_context("delete failed")
@@ -566,6 +594,14 @@ mod dpapi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_references_never_include_inline_secrets() {
+        for value in ["", "plaintext-token", "dpapi:v1:encrypted"] {
+            assert!(native_cleanup_reference(value, "TEST").unwrap().is_none());
+        }
+        assert!(native_cleanup_reference("native-secret:v1:invalid", "TEST").is_err());
+    }
 
     #[test]
     fn deletion_targets_only_valid_native_references_and_propagates_failures() {

@@ -514,6 +514,125 @@ impl Store {
         Ok(())
     }
 
+    /// Commit a replacement and its opaque cleanup references in one SQLite transaction.
+    pub(crate) fn sync_settings_retiring_secret(
+        &self,
+        values: &BTreeMap<String, String>,
+        source: &str,
+        secret_key: &str,
+        cleanup_key: &str,
+        retire: impl FnOnce(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        let mut conn = self.conn()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let read = |key: &str| -> Result<String> {
+            Ok(tx
+                .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                    row.get::<_, String>(0)
+                })
+                .optional()?
+                .unwrap_or_default())
+        };
+        let previous = read(secret_key)?;
+        let pending = read(cleanup_key)?;
+        let mut pending: Vec<String> = if pending.is_empty() {
+            Vec::new()
+        } else {
+            serde_json::from_str(&pending).context("invalid secret cleanup references")?
+        };
+        if values.get(secret_key).is_some_and(|value| value != &previous)
+            && let Some(reference) = retire(&previous)?
+            && !pending.contains(&reference)
+        {
+            pending.push(reference);
+        }
+        let pending = serde_json::to_string(&pending)?;
+        let now = Utc::now().to_rfc3339();
+        for (key, value) in values {
+            tx.execute(
+                "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(key) DO UPDATE SET value=excluded.value,source=excluded.source,updated_at=excluded.updated_at",
+                params![key, value, source, now],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'native-secret-cleanup',?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            params![cleanup_key, pending, now],
+        )?;
+        tx.commit()?;
+        for (key, value) in values {
+            cache.insert(key.clone(), value.clone());
+        }
+        cache.insert(cleanup_key.to_string(), pending);
+        Ok(())
+    }
+
+    pub(crate) fn pending_secret_cleanup(&self, key: &str) -> Result<Vec<String>> {
+        let conn = self.conn()?;
+        let value: Option<String> = conn
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0))
+            .optional()?;
+        match value.filter(|value| !value.is_empty()) {
+            Some(value) => serde_json::from_str(&value).context("invalid secret cleanup references"),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) fn retain_secret_cleanup(&self, key: &str, reference: &str) -> Result<()> {
+        let mut conn = self.conn()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value: Option<String> = tx
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0))
+            .optional()?;
+        let mut pending: Vec<String> = match value.filter(|value| !value.is_empty()) {
+            Some(value) => serde_json::from_str(&value).context("invalid secret cleanup references")?,
+            None => Vec::new(),
+        };
+        if !pending.iter().any(|value| value == reference) {
+            pending.push(reference.to_string());
+        }
+        let value = serde_json::to_string(&pending)?;
+        tx.execute(
+            "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'native-secret-cleanup',?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            params![key, value, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        cache.insert(key.to_string(), value);
+        Ok(())
+    }
+
+    pub(crate) fn finish_secret_cleanup(&self, key: &str, reference: &str) -> Result<()> {
+        let mut conn = self.conn()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value: Option<String> = tx
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0))
+            .optional()?;
+        let mut pending: Vec<String> = match value.filter(|value| !value.is_empty()) {
+            Some(value) => serde_json::from_str(&value).context("invalid secret cleanup references")?,
+            None => Vec::new(),
+        };
+        pending.retain(|value| value != reference);
+        let value = serde_json::to_string(&pending)?;
+        tx.execute(
+            "UPDATE settings SET value=?2,updated_at=?3 WHERE key=?1",
+            params![key, value, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        cache.insert(key.to_string(), value);
+        Ok(())
+    }
+
     pub fn sync_settings(&self, values: &BTreeMap<String, String>, source: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let mut conn = self.conn()?;

@@ -453,7 +453,7 @@ fn provider_clear_removes_scoped_native_entry_and_keeps_reference_on_helper_fail
     let helper = layout.fake_bin.join("secret-tool");
     fs::write(
         &helper,
-        "#!/bin/sh\n[ \"$1\" = clear ] && [ \"$2\" = application ] && [ \"$3\" = stream-archive ] && [ \"$4\" = reference ] || exit 23\n[ \"$FAKE_DELETE_FAIL\" = 1 ] && exit 1\nrm -- \"$FAKE_SECRET_DIR/$5\"\n",
+        "#!/bin/sh\ncase \"$1\" in\nclear)\n[ \"$2\" = application ] && [ \"$3\" = stream-archive ] && [ \"$4\" = reference ] || exit 23\n[ \"$FAKE_DELETE_FAIL\" = 1 ] && exit 1\n[ -f \"$FAKE_SECRET_DIR/$5\" ] || exit 1\nrm -- \"$FAKE_SECRET_DIR/$5\";;\nsearch)\n[ \"$2\" = --all ] && [ \"$3\" = application ] && [ \"$4\" = stream-archive ] && [ \"$5\" = reference ] || exit 23\n[ ! -f \"$FAKE_SECRET_DIR/$6\" ] || printf '[fixture] secret metadata\\n'\nexit 0;;\n*) exit 23;;\nesac\n",
     )
     .unwrap();
     fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();

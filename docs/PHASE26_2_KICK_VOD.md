@@ -25,6 +25,12 @@
 - fragmented MP4의 Windows Explorer 썸네일과 강제 종료 후 부분 재생은 실제 PC에서 확인해야 합니다. 일반 MP4의 `+faststart` 후처리나 전체 remux를 자동 추가하지 않습니다.
 - 내부 web playback API와 player version 필드는 공개 API 계약이 아니며, KICK 변경 시 분석이 실패할 수 있습니다. 로그인 자동화·Cloudflare 우회는 추가하지 않습니다.
 
+## native credential 교체와 정리
+
+KICK 토큰 교체는 새 참조와 이전 native 참조의 정리 대기 기록을 기존 SQLite `settings` 테이블에 함께 commit합니다. commit 실패 시 새로 만든 KICK native credential을 회수합니다. commit 후 이전 항목을 삭제하고, 삭제 실패 시 opaque 참조만 정리 대기로 보존하여 다음 저장/삭제에서 재시도합니다. 정리 대기에는 평문 토큰을 저장하지 않으며 DB schema migration은 없습니다.
+
+native 항목을 교체/삭제한 뒤 이전 참조를 가진 오래된 Backup을 Restore하면 해당 토큰을 다시 입력해야 할 수 있습니다. SQLite 데이터 복구와 native secret의 생명주기는 같지 않습니다.
+
 ## 오류 로그
 
 진단의 런타임 로그에 `[VOD:KICK:ERR]`와 job ID, 실패 단계, HTTP 상태 또는 안전한 오류 분류를 남깁니다. `playback.request` / `playback.http` / `playback.json` / `playback.vod_missing`, `cdn.hls.request` / `cdn.hls.http`, `download.ffmpeg.exit` / `download.incomplete`로 조회·CDN·파일 기록 실패를 구분합니다. FFmpeg 실패는 exit 상태, 기록 바이트와 진행 시간을 함께 남깁니다.
