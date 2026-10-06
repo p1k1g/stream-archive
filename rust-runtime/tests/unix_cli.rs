@@ -394,7 +394,7 @@ fn hung_kick_native_lookup_allows_queue_cancel_and_runtime_shutdown() {
 }
 
 #[test]
-fn kick_lookup_worker_entries_read_existing_db_without_runtime_bootstrap() {
+fn kick_lookup_worker_entries_reject_untrusted_callers_before_export() {
     let layout = Layout::new();
     layout.init();
     let db = layout.data.join("stream-archive.db");
@@ -411,8 +411,8 @@ fn kick_lookup_worker_entries_read_existing_db_without_runtime_bootstrap() {
             .arg(&db)
             .output()
             .unwrap();
-        assert_success("internal lookup entry", &output);
-        assert_eq!(output.stdout, b"fixture-token");
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
         assert!(output.stderr.is_empty());
     }
     let missing = layout.data.join("missing.db");

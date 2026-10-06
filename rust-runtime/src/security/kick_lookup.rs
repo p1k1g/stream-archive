@@ -14,10 +14,61 @@ const WORKER_ARG: &str = "--internal-kick-secret-lookup";
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_OUTPUT: usize = 64 * 1024;
 
+unsafe extern "C" {
+    fn getppid() -> i32;
+}
+
+fn authenticated_parent() -> bool {
+    let parent = unsafe { getppid() };
+    parent > 1 && same_executable(parent) && unsafe { getppid() } == parent
+}
+
+#[cfg(target_os = "linux")]
+fn same_executable(pid: i32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let own = std::fs::metadata("/proc/self/exe");
+    let caller = std::fs::metadata(format!("/proc/{pid}/exe"));
+    match (own, caller) {
+        (Ok(own), Ok(caller)) => own.dev() == caller.dev() && own.ino() == caller.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn same_executable(pid: i32) -> bool {
+    // Query the running images, not argv/env or a caller-supplied executable path.
+    // CDHash also rejects a different binary placed at the same filesystem path.
+    unsafe extern "C" {
+        fn proc_pidpath(pid: i32, buffer: *mut std::ffi::c_void, size: u32) -> i32;
+        fn csops(pid: i32, operation: u32, buffer: *mut std::ffi::c_void, size: usize) -> i32;
+    }
+    fn identity(pid: i32) -> Option<(Vec<u8>, [u8; 20])> {
+        let mut path = vec![0u8; 4096];
+        let mut hash = [0u8; 20];
+        let path_ok = unsafe { proc_pidpath(pid, path.as_mut_ptr().cast(), 4096) } > 0;
+        // CS_OPS_CDHASH (5) returns the kernel's code directory hash.
+        let hash_ok = unsafe { csops(pid, 5, hash.as_mut_ptr().cast(), hash.len()) } == 0;
+        if !path_ok || !hash_ok || hash == [0u8; 20] {
+            return None;
+        }
+        path.truncate(path.iter().position(|byte| *byte == 0)?);
+        Some((path, hash))
+    }
+    match (identity(std::process::id() as i32), identity(pid)) {
+        (Some(own), Some(caller)) => own == caller,
+        _ => false,
+    }
+}
+
 pub(super) fn worker_entry() -> Option<i32> {
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new(WORKER_ARG)) {
         return None;
+    }
+    // Only the same running application image may request a native export.
+    // An arbitrary process cannot turn the Keychain-trusted executable into an oracle.
+    if !authenticated_parent() {
+        return Some(1);
     }
     let result = (|| -> Result<()> {
         let path = args.next().map(std::path::PathBuf::from);
@@ -118,6 +169,13 @@ async fn wait_cancel(cancel: &AtomicBool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caller_identity_uses_the_running_executable() {
+        assert!(same_executable(std::process::id() as i32));
+        assert!(!same_executable(-1));
+        assert!(!authenticated_parent());
+    }
 
     #[tokio::test]
     async fn hung_lookup_timeout_and_cancel_release_lock_and_preserve_unrelated_process() {
