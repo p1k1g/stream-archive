@@ -687,9 +687,14 @@ mod tests {
                 "test",
             )
             .unwrap();
-        let outcome = runtime.block_on(manager.restore(&backup.file_name)).unwrap();
+        let outcome = runtime
+            .block_on(manager.restore(&backup.file_name))
+            .unwrap();
         assert_eq!(
-            store.setting_value("KICK_SESSION_TOKEN").unwrap().as_deref(),
+            store
+                .setting_value("KICK_SESSION_TOKEN")
+                .unwrap()
+                .as_deref(),
             Some(new)
         );
         assert_eq!(

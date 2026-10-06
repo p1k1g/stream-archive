@@ -346,8 +346,9 @@ impl Store {
             anyhow::bail!("backup SQLite quick_check failed: {check}");
         }
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let _credential_guard = crate::security::kick_secret_guard(self)
-            .context("KICK 인증정보 사용 중에는 백업을 복원할 수 없습니다. 잠시 후 재시도하세요.")?;
+        let _credential_guard = crate::security::kick_secret_guard(self).context(
+            "KICK 인증정보 사용 중에는 백업을 복원할 수 없습니다. 잠시 후 재시도하세요.",
+        )?;
         let mut target = self.conn()?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let source = Self::restore_source_preserving_kick(&source, &target)?;
@@ -379,7 +380,10 @@ impl Store {
         staged.execute_batch(SCHEMA_SQL)?;
         ensure_multiplatform_schema(&mut staged)?;
         let tx = staged.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for key in ["KICK_SESSION_TOKEN", "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS"] {
+        for key in [
+            "KICK_SESSION_TOKEN",
+            "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS",
+        ] {
             let row: Option<(String, String, String)> = current
                 .query_row(
                     "SELECT value,source,updated_at FROM settings WHERE key=?1",
@@ -1124,12 +1128,18 @@ mod tests {
             }
             // The owning store still has the old cached value; use canonical rows.
             assert_eq!(
-                store.setting_value("KICK_SESSION_TOKEN").unwrap().as_deref(),
+                store
+                    .setting_value("KICK_SESSION_TOKEN")
+                    .unwrap()
+                    .as_deref(),
                 Some(old)
             );
             store.restore_from(&backup).unwrap();
             assert_eq!(
-                store.setting_value("KICK_SESSION_TOKEN").unwrap().as_deref(),
+                store
+                    .setting_value("KICK_SESSION_TOKEN")
+                    .unwrap()
+                    .as_deref(),
                 current
             );
             assert_eq!(
@@ -1177,7 +1187,10 @@ mod tests {
             Some("current-data")
         );
         assert_ne!(
-            store.setting_value("KICK_SESSION_TOKEN").unwrap().as_deref(),
+            store
+                .setting_value("KICK_SESSION_TOKEN")
+                .unwrap()
+                .as_deref(),
             Some("stale-native-reference")
         );
         let persisted: String = store
