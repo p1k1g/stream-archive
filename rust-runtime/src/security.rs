@@ -717,16 +717,25 @@ mod tests {
                 let result = read_kick_token_with(&reader_owner, |reference| {
                     assert_eq!(reference, value);
                     assert!(kick_secret_guard(&reader_observer).is_err());
-                    assert!(kick_secret_read_guard(&reader_observer, std::time::Duration::ZERO).is_ok());
+                    assert!(
+                        kick_secret_read_guard(&reader_observer, std::time::Duration::ZERO).is_ok()
+                    );
                     Ok(reference.into())
                 });
                 done_tx.send(result).unwrap();
             });
             started_rx.recv().unwrap();
-            assert!(done_rx.recv_timeout(std::time::Duration::from_millis(50)).is_err());
+            assert!(
+                done_rx
+                    .recv_timeout(std::time::Duration::from_millis(50))
+                    .is_err()
+            );
             drop(writer);
             assert_eq!(
-                done_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().unwrap(),
+                done_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap(),
                 value
             );
             reader.join().unwrap();
