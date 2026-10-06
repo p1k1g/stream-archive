@@ -390,12 +390,16 @@ async fn body(response: reqwest::Response) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn refresh_token_setting(store: &crate::store::Store) -> Result<String> {
+    // CLI observer writes must reach a headless owner even without the LIVE watcher.
+    store.refresh_config_cache()?;
+    Ok(store.setting_value(TOKEN_KEY)?.unwrap_or_default())
+}
+
 async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
     let (channel, id) = parse_url(raw)?;
     let token = crate::security::unprotect_secret(
-        &crate::store::global()?
-            .setting_value(TOKEN_KEY)?
-            .unwrap_or_default(),
+        &refresh_token_setting(crate::store::global()?)?,
         TOKEN_KEY,
     )?;
     let client = reqwest::Client::builder()
@@ -813,6 +817,30 @@ async fn download_mp4(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observer_token_changes_reach_owner_without_watcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let owner = crate::store::Store::open(path.clone()).unwrap();
+        let observer = crate::store::Store::open_observer(path).unwrap();
+        assert_eq!(refresh_token_setting(&owner).unwrap(), "");
+        for value in ["first%7Ctoken", "replacement%7Ctoken", ""] {
+            let cached = owner.setting_value(TOKEN_KEY).unwrap().unwrap_or_default();
+            observer
+                .sync_settings(
+                    &std::collections::BTreeMap::from([(TOKEN_KEY.into(), value.into())]),
+                    "test-observer",
+                )
+                .unwrap();
+            assert_eq!(
+                owner.setting_value(TOKEN_KEY).unwrap().unwrap_or_default(),
+                cached
+            );
+            assert_eq!(refresh_token_setting(&owner).unwrap(), value);
+        }
+    }
+
     const VOD: &str = "https://kick.com/example/videos/01a106d1-f328-750c-a31b-16a5df570460";
     fn playback() -> serde_json::Value {
         serde_json::json!({"playback_url":{"vod":"https://stream.kick.com/media/hls/master.m3u8"},

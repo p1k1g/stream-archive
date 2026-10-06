@@ -100,9 +100,9 @@ cd stream-archive
 | 기능 | SOOP | CHZZK | KICK |
 |---|:---:|:---:|:---:|
 | LIVE 자동 녹화 | ✅ | ✅ | 공개 LIVE (Phase 26.1) |
-| VOD 분석·다운로드 | ✅ | ✅ | 미지원 |
-| Queue / History | ✅ | ✅ | LIVE History만 |
-| 취소·재시도 | ✅ | ✅ | LIVE 중지·재확인 |
+| VOD 분석·다운로드 | ✅ | ✅ | 공개 / 구독 VOD (구독 인증 필요) |
+| Queue / History | ✅ | ✅ | VOD Queue / LIVE·VOD History |
+| 취소·재시도 | ✅ | ✅ | LIVE 중지·재확인 / VOD 취소·새 파일 재시도 (이어받기 미지원) |
 | 클립 / CATCH / 쇼츠 / 기타 별도 콘텐츠 | 미지원 | 미지원 | 미지원 |
 
 - Windows Native UI에서 채널·녹화·다운로드 관리
