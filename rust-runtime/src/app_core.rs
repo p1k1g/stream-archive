@@ -355,7 +355,7 @@ impl StreamArchiveCore {
         let _guard = self.config_write_lock.lock().await;
         let mut delete =
             |value: &str| crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN");
-        clear_kick_token_in_store(&self.store, &mut delete)?;
+        clear_kick_token_in_store(&self.store, delete)?;
         cleanup_kick_secrets(&self.store, &mut delete)
     }
 
