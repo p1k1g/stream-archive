@@ -158,8 +158,11 @@ impl VodManager {
                 } else if let Err(err) = result {
                     current.state = "FAILED".into();
                     current.message = format!("{err:#}");
-                    logs.push(format!("[VOD:KICK:ERR] job={terminal_job_id} {}", current.message))
-                        .await;
+                    logs.push(format!(
+                        "[VOD:KICK:ERR] job={terminal_job_id} {}",
+                        current.message
+                    ))
+                    .await;
                 }
                 current.clone()
             };
