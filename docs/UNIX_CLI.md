@@ -598,3 +598,10 @@ stream-archive-cli serve --watch
 ## KICK VOD 인증
 
 `KICK_SESSION_TOKEN`은 기존 provider secret 입력 절차로 저장합니다. 명령행 인수에 토큰을 직접 넣지 않습니다. KICK VOD는 FFmpeg로 직접 MP4를 저장하고, Queue 재시도는 새 파일로 시작합니다. [Phase 26.2 제한 및 수동 검증](PHASE26_2_KICK_VOD.md)을 확인하세요.
+
+
+KICK 인증정보 삭제는 shared core를 통해 native secret store의 참조 항목을 먼저 삭제한 뒤 SQLite 설정을 비웁니다. 삭제 실패 시 설정 참조를 유지하고 오류를 반환합니다.
+
+```bash
+stream-archive-cli providers clear-secret KICK_SESSION_TOKEN
+```

@@ -408,6 +408,83 @@ fn one_shot_cli_observes_running_owner_without_recovering_active_rows() {
 }
 
 #[test]
+fn provider_clear_kick_token_uses_core_and_does_not_expose_values() {
+    let layout = Layout::new();
+    layout.init();
+    let conn = Connection::open(layout.data.join("stream-archive.db")).unwrap();
+    conn.execute(
+        "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params!["KICK_SESSION_TOKEN", "legacy-kick-secret"],
+    )
+    .unwrap();
+    let output = layout.cli(&["providers", "clear-secret", "KICK_SESSION_TOKEN"]);
+    assert_success("clear KICK token", &output);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("legacy-kick-secret"));
+    let providers = json_output(
+        "providers status",
+        layout.cli(&["providers", "status", "--json"]),
+    );
+    assert_eq!(providers["KICK"]["session_token_configured"], false);
+    assert_success(
+        "clear already empty KICK token",
+        &layout.cli(&["providers", "clear-secret", "KICK_SESSION_TOKEN"]),
+    );
+    assert!(
+        !layout
+            .cli(&["providers", "clear-secret", "SOOP_PASSWORD"])
+            .status
+            .success()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn provider_clear_removes_scoped_native_entry_and_keeps_reference_on_helper_failure() {
+    let layout = Layout::new();
+    layout.init();
+    let reference = "123e4567-e89b-12d3-a456-426614174000";
+    let value = format!("native-secret:v1:{reference}");
+    let conn = Connection::open(layout.data.join("stream-archive.db")).unwrap();
+    conn.execute(
+        "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params!["KICK_SESSION_TOKEN", value],
+    )
+    .unwrap();
+    let helper = layout.fake_bin.join("secret-tool");
+    fs::write(
+        &helper,
+        "#!/bin/sh\n[ \"$1\" = clear ] && [ \"$2\" = application ] && [ \"$3\" = stream-archive ] && [ \"$4\" = reference ] || exit 23\n[ \"$FAKE_DELETE_FAIL\" = 1 ] && exit 1\nrm -- \"$FAKE_SECRET_DIR/$5\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let credential = layout.fake_bin.join(reference);
+    let unrelated = layout.fake_bin.join("unrelated-secret");
+    fs::write(&credential, "fixture-secret").unwrap();
+    fs::write(&unrelated, "other").unwrap();
+    for fail in [true, false] {
+        let output = layout
+            .command(CLI)
+            .args(["providers", "clear-secret", "KICK_SESSION_TOKEN"])
+            .env("FAKE_DELETE_FAIL", if fail { "1" } else { "0" })
+            .env("FAKE_SECRET_DIR", &layout.fake_bin)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), !fail);
+        assert_eq!(credential.exists(), fail);
+        assert!(unrelated.exists());
+        let stored: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='KICK_SESSION_TOKEN'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, if fail { value.as_str() } else { "" });
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-secret"));
+    }
+}
+
+#[test]
 fn provider_secret_cli_rejects_secret_as_argv_value() {
     let layout = Layout::new();
     layout.init();

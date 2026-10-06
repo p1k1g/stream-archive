@@ -52,6 +52,25 @@ pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
+/// Remove a referenced native credential before its SQLite reference is cleared.
+pub fn delete_protected_secret(value: &str, name: &str) -> Result<()> {
+    delete_protected_secret_with(value, name, native_secret_delete)
+}
+
+fn delete_protected_secret_with(
+    value: &str,
+    name: &str,
+    delete: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    let value = value.trim();
+    if value.to_ascii_lowercase().starts_with(NATIVE_SECRET_PREFIX) {
+        let reference = parse_native_reference(&value[NATIVE_SECRET_PREFIX.len()..], name)?;
+        delete(reference).with_context(|| format!("{name} native secret deletion failed"))?;
+    }
+    // DPAPI and legacy plaintext have no separate credential-store entry.
+    Ok(())
+}
+
 pub fn protect_secret(value: &str) -> Result<String> {
     if value.contains('\r') || value.contains('\n') || value.contains('\0') {
         bail!("secret must be a single line");
@@ -152,6 +171,21 @@ fn native_secret_load(_reference: &str) -> Result<String> {
 }
 
 #[cfg(target_os = "linux")]
+fn native_secret_delete(reference: &str) -> Result<()> {
+    linux_secret_service::delete(reference)
+}
+
+#[cfg(target_os = "macos")]
+fn native_secret_delete(reference: &str) -> Result<()> {
+    macos_keychain::delete(reference)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn native_secret_delete(_reference: &str) -> Result<()> {
+    bail!("Unix native-secret references must be deleted in their original native credential store")
+}
+
+#[cfg(target_os = "linux")]
 mod linux_secret_service {
     use anyhow::{Context, Result, bail};
     use std::{
@@ -211,6 +245,29 @@ mod linux_secret_service {
                 } else {
                     format!(": {detail}")
                 }
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn delete(reference: &str) -> Result<()> {
+        let output = command()
+            .args([
+                "clear",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "reference",
+                reference,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .with_context(|| helper_context("delete"))?;
+        if !output.status.success() {
+            bail!(
+                "{}; unlock the credential store and retry",
+                helper_context("delete failed")
             );
         }
         Ok(())
@@ -288,6 +345,12 @@ mod macos_keychain {
         ) -> i32;
 
         fn SecKeychainItemFreeContent(attr_list: *mut c_void, data: *mut c_void) -> i32;
+        fn SecKeychainItemDelete(item_ref: *mut c_void) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(value: *const c_void);
     }
 
     fn len_u32(value: usize, field: &str) -> Result<u32> {
@@ -311,6 +374,44 @@ mod macos_keychain {
         };
         if status != 0 {
             bail!("macOS Keychain store failed with OSStatus {status}");
+        }
+        Ok(())
+    }
+
+    pub(super) fn delete(reference: &str) -> Result<()> {
+        let account = reference.as_bytes();
+        let mut item_ref: *mut c_void = null_mut();
+        let status = unsafe {
+            SecKeychainFindGenericPassword(
+                null_mut(),
+                len_u32(SERVICE.len(), "service")?,
+                SERVICE.as_ptr(),
+                len_u32(account.len(), "account")?,
+                account.as_ptr(),
+                null_mut(),
+                null_mut(),
+                &mut item_ref,
+            )
+        };
+        if status == ERR_SEC_ITEM_NOT_FOUND {
+            return Ok(());
+        }
+        if status != 0 {
+            bail!("macOS Keychain deletion lookup failed with OSStatus {status}");
+        }
+        if item_ref.is_null() {
+            bail!("macOS Keychain returned an invalid item reference");
+        }
+        struct KeychainItem(*mut c_void);
+        impl Drop for KeychainItem {
+            fn drop(&mut self) {
+                unsafe { CFRelease(self.0) };
+            }
+        }
+        let item = KeychainItem(item_ref);
+        let status = unsafe { SecKeychainItemDelete(item.0) };
+        if status != 0 && status != ERR_SEC_ITEM_NOT_FOUND {
+            bail!("macOS Keychain deletion failed with OSStatus {status}");
         }
         Ok(())
     }
@@ -465,6 +566,30 @@ mod dpapi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_targets_only_valid_native_references_and_propagates_failures() {
+        let reference = "123e4567-e89b-12d3-a456-426614174000";
+        let value = format!("{NATIVE_SECRET_PREFIX}{reference}");
+        delete_protected_secret_with(&value, "TEST", |actual| {
+            assert_eq!(actual, reference);
+            Ok(())
+        })
+        .unwrap();
+        assert!(delete_protected_secret_with(&value, "TEST", |_| bail!("locked")).is_err());
+        assert!(
+            delete_protected_secret_with("native-secret:v1:invalid", "TEST", |_| {
+                panic!("invalid references must not reach native deletion")
+            })
+            .is_err()
+        );
+        for value in ["", "dpapi:v1:opaque", "legacy-token"] {
+            delete_protected_secret_with(value, "TEST", |_| {
+                panic!("inline secrets have no native entry")
+            })
+            .unwrap();
+        }
+    }
 
     #[test]
     fn plaintext_legacy_value_is_passed_through() {

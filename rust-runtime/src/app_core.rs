@@ -65,6 +65,16 @@ pub struct CoreOpenResult {
     pub migrated_legacy_db: bool,
 }
 
+fn clear_kick_token_in_store(store: &Store, delete: impl FnOnce(&str) -> Result<()>) -> Result<()> {
+    store.refresh_config_cache()?;
+    let value = store.setting_value("KICK_SESSION_TOKEN")?.unwrap_or_default();
+    delete(&value)?;
+    store.sync_settings(
+        &BTreeMap::from([("KICK_SESSION_TOKEN".into(), String::new())]),
+        "native-provider",
+    )
+}
+
 impl StreamArchiveCore {
     /// Open the canonical SQLite store and assemble the shared runtime spine.
     ///
@@ -286,11 +296,9 @@ impl StreamArchiveCore {
     /// Explicit deletion; empty provider drafts continue to preserve saved values.
     pub async fn clear_kick_token(&self) -> Result<()> {
         let _guard = self.config_write_lock.lock().await;
-        self.store.sync_settings(
-            &BTreeMap::from([("KICK_SESSION_TOKEN".into(), String::new())]),
-            "native-provider",
-        )?;
-        Ok(())
+        clear_kick_token_in_store(&self.store, |value| {
+            crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN")
+        })
     }
 
     /// Verify the currently saved SOOP login and Cloudflare Worker credentials.
@@ -727,6 +735,45 @@ impl StreamArchiveCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kick_clear_deletes_latest_reference_before_db_and_preserves_it_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let owner = Store::open(path.clone()).unwrap();
+        let observer = Store::open_observer(path).unwrap();
+        let reference = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
+        observer
+            .sync_settings(
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), reference.into())]),
+                "test",
+            )
+            .unwrap();
+        assert!(
+            clear_kick_token_in_store(&owner, |value| {
+                assert_eq!(value, reference);
+                bail!("credential store locked")
+            })
+            .is_err()
+        );
+        assert_eq!(
+            owner.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            reference
+        );
+        clear_kick_token_in_store(&owner, |value| {
+            assert_eq!(value, reference);
+            assert_eq!(
+                observer.setting_value("KICK_SESSION_TOKEN")?.unwrap(),
+                reference
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            owner.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            ""
+        );
+    }
 
     #[tokio::test]
     async fn desktop_close_action_defaults_to_exit_and_survives_reopen() {
