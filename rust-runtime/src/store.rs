@@ -544,7 +544,9 @@ impl Store {
         } else {
             serde_json::from_str(&pending).context("invalid secret cleanup references")?
         };
-        if values.get(secret_key).is_some_and(|value| value != &previous)
+        if values
+            .get(secret_key)
+            .is_some_and(|value| value != &previous)
             && let Some(reference) = retire(&previous)?
             && !pending.contains(&reference)
         {
@@ -573,10 +575,14 @@ impl Store {
     pub(crate) fn pending_secret_cleanup(&self, key: &str) -> Result<Vec<String>> {
         let conn = self.conn()?;
         let value: Option<String> = conn
-            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0))
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
             .optional()?;
         match value.filter(|value| !value.is_empty()) {
-            Some(value) => serde_json::from_str(&value).context("invalid secret cleanup references"),
+            Some(value) => {
+                serde_json::from_str(&value).context("invalid secret cleanup references")
+            }
             None => Ok(Vec::new()),
         }
     }
@@ -589,10 +595,14 @@ impl Store {
             .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value: Option<String> = tx
-            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0))
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
             .optional()?;
         let mut pending: Vec<String> = match value.filter(|value| !value.is_empty()) {
-            Some(value) => serde_json::from_str(&value).context("invalid secret cleanup references")?,
+            Some(value) => {
+                serde_json::from_str(&value).context("invalid secret cleanup references")?
+            }
             None => Vec::new(),
         };
         if !pending.iter().any(|value| value == reference) {
@@ -616,10 +626,14 @@ impl Store {
             .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value: Option<String> = tx
-            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0))
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
             .optional()?;
         let mut pending: Vec<String> = match value.filter(|value| !value.is_empty()) {
-            Some(value) => serde_json::from_str(&value).context("invalid secret cleanup references")?,
+            Some(value) => {
+                serde_json::from_str(&value).context("invalid secret cleanup references")?
+            }
             None => Vec::new(),
         };
         pending.retain(|value| value != reference);

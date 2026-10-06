@@ -316,9 +316,8 @@ impl StreamArchiveCore {
         validate_secret_updates(secrets)?;
 
         let _guard = self.config_write_lock.lock().await;
-        let mut delete = |value: &str| {
-            crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN")
-        };
+        let mut delete =
+            |value: &str| crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN");
         let kick = secrets
             .get("KICK_SESSION_TOKEN")
             .filter(|value| !value.is_empty());
@@ -354,9 +353,8 @@ impl StreamArchiveCore {
     /// Explicit deletion; empty provider drafts continue to preserve saved values.
     pub async fn clear_kick_token(&self) -> Result<()> {
         let _guard = self.config_write_lock.lock().await;
-        let mut delete = |value: &str| {
-            crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN")
-        };
+        let mut delete =
+            |value: &str| crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN");
         clear_kick_token_in_store(&self.store, &mut delete)?;
         cleanup_kick_secrets(&self.store, &mut delete)
     }
@@ -914,7 +912,10 @@ mod tests {
         drop(store);
         let reopened = Store::open(path).unwrap();
         assert_eq!(
-            reopened.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            reopened
+                .setting_value("KICK_SESSION_TOKEN")
+                .unwrap()
+                .unwrap(),
             NEW_KICK_REFERENCE
         );
         assert_eq!(
@@ -933,7 +934,10 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            reopened.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            reopened
+                .setting_value("KICK_SESSION_TOKEN")
+                .unwrap()
+                .unwrap(),
             NEW_KICK_REFERENCE
         );
     }
