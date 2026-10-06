@@ -67,24 +67,6 @@ pub struct CoreOpenResult {
 
 const KICK_CLEANUP_KEY: &str = "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS";
 
-fn kick_secret_write_guard(store: &Store) -> Result<std::fs::File> {
-    let mut path = store.path().as_os_str().to_os_string();
-    path.push(".kick-secret.lock");
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options
-        .open(PathBuf::from(path))
-        .context("KICK 인증정보 변경 잠금 파일을 열지 못했습니다.")?;
-    fs2::FileExt::try_lock_exclusive(&file)
-        .context("다른 프로세스가 KICK 인증정보를 변경 중입니다. 잠시 후 재시도하세요.")?;
-    Ok(file)
-}
-
 fn cleanup_kick_secrets(store: &Store, delete: &mut impl FnMut(&str) -> Result<()>) -> Result<()> {
     for reference in store.pending_secret_cleanup(KICK_CLEANUP_KEY)? {
         delete(&reference).context(
@@ -340,7 +322,7 @@ impl StreamArchiveCore {
             .get("KICK_SESSION_TOKEN")
             .filter(|value| !value.is_empty());
         let _secret_guard = if kick.is_some() {
-            Some(kick_secret_write_guard(&self.store)?)
+            Some(crate::security::kick_secret_guard(&self.store)?)
         } else {
             None
         };
@@ -381,7 +363,7 @@ impl StreamArchiveCore {
     /// Explicit deletion; empty provider drafts continue to preserve saved values.
     pub async fn clear_kick_token(&self) -> Result<()> {
         let _guard = self.config_write_lock.lock().await;
-        let _secret_guard = kick_secret_write_guard(&self.store)?;
+        let _secret_guard = crate::security::kick_secret_guard(&self.store)?;
         let delete =
             |value: &str| crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN");
         clear_kick_token_in_store(&self.store, delete)
@@ -912,10 +894,10 @@ mod tests {
         let path = dir.path().join("test.db");
         let owner = Store::open(path.clone()).unwrap();
         let observer = Store::open_observer(path).unwrap();
-        let guard = kick_secret_write_guard(&owner).unwrap();
-        assert!(kick_secret_write_guard(&observer).is_err());
+        let guard = crate::security::kick_secret_guard(&owner).unwrap();
+        assert!(crate::security::kick_secret_guard(&observer).is_err());
         drop(guard);
-        assert!(kick_secret_write_guard(&observer).is_ok());
+        assert!(crate::security::kick_secret_guard(&observer).is_ok());
     }
 
     #[test]

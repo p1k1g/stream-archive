@@ -212,6 +212,7 @@ enum VodJobKind {
     Download(VodDownloadRequest),
 }
 
+#[cfg(test)]
 const TOKEN_KEY: &str = "KICK_SESSION_TOKEN";
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
@@ -406,12 +407,6 @@ async fn body(response: reqwest::Response) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn refresh_token_setting(store: &crate::store::Store) -> Result<String> {
-    // CLI observer writes must reach a headless owner even without the LIVE watcher.
-    store.refresh_config_cache()?;
-    Ok(store.setting_value(TOKEN_KEY)?.unwrap_or_default())
-}
-
 fn request_failure(stage: &str, error: &reqwest::Error) -> anyhow::Error {
     let reason = if error.is_timeout() {
         "timeout"
@@ -462,10 +457,7 @@ fn media_request(client: &reqwest::Client, url: Url) -> reqwest::RequestBuilder 
 
 async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
     let (channel, id) = parse_url(raw)?;
-    let token = crate::security::unprotect_secret(
-        &refresh_token_setting(&crate::store::global()?)?,
-        TOKEN_KEY,
-    )?;
+    let token = crate::security::read_kick_token(&crate::store::global()?)?;
     let client = playback_client_builder()
         .build()
         .map_err(|_| anyhow::anyhow!("KICK 요청 초기화 실패"))?;
@@ -1034,7 +1026,7 @@ mod tests {
         let path = dir.path().join("test.db");
         let owner = crate::store::Store::open(path.clone()).unwrap();
         let observer = crate::store::Store::open_observer(path).unwrap();
-        assert_eq!(refresh_token_setting(&owner).unwrap(), "");
+        assert_eq!(crate::security::read_kick_token(&owner).unwrap(), "");
         for value in ["first%7Ctoken", "replacement%7Ctoken", ""] {
             let cached = owner.setting_value(TOKEN_KEY).unwrap().unwrap_or_default();
             observer
@@ -1047,7 +1039,7 @@ mod tests {
                 owner.setting_value(TOKEN_KEY).unwrap().unwrap_or_default(),
                 cached
             );
-            assert_eq!(refresh_token_setting(&owner).unwrap(), value);
+            assert_eq!(crate::security::read_kick_token(&owner).unwrap(), value);
         }
     }
 

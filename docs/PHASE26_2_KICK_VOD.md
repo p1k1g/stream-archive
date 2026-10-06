@@ -75,3 +75,5 @@ HTTP 403은 `cf-mitigated: challenge`가 확인되면 `reason=cloudflare_challen
 26.1 이후 LIVE 조회·썸네일 경로의 코드 변경은 없었습니다. 2026-10-06 `kaneljoseph` API는 방송 ID `130830473`과 기존 thumbnail URL을 정상 반환했지만, 해당 이미지 CDN은 현재 요청 헤더 및 Origin / Referer 추가 요청 모두 HTTP 403 / XML AccessDenied를 반환했습니다. 이 사실만으로 모든 계정이나 환경의 썸네일 문제가 같은 원인이라고 단정하지 않습니다.
 
 썸네일 실패는 플랫폼 로고로 대체하며, 진단 런타임 로그에 `[LIVE:THUMBNAIL:ERR] platform=KICK reason=http_403` 등의 안전한 분류를 남깁니다. 인증정보·썸네일 URL·원본 오류 본문은 기록하지 않습니다. 기존 LIVE 새로 고침 재시도와 방송 종료 시 캐시 정리를 유지합니다. 임의 URL 변경, 구독 토큰의 이미지 CDN 전달, Cloudflare 우회는 추가하지 않습니다. 실제 PC에서 새로 고침 후 결과와 이 로그를 확인해야 하며, 이번 관측으로 썸네일 복구 완료를 주장하지 않습니다.
+
+KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 잠금을 획득한 뒤 cache refresh와 native secret 조회를 함께 수행합니다. 조회 중 참조 삭제를 막고 HTTP 요청 전에 잠금을 해제합니다. 경합 시 잠시 후 재시도를 안내하며 기존 try-lock 계약을 유지합니다. 회귀 테스트는 writer 경합, 교체·삭제 반영, 복호화 중 잠금 유지와 복호화 실패 뒤 잠금 해제를 검증합니다.

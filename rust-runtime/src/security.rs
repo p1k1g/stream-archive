@@ -23,6 +23,39 @@ fn is_protected(value: &str) -> bool {
     normalized.starts_with(DPAPI_PREFIX) || normalized.starts_with(NATIVE_SECRET_PREFIX)
 }
 
+pub(crate) fn kick_secret_guard(store: &crate::store::Store) -> Result<std::fs::File> {
+    let mut path = store.path().as_os_str().to_os_string();
+    path.push(".kick-secret.lock");
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(std::path::PathBuf::from(path))
+        .context("KICK 인증정보 잠금 파일을 열지 못했습니다.")?;
+    fs2::FileExt::try_lock_exclusive(&file)
+        .context("다른 프로세스가 KICK 인증정보를 사용 중입니다. 잠시 후 재시도하세요.")?;
+    Ok(file)
+}
+
+pub(crate) fn read_kick_token(store: &crate::store::Store) -> Result<String> {
+    read_kick_token_with(store, |value| unprotect_secret(value, "KICK_SESSION_TOKEN"))
+}
+
+fn read_kick_token_with(
+    store: &crate::store::Store,
+    unprotect: impl FnOnce(&str) -> Result<String>,
+) -> Result<String> {
+    let _guard = kick_secret_guard(store)?;
+    // Keep the same cross-process lock through native lookup, then release before HTTP.
+    store.refresh_config_cache()?;
+    let reference = store.setting_value("KICK_SESSION_TOKEN")?.unwrap_or_default();
+    unprotect(&reference)
+}
+
 pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -630,6 +663,35 @@ mod dpapi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kick_lookup_holds_writer_lock_through_unprotection_and_releases_on_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let owner = crate::store::Store::open(path.clone()).unwrap();
+        let observer = crate::store::Store::open_observer(path).unwrap();
+        for value in ["old-reference", "replacement-reference", ""] {
+            let writer = kick_secret_guard(&observer).unwrap();
+            observer
+                .sync_settings(
+                    &std::collections::BTreeMap::from([("KICK_SESSION_TOKEN".into(), value.into())]),
+                    "test-observer",
+                )
+                .unwrap();
+            assert!(read_kick_token_with(&owner, |_| Ok("unreachable".into())).is_err());
+            drop(writer);
+            let result = read_kick_token_with(&owner, |reference| {
+                assert_eq!(reference, value);
+                assert!(kick_secret_guard(&observer).is_err());
+                Ok(reference.into())
+            })
+            .unwrap();
+            assert_eq!(result, value);
+            assert!(kick_secret_guard(&observer).is_ok());
+        }
+        assert!(read_kick_token_with(&owner, |_| bail!("native lookup failed")).is_err());
+        assert!(kick_secret_guard(&observer).is_ok());
+    }
 
     #[test]
     fn cleanup_references_never_include_inline_secrets() {
