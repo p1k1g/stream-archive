@@ -7,7 +7,7 @@
 - `https://kick.com/{channel}/videos/{UUID}` 형식만 지원합니다.
 - `POST https://web.kick.com/api/v1/stream/{UUID}/playback`에서 `playback_url.vod`를 사용합니다. `live` 주소로 대체하지 않습니다.
 - 설정의 `KICK_SESSION_TOKEN`은 기존 DPAPI / Secret Service / Keychain 경계에서 보호됩니다. UI는 저장 여부만 읽고 평문을 다시 표시하지 않습니다.
-- 인증정보 삭제는 Linux Secret Service / macOS Keychain의 현재 참조 항목을 먼저 삭제한 뒤 SQLite 설정을 비웁니다. native 삭제 실패 시 설정 참조를 유지하며 성공으로 표시하지 않습니다. Unix CLI는 `providers clear-secret KICK_SESSION_TOKEN`을 사용합니다. Windows DPAPI는 별도 credential-store 항목이 없으므로 SQLite의 암호화 값만 제거합니다.
+- 인증정보 삭제는 SQLite 설정을 비우면서 이전 native 참조를 정리 대기로 원자적으로 보관한 뒤 Linux Secret Service / macOS Keychain 항목을 삭제합니다. DB 전환 실패 시 native 항목을 삭제하지 않습니다. native 삭제 실패 시 정리 참조를 유지하고 오류를 반환하며, 같은 삭제 명령으로 재시도합니다. Unix CLI는 `providers clear-secret KICK_SESSION_TOKEN`을 사용합니다. Windows DPAPI는 별도 credential-store 항목이 없으므로 SQLite의 암호화 값만 제거합니다.
 - `session_token` Cookie는 인코딩을 유지하고 Bearer만 percent-decode합니다. 요청마다 저장된 값을 읽으므로 교체 후 재시작할 필요가 없습니다.
 - 미설정 상태에서는 인증 없이 조회합니다. 주소가 없으면 구독 인증 설정을 안내합니다. 설정된 인증정보도 권한을 보장하지 않습니다.
 - Cookie/Bearer는 KICK playback 요청에만 전달합니다. CDN과 FFmpeg에는 전달하지 않습니다. HTTP redirect를 자동으로 따라가지 않습니다.

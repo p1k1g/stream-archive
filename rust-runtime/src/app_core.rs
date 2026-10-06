@@ -121,13 +121,18 @@ fn commit_kick_configuration(
         .context("KICK 새 인증정보는 저장됐지만 이전 native credential 정리가 완료되지 않았습니다.")
 }
 
-fn clear_kick_token_in_store(store: &Store, delete: impl FnOnce(&str) -> Result<()>) -> Result<()> {
-    store.refresh_config_cache()?;
-    let value = store
-        .setting_value("KICK_SESSION_TOKEN")?
-        .unwrap_or_default();
-    delete(&value)?;
-    store.clear_setting_if_unchanged("KICK_SESSION_TOKEN", &value)
+fn clear_kick_token_in_store(
+    store: &Store,
+    mut delete: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    store.sync_settings_retiring_secret(
+        &BTreeMap::from([("KICK_SESSION_TOKEN".into(), String::new())]),
+        "native-provider",
+        "KICK_SESSION_TOKEN",
+        KICK_CLEANUP_KEY,
+        |value| crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN"),
+    )?;
+    cleanup_kick_secrets(store, &mut delete)
 }
 
 impl StreamArchiveCore {
@@ -377,10 +382,9 @@ impl StreamArchiveCore {
     pub async fn clear_kick_token(&self) -> Result<()> {
         let _guard = self.config_write_lock.lock().await;
         let _secret_guard = kick_secret_write_guard(&self.store)?;
-        let mut delete =
+        let delete =
             |value: &str| crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN");
-        clear_kick_token_in_store(&self.store, delete)?;
-        cleanup_kick_secrets(&self.store, &mut delete)
+        clear_kick_token_in_store(&self.store, delete)
     }
 
     /// Verify the currently saved SOOP login and Cloudflare Worker credentials.
@@ -985,41 +989,79 @@ mod tests {
     }
 
     #[test]
-    fn kick_clear_deletes_latest_reference_before_db_and_preserves_it_on_failure() {
+    fn kick_clear_commits_cleanup_before_deletion_and_retries_after_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.db");
         let owner = Store::open(path.clone()).unwrap();
-        let observer = Store::open_observer(path).unwrap();
-        let reference = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
+        let observer = Store::open_observer(path.clone()).unwrap();
         observer
             .sync_settings(
-                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), reference.into())]),
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), OLD_KICK_REFERENCE.into())]),
                 "test",
             )
             .unwrap();
         assert!(
             clear_kick_token_in_store(&owner, |value| {
-                assert_eq!(value, reference);
+                assert_eq!(value, OLD_KICK_REFERENCE);
+                observer.refresh_config_cache()?;
+                assert_eq!(observer.setting_value("KICK_SESSION_TOKEN")?.unwrap(), "");
                 bail!("credential store locked")
             })
             .is_err()
         );
         assert_eq!(
             owner.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
-            reference
+            ""
         );
-        clear_kick_token_in_store(&owner, |value| {
-            assert_eq!(value, reference);
-            assert_eq!(
-                observer.setting_value("KICK_SESSION_TOKEN")?.unwrap(),
-                reference
-            );
+        drop(owner);
+        let reopened = Store::open(path).unwrap();
+        assert_eq!(
+            reopened.pending_secret_cleanup(KICK_CLEANUP_KEY).unwrap(),
+            vec![OLD_KICK_REFERENCE]
+        );
+        clear_kick_token_in_store(&reopened, |value| {
+            assert_eq!(value, OLD_KICK_REFERENCE);
             Ok(())
         })
         .unwrap();
+        assert!(
+            reopened
+                .pending_secret_cleanup(KICK_CLEANUP_KEY)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn kick_clear_does_not_delete_native_item_when_db_transition_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), OLD_KICK_REFERENCE.into())]),
+                "test",
+            )
+            .unwrap();
+        let conn = rusqlite::Connection::open(store.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_clear BEFORE UPDATE ON settings BEGIN SELECT RAISE(ABORT,'fixture write failure'); END;",
+        )
+        .unwrap();
+        assert!(
+            clear_kick_token_in_store(&store, |_| {
+                panic!("native deletion must not happen before a committed DB transition")
+            })
+            .is_err()
+        );
         assert_eq!(
-            owner.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
-            ""
+            store.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
+            OLD_KICK_REFERENCE
+        );
+        assert!(
+            store
+                .pending_secret_cleanup(KICK_CLEANUP_KEY)
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -1031,20 +1073,24 @@ mod tests {
         let observer = Store::open_observer(path).unwrap();
         let key = "KICK_SESSION_TOKEN";
         observer
-            .sync_settings(&BTreeMap::from([(key.into(), "old".into())]), "test")
+            .sync_settings(
+                &BTreeMap::from([(key.into(), OLD_KICK_REFERENCE.into())]),
+                "test",
+            )
             .unwrap();
-        assert!(
-            clear_kick_token_in_store(&owner, |value| {
-                assert_eq!(value, "old");
-                observer.sync_settings(
-                    &BTreeMap::from([(key.into(), "replacement".into())]),
-                    "test",
-                )
-            })
-            .is_err()
-        );
+        clear_kick_token_in_store(&owner, |value| {
+            assert_eq!(value, OLD_KICK_REFERENCE);
+            observer.sync_settings(
+                &BTreeMap::from([(key.into(), NEW_KICK_REFERENCE.into())]),
+                "test",
+            )
+        })
+        .unwrap();
         owner.refresh_config_cache().unwrap();
-        assert_eq!(owner.setting_value(key).unwrap().unwrap(), "replacement");
+        assert_eq!(
+            owner.setting_value(key).unwrap().unwrap(),
+            NEW_KICK_REFERENCE
+        );
     }
 
     #[tokio::test]

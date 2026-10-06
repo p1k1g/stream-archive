@@ -439,7 +439,7 @@ fn provider_clear_kick_token_uses_core_and_does_not_expose_values() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn provider_clear_removes_scoped_native_entry_and_keeps_reference_on_helper_failure() {
+fn provider_clear_removes_scoped_native_entry_and_retains_cleanup_on_helper_failure() {
     let layout = Layout::new();
     layout.init();
     let reference = "123e4567-e89b-12d3-a456-426614174000";
@@ -479,7 +479,16 @@ fn provider_clear_removes_scoped_native_entry_and_keeps_reference_on_helper_fail
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored, if fail { value.as_str() } else { "" });
+        assert_eq!(stored, "");
+        let pending: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let pending: Vec<String> = serde_json::from_str(&pending).unwrap();
+        assert_eq!(pending, if fail { vec![value.clone()] } else { vec![] });
         assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-secret"));
     }
 }
