@@ -71,10 +71,7 @@ fn clear_kick_token_in_store(store: &Store, delete: impl FnOnce(&str) -> Result<
         .setting_value("KICK_SESSION_TOKEN")?
         .unwrap_or_default();
     delete(&value)?;
-    store.sync_settings(
-        &BTreeMap::from([("KICK_SESSION_TOKEN".into(), String::new())]),
-        "native-provider",
-    )
+    store.clear_setting_if_unchanged("KICK_SESSION_TOKEN", &value)
 }
 
 impl StreamArchiveCore {
@@ -775,6 +772,30 @@ mod tests {
             owner.setting_value("KICK_SESSION_TOKEN").unwrap().unwrap(),
             ""
         );
+    }
+
+    #[test]
+    fn kick_clear_preserves_replacement_written_during_native_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let owner = Store::open(path.clone()).unwrap();
+        let observer = Store::open_observer(path).unwrap();
+        let key = "KICK_SESSION_TOKEN";
+        observer
+            .sync_settings(&BTreeMap::from([(key.into(), "old".into())]), "test")
+            .unwrap();
+        assert!(
+            clear_kick_token_in_store(&owner, |value| {
+                assert_eq!(value, "old");
+                observer.sync_settings(
+                    &BTreeMap::from([(key.into(), "replacement".into())]),
+                    "test",
+                )
+            })
+            .is_err()
+        );
+        owner.refresh_config_cache().unwrap();
+        assert_eq!(owner.setting_value(key).unwrap().unwrap(), "replacement");
     }
 
     #[tokio::test]

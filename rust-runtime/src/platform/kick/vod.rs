@@ -368,7 +368,9 @@ async fn body(response: reqwest::Response) -> Result<Vec<u8>> {
     let mut response = response;
     if !response.status().is_success() {
         match response.status().as_u16() {
-            401 => bail!("KICK 인증을 확인하지 못했습니다. 세션 유효성 또는 계정 권한을 확인하세요 (HTTP 401)."),
+            401 => bail!(
+                "KICK 인증을 확인하지 못했습니다. 세션 유효성 또는 계정 권한을 확인하세요 (HTTP 401)."
+            ),
             403 => bail!(
                 "KICK 접근이 거부되었습니다. 시청 권한 또는 Cloudflare 제한을 확인하세요 (HTTP 403)."
             ),
@@ -828,7 +830,9 @@ async fn download_mp4(
     if std::fs::metadata(output).map(|m| m.len()).unwrap_or(0) == 0
         || seconds + 10.0 < duration as f64
     {
-        bail!("[download.incomplete] KICK 다운로드가 영상 끝까지 도달하지 못했습니다. partial.mp4는 보존됩니다.");
+        bail!(
+            "[download.incomplete] KICK 다운로드가 영상 끝까지 도달하지 못했습니다. partial.mp4는 보존됩니다."
+        );
     }
     use std::io::Read;
     let mut header = [0u8; 12];
