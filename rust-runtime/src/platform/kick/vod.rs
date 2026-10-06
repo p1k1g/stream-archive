@@ -941,7 +941,9 @@ mod tests {
                     assert_eq!(get("cookie"), None);
                 }
                 socket
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
                     .await
                     .unwrap();
             }
@@ -963,7 +965,12 @@ mod tests {
         *request.url_mut() = Url::parse(&format!("http://{address}/playback")).unwrap();
         assert_eq!(client.execute(request).await.unwrap().status(), 200);
         assert_eq!(
-            client.get(format!("http://{address}/cdn")).send().await.unwrap().status(),
+            client
+                .get(format!("http://{address}/cdn"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
             200
         );
         tokio::time::timeout(Duration::from_secs(5), server)
@@ -1142,10 +1149,14 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert!(args.windows(2).any(|a| a == ["-c", "copy"]));
-        assert!(args.windows(2).any(|a| {
-            a == ["-user_agent", crate::support::PROVIDER_USER_AGENT]
-        }));
-        assert!(args.windows(2).any(|a| a == ["-headers", "Origin: https://kick.com\r\n"]));
+        assert!(
+            args.windows(2)
+                .any(|a| { a == ["-user_agent", crate::support::PROVIDER_USER_AGENT] })
+        );
+        assert!(
+            args.windows(2)
+                .any(|a| a == ["-headers", "Origin: https://kick.com\r\n"])
+        );
         assert!(args.windows(2).any(|a| a == ["-f", "mp4"]));
         assert!(
             !args

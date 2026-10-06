@@ -47,6 +47,27 @@ async fn bounded_body(response: reqwest::Response, maximum: usize) -> Result<Vec
     Ok(bytes)
 }
 
+pub(crate) fn failure_reason(error: &anyhow::Error) -> String {
+    if let Some(http) = error.downcast_ref::<reqwest::Error>() {
+        if let Some(status) = http.status() {
+            return format!("http_{}", status.as_u16());
+        }
+        return if http.is_timeout() {
+            "timeout"
+        } else {
+            "request_failed"
+        }
+        .into();
+    }
+    if error
+        .downcast_ref::<tokio::time::error::Elapsed>()
+        .is_some()
+    {
+        return "timeout".into();
+    }
+    "validation_or_decode_failed".into()
+}
+
 pub async fn load(platform: PlatformId, url: &str) -> Result<ThumbnailImage> {
     tokio::time::timeout(Duration::from_secs(12), load_inner(platform, url, false)).await?
 }

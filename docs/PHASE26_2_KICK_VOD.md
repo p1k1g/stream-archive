@@ -69,3 +69,9 @@ HTTP 403은 `cf-mitigated: challenge`가 확인되면 `reason=cloudflare_challen
 2026-10-06 공개 VOD `nnabi/videos/01a1016e-7aa0-79f2-91cb-c0739f2466da`를 인증정보 없이 독립 요청으로 확인했습니다. playback HTTP 200 / `VIEWER_TIER_FREE`, HLS 조회와 FFmpeg 30초 샘플 MP4 저장을 확인했습니다. 결과는 1920×1080 H.264 + AAC, 30.018초, 30,250,489바이트이며 FFmpeg 종료 코드는 0입니다. 전체 18,846초 다운로드, Windows 앱 binary 및 구독자 전용 계정 검증은 수행하지 않았으며 위 수동 RC 항목을 완료 처리하지 않습니다.
 
 회귀 테스트는 실제 loopback HTTP 요청의 User-Agent / HTTP version / playback 인증 헤더와 동일 client의 CDN 요청에 Cookie / Bearer가 없음을 검증합니다. 테스트의 proxy 비활성화는 loopback fixture에만 적용합니다.
+
+## KICK LIVE 썸네일 확인
+
+26.1 이후 LIVE 조회·썸네일 경로의 코드 변경은 없었습니다. 2026-10-06 `kaneljoseph` API는 방송 ID `130830473`과 기존 thumbnail URL을 정상 반환했지만, 해당 이미지 CDN은 현재 요청 헤더 및 Origin / Referer 추가 요청 모두 HTTP 403 / XML AccessDenied를 반환했습니다. 이 사실만으로 모든 계정이나 환경의 썸네일 문제가 같은 원인이라고 단정하지 않습니다.
+
+썸네일 실패는 플랫폼 로고로 대체하며, 진단 런타임 로그에 `[LIVE:THUMBNAIL:ERR] platform=KICK reason=http_403` 등의 안전한 분류를 남깁니다. 인증정보·썸네일 URL·원본 오류 본문은 기록하지 않습니다. 기존 LIVE 새로 고침 재시도와 방송 종료 시 캐시 정리를 유지합니다. 임의 URL 변경, 구독 토큰의 이미지 CDN 전달, Cloudflare 우회는 추가하지 않습니다. 실제 PC에서 새로 고침 후 결과와 이 로그를 확인해야 하며, 이번 관측으로 썸네일 복구 완료를 주장하지 않습니다.

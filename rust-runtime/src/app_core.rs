@@ -490,7 +490,18 @@ impl StreamArchiveCore {
             })
             .and_then(|row| row.thumbnail_url.clone())
             .ok_or_else(|| anyhow::anyhow!("현재 방송의 썸네일 정보가 없습니다."))?;
-        let image = crate::thumbnail_service::load(platform, &url).await?;
+        let image = match crate::thumbnail_service::load(platform, &url).await {
+            Ok(image) => image,
+            Err(error) => {
+                self.logs
+                    .push(format!(
+                        "[LIVE:THUMBNAIL:ERR] platform={platform} reason={}",
+                        crate::thumbnail_service::failure_reason(&error)
+                    ))
+                    .await;
+                return Err(error);
+            }
+        };
         let current = self.watcher_status().await?;
         if !current.running
             || !current.channels.iter().any(|row| {
