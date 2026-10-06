@@ -59,3 +59,13 @@ Cookie의 expiry가 길어도 세션 무효화·시청 권한·API 변경은 별
 사용자가 수행한 Cookie+Bearer playback 성공과 Cookie 없는 HLS 다운로드는 설계 근거입니다. 새 앱 binary에서의 성공으로 기록하지 않습니다.
 
 KICK native credential은 생성 전에 opaque cleanup 참조를 SQLite에 기록합니다. 새 값 commit 시 해당 참조를 cleanup 목록에서 원자적으로 제거하므로 DB가 이후 쓰기 불가능해져도 rollback 정리 대상을 복구할 수 있습니다. KICK 등록·교체·삭제는 DB별 파일 잠금으로 CLI observer 간 충돌을 막으며, 잠금 실패 시 재시도를 안내합니다.
+
+## playback / CDN 요청 호환성 보완
+
+KICK VOD playback과 HLS 조회는 기존 provider 조회와 같은 User-Agent를 사용하고 HTTP/1.1로 요청합니다. playback에는 `Accept: application/json`을 명시합니다. FFmpeg에도 동일 User-Agent와 KICK Origin / Referer를 전달하며 Cookie / Bearer는 전달하지 않습니다. proxy 동작은 변경하지 않습니다.
+
+HTTP 403은 `cf-mitigated: challenge`가 확인되면 `reason=cloudflare_challenge`, 그 외에는 `reason=access_denied`로 구분합니다. 원본 응답이나 인증값을 로그에 남기지 않으며, `access_denied`만으로 토큰 만료 또는 Cloudflare 차단을 단정하지 않습니다.
+
+2026-10-06 공개 VOD `nnabi/videos/01a1016e-7aa0-79f2-91cb-c0739f2466da`를 인증정보 없이 독립 요청으로 확인했습니다. playback HTTP 200 / `VIEWER_TIER_FREE`, HLS 조회와 FFmpeg 30초 샘플 MP4 저장을 확인했습니다. 결과는 1920×1080 H.264 + AAC, 30.018초, 30,250,489바이트이며 FFmpeg 종료 코드는 0입니다. 전체 18,846초 다운로드, Windows 앱 binary 및 구독자 전용 계정 검증은 수행하지 않았으며 위 수동 RC 항목을 완료 처리하지 않습니다.
+
+회귀 테스트는 실제 loopback HTTP 요청의 User-Agent / HTTP version / playback 인증 헤더와 동일 client의 CDN 요청에 Cookie / Bearer가 없음을 검증합니다. 테스트의 proxy 비활성화는 loopback fixture에만 적용합니다.

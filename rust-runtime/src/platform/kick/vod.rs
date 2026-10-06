@@ -371,9 +371,20 @@ async fn body(response: reqwest::Response) -> Result<Vec<u8>> {
             401 => bail!(
                 "KICK 인증을 확인하지 못했습니다. 세션 유효성 또는 계정 권한을 확인하세요 (HTTP 401)."
             ),
-            403 => bail!(
-                "KICK 접근이 거부되었습니다. 시청 권한 또는 Cloudflare 제한을 확인하세요 (HTTP 403)."
-            ),
+            403 => {
+                let challenge = response
+                    .headers()
+                    .get("cf-mitigated")
+                    .is_some_and(|value| value == "challenge");
+                let reason = if challenge {
+                    "cloudflare_challenge"
+                } else {
+                    "access_denied"
+                };
+                bail!(
+                    "KICK 접근이 거부되었습니다. 시청 권한 또는 Cloudflare 제한을 확인하세요 (HTTP 403; reason={reason})."
+                );
+            }
             404 => {
                 bail!("KICK 영상을 찾지 못했습니다. 삭제 또는 API 변경을 확인하세요 (HTTP 404).")
             }
@@ -415,27 +426,44 @@ fn request_failure(stage: &str, error: &reqwest::Error) -> anyhow::Error {
     anyhow::anyhow!("[{stage}] KICK 요청 실패 ({reason})")
 }
 
+fn playback_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .user_agent(crate::support::PROVIDER_USER_AGENT)
+        .http1_only()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+}
+
+fn playback_request(
+    client: &reqwest::Client,
+    channel: &str,
+    id: &str,
+    token: &str,
+) -> Result<reqwest::RequestBuilder> {
+    let mut request = client
+        .post(format!("https://web.kick.com/api/v1/stream/{id}/playback"))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header("Origin", "https://kick.com")
+        .header("Referer", format!("https://kick.com/{channel}/videos/{id}"))
+        .json(&playback_body(channel, id));
+    if !token.is_empty() {
+        request = request.headers(auth_headers(token)?);
+    }
+    Ok(request)
+}
+
 async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
     let (channel, id) = parse_url(raw)?;
     let token = crate::security::unprotect_secret(
         &refresh_token_setting(&crate::store::global()?)?,
         TOKEN_KEY,
     )?;
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
+    let client = playback_client_builder()
         .build()
         .map_err(|_| anyhow::anyhow!("KICK 요청 초기화 실패"))?;
     let operation = async {
-        let mut request = client
-            .post(format!("https://web.kick.com/api/v1/stream/{id}/playback"))
-            .header("Origin", "https://kick.com")
-            .header("Referer", format!("https://kick.com/{channel}/videos/{id}"))
-            .json(&playback_body(&channel, &id));
-        if !token.is_empty() {
-            request = request.headers(auth_headers(&token)?);
-        }
+        let request = playback_request(&client, &channel, &id, &token)?;
         let bytes = body(
             request
                 .send()
@@ -701,6 +729,10 @@ fn ffmpeg_command(ffmpeg: &Path, source: &Url, output: &Path) -> tokio::process:
             "-hide_banner",
             "-loglevel",
             "error",
+            "-user_agent",
+            crate::support::PROVIDER_USER_AGENT,
+            "-headers",
+            "Origin: https://kick.com\r\n",
             "-referer",
             "https://kick.com/",
             "-i",
@@ -853,6 +885,92 @@ async fn download_mp4(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn playback_wire_headers_and_cdn_credential_boundary() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for authenticated in [true, false] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut buffer = [0; 2048];
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&buffer[..count]);
+                    assert!(bytes.len() < 65536);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                let headers = request.split("\r\n\r\n").next().unwrap();
+                assert!(headers.lines().next().unwrap().ends_with("HTTP/1.1"));
+                let get = |name: &str| {
+                    headers.lines().find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case(name).then(|| value.trim())
+                    })
+                };
+                assert_eq!(get("user-agent"), Some(crate::support::PROVIDER_USER_AGENT));
+                if authenticated {
+                    assert_eq!(get("accept"), Some("application/json"));
+                    assert_eq!(get("origin"), Some("https://kick.com"));
+                    assert_eq!(get("authorization"), Some("Bearer 123|fixture"));
+                    assert_eq!(get("cookie"), Some("session_token=123%7Cfixture"));
+                    assert!(get("referer").unwrap().contains("/example/videos/"));
+                    let payload: serde_json::Value =
+                        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+                    assert_eq!(payload["video_session"]["page_type"], "video");
+                } else {
+                    assert_eq!(get("authorization"), None);
+                    assert_eq!(get("cookie"), None);
+                }
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = playback_client_builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let mut request = playback_request(
+            &client,
+            "example",
+            "01a106d1-f328-750c-a31b-16a5df570460",
+            "123%7Cfixture",
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        *request.url_mut() = Url::parse(&format!("http://{address}/playback")).unwrap();
+        assert_eq!(client.execute(request).await.unwrap().status(), 200);
+        assert_eq!(
+            client.get(format!("http://{address}/cdn")).send().await.unwrap().status(),
+            200
+        );
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 
     #[test]
     fn composed_output_names_fit_byte_limit_without_losing_uuid_or_utf8() {
@@ -1024,6 +1142,10 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert!(args.windows(2).any(|a| a == ["-c", "copy"]));
+        assert!(args.windows(2).any(|a| {
+            a == ["-user_agent", crate::support::PROVIDER_USER_AGENT]
+        }));
+        assert!(args.windows(2).any(|a| a == ["-headers", "Origin: https://kick.com\r\n"]));
         assert!(args.windows(2).any(|a| a == ["-f", "mp4"]));
         assert!(
             !args
