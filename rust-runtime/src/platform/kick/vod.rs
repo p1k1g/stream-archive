@@ -399,7 +399,7 @@ fn refresh_token_setting(store: &crate::store::Store) -> Result<String> {
 async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
     let (channel, id) = parse_url(raw)?;
     let token = crate::security::unprotect_secret(
-        &refresh_token_setting(crate::store::global()?)?,
+        &refresh_token_setting(&crate::store::global()?)?,
         TOKEN_KEY,
     )?;
     let client = reqwest::Client::builder()
