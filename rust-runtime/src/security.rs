@@ -52,7 +52,9 @@ fn read_kick_token_with(
     let _guard = kick_secret_guard(store)?;
     // Keep the same cross-process lock through native lookup, then release before HTTP.
     store.refresh_config_cache()?;
-    let reference = store.setting_value("KICK_SESSION_TOKEN")?.unwrap_or_default();
+    let reference = store
+        .setting_value("KICK_SESSION_TOKEN")?
+        .unwrap_or_default();
     unprotect(&reference)
 }
 
@@ -674,7 +676,10 @@ mod tests {
             let writer = kick_secret_guard(&observer).unwrap();
             observer
                 .sync_settings(
-                    &std::collections::BTreeMap::from([("KICK_SESSION_TOKEN".into(), value.into())]),
+                    &std::collections::BTreeMap::from([(
+                        "KICK_SESSION_TOKEN".into(),
+                        value.into(),
+                    )]),
                     "test-observer",
                 )
                 .unwrap();
