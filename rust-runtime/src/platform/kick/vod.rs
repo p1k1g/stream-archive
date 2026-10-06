@@ -596,7 +596,11 @@ async fn run_download(
     let variant = select_variant(&metadata, &req.quality)?;
     let dir = PathBuf::from(req.output_directory.trim());
     std::fs::create_dir_all(&dir)?;
-    let stem = output_stem(&metadata.view.streamer, &metadata.view.title, Uuid::new_v4());
+    let stem = output_stem(
+        &metadata.view.streamer,
+        &metadata.view.title,
+        Uuid::new_v4(),
+    );
     let output = dir.join(format!("{stem}.partial.mp4"));
     // Reserve a unique filename without overwriting another writer's file.
     std::fs::OpenOptions::new()
