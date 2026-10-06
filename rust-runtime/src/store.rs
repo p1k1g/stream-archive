@@ -487,33 +487,6 @@ impl Store {
             .clone())
     }
 
-    /// Preserve a newer observer write if it raced with native credential deletion.
-    pub(crate) fn clear_setting_if_unchanged(&self, key: &str, expected: &str) -> Result<()> {
-        let mut conn = self.conn()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = tx
-            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
-                row.get::<_, String>(0)
-            })
-            .optional()?
-            .unwrap_or_default();
-        if current != expected {
-            anyhow::bail!(
-                "인증정보가 다른 프로세스에서 변경되었습니다. 최신 설정을 확인하고 다시 삭제하세요."
-            );
-        }
-        tx.execute(
-            "UPDATE settings SET value='',source='native-provider',updated_at=?2 WHERE key=?1",
-            params![key, Utc::now().to_rfc3339()],
-        )?;
-        tx.commit()?;
-        self.settings_cache
-            .write()
-            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?
-            .insert(key.to_string(), String::new());
-        Ok(())
-    }
-
     /// Commit a replacement and its opaque cleanup references in one SQLite transaction.
     pub(crate) fn sync_settings_retiring_secret(
         &self,
