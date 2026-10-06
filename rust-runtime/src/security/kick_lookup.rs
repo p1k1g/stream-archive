@@ -170,14 +170,21 @@ mod tests {
     async fn lookup_protocol_rejects_failure_invalid_and_oversized_output_without_exposing_it() {
         for (script, success) in [
             ("printf fixture-token", true),
-            ("printf fixture-token; printf fixture-token >&2; exit 1", false),
+            (
+                "printf fixture-token; printf fixture-token >&2; exit 1",
+                false,
+            ),
             ("printf '\\377'", false),
             ("head -c 65537 /dev/zero", false),
         ] {
             let mut command = Command::new("sh");
             command.args(["-c", script]);
-            let result =
-                run_lookup(&mut command, &AtomicBool::new(false), Duration::from_secs(5)).await;
+            let result = run_lookup(
+                &mut command,
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .await;
             if success {
                 assert_eq!(result.unwrap(), "fixture-token");
             } else {
