@@ -4,6 +4,41 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::{fs, path::Path};
 use uuid::Uuid;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod kick_lookup;
+
+/// Internal Unix worker entry, before application bootstrap or CLI logging.
+pub fn kick_secret_worker_entry() -> Option<i32> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        kick_lookup::worker_entry()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+pub(crate) async fn read_kick_token_cancellable(
+    store: &crate::store::Store,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        kick_lookup::read(store, cancel).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            bail!("KICK 인증정보 조회가 취소되었습니다.");
+        }
+        let store = store.clone();
+        tokio::task::spawn_blocking(move || read_kick_token(&store))
+            .await
+            .map_err(|_| anyhow::anyhow!("KICK 인증정보 조회 작업 실패"))?
+    }
+}
+
 pub const DPAPI_PREFIX: &str = "dpapi:v1:";
 pub const NATIVE_SECRET_PREFIX: &str = "native-secret:v1:";
 #[cfg(windows)]

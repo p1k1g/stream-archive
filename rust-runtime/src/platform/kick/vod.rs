@@ -458,9 +458,7 @@ fn media_request(client: &reqwest::Client, url: Url) -> reqwest::RequestBuilder 
 async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
     let (channel, id) = parse_url(raw)?;
     let store = crate::store::global()?;
-    let token = tokio::task::spawn_blocking(move || crate::security::read_kick_token(&store))
-        .await
-        .map_err(|_| anyhow::anyhow!("KICK 인증정보 조회 작업 실패"))??;
+    let token = crate::security::read_kick_token_cancellable(&store, cancel).await?;
     let client = playback_client_builder()
         .build()
         .map_err(|_| anyhow::anyhow!("KICK 요청 초기화 실패"))?;

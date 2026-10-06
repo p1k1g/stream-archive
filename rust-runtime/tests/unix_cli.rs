@@ -328,6 +328,106 @@ fn queue_cancel_reaches_active_runtime_owner() {
     assert!(status.success(), "runtime owner SIGTERM exit was {status}");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn hung_kick_native_lookup_allows_queue_cancel_and_runtime_shutdown() {
+    for cancel_job in [true, false] {
+        let layout = Layout::new();
+        layout.init();
+        layout.stage_fake_tools();
+        assert_success("tools configure", &layout.cli(&["tools", "configure"]));
+        let db = layout.data.join("stream-archive.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params!["KICK_SESSION_TOKEN", "native-secret:v1:123e4567-e89b-12d3-a456-426614174000"],
+        )
+        .unwrap();
+        let helper = layout.fake_bin.join("secret-tool");
+        fs::write(
+            &helper,
+            "#!/bin/sh\n[ \"$1\" = lookup ] || exit 23\nprintf fixture-secret >&2\ntouch \"$FAKE_LOOKUP_READY\"\nexec sleep 30\n",
+        )
+        .unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        let queued = json_output(
+            "queue add KICK blocked lookup",
+            layout.cli(&[
+                "queue",
+                "add",
+                "https://kick.com/fixture/videos/01a106d1-f328-750c-a31b-16a5df570460",
+                "--output",
+                layout.live.to_str().unwrap(),
+                "--json",
+            ]),
+        );
+        let id = queued["id"].as_str().unwrap();
+        let ready = layout.fake_bin.join("lookup-ready");
+        let mut owner = layout
+            .command(CLI)
+            .arg("serve")
+            .env("FAKE_LOOKUP_READY", &ready)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        wait_for_path(&ready, Duration::from_secs(8));
+        let lock_path = db.with_file_name("stream-archive.db.kick-secret.lock");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        assert!(fs2::FileExt::try_lock_exclusive(&lock).is_err());
+        if cancel_job {
+            let output = layout.cli(&["queue", "cancel", id, "--json"]);
+            assert_success("KICK cancel while native lookup hangs", &output);
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-secret"));
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
+            wait_for_queue_state(&db, id, "CANCELLED");
+        }
+        send_sigterm(owner.id());
+        assert!(wait_for_exit(&mut owner, Duration::from_secs(8)).success());
+        assert!(fs2::FileExt::try_lock_exclusive(&lock).is_ok());
+    }
+}
+
+#[test]
+fn kick_lookup_worker_entries_read_existing_db_without_runtime_bootstrap() {
+    let layout = Layout::new();
+    layout.init();
+    let db = layout.data.join("stream-archive.db");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params!["KICK_SESSION_TOKEN", "fixture-token"],
+    )
+    .unwrap();
+    for binary in [CLI, SERVER] {
+        let output = layout
+            .command(binary)
+            .arg("--internal-kick-secret-lookup")
+            .arg(&db)
+            .output()
+            .unwrap();
+        assert_success("internal lookup entry", &output);
+        assert_eq!(output.stdout, b"fixture-token");
+        assert!(output.stderr.is_empty());
+    }
+    let missing = layout.data.join("missing.db");
+    let output = layout
+        .command(CLI)
+        .arg("--internal-kick-secret-lookup")
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!missing.exists());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
 #[test]
 fn one_shot_cli_observes_running_owner_without_recovering_active_rows() {
     let layout = Layout::new();
