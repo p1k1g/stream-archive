@@ -67,7 +67,9 @@ pub struct CoreOpenResult {
 
 fn clear_kick_token_in_store(store: &Store, delete: impl FnOnce(&str) -> Result<()>) -> Result<()> {
     store.refresh_config_cache()?;
-    let value = store.setting_value("KICK_SESSION_TOKEN")?.unwrap_or_default();
+    let value = store
+        .setting_value("KICK_SESSION_TOKEN")?
+        .unwrap_or_default();
     delete(&value)?;
     store.sync_settings(
         &BTreeMap::from([("KICK_SESSION_TOKEN".into(), String::new())]),
