@@ -596,13 +596,8 @@ async fn run_download(
     let variant = select_variant(&metadata, &req.quality)?;
     let dir = PathBuf::from(req.output_directory.trim());
     std::fs::create_dir_all(&dir)?;
-    let id = Uuid::new_v4().to_string();
-    let output = dir.join(format!(
-        "{}_{}_{}.partial.mp4",
-        safe_name(&metadata.view.streamer),
-        safe_name(&metadata.view.title),
-        id
-    ));
+    let stem = output_stem(&metadata.view.streamer, &metadata.view.title, Uuid::new_v4());
+    let output = dir.join(format!("{stem}.partial.mp4"));
     // Reserve a unique filename without overwriting another writer's file.
     std::fs::OpenOptions::new()
         .write(true)
@@ -622,12 +617,7 @@ async fn run_download(
         return Ok(());
     }
     // No-copy publication; Windows MoveFileW also supports exFAT and refuses replacement.
-    let final_path = dir.join(format!(
-        "{}_{}_{}.mp4",
-        safe_name(&metadata.view.streamer),
-        safe_name(&metadata.view.title),
-        id
-    ));
+    let final_path = dir.join(format!("{stem}.mp4"));
     publish_mp4(&output, &final_path)?;
     let mut state = status.write().await;
     state.state = "COMPLETED".into();
@@ -670,6 +660,19 @@ fn select_variant<'a>(metadata: &'a Metadata, quality: &str) -> Result<&'a Url> 
     chosen
         .map(|v| &v.1)
         .ok_or_else(|| anyhow::anyhow!("KICK 화질 목록이 변경되었습니다. 다시 분석하세요."))
+}
+
+fn output_stem(streamer: &str, title: &str, id: Uuid) -> String {
+    let id = id.to_string();
+    let mut prefix = format!("{}_{}", safe_name(streamer), safe_name(title));
+    // Reserve the longest suffix and UUID within the common Unix component limit.
+    let budget = 255 - "_".len() - id.len() - ".partial.mp4".len();
+    let mut end = prefix.len().min(budget);
+    while !prefix.is_char_boundary(end) {
+        end -= 1;
+    }
+    prefix.truncate(end);
+    format!("{}_{}", prefix.trim_end_matches([' ', '.']), id)
 }
 
 fn safe_name(raw: &str) -> String {
@@ -846,6 +849,34 @@ async fn download_mp4(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composed_output_names_fit_byte_limit_without_losing_uuid_or_utf8() {
+        let id = Uuid::new_v4();
+        for title in ["한".repeat(60), "🎥".repeat(60), "é".repeat(60)] {
+            let stem = output_stem(&"a".repeat(60), &title, id);
+            let partial = format!("{stem}.partial.mp4");
+            let final_name = format!("{stem}.mp4");
+            assert!(partial.len() <= 255);
+            assert!(final_name.len() <= 255);
+            assert!(stem.ends_with(&id.to_string()));
+            assert_ne!(stem, output_stem(&"a".repeat(60), &title, Uuid::new_v4()));
+            #[cfg(unix)]
+            {
+                let dir = tempfile::tempdir().unwrap();
+                let source = dir.path().join(partial);
+                let target = dir.path().join(final_name);
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&source)
+                    .unwrap();
+                publish_mp4(&source, &target).unwrap();
+                assert!(target.exists());
+                assert!(!source.exists());
+            }
+        }
+    }
 
     #[test]
     fn request_error_diagnostics_never_echo_urls_or_tokens() {
