@@ -273,7 +273,18 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
         return;
     }
 
-    if mode == "kick-direct-success" || mode == "kick-direct-truncated" || mode == "kick-direct-invalid" {
+    let retry_success = mode == "kick-retry-success";
+    if retry_success {
+        let counter = env::current_exe().unwrap().with_extension("kick-attempts");
+        let attempt = fs::read_to_string(&counter).ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0) + 1;
+        fs::write(counter, attempt.to_string()).unwrap();
+        if attempt == 1 {
+            let output = arg_after(args, "-o").unwrap();
+            write_sized_file(Path::new(output), 64 * 1024);
+            process::exit(7);
+        }
+    }
+    if mode == "kick-direct-success" || mode == "kick-direct-truncated" || mode == "kick-direct-invalid" || retry_success {
         let output = arg_after(args, "-o").unwrap();
         let mut bytes = vec![0u8; 188 * 4];
         if mode != "kick-direct-invalid" {

@@ -607,7 +607,7 @@ async fn run_analysis(
 async fn run_download(
     backend: &Path,
     req: VodDownloadRequest,
-    _logs: &LogBuffer,
+    logs: &LogBuffer,
     status: &Arc<RwLock<VodJobStatus>>,
     cancel: &AtomicBool,
 ) -> Result<()> {
@@ -624,48 +624,107 @@ async fn run_download(
     let fragment_count = expected_fragment_count(variant, metadata.duration, cancel).await?;
     let dir = PathBuf::from(req.output_directory.trim());
     std::fs::create_dir_all(&dir)?;
-    let stem = output_stem(
-        &metadata.view.streamer,
-        &metadata.view.title,
-        Uuid::new_v4(),
-    );
-    let output = dir.join(format!("{stem}.partial.ts"));
-    // Reserve a unique filename without overwriting another writer's file.
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&output)?;
-    {
-        let mut state = status.write().await;
-        state.analysis = Some(metadata.view.clone());
-        state.current_part = 1;
-        state.part_count = 1;
-        state.state = "DOWNLOADING".into();
-        state.message = "KICK VOD 다운로드 중".into();
-        state.output_file = Some(output.display().to_string());
-    }
-    download_ts(
+    download_with_retries(
         &yt_dlp,
-        variant,
-        &output,
-        metadata.duration,
+        &metadata,
+        &req,
         fragment_count,
         status,
         cancel,
+        logs,
     )
-    .await?;
-    if cancel.load(Ordering::Acquire) {
-        return Ok(());
+    .await
+}
+
+async fn download_with_retries(
+    tool: &Path,
+    metadata: &Metadata,
+    req: &VodDownloadRequest,
+    fragment_count: u64,
+    status: &Arc<RwLock<VodJobStatus>>,
+    cancel: &AtomicBool,
+    logs: &LogBuffer,
+) -> Result<()> {
+    let variant = select_variant(metadata, &req.quality)?;
+    let dir = PathBuf::from(req.output_directory.trim());
+    let attempts = req.max_retries.max(1);
+    for attempt in 1..=attempts {
+        if cancel.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let stem = output_stem(
+            &metadata.view.streamer,
+            &metadata.view.title,
+            Uuid::new_v4(),
+        );
+        let output = dir.join(format!("{stem}.partial.ts"));
+        // Each attempt owns a new file; failed attempts and sidecars remain untouched.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output)?;
+        {
+            let mut state = status.write().await;
+            state.analysis = Some(metadata.view.clone());
+            state.current_part = 1;
+            state.part_count = 1;
+            state.state = "DOWNLOADING".into();
+            state.percent = 0.0;
+            state.message = format!("KICK VOD 다운로드 중 ({attempt}/{attempts})");
+            state.output_file = Some(output.display().to_string());
+        }
+        match download_ts(
+            tool,
+            variant,
+            &output,
+            metadata.duration,
+            fragment_count,
+            status,
+            cancel,
+        )
+        .await
+        {
+            Ok(()) => {
+                if cancel.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                // Publication failures are not download retries.
+                let final_path = dir.join(format!("{stem}.ts"));
+                publish_ts(&output, &final_path)?;
+                let mut state = status.write().await;
+                state.state = "COMPLETED".into();
+                state.percent = 100.0;
+                state.output_file = Some(final_path.display().to_string());
+                state.message = "KICK VOD 다운로드가 완료되었습니다.".into();
+                return Ok(());
+            }
+            Err(error) => {
+                if cancel.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                // Raw tool stderr/URLs/credentials must never enter the log.
+                logs.push(format!(
+                    "[VOD:KICK:WARN] 다운로드 시도 실패 ({attempt}/{attempts}); 부분 파일 보존"
+                ))
+                .await;
+                if attempt == attempts {
+                    return Err(error);
+                }
+                {
+                    let mut state = status.write().await;
+                    state.message = format!(
+                        "KICK VOD 재시도 대기 ({}/{attempts}) · 이전 부분 파일 보존",
+                        attempt + 1
+                    );
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(u64::from(attempt).min(5))) => {},
+                    _ = wait_cancel(cancel) => return Ok(()),
+                }
+            }
+        }
     }
-    // No-copy publication; Windows MoveFileW also supports exFAT and refuses replacement.
-    let final_path = dir.join(format!("{stem}.ts"));
-    publish_ts(&output, &final_path)?;
-    let mut state = status.write().await;
-    state.state = "COMPLETED".into();
-    state.percent = 100.0;
-    state.output_file = Some(final_path.display().to_string());
-    state.message = "KICK VOD 다운로드가 완료되었습니다.".into();
-    Ok(())
+    unreachable!("at least one attempt")
 }
 
 fn publish_ts(source: &Path, target: &Path) -> Result<()> {
@@ -1342,6 +1401,126 @@ mod tests {
         std::fs::write(&another, b"other").unwrap();
         assert!(publish_ts(&another, &target).is_err());
         assert_eq!(std::fs::read(&another).unwrap(), b"other");
+    }
+
+    #[tokio::test]
+    async fn retries_use_fresh_files_and_honor_attempt_limit() {
+        use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
+        for (mode, limit, expected, succeeds) in [
+            ("kick-retry-success", 3, 2, true),
+            ("run-partial-fail", 2, 2, false),
+            ("run-partial-fail", 0, 1, false),
+        ] {
+            let fixture = ProviderFixture::new();
+            let tool = fixture.tool(ToolKind::YtDlp);
+            fixture.set_mode(&tool, mode);
+            let mut metadata = parse_playback(
+                "https://kick.com/example/videos/01a106d1-f328-750c-a31b-16a5df570460",
+                &playback(),
+                false,
+            )
+            .unwrap();
+            metadata.duration = 60;
+            metadata.variants = parse_variants(
+                &metadata.source,
+                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100,RESOLUTION=1920x1080\nindex.m3u8\n",
+            )
+            .unwrap();
+            let req = VodDownloadRequest {
+                output_directory: fixture.root().display().to_string(),
+                quality: "best".into(),
+                max_retries: limit,
+                ..serde_json::from_value(serde_json::json!({"vod_url":"", "output_directory":""}))
+                    .unwrap()
+            };
+            let status = Arc::new(RwLock::new(VodJobStatus::default()));
+            let cancel = AtomicBool::new(false);
+            let result = download_with_retries(
+                &tool,
+                &metadata,
+                &req,
+                10,
+                &status,
+                &cancel,
+                &LogBuffer::new(),
+            )
+            .await;
+            assert_eq!(result.is_ok(), succeeds, "{mode}, limit={limit}");
+            let outputs: Vec<_> = std::fs::read_dir(fixture.root())
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.extension().is_some_and(|e| e == "ts"))
+                .collect();
+            assert_eq!(outputs.len(), expected);
+            assert_eq!(
+                outputs
+                    .iter()
+                    .filter(|p| !p.to_string_lossy().ends_with(".partial.ts"))
+                    .count(),
+                usize::from(succeeds)
+            );
+            for path in outputs
+                .iter()
+                .filter(|p| p.to_string_lossy().ends_with(".partial.ts"))
+            {
+                assert_eq!(std::fs::metadata(path).unwrap().len(), 64 * 1024);
+            }
+            assert_eq!(status.read().await.state == "COMPLETED", succeeds);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_retry_wait_does_not_start_another_attempt() {
+        use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
+        let fixture = ProviderFixture::new();
+        let tool = fixture.tool(ToolKind::YtDlp);
+        fixture.set_mode(&tool, "run-partial-fail");
+        let mut metadata = parse_playback(
+            "https://kick.com/example/videos/01a106d1-f328-750c-a31b-16a5df570460",
+            &playback(),
+            false,
+        )
+        .unwrap();
+        metadata.variants = parse_variants(
+            &metadata.source,
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nindex.m3u8\n",
+        )
+        .unwrap();
+        let req = VodDownloadRequest {
+            output_directory: fixture.root().display().to_string(),
+            quality: "best".into(),
+            max_retries: 5,
+            ..serde_json::from_value(serde_json::json!({"vod_url":"", "output_directory":""}))
+                .unwrap()
+        };
+        let status = Arc::new(RwLock::new(VodJobStatus::default()));
+        let cancel = AtomicBool::new(false);
+        let logs = LogBuffer::new();
+        let operation = download_with_retries(&tool, &metadata, &req, 10, &status, &cancel, &logs);
+        let stop = async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !status.read().await.message.contains("재시도 대기") {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            cancel.store(true, Ordering::Release);
+        };
+        let (result, ()) = tokio::join!(operation, stop);
+        result.unwrap();
+        assert_ne!(status.read().await.state, "COMPLETED");
+        let partials = std::fs::read_dir(fixture.root())
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .path()
+                    .to_string_lossy()
+                    .ends_with(".partial.ts")
+            })
+            .count();
+        assert_eq!(partials, 1);
     }
 
     #[tokio::test]

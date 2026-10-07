@@ -789,7 +789,7 @@ fn provider_checks(
             } else {
                 "session_token 미설정 (공개 VOD 조회 가능)"
             },
-            "구독 VOD는 session_token을 저장하세요. 이 항목은 토큰 유효성이나 구독 권한을 검증하지 않습니다. 다운로드에는 FFmpeg를 사용합니다.",
+            "구독 VOD는 session_token을 저장하세요. 이 항목은 토큰 유효성이나 구독 권한을 검증하지 않습니다. 다운로드에는 yt-dlp를 사용해 HLS 조각 4개를 병렬 처리하고 TS로 저장합니다. LIVE/VOD 첫 프레임 썸네일에는 FFmpeg가 필요합니다.",
             "VOD 분석 실패 시 만료·구독 권한·HTTP 오류 안내를 확인하세요.",
         ),
         check!(

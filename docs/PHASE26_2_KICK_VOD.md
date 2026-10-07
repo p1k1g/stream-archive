@@ -18,7 +18,7 @@
 
 - 화질 선택 후 해당 variant playlist를 yt-dlp native HLS downloader에 전달합니다. `--concurrent-fragments 4`, `--hls-use-mpegts`, `--fixup never`로 실제 `.ts`를 직접 저장하며 MP4 remux는 하지 않습니다.
 - `--abort-on-unavailable-fragments`로 누락 조각을 성공 처리하지 않습니다. 사전 playlist ENDLIST·전체 길이와 조각 수, 정상 exit, 동일 조각 수의 전체 완료, 완료 marker, MPEG-TS sync byte를 확인한 뒤 COMPLETED / History / 완료 알림을 처리합니다.
-- UUID가 포함된 고유한 `*.partial.ts`와 yt-dlp의 `.part` / `.ytdl` / fragment 파일을 사용합니다. 취소·실패 시 부분 파일들을 보존합니다. 재시도는 새 UUID로 처음부터 시작하며 이전 파일을 덮어쓰지 않습니다.
+- UUID가 포함된 고유한 `*.partial.ts`와 yt-dlp의 `.part` / `.ytdl` / fragment 파일을 사용합니다. 취소·실패 시 부분 파일들을 보존합니다. 자동 재시도는 `max_retries.max(1)`의 총 시도 횟수를 따릅니다(기본 5회, 0은 1회). 각 시도는 새 UUID로 처음부터 시작하며 이전 파일을 덮어쓰지 않습니다. 다운로드 실패 사이에는 최대 5초의 취소 가능한 대기를 적용하고, 취소 또는 최종 파일 게시 실패는 재시도하지 않습니다.
 - 취소는 앱이 소유한 yt-dlp process tree만 종료합니다. 기존 SOOP/CHZZK 방식은 변경하지 않습니다.
 - Windows 발행은 MoveFileW, Unix는 같은 디스크 hard-link 후 임시 이름 제거로 처리합니다. Unix 저장 파일시스템은 hard-link를 지원해야 합니다.
 - TS의 Explorer 썸네일은 PC 환경에 따라 달라질 수 있습니다. 사용자의 독립 명령 테스트에서는 표시됐지만 새 앱 binary의 전체 영상 검증은 별도 수동 RC입니다.
