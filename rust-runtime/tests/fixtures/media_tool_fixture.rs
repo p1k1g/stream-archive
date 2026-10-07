@@ -207,7 +207,7 @@ fn provider_tool() -> Option<ProviderTool> {
 
 fn run_provider_tool(tool: ProviderTool, args: &[std::ffi::OsString]) {
     let mode = provider_mode();
-    if arg_after(args, "--batch-file") == Some("-") || arg_after(args, "-i") == Some("pipe:0") {
+    if arg_after(args, "--batch-file") == Some("-") || (arg_after(args, "-i") == Some("pipe:0") && arg_after(args, "-f") == Some("concat")) {
         let mut input = String::new();
         io::stdin().read_to_string(&mut input).unwrap();
         assert!(input.contains("https://"), "fixture expected private pipe input");
