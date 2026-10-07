@@ -275,6 +275,10 @@ fn print_provider_status(core: &StreamArchiveCore, json_mode: bool) -> Result<()
         println!("provider configuration");
         println!("KICK                : public LIVE / VOD (connection not verified)");
         println!(
+            "KICK session_token  : {}",
+            yes_no(configured_secret(&secrets, "KICK_SESSION_TOKEN"))
+        );
+        println!(
             "SOOP username       : {}",
             yes_no(configured_setting(&settings, "SOOP_USERNAME"))
         );

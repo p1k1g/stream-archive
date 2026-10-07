@@ -517,6 +517,11 @@ fn provider_clear_kick_token_uses_core_and_does_not_expose_values() {
         params!["KICK_SESSION_TOKEN", "legacy-kick-secret"],
     )
     .unwrap();
+    let configured = layout.cli(&["providers", "status"]);
+    assert_success("KICK text status before clear", &configured);
+    let text = String::from_utf8_lossy(&configured.stdout);
+    assert!(text.contains("KICK session_token  : yes"));
+    assert!(!text.contains("legacy-kick-secret"));
     let output = layout.cli(&["providers", "clear-secret", "KICK_SESSION_TOKEN"]);
     assert_success("clear KICK token", &output);
     assert!(!String::from_utf8_lossy(&output.stdout).contains("legacy-kick-secret"));
@@ -525,6 +530,11 @@ fn provider_clear_kick_token_uses_core_and_does_not_expose_values() {
         layout.cli(&["providers", "status", "--json"]),
     );
     assert_eq!(providers["KICK"]["session_token_configured"], false);
+    let cleared = layout.cli(&["providers", "status"]);
+    assert_success("KICK text status after clear", &cleared);
+    let text = String::from_utf8_lossy(&cleared.stdout);
+    assert!(text.contains("KICK session_token  : no"));
+    assert!(!text.contains("legacy-kick-secret"));
     assert_success(
         "clear already empty KICK token",
         &layout.cli(&["providers", "clear-secret", "KICK_SESSION_TOKEN"]),

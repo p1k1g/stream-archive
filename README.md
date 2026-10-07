@@ -1,6 +1,6 @@
 # Stream Archive
 
-**SOOP·CHZZK의 LIVE 자동 녹화와 VOD 다운로드, KICK 공개 LIVE 녹화를 관리하는 로컬 아카이브 도구입니다.**
+**SOOP·CHZZK의 LIVE 자동 녹화와 VOD 다운로드, KICK 공개 LIVE 녹화 및 공개·구독 VOD 다운로드를 관리하는 로컬 아카이브 도구입니다.**
 
 Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행을 제공합니다. Queue, History, 백업·복구, Diagnostics를 한곳에서 관리할 수 있습니다.
 
@@ -125,7 +125,7 @@ cd stream-archive
 
 ### VOD 다운로드
 
-1. **VOD** 화면에서 SOOP/CHZZK VOD URL을 입력하고 분석합니다.
+1. **VOD** 화면에서 SOOP/CHZZK/KICK VOD URL을 입력하고 분석합니다. KICK 구독 VOD는 설정에 해당 계정의 `session_token`을 저장한 뒤 분석합니다.
 2. 품질과 출력 경로 등 필요한 옵션을 선택합니다.
 3. 다운로드를 시작하거나 Queue에 등록합니다.
 4. **대기열**에서 진행·실패·취소·재시도 상태를 확인합니다.
