@@ -42,7 +42,7 @@ Cookie의 expiry가 길어도 세션 무효화·시청 권한·API 변경은 별
 
 - URL/영상 identity, 인증 헤더 인코딩·주입 거부, DRM/CDN 거부, HLS 화질 선택·목록 순서 변경, yt-dlp 명령의 병렬/TS/누락 거부/인증 미전달을 검증합니다.
 - 공통 notification epoch 전환에 KICK을 포함하며 기존 SOOP/CHZZK 검증을 유지합니다.
-- 로컬 FFmpeg에서 생성한 H.264/AAC HLS의 직접 fragmented MP4 저장, ffprobe 컨테이너·코덱, JPEG 프레임 추출을 확인했습니다. 15초 테스트 입력을 다운로드 중 강제 종료했을 때 기록이 끝난 fragment는 ffprobe로 읽을 수 있었습니다. 첫 fragment 완료 전 종료는 재생을 보장하지 않습니다. 실제 provider 테스트로 간주하지 않습니다.
+- 이전 MP4 방식의 검증 기록(2026-10-06): 로컬 FFmpeg에서 생성한 H.264/AAC HLS의 직접 fragmented MP4 저장, ffprobe 컨테이너·코덱, JPEG 프레임 추출을 확인했습니다. 15초 테스트 입력을 다운로드 중 강제 종료했을 때 기록이 끝난 fragment는 ffprobe로 읽을 수 있었습니다. 첫 fragment 완료 전 종료는 재생을 보장하지 않습니다. 실제 provider 테스트로 간주하지 않습니다.
 
 ## 수동 RC
 

@@ -91,4 +91,4 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 
 - Phase 26.1 ✅ KICK 공개 LIVE 지원 ([사용 조건 및 수동 QA](PHASE26_1_KICK_LIVE.md))
 
-- 🚧 Phase 26.2 — KICK VOD: playback 인증, 화질 선택, FFmpeg 직접 MP4 저장. [범위 및 수동 RC](PHASE26_2_KICK_VOD.md)
+- 🚧 Phase 26.2 — KICK VOD: playback 인증, 화질 선택, yt-dlp 4개 조각 병렬 다운로드 및 MPEG-TS 저장, FFmpeg 첫 프레임 썸네일. [범위 및 수동 RC](PHASE26_2_KICK_VOD.md)

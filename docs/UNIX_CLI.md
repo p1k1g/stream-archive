@@ -599,7 +599,7 @@ stream-archive-cli serve --watch
 
 ## KICK VOD 인증
 
-`KICK_SESSION_TOKEN`은 기존 provider secret 입력 절차로 저장합니다. 명령행 인수에 토큰을 직접 넣지 않습니다. KICK VOD는 FFmpeg로 직접 MP4를 저장하고, Queue 재시도는 새 파일로 시작합니다. [Phase 26.2 제한 및 수동 검증](PHASE26_2_KICK_VOD.md)을 확인하세요.
+`KICK_SESSION_TOKEN`은 기존 provider secret 입력 절차로 저장합니다. 명령행 인수에 토큰을 직접 넣지 않습니다. KICK VOD 다운로드에는 yt-dlp가 필요합니다. native HLS downloader로 조각 4개를 병렬 다운로드하고 MPEG-TS(`.ts`)로 저장하며 MP4 remux는 하지 않습니다. LIVE/VOD 첫 프레임 썸네일 추출에는 FFmpeg가 필요합니다. Queue 재시도는 새 파일로 시작하며 이어받기는 지원하지 않습니다. [Phase 26.2 제한 및 수동 검증](PHASE26_2_KICK_VOD.md)을 확인하세요.
 
 KICK 인증정보 삭제는 shared core에서 SQLite 설정 비우기와 이전 native 참조의 정리 대기 기록을 원자적으로 commit한 뒤 native 항목을 삭제합니다. DB commit 실패 시 native 항목은 유지됩니다. native 삭제 실패 시 설정은 비워진 상태이며 정리 참조를 보존하고 오류를 반환합니다. 같은 `providers clear-secret KICK_SESSION_TOKEN` 명령으로 정리를 재시도하세요.
 

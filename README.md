@@ -192,4 +192,4 @@ Phase 25.2에서 LIVE 상태·버튼, 저장 공간 배치, 채널 관리와 닫
 
 ### Phase 26.2 — KICK VOD
 
-🚧 KICK 공개·구독 VOD 분석, `session_token` 보호 저장, FFmpeg 직접 MP4 저장을 추가합니다. 재시도는 새 파일로 시작하며 FFmpeg MP4 이어받기는 지원하지 않습니다. [구현 범위 및 수동 검증](docs/PHASE26_2_KICK_VOD.md)
+🚧 KICK 공개·구독 VOD 분석, `session_token` 보호 저장, yt-dlp의 4개 조각 병렬 다운로드와 MPEG-TS(`.ts`) 저장을 추가합니다. 다운로드에는 yt-dlp, LIVE/VOD 첫 프레임 썸네일에는 FFmpeg가 필요합니다. MP4 remux는 하지 않으며 재시도는 새 파일로 시작합니다. 이어받기는 지원하지 않습니다. [구현 범위 및 수동 검증](docs/PHASE26_2_KICK_VOD.md)
