@@ -20,7 +20,7 @@
 - `--abort-on-unavailable-fragments`로 누락 조각을 성공 처리하지 않습니다. 사전 playlist ENDLIST·전체 길이와 조각 수, 정상 exit, 동일 조각 수의 전체 완료, 완료 marker, MPEG-TS sync byte를 확인한 뒤 COMPLETED / History / 완료 알림을 처리합니다.
 - UUID가 포함된 고유한 `*.partial.ts`와 yt-dlp의 `.part` / `.ytdl` / fragment 파일을 사용합니다. 취소·실패 시 부분 파일들을 보존합니다. 자동 재시도는 `max_retries.max(1)`의 총 시도 횟수를 따릅니다(기본 5회, 0은 1회). 각 시도는 새 UUID로 처음부터 시작하며 이전 파일을 덮어쓰지 않습니다. 다운로드 실패 사이에는 최대 5초의 취소 가능한 대기를 적용하고, 취소 또는 최종 파일 게시 실패는 재시도하지 않습니다.
 - 취소는 앱이 소유한 yt-dlp process tree만 종료합니다. 기존 SOOP/CHZZK 방식은 변경하지 않습니다.
-- Windows 발행은 MoveFileW, Unix는 같은 디스크 hard-link 후 임시 이름 제거로 처리합니다. Unix 저장 파일시스템은 hard-link를 지원해야 합니다.
+- 최종 TS 게시에는 Windows `MoveFileW`, Linux `renameat2(RENAME_NOREPLACE)`, macOS `renamex_np(RENAME_EXCL)`를 사용합니다. 같은 저장 폴더 안에서 파일을 복사하지 않고 이동하며 기존 대상 파일을 덮어쓰지 않습니다. Linux/macOS도 hard link 지원을 요구하지 않습니다. 저장장치가 해당 rename 연산을 거부하면 부분 파일을 보존하고 실패를 보고합니다.
 - TS의 Explorer 썸네일은 PC 환경에 따라 달라질 수 있습니다. 사용자의 독립 명령 테스트에서는 표시됐지만 새 앱 binary의 전체 영상 검증은 별도 수동 RC입니다.
 - LIVE 이미지 요청에 KICK Origin / Referer를 전달합니다. 이미지 실패 시 현재 broadcast ID를 재확인하고 public playback URL에서 첫 프레임을 추출합니다. 실패 시 플랫폼 로고로 fallback하며 로그에는 고정 오류 분류만 남깁니다.
 - VOD 다운로드에는 yt-dlp가 필요하고 LIVE/VOD 첫 프레임 썸네일에는 FFmpeg가 필요합니다. 외부 도구는 공식 패키지에 번들하지 않습니다.
@@ -53,6 +53,7 @@ Cookie의 expiry가 길어도 세션 무효화·시청 권한·API 변경은 별
 - [ ] 화질 선택 / 저장 폴더 선택 / Queue / History / 완료 알림
 - [ ] 다운로드 중 취소, 별도 FFmpeg 프로세스가 영향받지 않는지 확인
 - [ ] 강제 종료 후 partial.ts / .part 파일 보존, 재시도 시 새 파일 시작 확인
+- [ ] Linux/macOS exFAT/FAT 실제 장치에서 최종 TS 게시 및 대상 충돌 보호 확인
 - [ ] Windows Explorer 썸네일·seek·Windows 기본 플레이어 호환성
 - [ ] 디스크 부족 시 실패 안내 및 부분 파일 보존
 - [ ] SOOP/CHZZK LIVE/VOD와 KICK LIVE regression
@@ -97,5 +98,3 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 - [ ] 새 앱에서 공개/구독 VOD 분석 썸네일 확인
 - [ ] TS 전체 다운로드, 선택 화질, 영상 길이와 끝부분 재생·탐색 확인
 - [ ] 취소, 조각 실패, 디스크 부족 시 성공 알림이 나오지 않는지 확인
-
-최종 TS 게시에는 Windows `MoveFileW`, Linux `renameat2(RENAME_NOREPLACE)`, macOS `renamex_np(RENAME_EXCL)`를 사용합니다. 같은 저장 폴더 안에서 파일을 복사하지 않고 이동하며 기존 대상 파일을 덮어쓰지 않습니다. Linux/macOS도 hard link 지원을 요구하지 않습니다. 저장장치가 해당 rename 연산을 거부하면 부분 파일을 보존하고 실패를 보고합니다. exFAT/FAT 실제 장치 검증은 수동 RC로 남겨둡니다.
