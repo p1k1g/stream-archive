@@ -492,6 +492,7 @@ async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
         let playlist =
             std::str::from_utf8(&bytes).map_err(|_| anyhow::anyhow!("KICK HLS 형식 오류"))?;
         metadata.variants = parse_variants(&metadata.source, playlist)?;
+        metadata.view.thumbnail_url = Some(select_variant(&metadata, "best")?.to_string());
         metadata.view.qualities = metadata.variants.iter().map(|v| v.0.clone()).collect();
         metadata.view.qualities.insert(
             0,
@@ -750,7 +751,7 @@ fn yt_dlp_command(tool: &Path, source: &Url, output: &Path) -> tokio::process::C
             "https://kick.com/",
             "-o",
         ])
-        .arg(output)
+        .arg(output.to_string_lossy().replace('%', "%%"))
         .arg(source.as_str())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -1168,6 +1169,36 @@ mod tests {
                 "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttps://localhost/x.m3u8"
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn fragment_progress_rejects_missing_zero_and_invalid_counts() {
+        assert_eq!(fragment_progress("KICK_PROGRESS:4:8"), Some(0.5));
+        assert_eq!(fragment_progress("KICK_PROGRESS:8:8"), Some(1.0));
+        for line in [
+            "KICK_PROGRESS:NA:NA",
+            "KICK_PROGRESS:1:0",
+            "KICK_PROGRESS:9:8",
+            "http://secret",
+        ] {
+            assert_eq!(fragment_progress(line), None);
+        }
+    }
+    #[test]
+    fn output_template_treats_percent_in_user_paths_as_literal() {
+        let command = yt_dlp_command(
+            Path::new("yt-dlp"),
+            &media_url("https://stream.kick.com/hls/index.m3u8").unwrap(),
+            Path::new("folder 100%/title %(id)s.partial.ts"),
+        );
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|a| a == ["-o", "folder 100%%/title %%(id)s.partial.ts"])
         );
     }
     #[test]

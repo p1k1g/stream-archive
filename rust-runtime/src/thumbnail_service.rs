@@ -274,6 +274,29 @@ mod tests {
         assert!(!calls.contains("Cookie") && !calls.contains("Bearer"));
     }
 
+    #[tokio::test]
+    async fn dropping_kick_frame_request_stops_only_owned_descendants() {
+        use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
+        let fixture = ProviderFixture::new();
+        let tool = fixture.tool(ToolKind::Ffmpeg);
+        fixture.set_mode(&tool, "run-spawn-child");
+        let mut unrelated = fixture.spawn_unrelated();
+        fixture.wait_for_unrelated().await;
+        let worker_tool = tool.clone();
+        let task = tokio::spawn(async move {
+            load_kick_vod_frame(&worker_tool, "https://stream.kick.com/hls/playlist.m3u8").await
+        });
+        fixture
+            .wait_for_path(&fixture.child_ready_path(&tool))
+            .await;
+        task.abort();
+        let _ = task.await;
+        fixture.assert_child_stopped(&tool).await;
+        assert!(unrelated.try_wait().unwrap().is_none());
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
+    }
+
     #[test]
     fn vod_images_are_limited_to_provider_cdns_without_credentials_or_custom_ports() {
         for (platform, url) in [
