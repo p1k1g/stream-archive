@@ -207,6 +207,11 @@ fn provider_tool() -> Option<ProviderTool> {
 
 fn run_provider_tool(tool: ProviderTool, args: &[std::ffi::OsString]) {
     let mode = provider_mode();
+    if arg_after(args, "--batch-file") == Some("-") || arg_after(args, "-i") == Some("pipe:0") {
+        let mut input = String::new();
+        io::stdin().read_to_string(&mut input).unwrap();
+        assert!(input.contains("https://"), "fixture expected private pipe input");
+    }
     match tool {
         ProviderTool::Streamlink => run_streamlink_fixture(args, &mode),
         ProviderTool::YtDlp => run_ytdlp_fixture(args, &mode),

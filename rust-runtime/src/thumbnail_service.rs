@@ -125,7 +125,7 @@ pub(crate) async fn load_kick_vod_frame(
     tool: &std::path::Path,
     source: &str,
 ) -> Result<ThumbnailImage> {
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let url = Url::parse(source)?;
     if !crate::support::platform::kick::live::valid_preview_url(&url) {
         validate_vod_image_url(PlatformId::Kick, &url)?;
@@ -139,15 +139,15 @@ pub(crate) async fn load_kick_vod_frame(
             "-hide_banner",
             "-loglevel",
             "error",
-            "-user_agent",
-            crate::support::PROVIDER_USER_AGENT,
-            "-referer",
-            "https://kick.com/",
-            "-headers",
-            "Origin: https://kick.com\r\n",
+            "-protocol_whitelist",
+            "pipe,https,tls,tcp,crypto",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
             "-i",
+            "pipe:0",
         ])
-        .arg(url.as_str())
         .args([
             "-map",
             "0:v:0",
@@ -162,7 +162,7 @@ pub(crate) async fn load_kick_vod_frame(
             "mjpeg",
             "pipe:1",
         ])
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
@@ -185,6 +185,22 @@ pub(crate) async fn load_kick_vod_frame(
         .take()
         .ok_or_else(|| anyhow::anyhow!("KICK 썸네일 파이프 오류"))?;
     let operation = async {
+        let mut stdin = process
+            .child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("KICK 썸네일 입력 파이프 오류"))?;
+        // Concat opens one validated HLS URL with HTTP options through the private pipe.
+        let quoted = url.as_str().replace('\'', "'\\''");
+        let playlist = format!(
+            "ffconcat version 1.0\nfile '{quoted}'\noption user_agent '{}'\noption referer 'https://kick.com/'\noption headers 'Origin: https://kick.com'\n",
+            crate::support::PROVIDER_USER_AGENT
+        );
+        stdin
+            .write_all(playlist.as_bytes())
+            .await
+            .map_err(|_| anyhow::anyhow!("KICK 썸네일 입력 전달 실패"))?;
+        drop(stdin);
         let mut bytes = Vec::new();
         stdout
             .take((MAX_BODY + 1) as u64)
@@ -260,6 +276,7 @@ mod tests {
         fixture.set_mode(&tool, "kick-thumbnail-success");
         let image = load_kick_vod_frame(&tool, source).await.unwrap();
         assert_eq!((image.width, image.height), (16, 9));
+        assert!(!fixture.invocations().contains(source));
         fixture.set_mode(&tool, "kick-thumbnail-invalid");
         assert!(load_kick_vod_frame(&tool, source).await.is_err());
         for source in [

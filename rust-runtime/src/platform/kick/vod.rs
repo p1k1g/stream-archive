@@ -892,7 +892,7 @@ async fn expected_fragment_count(source: &Url, duration: u64, cancel: &AtomicBoo
     tokio::select! { result = operation => result, _ = wait_cancel(cancel) => bail!("KICK VOD 조회가 취소되었습니다.") }
 }
 
-fn yt_dlp_command(tool: &Path, source: &Url, output: &Path) -> tokio::process::Command {
+fn yt_dlp_command(tool: &Path, output: &Path) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(tool);
     command
         .args([
@@ -923,8 +923,8 @@ fn yt_dlp_command(tool: &Path, source: &Url, output: &Path) -> tokio::process::C
             "-o",
         ])
         .arg(output.to_string_lossy().replace('%', "%%"))
-        .arg(source.as_str())
-        .stdin(std::process::Stdio::null())
+        .args(["--batch-file", "-"])
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
@@ -957,14 +957,29 @@ async fn download_ts(
     status: &Arc<RwLock<VodJobStatus>>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     if cancel.load(Ordering::Acquire) {
         return Ok(());
     }
     let (mut child, mut tree) =
-        crate::platform_runtime::spawn_owned(&mut yt_dlp_command(tool, source, output))
+        crate::platform_runtime::spawn_owned(&mut yt_dlp_command(tool, output))
             .await
             .map_err(|_| anyhow::anyhow!("KICK yt-dlp 시작 실패"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("KICK 입력 파이프 오류"))?;
+    let input = format!("{}\n", source.as_str());
+    let sent =
+        tokio::time::timeout(Duration::from_secs(5), stdin.write_all(input.as_bytes())).await;
+    drop(stdin);
+    if !matches!(sent, Ok(Ok(()))) {
+        let _ = tree.terminate(&mut child).await;
+        if cancel.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        bail!("KICK 재생 주소 파이프 전달 실패");
+    }
     let stdout = child
         .stdout
         .take()
@@ -1407,7 +1422,6 @@ mod tests {
     fn output_template_treats_percent_in_user_paths_as_literal() {
         let command = yt_dlp_command(
             Path::new("yt-dlp"),
-            &media_url("https://stream.kick.com/hls/index.m3u8").unwrap(),
             Path::new("folder 100%/title %(id)s.partial.ts"),
         );
         let args: Vec<_> = command
@@ -1422,16 +1436,14 @@ mod tests {
     }
     #[test]
     fn command_is_parallel_ts_without_credentials_or_second_full_file() {
-        let command = yt_dlp_command(
-            Path::new("yt-dlp"),
-            &media_url("https://stream.kick.com/hls/index.m3u8").unwrap(),
-            Path::new("out.partial.ts"),
-        );
+        let command = yt_dlp_command(Path::new("yt-dlp"), Path::new("out.partial.ts"));
         let args: Vec<_> = command
             .as_std()
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
+        assert!(args.windows(2).any(|a| a == ["--batch-file", "-"]));
+        assert!(!args.iter().any(|a| a.contains("stream.kick.com")));
         assert!(
             args.windows(2)
                 .any(|a| a == ["--concurrent-fragments", "4"])
@@ -1473,6 +1485,7 @@ mod tests {
             assert!(output.exists(), "partial output must be preserved");
         }
         assert!(!fixture.invocations().contains("session_token"));
+        assert!(!fixture.invocations().contains(source.as_str()));
         let source = fixture.root().join("kick-direct-success.partial.ts");
         let target = fixture.root().join("complete.ts");
         publish_ts(&source, &target).unwrap();

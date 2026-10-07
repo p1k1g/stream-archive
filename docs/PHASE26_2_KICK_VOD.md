@@ -98,3 +98,5 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 - [ ] 새 앱에서 공개/구독 VOD 분석 썸네일 확인
 - [ ] TS 전체 다운로드, 선택 화질, 영상 길이와 끝부분 재생·탐색 확인
 - [ ] 취소, 조각 실패, 디스크 부족 시 성공 알림이 나오지 않는지 확인
+
+KICK HLS 주소는 yt-dlp의 `--batch-file -` stdin과 FFmpeg의 `pipe:0` concat 입력(HLS 주소와 HTTP 옵션)으로 전달합니다. 실제 주소를 child argv·환경변수·임시 파일에 기록하지 않습니다. FFmpeg 입력은 `pipe,https,tls,tcp,crypto` protocol whitelist로 제한합니다. 원본 tool stderr는 그대로 로그에 남기지 않습니다.
