@@ -80,7 +80,7 @@ impl State {
             "Stream Archive 다운로드 완료"
         };
         let body = format!(
-            "SOOP / CHZZK VOD 완료 {}건 · 실패 {}건\n클릭하면 History에서 결과를 확인합니다.",
+            "VOD 완료 {}건 · 실패 {}건\n클릭하면 History에서 결과를 확인합니다.",
             summary.completed, summary.failed
         );
         for (dest, src) in data

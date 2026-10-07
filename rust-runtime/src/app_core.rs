@@ -647,9 +647,13 @@ impl StreamArchiveCore {
             .thumbnail_url
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("VOD 썸네일 정보가 없습니다."))?;
-        let image = if status.platform == crate::support::platform::PlatformId::Kick
-            && url::Url::parse(url).is_ok_and(|url| url.path().ends_with(".m3u8"))
-        {
+        let image = if status.platform == crate::support::platform::PlatformId::Kick {
+            let source = crate::support::platform::vod::thumbnail_frame_source(
+                status.platform,
+                vod_url,
+                url,
+            )
+            .await?;
             let settings = self.store.vod_tool_settings()?;
             let configured = settings
                 .get("FFMPEG_PATH")
@@ -662,7 +666,7 @@ impl StreamArchiveCore {
             )
             .path
             .ok_or_else(|| anyhow::anyhow!("KICK VOD 썸네일 추출에는 FFmpeg가 필요합니다."))?;
-            crate::thumbnail_service::load_kick_vod_frame(&tool, url).await?
+            crate::thumbnail_service::load_kick_vod_frame(&tool, &source).await?
         } else {
             crate::thumbnail_service::load_vod(status.platform, url).await?
         };

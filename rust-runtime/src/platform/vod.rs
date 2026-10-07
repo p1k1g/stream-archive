@@ -15,6 +15,17 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
     }
 }
 
+pub(crate) async fn thumbnail_frame_source(
+    platform: PlatformId,
+    vod_url: &str,
+    handle: &str,
+) -> Result<String> {
+    match platform {
+        PlatformId::Kick => kick::vod::thumbnail_frame_source(vod_url, handle).await,
+        _ => bail!("이 플랫폼은 VOD 첫 프레임 미리보기를 제공하지 않습니다."),
+    }
+}
+
 /// Platform-neutral VOD facade.
 ///
 /// Queue/history/UI code talks only to this type. Platform-specific metadata,

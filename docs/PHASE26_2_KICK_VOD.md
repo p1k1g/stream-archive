@@ -12,7 +12,7 @@
 - 미설정 상태에서는 인증 없이 조회합니다. 주소가 없으면 구독 인증 설정을 안내합니다. 설정된 인증정보도 권한을 보장하지 않습니다.
 - Cookie/Bearer는 KICK playback 요청에만 전달합니다. CDN, yt-dlp와 FFmpeg에는 전달하지 않습니다. HTTP redirect를 자동으로 따라가지 않습니다.
 - 영상 UUID·채널·VOD 상태를 확인하고 DRM, 허용되지 않은 CDN, 빈 재생 주소는 거부합니다. 401/403/404/429는 구분해 안내합니다.
-- 제목·채널·길이는 playback 응답, 화질은 HLS master playlist에서 얻습니다. thumbnail sheet는 표지 사진이 아니므로 임의로 잘라 표시하지 않습니다. core에서 FFmpeg로 HLS 첫 프레임 한 장을 최대 480×270으로 추출하며, 실패하면 KICK 플랫폼 로고를 유지합니다.
+- 제목·채널·길이는 playback 응답, 화질은 HLS master playlist에서 얻습니다. thumbnail sheet는 표지 사진이 아니므로 임의로 잘라 표시하지 않습니다. 공개 분석 모델과 CLI JSON에는 `kick-preview:<영상 ID>` 식별자만 포함하며 HLS 재생 주소는 넣지 않습니다. 미리보기 요청 시 provider 내부에서 인증·영상 ID를 확인하고 실제 첫 프레임 입력 주소를 조회합니다. core에서 FFmpeg로 HLS 첫 프레임 한 장을 최대 480×270으로 추출하며, 실패하면 KICK 플랫폼 로고를 유지합니다.
 
 ## 파일과 중단 정책
 

@@ -348,7 +348,7 @@ fn parse_playback(raw: &str, value: &serde_json::Value, authenticated: bool) -> 
             streamer: channel.clone(),
             streamer_id: channel,
             // Sprite sheets are not covers; the core extracts one bounded frame from HLS.
-            thumbnail_url: Some(media_url(source)?.to_string()),
+            thumbnail_url: Some(format!("kick-preview:{id}")),
             part_count: 1,
             parts: vec![VodPartInfo {
                 part: 1,
@@ -492,7 +492,6 @@ async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
         let playlist =
             std::str::from_utf8(&bytes).map_err(|_| anyhow::anyhow!("KICK HLS 형식 오류"))?;
         metadata.variants = parse_variants(&metadata.source, playlist)?;
-        metadata.view.thumbnail_url = Some(select_variant(&metadata, "best")?.to_string());
         metadata.view.qualities = metadata.variants.iter().map(|v| v.0.clone()).collect();
         metadata.view.qualities.insert(
             0,
@@ -504,6 +503,17 @@ async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
         Ok(metadata)
     };
     tokio::select! { result = operation => result, _ = wait_cancel(cancel) => bail!("KICK VOD 조회가 취소되었습니다.") }
+}
+
+/// Resolve a public opaque preview handle inside the provider; never serialize HLS URLs.
+pub(crate) async fn thumbnail_frame_source(raw: &str, handle: &str) -> Result<String> {
+    let (_, id) = parse_url(raw)?;
+    if handle != format!("kick-preview:{id}") {
+        bail!("KICK VOD 썸네일 식별자가 일치하지 않습니다.");
+    }
+    let cancel = AtomicBool::new(false);
+    let metadata = load_metadata(raw, &cancel).await?;
+    Ok(select_variant(&metadata, "best")?.to_string())
 }
 
 fn parse_variants(base: &Url, playlist: &str) -> Result<Vec<(VodQualityOption, Url, u64)>> {
@@ -1248,6 +1258,38 @@ mod tests {
             "video_session":{"video_id":"01a106d1-f328-750c-a31b-16a5df570460","video_series":"example",
                 "video_stream_status":"vod","video_encryption_type":"NONE","video_title":"Example","video_duration":300}})
     }
+    #[test]
+    fn analysis_json_contains_only_opaque_preview_handle() {
+        for authenticated in [false, true] {
+            let metadata = parse_playback(
+                "https://kick.com/example/videos/01a106d1-f328-750c-a31b-16a5df570460",
+                &playback(),
+                authenticated,
+            )
+            .unwrap();
+            let json = serde_json::to_string(&metadata.view).unwrap();
+            assert!(json.contains("kick-preview:01a106d1-f328-750c-a31b-16a5df570460"));
+            assert!(!json.contains("stream.kick.com"));
+            assert!(!json.contains("m3u8"));
+            assert_ne!(
+                metadata.view.thumbnail_url.as_deref(),
+                Some(metadata.source.as_str())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn thumbnail_handle_mismatch_is_rejected_before_network() {
+        assert!(
+            thumbnail_frame_source(
+                "https://kick.com/example/videos/01a106d1-f328-750c-a31b-16a5df570460",
+                "kick-preview:another"
+            )
+            .await
+            .is_err()
+        );
+    }
+
     #[test]
     fn auth_decodes_only_bearer_and_never_allows_header_injection() {
         let headers = auth_headers("123%7Cexample+value").unwrap();
