@@ -621,6 +621,7 @@ async fn run_download(
     .ok_or_else(|| anyhow::anyhow!("yt-dlp 경로를 설정하세요."))?;
     let metadata = load_metadata(&req.vod_url, cancel).await?;
     let variant = select_variant(&metadata, &req.quality)?;
+    let fragment_count = expected_fragment_count(variant, metadata.duration, cancel).await?;
     let dir = PathBuf::from(req.output_directory.trim());
     std::fs::create_dir_all(&dir)?;
     let stem = output_stem(
@@ -643,7 +644,16 @@ async fn run_download(
         state.message = "KICK VOD 다운로드 중".into();
         state.output_file = Some(output.display().to_string());
     }
-    download_ts(&yt_dlp, variant, &output, metadata.duration, status, cancel).await?;
+    download_ts(
+        &yt_dlp,
+        variant,
+        &output,
+        metadata.duration,
+        fragment_count,
+        status,
+        cancel,
+    )
+    .await?;
     if cancel.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -721,6 +731,59 @@ fn safe_name(raw: &str) -> String {
         .to_owned()
 }
 
+fn validate_media_playlist(playlist: &str, duration: u64) -> Result<u64> {
+    if !playlist.trim_start().starts_with("#EXTM3U")
+        || !playlist.lines().any(|line| line.trim() == "#EXT-X-ENDLIST")
+    {
+        bail!("[download.playlist] KICK VOD의 완료된 playlist가 아닙니다.");
+    }
+    let mut count = 0u64;
+    let mut total = 0.0;
+    let mut pending = false;
+    for line in playlist.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix("#EXTINF:") {
+            if pending {
+                bail!("KICK HLS 조각 주소가 누락되었습니다.");
+            }
+            let seconds = value.split(',').next().unwrap_or("").parse::<f64>()?;
+            if !seconds.is_finite() || seconds <= 0.0 {
+                bail!("KICK HLS 조각 길이가 잘못되었습니다.");
+            }
+            total += seconds;
+            pending = true;
+        } else if !line.is_empty() && !line.starts_with('#') {
+            if !pending {
+                bail!("KICK HLS 조각 길이가 누락되었습니다.");
+            }
+            count += 1;
+            pending = false;
+        }
+    }
+    if pending || count == 0 || !total.is_finite() || (total - duration as f64).abs() > 10.0 {
+        bail!(
+            "[download.playlist] KICK playlist가 영상 전체 길이와 일치하지 않습니다. 다시 분석하세요."
+        );
+    }
+    Ok(count)
+}
+
+async fn expected_fragment_count(source: &Url, duration: u64, cancel: &AtomicBool) -> Result<u64> {
+    let operation = async {
+        let client = playback_client_builder().build()?;
+        let bytes = body(
+            media_request(&client, source.clone())
+                .send()
+                .await
+                .map_err(|error| request_failure("download.playlist.request", &error))?,
+        )
+        .await?;
+        let playlist =
+            std::str::from_utf8(&bytes).map_err(|_| anyhow::anyhow!("KICK HLS 형식 오류"))?;
+        validate_media_playlist(playlist, duration)
+    };
+    tokio::select! { result = operation => result, _ = wait_cancel(cancel) => bail!("KICK VOD 조회가 취소되었습니다.") }
+}
+
 fn yt_dlp_command(tool: &Path, source: &Url, output: &Path) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(tool);
     command
@@ -770,11 +833,11 @@ fn partial_size(output: &Path) -> u64 {
     )
 }
 
-fn fragment_progress(line: &str) -> Option<f64> {
+fn fragment_progress(line: &str, expected: u64) -> Option<f64> {
     let (index, count) = line.strip_prefix("KICK_PROGRESS:")?.split_once(':')?;
     let index = index.parse::<u64>().ok()?;
     let count = count.parse::<u64>().ok()?;
-    (count > 0 && index <= count).then_some(index as f64 / count as f64)
+    (count > 0 && count == expected && index <= count).then_some(index as f64 / count as f64)
 }
 
 async fn download_ts(
@@ -782,6 +845,7 @@ async fn download_ts(
     source: &Url,
     output: &Path,
     duration: u64,
+    fragment_count: u64,
     status: &Arc<RwLock<VodJobStatus>>,
     cancel: &AtomicBool,
 ) -> Result<()> {
@@ -805,6 +869,7 @@ async fn download_ts(
     fn reader_task<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
         stream: R,
         tx: tokio::sync::mpsc::Sender<f64>,
+        expected: u64,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut lines = BufReader::new(stream).lines();
@@ -812,7 +877,7 @@ async fn download_ts(
                 let progress = if line.starts_with("KICK_DONE ") {
                     Some(2.0)
                 } else {
-                    fragment_progress(&line)
+                    fragment_progress(&line, expected)
                 };
                 if let Some(progress) = progress
                     && tx.send(progress).await.is_err()
@@ -822,8 +887,8 @@ async fn download_ts(
             }
         })
     }
-    let reader = reader_task(stdout, tx.clone());
-    let error_reader = reader_task(stderr, tx);
+    let reader = reader_task(stdout, tx.clone(), fragment_count);
+    let error_reader = reader_task(stderr, tx, fragment_count);
     let mut seconds = 0.0;
     let mut completed = false;
     let mut cancel_deadline = None;
@@ -1172,16 +1237,30 @@ mod tests {
         );
     }
     #[test]
+    fn media_playlist_requires_endlist_full_duration_and_each_segment() {
+        let full = "#EXTM3U\n#EXTINF:30,\n0.ts\n#EXTINF:30,\n1.ts\n#EXT-X-ENDLIST\n";
+        assert_eq!(validate_media_playlist(full, 60).unwrap(), 2);
+        for bad in [
+            full.replace("#EXT-X-ENDLIST", ""),
+            full.replace("#EXTINF:30,", "#EXTINF:1,"),
+            full.replace("#EXTINF:30,", "#EXTINF:NaN,"),
+            full.replace("0.ts\n", ""),
+        ] {
+            assert!(validate_media_playlist(&bad, 60).is_err());
+        }
+        assert_eq!(fragment_progress("KICK_PROGRESS:7:7", 8), None);
+    }
+    #[test]
     fn fragment_progress_rejects_missing_zero_and_invalid_counts() {
-        assert_eq!(fragment_progress("KICK_PROGRESS:4:8"), Some(0.5));
-        assert_eq!(fragment_progress("KICK_PROGRESS:8:8"), Some(1.0));
+        assert_eq!(fragment_progress("KICK_PROGRESS:4:8", 8), Some(0.5));
+        assert_eq!(fragment_progress("KICK_PROGRESS:8:8", 8), Some(1.0));
         for line in [
             "KICK_PROGRESS:NA:NA",
             "KICK_PROGRESS:1:0",
             "KICK_PROGRESS:9:8",
             "http://secret",
         ] {
-            assert_eq!(fragment_progress(line), None);
+            assert_eq!(fragment_progress(line, 8), None);
         }
     }
     #[test]
@@ -1249,7 +1328,7 @@ mod tests {
         ] {
             fixture.set_mode(&ffmpeg, mode);
             let output = fixture.root().join(format!("{mode}.partial.ts"));
-            let result = download_ts(&ffmpeg, &source, &output, 60, &status, &cancel).await;
+            let result = download_ts(&ffmpeg, &source, &output, 60, 10, &status, &cancel).await;
             assert_eq!(result.is_ok(), success, "{mode}");
             assert!(output.exists(), "partial output must be preserved");
         }
@@ -1277,7 +1356,7 @@ mod tests {
         let output = fixture.root().join("cancel.partial.ts");
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
         let cancel = AtomicBool::new(false);
-        let operation = download_ts(&ffmpeg, &source, &output, 60, &status, &cancel);
+        let operation = download_ts(&ffmpeg, &source, &output, 60, 10, &status, &cancel);
         let trigger = async {
             fixture
                 .wait_for_path(&fixture.child_ready_path(&ffmpeg))
