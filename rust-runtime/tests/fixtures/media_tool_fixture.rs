@@ -207,6 +207,11 @@ fn provider_tool() -> Option<ProviderTool> {
 
 fn run_provider_tool(tool: ProviderTool, args: &[std::ffi::OsString]) {
     let mode = provider_mode();
+    if arg_after(args, "--batch-file") == Some("-") || (arg_after(args, "-i") == Some("pipe:0") && arg_after(args, "-f") == Some("concat")) {
+        let mut input = String::new();
+        io::stdin().read_to_string(&mut input).unwrap();
+        assert!(input.contains("https://"), "fixture expected private pipe input");
+    }
     match tool {
         ProviderTool::Streamlink => run_streamlink_fixture(args, &mode),
         ProviderTool::YtDlp => run_ytdlp_fixture(args, &mode),
@@ -273,6 +278,33 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
         return;
     }
 
+    let retry_success = mode == "kick-retry-success";
+    if retry_success {
+        let counter = env::current_exe().unwrap().with_extension("kick-attempts");
+        let attempt = fs::read_to_string(&counter).ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0) + 1;
+        fs::write(counter, attempt.to_string()).unwrap();
+        if attempt == 1 {
+            let output = arg_after(args, "-o").unwrap();
+            write_sized_file(Path::new(output), 64 * 1024);
+            process::exit(7);
+        }
+    }
+    if mode == "kick-direct-success" || mode == "kick-direct-truncated" || mode == "kick-direct-invalid" || retry_success {
+        let output = arg_after(args, "-o").unwrap();
+        let mut bytes = vec![0u8; 188 * 4];
+        if mode != "kick-direct-invalid" {
+            for offset in [0, 188, 376, 564] { bytes[offset] = 0x47; }
+        }
+        fs::write(output, bytes).unwrap();
+        println!("KICK_PROGRESS:{}:10", if mode == "kick-direct-truncated" { 1 } else { 10 });
+        println!("KICK_DONE fixture");
+        return;
+    }
+    if mode == "run-partial-fail" {
+        let output = arg_after(args, "-o").unwrap();
+        write_sized_file(Path::new(output), 64 * 1024);
+        process::exit(7);
+    }
     apply_run_mode(mode);
 
     if has_arg(args, "--cookies-from-browser")
@@ -376,11 +408,29 @@ fn run_ffmpeg_fixture(args: &[std::ffi::OsString], mode: &str) {
         return;
     }
 
+    if mode == "kick-thumbnail-success" {
+        use std::io::Write;
+        io::stdout().write_all(include_bytes!("kick-preview.png")).unwrap();
+        return;
+    }
+    if mode == "kick-thumbnail-invalid" {
+        print!("not an image");
+        return;
+    }
     let target = args
         .iter()
         .rev()
         .map(|value| value.to_string_lossy().into_owned())
         .find(|value| !value.starts_with('-') && !value.starts_with("pipe:"));
+
+    if mode == "kick-direct-success" || mode == "kick-direct-truncated" {
+        if let Some(target) = target.as_deref() {
+            fs::write(target, b"\x00\x00\x00\x18ftypisomfixture-mp4").unwrap();
+        }
+        println!("out_time_us={}", if mode == "kick-direct-success" { 60000000 } else { 1000000 });
+        println!("progress=end");
+        return;
+    }
 
     if mode == "run-partial-fail" {
         if let Some(target) = target.as_deref() {

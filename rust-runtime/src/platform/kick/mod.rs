@@ -5,6 +5,7 @@ use serde_json::Value;
 use url::Url;
 
 pub mod live;
+pub mod vod;
 pub(crate) static KICK: KickProvider = KickProvider;
 pub(crate) struct KickProvider;
 
@@ -16,7 +17,7 @@ impl PlatformProvider for KickProvider {
         PlatformCapabilities {
             channel_lookup: true,
             live: true,
-            vod: false,
+            vod: true,
         }
     }
     fn validate_account(&self, account: &str) -> Result<()> {
@@ -73,8 +74,8 @@ impl PlatformProvider for KickProvider {
         }
         Ok(url)
     }
-    fn accepts_vod_url(&self, _url: &Url) -> bool {
-        false
+    fn accepts_vod_url(&self, url: &Url) -> bool {
+        vod::parse_url(url.as_str()).is_ok()
     }
 }
 
@@ -95,7 +96,7 @@ mod tests {
         value["is_banned"] = true.into();
         assert!(KICK.parse_channel_name("xqc", &value).is_err());
         assert!(KICK.capabilities().live);
-        assert!(!KICK.capabilities().vod);
+        assert!(KICK.capabilities().vod);
         assert!(!KICK.accepts_vod_url(&Url::parse("https://kick.com/xqc/videos/123").unwrap()));
     }
 }

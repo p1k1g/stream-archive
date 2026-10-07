@@ -771,8 +771,26 @@ fn provider_checks(
             "KICK LIVE 사용 조건",
             DiagnosticStatus::Ok,
             "공개 LIVE 지원 조건 안내 (연결 미검증)",
-            "KICK은 공개 LIVE만 지원합니다. 최신 Streamlink KICK 플러그인이 필요하며, JS challenge 처리에 Chromium 계열 브라우저가 필요할 수 있습니다. 이 항목은 연결 성공이나 브라우저 설치를 검증하지 않습니다.",
+            "KICK LIVE는 공개 방송을 지원합니다. 최신 Streamlink KICK 플러그인이 필요하며, JS challenge 처리에 Chromium 계열 브라우저가 필요할 수 있습니다. 이 항목은 연결 성공이나 브라우저 설치를 검증하지 않습니다.",
             "API 403/429 또는 녹화 시작 실패 시 LIVE 상세 오류와 런타임 로그를 확인하세요. Streamlink·브라우저는 공식 패키지에 포함되지 않습니다.",
+        ),
+        check!(
+            "provider.kick_vod",
+            DiagnosticCategory::Providers,
+            DiagnosticRequirement::Informational,
+            "KICK VOD 인증",
+            DiagnosticStatus::Ok,
+            if configured_secrets
+                .get("KICK_SESSION_TOKEN")
+                .copied()
+                .unwrap_or(false)
+            {
+                "session_token 저장됨 (권한 미검증)"
+            } else {
+                "session_token 미설정 (공개 VOD 조회 가능)"
+            },
+            "구독 VOD는 session_token을 저장하세요. 이 항목은 토큰 유효성이나 구독 권한을 검증하지 않습니다. 다운로드에는 yt-dlp를 사용해 HLS 조각 4개를 병렬 처리하고 TS로 저장합니다. LIVE/VOD 첫 프레임 썸네일에는 FFmpeg가 필요합니다.",
+            "VOD 분석 실패 시 만료·구독 권한·HTTP 오류 안내를 확인하세요.",
         ),
         check!(
             "provider.soop",

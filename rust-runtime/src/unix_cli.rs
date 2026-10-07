@@ -26,6 +26,7 @@ const PROVIDER_SECRET_KEYS: &[&str] = &[
     "CLOUDFLARE_API_KEY",
     "CHZZK_NID_AUT",
     "CHZZK_NID_SES",
+    "KICK_SESSION_TOKEN",
 ];
 
 pub async fn run_management(command: &str, args: &[String]) -> Result<()> {
@@ -223,11 +224,18 @@ async fn command_providers(args: &[String]) -> Result<()> {
                 .await?;
             println!("updated provider secret: {key}");
         }
+        [action, key] if action == "clear-secret" => {
+            if key != "KICK_SESSION_TOKEN" {
+                bail!("providers clear-secret currently supports only KICK_SESSION_TOKEN");
+            }
+            core.clear_kick_token().await?;
+            println!("cleared provider secret: {key}");
+        }
         [action] if action == "test-soop" => {
             println!("{}", core.test_soop_auth().await?);
         }
         _ => bail!(
-            "usage: stream-archive-cli providers status [--json] | providers set <KEY> <VALUE> | providers secret <KEY> --stdin | providers test-soop"
+            "usage: stream-archive-cli providers status [--json] | providers set <KEY> <VALUE> | providers secret <KEY> --stdin | providers clear-secret KICK_SESSION_TOKEN | providers test-soop"
         ),
     }
     core.shutdown().await;
@@ -255,7 +263,7 @@ fn print_provider_status(core: &StreamArchiveCore, json_mode: bool) -> Result<()
             "worker_url_configured": configured_setting(&settings, "CLOUDFLARE_WORKER_URL"),
             "worker_key_configured": configured_secret(&secrets, "CLOUDFLARE_API_KEY"),
         },
-        "KICK": { "live_supported": true, "vod_supported": false, "authentication": "public_only" },
+        "KICK": { "live_supported": true, "vod_supported": true, "session_token_configured": configured_secret(&secrets, "KICK_SESSION_TOKEN") },
         "CHZZK": {
             "nid_aut_configured": configured_secret(&secrets, "CHZZK_NID_AUT"),
             "nid_ses_configured": configured_secret(&secrets, "CHZZK_NID_SES"),
@@ -265,7 +273,11 @@ fn print_provider_status(core: &StreamArchiveCore, json_mode: bool) -> Result<()
         print_json(&value)?;
     } else {
         println!("provider configuration");
-        println!("KICK                : public LIVE only (connection not verified)");
+        println!("KICK                : public LIVE / VOD (connection not verified)");
+        println!(
+            "KICK session_token  : {}",
+            yes_no(configured_secret(&secrets, "KICK_SESSION_TOKEN"))
+        );
         println!(
             "SOOP username       : {}",
             yes_no(configured_setting(&settings, "SOOP_USERNAME"))

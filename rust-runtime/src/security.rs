@@ -4,6 +4,41 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::{fs, path::Path};
 use uuid::Uuid;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod kick_lookup;
+
+/// Internal Unix worker entry, before application bootstrap or CLI logging.
+pub fn kick_secret_worker_entry() -> Option<i32> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        kick_lookup::worker_entry()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+pub(crate) async fn read_kick_token_cancellable(
+    store: &crate::store::Store,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        kick_lookup::read(store, cancel).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            bail!("KICK 인증정보 조회가 취소되었습니다.");
+        }
+        let store = store.clone();
+        tokio::task::spawn_blocking(move || read_kick_token(&store))
+            .await
+            .map_err(|_| anyhow::anyhow!("KICK 인증정보 조회 작업 실패"))?
+    }
+}
+
 pub const DPAPI_PREFIX: &str = "dpapi:v1:";
 pub const NATIVE_SECRET_PREFIX: &str = "native-secret:v1:";
 #[cfg(windows)]
@@ -14,12 +49,73 @@ const SECRET_KEYS: &[&str] = &[
     "CLOUDFLARE_API_KEY",
     "CHZZK_NID_AUT",
     "CHZZK_NID_SES",
+    "KICK_SESSION_TOKEN",
 ];
 
 #[cfg(test)]
 fn is_protected(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     normalized.starts_with(DPAPI_PREFIX) || normalized.starts_with(NATIVE_SECRET_PREFIX)
+}
+
+fn kick_secret_lock_file(store: &crate::store::Store) -> Result<std::fs::File> {
+    let mut path = store.path().as_os_str().to_os_string();
+    path.push(".kick-secret.lock");
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(std::path::PathBuf::from(path))
+        .context("KICK 인증정보 잠금 파일을 열지 못했습니다.")?;
+    Ok(file)
+}
+
+pub(crate) fn kick_secret_guard(store: &crate::store::Store) -> Result<std::fs::File> {
+    let file = kick_secret_lock_file(store)?;
+    fs2::FileExt::try_lock_exclusive(&file)
+        .context("다른 프로세스가 KICK 인증정보를 사용 중입니다. 잠시 후 재시도하세요.")?;
+    Ok(file)
+}
+
+fn kick_secret_read_guard(
+    store: &crate::store::Store,
+    timeout: std::time::Duration,
+) -> Result<std::fs::File> {
+    let file = kick_secret_lock_file(store)?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match fs2::FileExt::try_lock_shared(&file) {
+            Ok(()) => return Ok(file),
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+                if std::time::Instant::now() >= deadline {
+                    bail!("KICK 인증정보 잠금 대기 시간이 초과되었습니다. 잠시 후 재시도하세요.");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(error).context("KICK 인증정보 읽기 잠금 실패"),
+        }
+    }
+}
+
+pub(crate) fn read_kick_token(store: &crate::store::Store) -> Result<String> {
+    read_kick_token_with(store, |value| unprotect_secret(value, "KICK_SESSION_TOKEN"))
+}
+
+fn read_kick_token_with(
+    store: &crate::store::Store,
+    unprotect: impl FnOnce(&str) -> Result<String>,
+) -> Result<String> {
+    let _guard = kick_secret_read_guard(store, std::time::Duration::from_secs(5))?;
+    // Keep the same cross-process lock through native lookup, then release before HTTP.
+    store.refresh_config_cache()?;
+    let reference = store
+        .setting_value("KICK_SESSION_TOKEN")?
+        .unwrap_or_default();
+    unprotect(&reference)
 }
 
 pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
@@ -51,6 +147,35 @@ pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
+/// Return an opaque native reference for deferred cleanup, never plaintext or DPAPI data.
+pub(crate) fn native_cleanup_reference(value: &str, name: &str) -> Result<Option<String>> {
+    let value = value.trim();
+    if value.to_ascii_lowercase().starts_with(NATIVE_SECRET_PREFIX) {
+        let reference = parse_native_reference(&value[NATIVE_SECRET_PREFIX.len()..], name)?;
+        return Ok(Some(format!("{NATIVE_SECRET_PREFIX}{reference}")));
+    }
+    Ok(None)
+}
+
+/// Remove a referenced native credential before its SQLite reference is cleared.
+pub fn delete_protected_secret(value: &str, name: &str) -> Result<()> {
+    delete_protected_secret_with(value, name, native_secret_delete)
+}
+
+fn delete_protected_secret_with(
+    value: &str,
+    name: &str,
+    delete: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    let value = value.trim();
+    if value.to_ascii_lowercase().starts_with(NATIVE_SECRET_PREFIX) {
+        let reference = parse_native_reference(&value[NATIVE_SECRET_PREFIX.len()..], name)?;
+        delete(reference).with_context(|| format!("{name} native secret deletion failed"))?;
+    }
+    // DPAPI and legacy plaintext have no separate credential-store entry.
+    Ok(())
+}
+
 pub fn protect_secret(value: &str) -> Result<String> {
     if value.contains('\r') || value.contains('\n') || value.contains('\0') {
         bail!("secret must be a single line");
@@ -78,6 +203,41 @@ pub fn protect_secret(value: &str) -> Result<String> {
     {
         bail!("native protected secret storage is unsupported on this operating system")
     }
+}
+
+/// Persist an opaque cleanup intent before creating a KICK native credential.
+pub(crate) fn protect_secret_with_cleanup_intent(
+    value: &str,
+    retain: impl FnOnce(&str) -> Result<()>,
+) -> Result<String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        protect_native_secret_with(value, retain, native_secret_store)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = retain;
+        protect_secret(value)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+pub(crate) fn protect_native_secret_with(
+    value: &str,
+    retain: impl FnOnce(&str) -> Result<()>,
+    store: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<String> {
+    if value.contains('\r') || value.contains('\n') || value.contains('\0') {
+        bail!("secret must be a single line");
+    }
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let reference = Uuid::new_v4().hyphenated().to_string();
+    let protected = format!("{NATIVE_SECRET_PREFIX}{reference}");
+    retain(&protected).context("KICK native cleanup intent could not be saved")?;
+    store(&reference, value).context("native secret store failed")?;
+    Ok(protected)
 }
 
 fn parse_native_reference<'a>(value: &'a str, name: &str) -> Result<&'a str> {
@@ -151,6 +311,21 @@ fn native_secret_load(_reference: &str) -> Result<String> {
 }
 
 #[cfg(target_os = "linux")]
+fn native_secret_delete(reference: &str) -> Result<()> {
+    linux_secret_service::delete(reference)
+}
+
+#[cfg(target_os = "macos")]
+fn native_secret_delete(reference: &str) -> Result<()> {
+    macos_keychain::delete(reference)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn native_secret_delete(_reference: &str) -> Result<()> {
+    bail!("Unix native-secret references must be deleted in their original native credential store")
+}
+
+#[cfg(target_os = "linux")]
 mod linux_secret_service {
     use anyhow::{Context, Result, bail};
     use std::{
@@ -210,6 +385,48 @@ mod linux_secret_service {
                 } else {
                     format!(": {detail}")
                 }
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn delete(reference: &str) -> Result<()> {
+        let _output = command()
+            .args([
+                "clear",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "reference",
+                reference,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .with_context(|| helper_context("delete"))?;
+        // clear can skip locked items; request unlock so verification cannot skip them.
+        let mut probe = command()
+            .args([
+                "search",
+                "--all",
+                "--unlock",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "reference",
+                reference,
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| helper_context("deletion verification"))?;
+        let absent = probe.status.success() && probe.stdout.is_empty() && probe.stderr.is_empty();
+        // search may return a secret with item metadata; never expose captured output.
+        probe.stdout.fill(0);
+        probe.stderr.fill(0);
+        if !absent {
+            bail!(
+                "{}; unlock the credential store and retry",
+                helper_context("delete failed")
             );
         }
         Ok(())
@@ -287,6 +504,12 @@ mod macos_keychain {
         ) -> i32;
 
         fn SecKeychainItemFreeContent(attr_list: *mut c_void, data: *mut c_void) -> i32;
+        fn SecKeychainItemDelete(item_ref: *mut c_void) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(value: *const c_void);
     }
 
     fn len_u32(value: usize, field: &str) -> Result<u32> {
@@ -310,6 +533,44 @@ mod macos_keychain {
         };
         if status != 0 {
             bail!("macOS Keychain store failed with OSStatus {status}");
+        }
+        Ok(())
+    }
+
+    pub(super) fn delete(reference: &str) -> Result<()> {
+        let account = reference.as_bytes();
+        let mut item_ref: *mut c_void = null_mut();
+        let status = unsafe {
+            SecKeychainFindGenericPassword(
+                null_mut(),
+                len_u32(SERVICE.len(), "service")?,
+                SERVICE.as_ptr(),
+                len_u32(account.len(), "account")?,
+                account.as_ptr(),
+                null_mut(),
+                null_mut(),
+                &mut item_ref,
+            )
+        };
+        if status == ERR_SEC_ITEM_NOT_FOUND {
+            return Ok(());
+        }
+        if status != 0 {
+            bail!("macOS Keychain deletion lookup failed with OSStatus {status}");
+        }
+        if item_ref.is_null() {
+            bail!("macOS Keychain returned an invalid item reference");
+        }
+        struct KeychainItem(*mut c_void);
+        impl Drop for KeychainItem {
+            fn drop(&mut self) {
+                unsafe { CFRelease(self.0) };
+            }
+        }
+        let item = KeychainItem(item_ref);
+        let status = unsafe { SecKeychainItemDelete(item.0) };
+        if status != 0 && status != ERR_SEC_ITEM_NOT_FOUND {
+            bail!("macOS Keychain deletion failed with OSStatus {status}");
         }
         Ok(())
     }
@@ -464,6 +725,100 @@ mod dpapi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kick_lookup_waits_for_writer_and_holds_shared_lock_through_unprotection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let owner = crate::store::Store::open(path.clone()).unwrap();
+        let observer = crate::store::Store::open_observer(path).unwrap();
+        for value in ["old-reference", "replacement-reference", ""] {
+            let writer = kick_secret_guard(&observer).unwrap();
+            observer
+                .sync_settings(
+                    &std::collections::BTreeMap::from([(
+                        "KICK_SESSION_TOKEN".into(),
+                        value.into(),
+                    )]),
+                    "test-observer",
+                )
+                .unwrap();
+            let reader_owner = owner.clone();
+            let reader_observer = observer.clone();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                let result = read_kick_token_with(&reader_owner, |reference| {
+                    assert_eq!(reference, value);
+                    assert!(kick_secret_guard(&reader_observer).is_err());
+                    assert!(
+                        kick_secret_read_guard(&reader_observer, std::time::Duration::ZERO).is_ok()
+                    );
+                    Ok(reference.into())
+                });
+                done_tx.send(result).unwrap();
+            });
+            started_rx.recv().unwrap();
+            assert!(
+                done_rx
+                    .recv_timeout(std::time::Duration::from_millis(50))
+                    .is_err()
+            );
+            drop(writer);
+            assert_eq!(
+                done_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap(),
+                value
+            );
+            reader.join().unwrap();
+            assert!(kick_secret_guard(&observer).is_ok());
+        }
+        assert!(read_kick_token_with(&owner, |_| bail!("native lookup failed")).is_err());
+        assert!(kick_secret_guard(&observer).is_ok());
+    }
+
+    #[test]
+    fn kick_read_lock_timeout_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(dir.path().join("test.db")).unwrap();
+        let _writer = kick_secret_guard(&store).unwrap();
+        assert!(kick_secret_read_guard(&store, std::time::Duration::from_millis(20)).is_err());
+    }
+
+    #[test]
+    fn cleanup_references_never_include_inline_secrets() {
+        for value in ["", "plaintext-token", "dpapi:v1:encrypted"] {
+            assert!(native_cleanup_reference(value, "TEST").unwrap().is_none());
+        }
+        assert!(native_cleanup_reference("native-secret:v1:invalid", "TEST").is_err());
+    }
+
+    #[test]
+    fn deletion_targets_only_valid_native_references_and_propagates_failures() {
+        let reference = "123e4567-e89b-12d3-a456-426614174000";
+        let value = format!("{NATIVE_SECRET_PREFIX}{reference}");
+        delete_protected_secret_with(&value, "TEST", |actual| {
+            assert_eq!(actual, reference);
+            Ok(())
+        })
+        .unwrap();
+        assert!(delete_protected_secret_with(&value, "TEST", |_| bail!("locked")).is_err());
+        assert!(
+            delete_protected_secret_with("native-secret:v1:invalid", "TEST", |_| {
+                panic!("invalid references must not reach native deletion")
+            })
+            .is_err()
+        );
+        for value in ["", "dpapi:v1:opaque", "legacy-token"] {
+            delete_protected_secret_with(value, "TEST", |_| {
+                panic!("inline secrets have no native entry")
+            })
+            .unwrap();
+        }
+    }
 
     #[test]
     fn plaintext_legacy_value_is_passed_through() {

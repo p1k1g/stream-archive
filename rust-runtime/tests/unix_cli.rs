@@ -328,6 +328,106 @@ fn queue_cancel_reaches_active_runtime_owner() {
     assert!(status.success(), "runtime owner SIGTERM exit was {status}");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn hung_kick_native_lookup_allows_queue_cancel_and_runtime_shutdown() {
+    for cancel_job in [true, false] {
+        let layout = Layout::new();
+        layout.init();
+        layout.stage_fake_tools();
+        assert_success("tools configure", &layout.cli(&["tools", "configure"]));
+        let db = layout.data.join("stream-archive.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params!["KICK_SESSION_TOKEN", "native-secret:v1:123e4567-e89b-12d3-a456-426614174000"],
+        )
+        .unwrap();
+        let helper = layout.fake_bin.join("secret-tool");
+        fs::write(
+            &helper,
+            "#!/bin/sh\n[ \"$1\" = lookup ] || exit 23\nprintf fixture-secret >&2\ntouch \"$FAKE_LOOKUP_READY\"\nexec sleep 30\n",
+        )
+        .unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        let queued = json_output(
+            "queue add KICK blocked lookup",
+            layout.cli(&[
+                "queue",
+                "add",
+                "https://kick.com/fixture/videos/01a106d1-f328-750c-a31b-16a5df570460",
+                "--output",
+                layout.live.to_str().unwrap(),
+                "--json",
+            ]),
+        );
+        let id = queued["id"].as_str().unwrap();
+        let ready = layout.fake_bin.join("lookup-ready");
+        let mut owner = layout
+            .command(CLI)
+            .arg("serve")
+            .env("FAKE_LOOKUP_READY", &ready)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        wait_for_path(&ready, Duration::from_secs(8));
+        let lock_path = db.with_file_name("stream-archive.db.kick-secret.lock");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        assert!(fs2::FileExt::try_lock_exclusive(&lock).is_err());
+        if cancel_job {
+            let output = layout.cli(&["queue", "cancel", id, "--json"]);
+            assert_success("KICK cancel while native lookup hangs", &output);
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-secret"));
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
+            wait_for_queue_state(&db, id, "CANCELLED");
+        }
+        send_sigterm(owner.id());
+        assert!(wait_for_exit(&mut owner, Duration::from_secs(8)).success());
+        assert!(fs2::FileExt::try_lock_exclusive(&lock).is_ok());
+    }
+}
+
+#[test]
+fn kick_lookup_worker_entries_reject_untrusted_callers_before_export() {
+    let layout = Layout::new();
+    layout.init();
+    let db = layout.data.join("stream-archive.db");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params!["KICK_SESSION_TOKEN", "fixture-token"],
+    )
+    .unwrap();
+    for binary in [CLI, SERVER] {
+        let output = layout
+            .command(binary)
+            .arg("--internal-kick-secret-lookup")
+            .arg(&db)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+    }
+    let missing = layout.data.join("missing.db");
+    let output = layout
+        .command(CLI)
+        .arg("--internal-kick-secret-lookup")
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!missing.exists());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
 #[test]
 fn one_shot_cli_observes_running_owner_without_recovering_active_rows() {
     let layout = Layout::new();
@@ -405,6 +505,117 @@ fn one_shot_cli_observes_running_owner_without_recovering_active_rows() {
     send_sigterm(owner.id());
     let status = wait_for_exit(&mut owner, Duration::from_secs(8));
     assert!(status.success(), "runtime owner SIGTERM exit was {status}");
+}
+
+#[test]
+fn provider_clear_kick_token_uses_core_and_does_not_expose_values() {
+    let layout = Layout::new();
+    layout.init();
+    let conn = Connection::open(layout.data.join("stream-archive.db")).unwrap();
+    conn.execute(
+        "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params!["KICK_SESSION_TOKEN", "legacy-kick-secret"],
+    )
+    .unwrap();
+    let configured = layout.cli(&["providers", "status"]);
+    assert_success("KICK text status before clear", &configured);
+    let text = String::from_utf8_lossy(&configured.stdout);
+    assert!(text.contains("KICK session_token  : yes"));
+    assert!(!text.contains("legacy-kick-secret"));
+    let output = layout.cli(&["providers", "clear-secret", "KICK_SESSION_TOKEN"]);
+    assert_success("clear KICK token", &output);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("legacy-kick-secret"));
+    let providers = json_output(
+        "providers status",
+        layout.cli(&["providers", "status", "--json"]),
+    );
+    assert_eq!(providers["KICK"]["session_token_configured"], false);
+    let cleared = layout.cli(&["providers", "status"]);
+    assert_success("KICK text status after clear", &cleared);
+    let text = String::from_utf8_lossy(&cleared.stdout);
+    assert!(text.contains("KICK session_token  : no"));
+    assert!(!text.contains("legacy-kick-secret"));
+    assert_success(
+        "clear already empty KICK token",
+        &layout.cli(&["providers", "clear-secret", "KICK_SESSION_TOKEN"]),
+    );
+    assert!(
+        !layout
+            .cli(&["providers", "clear-secret", "SOOP_PASSWORD"])
+            .status
+            .success()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn provider_clear_removes_scoped_native_entry_and_retains_cleanup_on_helper_failure() {
+    let layout = Layout::new();
+    layout.init();
+    let reference = "123e4567-e89b-12d3-a456-426614174000";
+    let value = format!("native-secret:v1:{reference}");
+    let conn = Connection::open(layout.data.join("stream-archive.db")).unwrap();
+    conn.execute(
+        "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params!["KICK_SESSION_TOKEN", value],
+    )
+    .unwrap();
+    let helper = layout.fake_bin.join("secret-tool");
+    fs::write(
+        &helper,
+        "#!/bin/sh\ncase \"$1\" in\nclear)\n[ \"$2\" = application ] && [ \"$3\" = stream-archive ] && [ \"$4\" = reference ] || exit 23\n[ \"$FAKE_DELETE_FAIL\" = 1 ] && exit 1\n[ \"$FAKE_LOCKED\" = 1 ] && exit 1\n[ -f \"$FAKE_SECRET_DIR/$5\" ] || exit 1\nrm -- \"$FAKE_SECRET_DIR/$5\";;\nsearch)\n[ \"$2\" = --all ] && [ \"$3\" = --unlock ] && [ \"$4\" = application ] && [ \"$5\" = stream-archive ] && [ \"$6\" = reference ] || exit 23\nif [ \"$FAKE_UNLOCK_FAIL\" = 1 ]; then printf 'unlock cancelled\\n' >&2; exit 1; fi\n[ ! -f \"$FAKE_SECRET_DIR/$7\" ] || printf '[fixture] secret metadata\\n'\nexit 0;;\n*) exit 23;;\nesac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let credential = layout.fake_bin.join(reference);
+    let unrelated = layout.fake_bin.join("unrelated-secret");
+    fs::write(&credential, "fixture-secret").unwrap();
+    fs::write(&unrelated, "other").unwrap();
+    for (fail, locked, unlock_failure) in [
+        (true, false, false),
+        (false, true, false),
+        (false, true, true),
+        (false, false, false),
+    ] {
+        let pending_cleanup = fail || locked || unlock_failure;
+        let output = layout
+            .command(CLI)
+            .args(["providers", "clear-secret", "KICK_SESSION_TOKEN"])
+            .env("FAKE_DELETE_FAIL", if fail { "1" } else { "0" })
+            .env("FAKE_LOCKED", if locked { "1" } else { "0" })
+            .env("FAKE_UNLOCK_FAIL", if unlock_failure { "1" } else { "0" })
+            .env("FAKE_SECRET_DIR", &layout.fake_bin)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), !pending_cleanup);
+        assert_eq!(credential.exists(), pending_cleanup);
+        assert!(unrelated.exists());
+        let stored: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='KICK_SESSION_TOKEN'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "");
+        let pending: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let pending: Vec<String> = serde_json::from_str(&pending).unwrap();
+        assert_eq!(
+            pending,
+            if pending_cleanup {
+                vec![value.clone()]
+            } else {
+                vec![]
+            }
+        );
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-secret"));
+    }
 }
 
 #[test]

@@ -88,7 +88,7 @@ pub const fn default_platform() -> PlatformId {
 
 pub fn detect_vod_platform(raw_url: &str) -> Result<PlatformId> {
     let url = Url::parse(raw_url)?;
-    for id in [PlatformId::Soop, PlatformId::Chzzk] {
+    for id in [PlatformId::Soop, PlatformId::Chzzk, PlatformId::Kick] {
         let provider = provider(id);
         if provider.capabilities().vod && provider.accepts_vod_url(&url) {
             return Ok(id);
@@ -126,6 +126,14 @@ mod tests {
             detect_vod_platform("https://chzzk.naver.com/video/123456").unwrap(),
             PlatformId::Chzzk
         );
+        assert_eq!(
+            detect_vod_platform(
+                "https://kick.com/example/videos/01a106d1-f328-750c-a31b-16a5df570460"
+            )
+            .unwrap(),
+            PlatformId::Kick
+        );
+        assert!(detect_vod_platform("https://kick.com/example").is_err());
         assert!(detect_vod_platform("https://chzzk.naver.com/live/123456").is_err());
         assert!(detect_vod_platform("https://example.com/player/123456789").is_err());
     }

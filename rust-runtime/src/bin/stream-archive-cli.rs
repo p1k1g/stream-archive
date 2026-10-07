@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS settings (
 "#;
 
 fn main() -> ExitCode {
+    if let Some(code) = stream_archive_server::security::kick_secret_worker_entry() {
+        return ExitCode::from(code as u8);
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -76,6 +79,7 @@ Usage:
   stream-archive-cli providers status [--json]
   stream-archive-cli providers set <KEY> <VALUE>
   stream-archive-cli providers secret <KEY> --stdin
+  stream-archive-cli providers clear-secret KICK_SESSION_TOKEN
   stream-archive-cli providers test-soop
   stream-archive-cli tools [--json|configure]
   stream-archive-cli doctor [--json] [--active-tools]

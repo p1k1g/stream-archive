@@ -12,6 +12,7 @@ pub const HIDDEN_SETTING_KEYS: &[&str] = &[
     "CLOUDFLARE_API_KEY",
     "CHZZK_NID_AUT",
     "CHZZK_NID_SES",
+    "KICK_SESSION_TOKEN",
 ];
 
 pub const SAFE_SETTING_KEYS: &[&str] = &[

@@ -471,6 +471,8 @@ short-lived CLI process cannot overwrite SQLite underneath an active
 watcher/downloader/Queue worker. Existing LIVE/VOD/Queue safety checks still
 apply after exclusive ownership is obtained.
 
+Linux/macOS에서 Restore는 현재 `KICK_SESSION_TOKEN`과 native 정리 대기 참조를 유지합니다. 현재 토큰이 교체됐다면 새 값을 사용하고, 삭제 또는 미설정 상태라면 그대로 유지합니다. 나머지 백업 데이터는 기존대로 복원하며, 원본 백업 파일·체크섬과 native secret store 항목을 변경하지 않습니다. 인증정보 변경/조회가 진행 중이면 잠금 경합으로 Restore가 거부될 수 있으므로 종료 후 재시도하세요.
+
 ## Storage and logs
 
 ~~~bash
@@ -584,7 +586,7 @@ Public release/version/tag decisions and real provider/session QA remain Phase
 
 ## KICK 공개 LIVE (Phase 26.1)
 
-KICK 채널은 URL 전체 대신 마지막 이름(slug)을 등록합니다. VOD/Queue 및 제한 콘텐츠 인증은 지원하지 않습니다.
+KICK LIVE 채널은 URL 전체 대신 마지막 이름(slug)을 등록합니다. Phase 26.1의 공개 LIVE 범위와 별도로, Phase 26.2에서는 공개/구독 VOD 분석·다운로드, VOD Queue / History와 `session_token` 인증을 지원합니다. 제한된 LIVE 콘텐츠 인증은 지원하지 않습니다.
 
 ```bash
 stream-archive-cli channels add kick xqc "xQc" "/srv/archive/kick"
@@ -594,3 +596,13 @@ stream-archive-cli serve --watch
 ```
 
 최신 Streamlink KICK 플러그인이 필요합니다. API/JS challenge 및 Chromium 브라우저 요구 조건, headless 환경 제한은 [KICK LIVE 사용 조건](PHASE26_1_KICK_LIVE.md)을 확인하세요. API 접근 오류를 오프라인으로 간주하지 않습니다.
+
+## KICK VOD 인증
+
+`KICK_SESSION_TOKEN`은 기존 provider secret 입력 절차로 저장합니다. 명령행 인수에 토큰을 직접 넣지 않습니다. KICK VOD 다운로드에는 yt-dlp가 필요합니다. native HLS downloader로 조각 4개를 병렬 다운로드하고 MPEG-TS(`.ts`)로 저장하며 MP4 remux는 하지 않습니다. LIVE/VOD 첫 프레임 썸네일 추출에는 FFmpeg가 필요합니다. Queue 재시도는 새 파일로 시작하며 이어받기는 지원하지 않습니다. [Phase 26.2 제한 및 수동 검증](PHASE26_2_KICK_VOD.md)을 확인하세요.
+
+KICK 인증정보 삭제는 shared core에서 SQLite 설정 비우기와 이전 native 참조의 정리 대기 기록을 원자적으로 commit한 뒤 native 항목을 삭제합니다. DB commit 실패 시 native 항목은 유지됩니다. native 삭제 실패 시 설정은 비워진 상태이며 정리 참조를 보존하고 오류를 반환합니다. 같은 `providers clear-secret KICK_SESSION_TOKEN` 명령으로 정리를 재시도하세요.
+
+```bash
+stream-archive-cli providers clear-secret KICK_SESSION_TOKEN
+```

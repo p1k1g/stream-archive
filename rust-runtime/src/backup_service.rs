@@ -660,6 +660,68 @@ mod tests {
         assert_eq!(outcome.safety_backup.kind, "pre_restore");
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn managed_restore_keeps_current_kick_reference_and_safety_backup() {
+        let (_dir, _app, backend, store) = setup();
+        let old = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
+        let new = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
+        store
+            .sync_settings(
+                &BTreeMap::from([
+                    ("KICK_SESSION_TOKEN".into(), old.into()),
+                    ("TEST".into(), "backup-data".into()),
+                ]),
+                "test",
+            )
+            .unwrap();
+        let manager = BackupManager::open(store.clone(), &backend).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let backup = runtime.block_on(manager.create_manual()).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([
+                    ("KICK_SESSION_TOKEN".into(), new.into()),
+                    ("TEST".into(), "current-data".into()),
+                ]),
+                "test",
+            )
+            .unwrap();
+        let outcome = runtime
+            .block_on(manager.restore(&backup.file_name))
+            .unwrap();
+        assert_eq!(
+            store
+                .setting_value("KICK_SESSION_TOKEN")
+                .unwrap()
+                .as_deref(),
+            Some(new)
+        );
+        assert_eq!(
+            store.setting_value("TEST").unwrap().as_deref(),
+            Some("backup-data")
+        );
+        let safety = rusqlite::Connection::open_with_flags(
+            manager.backup_dir().join(&outcome.safety_backup.file_name),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let safety_token: String = safety
+            .query_row(
+                "SELECT value FROM settings WHERE key='KICK_SESSION_TOKEN'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(safety_token, new);
+        assert_eq!(
+            inspect_backup(&manager.backup_dir().join(&backup.file_name))
+                .unwrap()
+                .sha256,
+            backup.sha256
+        );
+    }
+
     #[test]
     fn retention_does_not_delete_unowned_databases() {
         let (_dir, _app, backend, store) = setup();

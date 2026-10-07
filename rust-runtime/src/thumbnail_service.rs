@@ -47,6 +47,27 @@ async fn bounded_body(response: reqwest::Response, maximum: usize) -> Result<Vec
     Ok(bytes)
 }
 
+pub(crate) fn failure_reason(error: &anyhow::Error) -> String {
+    if let Some(http) = error.downcast_ref::<reqwest::Error>() {
+        if let Some(status) = http.status() {
+            return format!("http_{}", status.as_u16());
+        }
+        return if http.is_timeout() {
+            "timeout"
+        } else {
+            "request_failed"
+        }
+        .into();
+    }
+    if error
+        .downcast_ref::<tokio::time::error::Elapsed>()
+        .is_some()
+    {
+        return "timeout".into();
+    }
+    "validation_or_decode_failed".into()
+}
+
 pub async fn load(platform: PlatformId, url: &str) -> Result<ThumbnailImage> {
     tokio::time::timeout(Duration::from_secs(12), load_inner(platform, url, false)).await?
 }
@@ -86,16 +107,118 @@ async fn load_inner(platform: PlatformId, url: &str, vod: bool) -> Result<Thumbn
         .timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
-    let bytes = bounded_body(
-        client
-            .get(url)
-            .header(reqwest::header::CACHE_CONTROL, "no-cache")
-            .send()
-            .await?,
-        MAX_BODY,
-    )
-    .await?;
+    let mut request = client
+        .get(url)
+        .header(reqwest::header::CACHE_CONTROL, "no-cache");
+    if platform == PlatformId::Kick {
+        request = request
+            .header("Origin", "https://kick.com")
+            .header("Referer", "https://kick.com/");
+    }
+    let bytes = bounded_body(request.send().await?, MAX_BODY).await?;
     tokio::task::spawn_blocking(move || decode(&bytes)).await?
+}
+
+/// Obtain a real video frame instead of rendering a KICK storyboard collage.
+/// No account credentials, disk image cache or downloaded media file is created.
+pub(crate) async fn load_kick_vod_frame(
+    tool: &std::path::Path,
+    source: &str,
+) -> Result<ThumbnailImage> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let url = Url::parse(source)?;
+    if !crate::support::platform::kick::live::valid_preview_url(&url) {
+        validate_vod_image_url(PlatformId::Kick, &url)?;
+    }
+    if !url.path().ends_with(".m3u8") {
+        bail!("잘못된 KICK HLS 주소입니다.");
+    }
+    let mut command = tokio::process::Command::new(tool);
+    command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-protocol_whitelist",
+            "pipe,https,tls,tcp,crypto",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            "pipe:0",
+        ])
+        .args([
+            "-map",
+            "0:v:0",
+            "-frames:v",
+            "1",
+            "-an",
+            "-vf",
+            "scale=480:270:force_original_aspect_ratio=decrease",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    struct FrameProcess {
+        child: tokio::process::Child,
+        tree: crate::platform_runtime::OwnedProcessTree,
+    }
+    impl Drop for FrameProcess {
+        fn drop(&mut self) {
+            let _ = self.tree.terminate_now();
+        }
+    }
+    let (child, tree) = crate::platform_runtime::spawn_owned(&mut command)
+        .await
+        .map_err(|_| anyhow::anyhow!("KICK 썸네일 추출 시작 실패"))?;
+    let mut process = FrameProcess { child, tree };
+    let stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("KICK 썸네일 파이프 오류"))?;
+    let operation = async {
+        let mut stdin = process
+            .child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("KICK 썸네일 입력 파이프 오류"))?;
+        // Concat opens one validated HLS URL with HTTP options through the private pipe.
+        let quoted = url.as_str().replace('\'', "'\\''");
+        let playlist = format!(
+            "ffconcat version 1.0\nfile '{quoted}'\noption user_agent '{}'\noption referer 'https://kick.com/'\noption headers 'Origin: https://kick.com'\n",
+            crate::support::PROVIDER_USER_AGENT
+        );
+        stdin
+            .write_all(playlist.as_bytes())
+            .await
+            .map_err(|_| anyhow::anyhow!("KICK 썸네일 입력 전달 실패"))?;
+        drop(stdin);
+        let mut bytes = Vec::new();
+        stdout
+            .take((MAX_BODY + 1) as u64)
+            .read_to_end(&mut bytes)
+            .await?;
+        if bytes.len() > MAX_BODY {
+            bail!("KICK 썸네일 응답 크기 초과");
+        }
+        let exit = process.child.wait().await?;
+        if !exit.success() {
+            bail!("KICK 썸네일 추출 실패");
+        }
+        decode(&bytes)
+    };
+    let result = tokio::time::timeout(Duration::from_secs(12), operation).await;
+    let FrameProcess { child, tree } = &mut process;
+    let _ = tree.terminate(child).await;
+    result.map_err(|_| anyhow::anyhow!("KICK 썸네일 추출 시간 초과"))?
 }
 
 fn decode(bytes: &[u8]) -> Result<ThumbnailImage> {
@@ -143,6 +266,53 @@ fn decode(bytes: &[u8]) -> Result<ThumbnailImage> {
 mod tests {
     use super::*;
     use image::{DynamicImage, ImageFormat};
+
+    #[tokio::test]
+    async fn kick_frame_is_bounded_decoded_and_rejects_foreign_sources() {
+        use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
+        let fixture = ProviderFixture::new();
+        let tool = fixture.tool(ToolKind::Ffmpeg);
+        let source = "https://stream.kick.com/media/hls/playlist.m3u8";
+        fixture.set_mode(&tool, "kick-thumbnail-success");
+        let image = load_kick_vod_frame(&tool, source).await.unwrap();
+        assert_eq!((image.width, image.height), (16, 9));
+        assert!(!fixture.invocations().contains(source));
+        fixture.set_mode(&tool, "kick-thumbnail-invalid");
+        assert!(load_kick_vod_frame(&tool, source).await.is_err());
+        for source in [
+            "https://localhost/a.m3u8",
+            "https://stream.kick.com.evil.test/a.m3u8",
+            "https://user:secret@stream.kick.com/a.m3u8",
+            "https://stream.kick.com/a.jpg",
+        ] {
+            assert!(load_kick_vod_frame(&tool, source).await.is_err());
+        }
+        let calls = fixture.invocations();
+        assert!(!calls.contains("Cookie") && !calls.contains("Bearer"));
+    }
+
+    #[tokio::test]
+    async fn dropping_kick_frame_request_stops_only_owned_descendants() {
+        use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
+        let fixture = ProviderFixture::new();
+        let tool = fixture.tool(ToolKind::Ffmpeg);
+        fixture.set_mode(&tool, "run-spawn-child");
+        let mut unrelated = fixture.spawn_unrelated();
+        fixture.wait_for_unrelated().await;
+        let worker_tool = tool.clone();
+        let task = tokio::spawn(async move {
+            load_kick_vod_frame(&worker_tool, "https://stream.kick.com/hls/playlist.m3u8").await
+        });
+        fixture
+            .wait_for_path(&fixture.child_ready_path(&tool))
+            .await;
+        task.abort();
+        let _ = task.await;
+        fixture.assert_child_stopped(&tool).await;
+        assert!(unrelated.try_wait().unwrap().is_none());
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
+    }
 
     #[test]
     fn vod_images_are_limited_to_provider_cdns_without_credentials_or_custom_ports() {

@@ -1,4 +1,4 @@
-use super::{PlatformId, chzzk, detect_vod_platform, provider, soop};
+use super::{PlatformId, chzzk, detect_vod_platform, kick, provider, soop};
 use crate::{
     backend::LogBuffer,
     model::{VodAnalyzeRequest, VodDownloadRequest, VodJobStatus},
@@ -11,7 +11,18 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
     match platform {
         PlatformId::Soop => soop::vod::valid_thumbnail_url(url),
         PlatformId::Chzzk => chzzk::vod::valid_thumbnail_url(url),
-        PlatformId::Kick => false,
+        PlatformId::Kick => kick::live::valid_thumbnail_url(url),
+    }
+}
+
+pub(crate) async fn thumbnail_frame_source(
+    platform: PlatformId,
+    vod_url: &str,
+    handle: &str,
+) -> Result<String> {
+    match platform {
+        PlatformId::Kick => kick::vod::thumbnail_frame_source(vod_url, handle).await,
+        _ => bail!("이 플랫폼은 VOD 첫 프레임 미리보기를 제공하지 않습니다."),
     }
 }
 
@@ -22,6 +33,7 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
 pub struct VodManager {
     soop: soop::vod::VodManager,
     chzzk: chzzk::vod::VodManager,
+    kick: kick::vod::VodManager,
     selected: Mutex<PlatformId>,
     lifecycle: Mutex<()>,
     events: crate::download_events::DownloadEvents,
@@ -36,7 +48,12 @@ impl VodManager {
                 logs.clone(),
                 events.clone(),
             ),
-            chzzk: chzzk::vod::VodManager::new_with_events(backend_dir, logs, events.clone()),
+            chzzk: chzzk::vod::VodManager::new_with_events(
+                backend_dir.clone(),
+                logs.clone(),
+                events.clone(),
+            ),
+            kick: kick::vod::VodManager::new_with_events(backend_dir, logs, events.clone()),
             events,
             selected: Mutex::new(PlatformId::Soop),
             lifecycle: Mutex::new(()),
@@ -54,13 +71,18 @@ impl VodManager {
     pub(crate) async fn notification_settings_changed(&self) {
         let (soop_status, soop_epoch) = self.soop.notification_state();
         let (chzzk_status, chzzk_epoch) = self.chzzk.notification_state();
+        let (kick_status, kick_epoch) = self.kick.notification_state();
         // Idle commits and new job initialization use these same status locks.
         // Already idle jobs keep their invalidated token; active jobs are rearmed.
         let soop = soop_status.write().await;
         let chzzk = chzzk_status.write().await;
+        let kick = kick_status.write().await;
         let epoch = self.events.invalidate();
         if soop.running {
             soop_epoch.store(epoch, std::sync::atomic::Ordering::Release);
+        }
+        if kick.running {
+            kick_epoch.store(epoch, std::sync::atomic::Ordering::Release);
         }
         if chzzk.running {
             chzzk_epoch.store(epoch, std::sync::atomic::Ordering::Release);
@@ -80,12 +102,7 @@ impl VodManager {
         match platform {
             PlatformId::Soop => self.soop.status().await,
             PlatformId::Chzzk => self.chzzk.status().await,
-            PlatformId::Kick => VodJobStatus {
-                platform,
-                state: "UNSUPPORTED".into(),
-                message: "KICK VOD는 아직 지원하지 않습니다.".into(),
-                ..Default::default()
-            },
+            PlatformId::Kick => self.kick.status().await,
         }
     }
 
@@ -97,6 +114,10 @@ impl VodManager {
         let chzzk = self.chzzk.status().await;
         if chzzk.running {
             return Some((PlatformId::Chzzk, chzzk));
+        }
+        let kick = self.kick.status().await;
+        if kick.running {
+            return Some((PlatformId::Kick, kick));
         }
         None
     }
@@ -122,16 +143,22 @@ impl VodManager {
         let primary = match selected {
             PlatformId::Soop => self.soop.terminal_status(job_id).await,
             PlatformId::Chzzk => self.chzzk.terminal_status(job_id).await,
-            PlatformId::Kick => None,
+            PlatformId::Kick => self.kick.terminal_status(job_id).await,
         };
         if primary.is_some() {
             return primary;
         }
-        match selected {
-            PlatformId::Soop => self.chzzk.terminal_status(job_id).await,
-            PlatformId::Chzzk => self.soop.terminal_status(job_id).await,
-            PlatformId::Kick => None,
+        for platform in [PlatformId::Soop, PlatformId::Chzzk, PlatformId::Kick] {
+            let result = match platform {
+                PlatformId::Soop => self.soop.terminal_status(job_id).await,
+                PlatformId::Chzzk => self.chzzk.terminal_status(job_id).await,
+                PlatformId::Kick => self.kick.terminal_status(job_id).await,
+            };
+            if result.is_some() {
+                return result;
+            }
         }
+        None
     }
 
     pub async fn analyze(&self, req: VodAnalyzeRequest) -> Result<VodJobStatus> {
@@ -142,7 +169,7 @@ impl VodManager {
         match platform {
             PlatformId::Soop => self.soop.analyze(req).await,
             PlatformId::Chzzk => self.chzzk.analyze(req).await,
-            PlatformId::Kick => bail!("KICK VOD는 아직 지원하지 않습니다."),
+            PlatformId::Kick => self.kick.analyze(req).await,
         }
     }
 
@@ -154,7 +181,7 @@ impl VodManager {
         match platform {
             PlatformId::Soop => self.soop.download(req).await,
             PlatformId::Chzzk => self.chzzk.download(req).await,
-            PlatformId::Kick => bail!("KICK VOD는 아직 지원하지 않습니다."),
+            PlatformId::Kick => self.kick.download(req).await,
         }
     }
 
@@ -169,7 +196,7 @@ impl VodManager {
         match platform {
             PlatformId::Soop => self.soop.cancel().await,
             PlatformId::Chzzk => self.chzzk.cancel().await,
-            PlatformId::Kick => bail!("KICK VOD는 아직 지원하지 않습니다."),
+            PlatformId::Kick => self.kick.cancel().await,
         }
     }
 }
@@ -178,7 +205,7 @@ pub(crate) fn validate_download_request(req: &VodDownloadRequest) -> Result<()> 
     match vod_platform(&req.vod_url)? {
         PlatformId::Soop => soop::vod::validate_download_request(req),
         PlatformId::Chzzk => chzzk::vod::validate_download_request(req),
-        PlatformId::Kick => bail!("KICK VOD는 아직 지원하지 않습니다."),
+        PlatformId::Kick => kick::vod::validate_download_request(req),
     }
 }
 
@@ -209,14 +236,14 @@ mod tests {
     }
     #[tokio::test]
     async fn settings_transition_excludes_idle_results_and_rearms_active_jobs() {
-        for platform in [PlatformId::Soop, PlatformId::Chzzk] {
+        for platform in [PlatformId::Soop, PlatformId::Chzzk, PlatformId::Kick] {
             let dir = tempfile::tempdir().unwrap();
             let manager = VodManager::new(dir.path().to_path_buf(), LogBuffer::new());
             let mut receiver = manager.subscribe_download_events();
             let (status, token) = match platform {
                 PlatformId::Soop => manager.soop.notification_state(),
                 PlatformId::Chzzk => manager.chzzk.notification_state(),
-                PlatformId::Kick => unreachable!("this test only iterates VOD providers"),
+                PlatformId::Kick => manager.kick.notification_state(),
             };
             let finished = VodJobStatus {
                 platform,

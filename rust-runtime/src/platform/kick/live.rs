@@ -14,6 +14,7 @@ pub struct KickBroadcast {
     pub channel_name: String,
     pub title: String,
     pub thumbnail_url: Option<String>,
+    pub preview_url: Option<Box<str>>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,12 +102,45 @@ fn parse_probe(account: &str, value: &Value) -> Result<KickProbe> {
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .map(str::to_owned);
+    let preview_url = value
+        .get("playback_url")
+        .and_then(Value::as_str)
+        .filter(|raw| Url::parse(raw).is_ok_and(|url| valid_preview_url(&url)))
+        .map(Box::<str>::from);
+    let thumbnail_url = thumbnail_url.or_else(|| preview_url.as_deref().map(str::to_owned));
     Ok(KickProbe::Live(KickBroadcast {
         live_id,
         channel_name,
         title,
         thumbnail_url,
+        preview_url,
     }))
+}
+
+pub(crate) fn valid_preview_url(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.path().ends_with(".m3u8")
+        && url
+            .host_str()
+            .is_some_and(|host| host.ends_with(".playback.live-video.net"))
+}
+
+pub(crate) async fn preview_source(account: &str, broadcast_id: &str) -> Result<String> {
+    let client = Client::builder()
+        .user_agent(crate::support::PROVIDER_USER_AGENT)
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    match KickLiveSession::new(client).probe(account).await? {
+        KickProbe::Live(live) if live.live_id == broadcast_id => live
+            .preview_url
+            .map(String::from)
+            .ok_or_else(|| anyhow::anyhow!("KICK LIVE 미리보기 주소가 없습니다.")),
+        _ => bail!("KICK LIVE 방송 상태가 변경되었습니다."),
+    }
 }
 
 pub(crate) fn valid_thumbnail_url(url: &Url) -> bool {
@@ -125,6 +159,25 @@ mod tests {
     use super::*;
     fn channel(live: Value) -> Value {
         serde_json::json!({"slug":"fixture","user":{"username":"방송자"},"livestream":live})
+    }
+    #[test]
+    fn preview_fallback_is_ephemeral_and_only_accepts_ivs_https_playlists() {
+        let mut value = channel(serde_json::json!({"id":123,"session_title":"test"}));
+        value["playback_url"] =
+            "https://example.us-west-2.playback.live-video.net/api/video/v1/x.m3u8?token=opaque"
+                .into();
+        let KickProbe::Live(live) = parse_probe("fixture", &value).unwrap() else {
+            panic!("expected LIVE");
+        };
+        assert_eq!(live.thumbnail_url.as_deref(), live.preview_url.as_deref());
+        for source in [
+            "https://localhost/a.m3u8",
+            "http://example.playback.live-video.net/a.m3u8",
+            "https://example.playback.live-video.net.evil.test/a.m3u8",
+            "https://user:secret@example.playback.live-video.net/a.m3u8",
+        ] {
+            assert!(!valid_preview_url(&Url::parse(source).unwrap()));
+        }
     }
     #[test]
     fn offline_requires_an_explicit_null_on_a_matching_channel() {

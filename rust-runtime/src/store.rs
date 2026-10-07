@@ -6,7 +6,9 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{Connection, OpenFlags, backup::Backup, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, TransactionBehavior, backup::Backup, params,
+};
 use std::{
     collections::BTreeMap,
     env, fs,
@@ -343,7 +345,13 @@ impl Store {
         if !check.eq_ignore_ascii_case("ok") {
             anyhow::bail!("backup SQLite quick_check failed: {check}");
         }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let _credential_guard = crate::security::kick_secret_guard(self).context(
+            "KICK 인증정보 사용 중에는 백업을 복원할 수 없습니다. 잠시 후 재시도하세요.",
+        )?;
         let mut target = self.conn()?;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let source = Self::restore_source_preserving_kick(&source, &target)?;
         let backup = Backup::new(&source, &mut target)?;
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
@@ -356,6 +364,45 @@ impl Store {
         drop(target);
         self.ensure_runtime_defaults()?;
         Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn restore_source_preserving_kick(
+        source: &Connection,
+        current: &Connection,
+    ) -> Result<Connection> {
+        // SQLite owns/removes this private temporary database. Do not modify the
+        // selected backup or decrypt native secrets into a staging file.
+        let mut staged = Connection::open("")?;
+        let backup = Backup::new(source, &mut staged)?;
+        backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
+        drop(backup);
+        staged.execute_batch(SCHEMA_SQL)?;
+        ensure_multiplatform_schema(&mut staged)?;
+        let tx = staged.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for key in [
+            "KICK_SESSION_TOKEN",
+            "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS",
+        ] {
+            let row: Option<(String, String, String)> = current
+                .query_row(
+                    "SELECT value,source,updated_at FROM settings WHERE key=?1",
+                    [key],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            tx.execute("DELETE FROM settings WHERE key=?1", [key])?;
+            if let Some((value, source, updated_at)) = row {
+                tx.execute(
+                    "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,?3,?4)",
+                    params![key, value, source, updated_at],
+                )?;
+            }
+        }
+        tx.commit()?;
+        // Both preserved rows are present before the backup API touches the live
+        // DB, so failures cannot leave a restored obsolete native reference.
+        Ok(staged)
     }
 
     pub fn ensure_schema(&self) -> Result<()> {
@@ -483,6 +530,142 @@ impl Store {
             .read()
             .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))?
             .clone())
+    }
+
+    /// Commit a replacement and its opaque cleanup references in one SQLite transaction.
+    pub(crate) fn sync_settings_retiring_secret(
+        &self,
+        values: &BTreeMap<String, String>,
+        source: &str,
+        secret_key: &str,
+        cleanup_key: &str,
+        retire: impl FnOnce(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        let mut conn = self.conn()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let read = |key: &str| -> Result<String> {
+            Ok(tx
+                .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                    row.get::<_, String>(0)
+                })
+                .optional()?
+                .unwrap_or_default())
+        };
+        let previous = read(secret_key)?;
+        let pending = read(cleanup_key)?;
+        let mut pending: Vec<String> = if pending.is_empty() {
+            Vec::new()
+        } else {
+            serde_json::from_str(&pending).context("invalid secret cleanup references")?
+        };
+        if values
+            .get(secret_key)
+            .is_some_and(|value| value != &previous)
+            && let Some(reference) = retire(&previous)?
+            && !pending.contains(&reference)
+        {
+            pending.push(reference);
+        }
+        if let Some(value) = values.get(secret_key) {
+            pending.retain(|reference| reference != value);
+        }
+        let pending = serde_json::to_string(&pending)?;
+        let now = Utc::now().to_rfc3339();
+        for (key, value) in values {
+            tx.execute(
+                "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(key) DO UPDATE SET value=excluded.value,source=excluded.source,updated_at=excluded.updated_at",
+                params![key, value, source, now],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'native-secret-cleanup',?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            params![cleanup_key, pending, now],
+        )?;
+        tx.commit()?;
+        for (key, value) in values {
+            cache.insert(key.clone(), value.clone());
+        }
+        cache.insert(cleanup_key.to_string(), pending);
+        Ok(())
+    }
+
+    pub(crate) fn pending_secret_cleanup(&self, key: &str) -> Result<Vec<String>> {
+        let conn = self.conn()?;
+        let value: Option<String> = conn
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        match value.filter(|value| !value.is_empty()) {
+            Some(value) => {
+                serde_json::from_str(&value).context("invalid secret cleanup references")
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) fn retain_secret_cleanup(&self, key: &str, reference: &str) -> Result<()> {
+        let mut conn = self.conn()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value: Option<String> = tx
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        let mut pending: Vec<String> = match value.filter(|value| !value.is_empty()) {
+            Some(value) => {
+                serde_json::from_str(&value).context("invalid secret cleanup references")?
+            }
+            None => Vec::new(),
+        };
+        if !pending.iter().any(|value| value == reference) {
+            pending.push(reference.to_string());
+        }
+        let value = serde_json::to_string(&pending)?;
+        tx.execute(
+            "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'native-secret-cleanup',?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            params![key, value, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        cache.insert(key.to_string(), value);
+        Ok(())
+    }
+
+    pub(crate) fn finish_secret_cleanup(&self, key: &str, reference: &str) -> Result<()> {
+        let mut conn = self.conn()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value: Option<String> = tx
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        let mut pending: Vec<String> = match value.filter(|value| !value.is_empty()) {
+            Some(value) => {
+                serde_json::from_str(&value).context("invalid secret cleanup references")?
+            }
+            None => Vec::new(),
+        };
+        pending.retain(|value| value != reference);
+        let value = serde_json::to_string(&pending)?;
+        tx.execute(
+            "UPDATE settings SET value=?2,updated_at=?3 WHERE key=?1",
+            params![key, value, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        cache.insert(key.to_string(), value);
+        Ok(())
     }
 
     pub fn sync_settings(&self, values: &BTreeMap<String, String>, source: &str) -> Result<()> {
@@ -896,6 +1079,133 @@ mod tests {
         assert_eq!(history.live[0].title.as_deref(), Some("방송 제목"));
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn restore_preserves_current_kick_rows_including_clear_and_absence() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        let store = Store::open(path.clone()).unwrap();
+        let observer = Store::open_observer(path).unwrap();
+        let cleanup_key = "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS";
+        let old = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
+        let new = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
+        let pending = format!("[\"{old}\"]");
+        for (index, current) in [Some(new), Some(""), None].into_iter().enumerate() {
+            store
+                .sync_settings(
+                    &BTreeMap::from([
+                        ("KICK_SESSION_TOKEN".into(), old.into()),
+                        (cleanup_key.into(), format!("[\"{new}\"]")),
+                        ("SOOP_PASSWORD".into(), "backup-soop-secret".into()),
+                        ("TEST_RESTORE".into(), "backup-data".into()),
+                    ]),
+                    "backup-test",
+                )
+                .unwrap();
+            let backup = dir.path().join(format!("old-backup-{index}.db"));
+            store.backup_to(&backup).unwrap();
+            let original = fs::read(&backup).unwrap();
+            observer
+                .sync_settings(
+                    &BTreeMap::from([
+                        ("KICK_SESSION_TOKEN".into(), current.unwrap_or("").into()),
+                        (cleanup_key.into(), pending.clone()),
+                        ("SOOP_PASSWORD".into(), "current-soop-secret".into()),
+                        ("TEST_RESTORE".into(), "current-data".into()),
+                    ]),
+                    "current-test",
+                )
+                .unwrap();
+            if current.is_none() {
+                observer
+                    .conn()
+                    .unwrap()
+                    .execute(
+                        "DELETE FROM settings WHERE key IN ('KICK_SESSION_TOKEN','STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS')",
+                        [],
+                    )
+                    .unwrap();
+            }
+            // The owning store still has the old cached value; use canonical rows.
+            assert_eq!(
+                store
+                    .setting_value("KICK_SESSION_TOKEN")
+                    .unwrap()
+                    .as_deref(),
+                Some(old)
+            );
+            store.restore_from(&backup).unwrap();
+            assert_eq!(
+                store
+                    .setting_value("KICK_SESSION_TOKEN")
+                    .unwrap()
+                    .as_deref(),
+                current
+            );
+            assert_eq!(
+                store.setting_value(cleanup_key).unwrap().as_deref(),
+                current.map(|_| pending.as_str())
+            );
+            assert_eq!(
+                store.setting_value("TEST_RESTORE").unwrap().as_deref(),
+                Some("backup-data")
+            );
+            assert_eq!(
+                store.setting_value("SOOP_PASSWORD").unwrap().as_deref(),
+                Some("backup-soop-secret")
+            );
+            assert_eq!(fs::read(&backup).unwrap(), original);
+            assert!(crate::security::kick_secret_guard(&observer).is_ok());
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn restore_rejects_credential_contention_and_staging_failure_without_changing_live_db() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();
+        let backup = dir.path().join("backup.db");
+        store.backup_to(&backup).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([("TEST_RESTORE".into(), "current-data".into())]),
+                "test",
+            )
+            .unwrap();
+        let guard = crate::security::kick_secret_guard(&store).unwrap();
+        assert!(store.restore_from(&backup).is_err());
+        drop(guard);
+        Connection::open(&backup)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_preserved_kick BEFORE DELETE ON settings WHEN OLD.key='KICK_SESSION_TOKEN' BEGIN SELECT RAISE(ABORT,'staging failure'); END; INSERT INTO settings(key,value,source,updated_at) VALUES('KICK_SESSION_TOKEN','stale-native-reference','test','now');",
+            )
+            .unwrap();
+        assert!(store.restore_from(&backup).is_err());
+        assert_eq!(
+            store.setting_value("TEST_RESTORE").unwrap().as_deref(),
+            Some("current-data")
+        );
+        assert_ne!(
+            store
+                .setting_value("KICK_SESSION_TOKEN")
+                .unwrap()
+                .as_deref(),
+            Some("stale-native-reference")
+        );
+        let persisted: String = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM settings WHERE key='TEST_RESTORE'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(persisted, "current-data");
+        assert!(crate::security::kick_secret_guard(&store).is_ok());
+    }
+
     #[test]
     fn fresh_store_is_first_run_until_user_configuration_is_written() {
         let dir = tempdir().unwrap();
@@ -1179,5 +1489,105 @@ mod tests {
         assert_eq!(live_status, "RECORDING");
         assert_eq!(vod_state, "DOWNLOADING");
         assert_eq!(queue_state, "RUNNING");
+    }
+    #[test]
+    fn kick_token_is_hidden_from_safe_settings_and_preflight_values() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([(
+                    "KICK_SESSION_TOKEN".into(),
+                    "native-secret:v1:configured".into(),
+                )]),
+                "test",
+            )
+            .unwrap();
+        assert!(
+            !store
+                .safe_settings()
+                .unwrap()
+                .contains_key("KICK_SESSION_TOKEN")
+        );
+        assert_eq!(
+            store
+                .configured_secrets()
+                .unwrap()
+                .get("KICK_SESSION_TOKEN"),
+            Some(&true)
+        );
+    }
+    #[test]
+    fn kick_native_creation_requires_durable_intent_and_survives_readonly_commit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("readonly.db");
+        let store = Store::open(path.clone()).unwrap();
+        let cleanup_key = "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS";
+        let protected = crate::security::protect_native_secret_with(
+            "fixture-token",
+            |reference| store.retain_secret_cleanup(cleanup_key, reference),
+            |reference, _| {
+                assert_eq!(
+                    store.pending_secret_cleanup(cleanup_key)?,
+                    vec![format!("native-secret:v1:{reference}")]
+                );
+                store.conn()?.execute_batch("PRAGMA query_only=ON")?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        let error = store
+            .sync_settings_retiring_secret(
+                &BTreeMap::from([("KICK_SESSION_TOKEN".into(), protected.clone())]),
+                "test",
+                "KICK_SESSION_TOKEN",
+                cleanup_key,
+                |_| Ok(None),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<rusqlite::Error>()
+                .unwrap()
+                .sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ReadOnly)
+        );
+        assert!(
+            store
+                .retain_secret_cleanup(cleanup_key, &protected)
+                .is_err()
+        );
+        assert!(
+            store
+                .finish_secret_cleanup(cleanup_key, &protected)
+                .is_err()
+        );
+        drop(store);
+        let reopened = Store::open(path).unwrap();
+        assert_eq!(
+            reopened.pending_secret_cleanup(cleanup_key).unwrap(),
+            vec![protected.clone()]
+        );
+        reopened
+            .finish_secret_cleanup(cleanup_key, &protected)
+            .unwrap();
+        assert!(
+            reopened
+                .pending_secret_cleanup(cleanup_key)
+                .unwrap()
+                .is_empty()
+        );
+
+        reopened
+            .conn()
+            .unwrap()
+            .execute_batch("PRAGMA query_only=ON")
+            .unwrap();
+        let result = crate::security::protect_native_secret_with(
+            "fixture-token",
+            |reference| reopened.retain_secret_cleanup(cleanup_key, reference),
+            |_, _| panic!("native credential must not be created before durable intent"),
+        );
+        assert!(result.is_err());
     }
 }
