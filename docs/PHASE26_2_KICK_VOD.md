@@ -10,20 +10,21 @@
 - 인증정보 삭제는 SQLite 설정을 비우면서 이전 native 참조를 정리 대기로 원자적으로 보관한 뒤 Linux Secret Service / macOS Keychain 항목을 삭제합니다. DB 전환 실패 시 native 항목을 삭제하지 않습니다. native 삭제 실패 시 정리 참조를 유지하고 오류를 반환하며, 같은 삭제 명령으로 재시도합니다. Unix CLI는 `providers clear-secret KICK_SESSION_TOKEN`을 사용합니다. Windows DPAPI는 별도 credential-store 항목이 없으므로 SQLite의 암호화 값만 제거합니다.
 - `session_token` Cookie는 인코딩을 유지하고 Bearer만 percent-decode합니다. 요청마다 저장된 값을 읽으므로 교체 후 재시작할 필요가 없습니다.
 - 미설정 상태에서는 인증 없이 조회합니다. 주소가 없으면 구독 인증 설정을 안내합니다. 설정된 인증정보도 권한을 보장하지 않습니다.
-- Cookie/Bearer는 KICK playback 요청에만 전달합니다. CDN과 FFmpeg에는 전달하지 않습니다. HTTP redirect를 자동으로 따라가지 않습니다.
+- Cookie/Bearer는 KICK playback 요청에만 전달합니다. CDN, yt-dlp와 FFmpeg에는 전달하지 않습니다. HTTP redirect를 자동으로 따라가지 않습니다.
 - 영상 UUID·채널·VOD 상태를 확인하고 DRM, 허용되지 않은 CDN, 빈 재생 주소는 거부합니다. 401/403/404/429는 구분해 안내합니다.
-- 제목·채널·길이는 playback 응답, 화질은 HLS master playlist에서 얻습니다. thumbnail sheet는 표지 사진이 아니므로 시안 이미지로 잘라 표시하지 않습니다. KICK 플랫폼 로고를 유지합니다.
+- 제목·채널·길이는 playback 응답, 화질은 HLS master playlist에서 얻습니다. thumbnail sheet는 표지 사진이 아니므로 임의로 잘라 표시하지 않습니다. core에서 FFmpeg로 HLS 첫 프레임 한 장을 최대 480×270으로 추출하며, 실패하면 KICK 플랫폼 로고를 유지합니다.
 
 ## 파일과 중단 정책
 
-- FFmpeg `-c copy`로 다운로드하면서 실제 fragmented MP4를 기록합니다. H.264/AAC 입력에서 `aac_adtstoasc`로 AAC 컨테이너 형식을 맞춥니다.
-- 별도의 TS 원본과 전체 MP4 복사본을 만들지 않습니다. 최종 발행은 Windows에서 기존 파일을 덮어쓰지 않는 MoveFileW, Unix에서 같은 디스크의 hard-link 후 임시 이름 제거로 처리합니다. Unix 저장 파일시스템은 hard-link를 지원해야 합니다.
-- 정상 종료, MP4 `ftyp` 헤더와 비어 있지 않은 출력, 영상 끝까지의 진행률을 확인한 뒤 COMPLETED / History / 완료 알림을 처리합니다.
-- 실행 중에는 고유한 `*.partial.mp4`에 기록합니다. 취소·실패 시 부분 파일을 보존하며 기존 파일을 덮어쓰지 않습니다.
-- 취소는 소유한 FFmpeg에 `q`를 보내고 5초 내 끝나지 않으면 소유한 process tree만 종료합니다.
-- **이번 단계는 FFmpeg MP4 이어 쓰기를 지원하지 않습니다. Queue 재시도는 새 파일로 처음부터 시작합니다.** 중단된 fragment를 자동 병합하거나 이어받았다고 표시하지 않습니다. `max_retries` 설정에 맞춰 파일을 반복 삭제·재다운로드하지 않습니다.
-- fragmented MP4의 Windows Explorer 썸네일과 강제 종료 후 부분 재생은 실제 PC에서 확인해야 합니다. 일반 MP4의 `+faststart` 후처리나 전체 remux를 자동 추가하지 않습니다.
-- 내부 web playback API와 player version 필드는 공개 API 계약이 아니며, KICK 변경 시 분석이 실패할 수 있습니다. 로그인 자동화·Cloudflare 우회는 추가하지 않습니다.
+- 화질 선택 후 해당 variant playlist를 yt-dlp native HLS downloader에 전달합니다. `--concurrent-fragments 4`, `--hls-use-mpegts`, `--fixup never`로 실제 `.ts`를 직접 저장하며 MP4 remux는 하지 않습니다.
+- `--abort-on-unavailable-fragments`로 누락 조각을 성공 처리하지 않습니다. 정상 exit, 모든 조각 완료, 완료 marker, MPEG-TS sync byte를 확인한 뒤 COMPLETED / History / 완료 알림을 처리합니다.
+- UUID가 포함된 고유한 `*.partial.ts`와 yt-dlp의 `.part` / `.ytdl` / fragment 파일을 사용합니다. 취소·실패 시 부분 파일들을 보존합니다. 재시도는 새 UUID로 처음부터 시작하며 이전 파일을 덮어쓰지 않습니다.
+- 취소는 앱이 소유한 yt-dlp process tree만 종료합니다. 기존 SOOP/CHZZK 방식은 변경하지 않습니다.
+- Windows 발행은 MoveFileW, Unix는 같은 디스크 hard-link 후 임시 이름 제거로 처리합니다. Unix 저장 파일시스템은 hard-link를 지원해야 합니다.
+- TS의 Explorer 썸네일은 PC 환경에 따라 달라질 수 있습니다. 사용자의 독립 명령 테스트에서는 표시됐지만 새 앱 binary의 전체 영상 검증은 별도 수동 RC입니다.
+- LIVE 이미지 요청에 KICK Origin / Referer를 전달합니다. 이미지 실패 시 현재 broadcast ID를 재확인하고 public playback URL에서 첫 프레임을 추출합니다. 실패 시 플랫폼 로고로 fallback하며 로그에는 고정 오류 분류만 남깁니다.
+- VOD 다운로드에는 yt-dlp가 필요하고 LIVE/VOD 첫 프레임 썸네일에는 FFmpeg가 필요합니다. 외부 도구는 공식 패키지에 번들하지 않습니다.
+- 내부 playback API는 공개 계약이 아니며 로그인 자동화·Cloudflare 우회는 추가하지 않습니다.
 
 ## native credential 교체와 정리
 
@@ -33,13 +34,13 @@ Linux/macOS에서 Backup을 Restore할 때 `KICK_SESSION_TOKEN`과 native 정리
 
 ## 오류 로그
 
-진단의 런타임 로그에 `[VOD:KICK:ERR]`와 job ID, 실패 단계, HTTP 상태 또는 안전한 오류 분류를 남깁니다. `playback.request` / `playback.http` / `playback.json` / `playback.vod_missing`, `cdn.hls.request` / `cdn.hls.http`, `download.ffmpeg.exit` / `download.incomplete`로 조회·CDN·파일 기록 실패를 구분합니다. FFmpeg 실패는 exit 상태, 기록 바이트와 진행 시간을 함께 남깁니다.
+진단의 런타임 로그에 `[VOD:KICK:ERR]`와 job ID, 실패 단계, HTTP 상태 또는 안전한 오류 분류를 남깁니다. `playback.request` / `playback.http` / `playback.json` / `playback.vod_missing`, `cdn.hls.request` / `cdn.hls.http`, `download.ytdlp.exit` / `download.incomplete`로 조회·CDN·파일 기록 실패를 구분합니다. yt-dlp 실패는 exit 상태, 기록 바이트와 진행 시간을 함께 남깁니다.
 
 Cookie의 expiry가 길어도 세션 무효화·시청 권한·API 변경은 별개의 문제이므로 HTTP 401이나 빈 재생 주소를 만료로 단정하지 않습니다. Cookie/Bearer, 재생 URL, 원본 응답 JSON과 FFmpeg stderr는 로그에 출력하지 않습니다. 런타임 로그는 메모리의 제한된 최근 기록이며 자동 영구 파일 로그로 간주하지 않습니다.
 
 ## 자동 검증
 
-- URL/영상 identity, 인증 헤더 인코딩·주입 거부, DRM/CDN 거부, HLS 화질 선택·목록 순서 변경, FFmpeg 명령의 MP4/stream-copy/인증 미전달을 검증합니다.
+- URL/영상 identity, 인증 헤더 인코딩·주입 거부, DRM/CDN 거부, HLS 화질 선택·목록 순서 변경, yt-dlp 명령의 병렬/TS/누락 거부/인증 미전달을 검증합니다.
 - 공통 notification epoch 전환에 KICK을 포함하며 기존 SOOP/CHZZK 검증을 유지합니다.
 - 로컬 FFmpeg에서 생성한 H.264/AAC HLS의 직접 fragmented MP4 저장, ffprobe 컨테이너·코덱, JPEG 프레임 추출을 확인했습니다. 15초 테스트 입력을 다운로드 중 강제 종료했을 때 기록이 끝난 fragment는 ffprobe로 읽을 수 있었습니다. 첫 fragment 완료 전 종료는 재생을 보장하지 않습니다. 실제 provider 테스트로 간주하지 않습니다.
 
@@ -51,7 +52,7 @@ Cookie의 expiry가 길어도 세션 무효화·시청 권한·API 변경은 별
 - [ ] 토큰 저장·교체·삭제·재실행 후 유지, native secret store 확인
 - [ ] 화질 선택 / 저장 폴더 선택 / Queue / History / 완료 알림
 - [ ] 다운로드 중 취소, 별도 FFmpeg 프로세스가 영향받지 않는지 확인
-- [ ] 강제 종료 후 partial.mp4 재생, 재시도 시 새 파일 시작 확인
+- [ ] 강제 종료 후 partial.ts / .part 파일 보존, 재시도 시 새 파일 시작 확인
 - [ ] Windows Explorer 썸네일·seek·Windows 기본 플레이어 호환성
 - [ ] 디스크 부족 시 실패 안내 및 부분 파일 보존
 - [ ] SOOP/CHZZK LIVE/VOD와 KICK LIVE regression
@@ -87,3 +88,12 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 사용자 선택에 따라 Linux/macOS Restore는 현재 KICK 인증정보와 cleanup journal을 유지합니다. 동일 DB별 인증정보 잠금 아래에서 최신 canonical 행을 읽고, SQLite 내부 임시 DB에 복원 대상과 현재 두 행을 먼저 구성한 뒤 canonical DB로 복원합니다. 원본 백업과 체크섬은 변경하지 않고 native secret을 복호화하거나 다시 저장하지 않습니다. 준비 실패나 인증정보 잠금 경합 시 복원하지 않으며, 복원 도중 오래된 토큰/cleanup 참조가 되살아나는 중간 상태를 만들지 않습니다. 기존 safety backup과 runtime-owner/LIVE/VOD/Queue 사전 조건을 유지합니다.
 
 자동 테스트는 현재 토큰 교체·삭제·미설정, 오래된 owning-store cache와 최신 observer 값, cleanup journal 유지, 다른 provider 설정의 정상 복원, 원본 백업 불변, 준비 실패/잠금 경합 시 live DB 보존, managed Restore와 safety backup을 검증합니다. 실제 native store 세션 수동 QA는 완료 처리하지 않습니다.
+
+## 2026-10-07 다운로드 방식 변경 검증
+
+사용자의 독립 PowerShell 테스트에서 FFmpeg MP4와 앱 MP4의 전체 길이가 같고 Explorer 썸네일이 표시됐습니다. yt-dlp TS 테스트도 진행 중 썸네일 표시와 빠른 전송을 확인했지만, 최종 완료·끝부분 재생은 아직 별도 확인 대상입니다. 이 관측을 새 앱 binary의 수동 QA 완료로 기록하지 않습니다.
+
+- [ ] 새 앱에서 KICK LIVE CDN 실패 → 첫 프레임 fallback 확인
+- [ ] 새 앱에서 공개/구독 VOD 분석 썸네일 확인
+- [ ] TS 전체 다운로드, 선택 화질, 영상 길이와 끝부분 재생·탐색 확인
+- [ ] 취소, 조각 실패, 디스크 부족 시 성공 알림이 나오지 않는지 확인

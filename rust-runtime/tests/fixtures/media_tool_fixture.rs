@@ -273,6 +273,22 @@ fn run_ytdlp_fixture(args: &[std::ffi::OsString], mode: &str) {
         return;
     }
 
+    if mode == "kick-direct-success" || mode == "kick-direct-truncated" || mode == "kick-direct-invalid" {
+        let output = arg_after(args, "-o").unwrap();
+        let mut bytes = vec![0u8; 188 * 4];
+        if mode != "kick-direct-invalid" {
+            for offset in [0, 188, 376, 564] { bytes[offset] = 0x47; }
+        }
+        fs::write(output, bytes).unwrap();
+        println!("KICK_PROGRESS:{}:10", if mode == "kick-direct-truncated" { 1 } else { 10 });
+        println!("KICK_DONE fixture");
+        return;
+    }
+    if mode == "run-partial-fail" {
+        let output = arg_after(args, "-o").unwrap();
+        write_sized_file(Path::new(output), 64 * 1024);
+        process::exit(7);
+    }
     apply_run_mode(mode);
 
     if has_arg(args, "--cookies-from-browser")
@@ -376,6 +392,15 @@ fn run_ffmpeg_fixture(args: &[std::ffi::OsString], mode: &str) {
         return;
     }
 
+    if mode == "kick-thumbnail-success" {
+        use std::io::Write;
+        io::stdout().write_all(include_bytes!("kick-preview.png")).unwrap();
+        return;
+    }
+    if mode == "kick-thumbnail-invalid" {
+        print!("not an image");
+        return;
+    }
     let target = args
         .iter()
         .rev()

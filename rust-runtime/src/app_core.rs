@@ -481,7 +481,26 @@ impl StreamArchiveCore {
                         crate::thumbnail_service::failure_reason(&error)
                     ))
                     .await;
-                return Err(error);
+                if platform != PlatformId::Kick {
+                    return Err(error);
+                }
+                let source =
+                    crate::support::platform::kick::live::preview_source(account, broadcast_id)
+                        .await
+                        .map_err(|_| anyhow::anyhow!("KICK LIVE 썸네일 fallback 조회 실패"))?;
+                let settings = self.store.vod_tool_settings()?;
+                let configured = settings
+                    .get("FFMPEG_PATH")
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let tool = crate::tool_discovery::resolve_tool(
+                    crate::tool_discovery::ToolKind::Ffmpeg,
+                    self.backend_dir(),
+                    &[("FFMPEG_PATH", configured)],
+                )
+                .path
+                .ok_or_else(|| anyhow::anyhow!("KICK LIVE 썸네일 추출에는 FFmpeg가 필요합니다."))?;
+                crate::thumbnail_service::load_kick_vod_frame(&tool, &source).await?
             }
         };
         let current = self.watcher_status().await?;
@@ -628,7 +647,25 @@ impl StreamArchiveCore {
             .thumbnail_url
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("VOD 썸네일 정보가 없습니다."))?;
-        let image = crate::thumbnail_service::load_vod(status.platform, url).await?;
+        let image = if status.platform == crate::support::platform::PlatformId::Kick
+            && url::Url::parse(url).is_ok_and(|url| url.path().ends_with(".m3u8"))
+        {
+            let settings = self.store.vod_tool_settings()?;
+            let configured = settings
+                .get("FFMPEG_PATH")
+                .map(String::as_str)
+                .unwrap_or("");
+            let tool = crate::tool_discovery::resolve_tool(
+                crate::tool_discovery::ToolKind::Ffmpeg,
+                self.backend_dir(),
+                &[("FFMPEG_PATH", configured)],
+            )
+            .path
+            .ok_or_else(|| anyhow::anyhow!("KICK VOD 썸네일 추출에는 FFmpeg가 필요합니다."))?;
+            crate::thumbnail_service::load_kick_vod_frame(&tool, url).await?
+        } else {
+            crate::thumbnail_service::load_vod(status.platform, url).await?
+        };
         let current = self.vod.status().await;
         if current.job_id.as_deref() != Some(job_id)
             || current

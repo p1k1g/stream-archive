@@ -1,4 +1,4 @@
-//! KICK playback authentication and direct, single-file MP4 download.
+//! KICK playback authentication and parallel native HLS download to MPEG-TS.
 use crate::{
     backend::LogBuffer,
     model::{
@@ -153,7 +153,7 @@ impl VodManager {
                 current.finished_at = Some(Utc::now().to_rfc3339());
                 if should_mark_cancelled(&cancel, &current.state) {
                     current.state = "CANCELLED".into();
-                    current.message = "KICK VOD 작업이 취소되었습니다. 생성된 partial.mp4는 보존됩니다. 재시도는 새 파일로 시작합니다.".into();
+                    current.message = "KICK VOD 작업이 취소되었습니다. 생성된 partial.ts / .part 부분 파일은 보존됩니다. 재시도는 새 파일로 시작합니다.".into();
                     logs.push("[VOD:KICK] job cancelled").await;
                 } else if let Err(err) = result {
                     current.state = "FAILED".into();
@@ -347,8 +347,8 @@ fn parse_playback(raw: &str, value: &serde_json::Value, authenticated: bool) -> 
             title: title.into(),
             streamer: channel.clone(),
             streamer_id: channel,
-            // KICK's thumbnail-sheet-{index} is a sprite sheet, not a video cover.
-            thumbnail_url: None,
+            // Sprite sheets are not covers; the core extracts one bounded frame from HLS.
+            thumbnail_url: Some(media_url(source)?.to_string()),
             part_count: 1,
             parts: vec![VodPartInfo {
                 part: 1,
@@ -611,13 +611,13 @@ async fn run_download(
     cancel: &AtomicBool,
 ) -> Result<()> {
     validate_download_request(&req)?;
-    let ffmpeg = crate::tool_discovery::resolve_tool(
-        crate::tool_discovery::ToolKind::Ffmpeg,
+    let yt_dlp = crate::tool_discovery::resolve_tool(
+        crate::tool_discovery::ToolKind::YtDlp,
         backend,
-        &[("FFMPEG_PATH", &req.ffmpeg_path)],
+        &[("YT_DLP_PATH", &req.yt_dlp_path)],
     )
     .path
-    .ok_or_else(|| anyhow::anyhow!("FFmpeg 경로를 설정하세요."))?;
+    .ok_or_else(|| anyhow::anyhow!("yt-dlp 경로를 설정하세요."))?;
     let metadata = load_metadata(&req.vod_url, cancel).await?;
     let variant = select_variant(&metadata, &req.quality)?;
     let dir = PathBuf::from(req.output_directory.trim());
@@ -627,7 +627,7 @@ async fn run_download(
         &metadata.view.title,
         Uuid::new_v4(),
     );
-    let output = dir.join(format!("{stem}.partial.mp4"));
+    let output = dir.join(format!("{stem}.partial.ts"));
     // Reserve a unique filename without overwriting another writer's file.
     std::fs::OpenOptions::new()
         .write(true)
@@ -642,13 +642,13 @@ async fn run_download(
         state.message = "KICK VOD 다운로드 중".into();
         state.output_file = Some(output.display().to_string());
     }
-    download_mp4(&ffmpeg, variant, &output, metadata.duration, status, cancel).await?;
+    download_ts(&yt_dlp, variant, &output, metadata.duration, status, cancel).await?;
     if cancel.load(Ordering::Acquire) {
         return Ok(());
     }
     // No-copy publication; Windows MoveFileW also supports exFAT and refuses replacement.
-    let final_path = dir.join(format!("{stem}.mp4"));
-    publish_mp4(&output, &final_path)?;
+    let final_path = dir.join(format!("{stem}.ts"));
+    publish_ts(&output, &final_path)?;
     let mut state = status.write().await;
     state.state = "COMPLETED".into();
     state.percent = 100.0;
@@ -657,7 +657,7 @@ async fn run_download(
     Ok(())
 }
 
-fn publish_mp4(source: &Path, target: &Path) -> Result<()> {
+fn publish_ts(source: &Path, target: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -668,13 +668,13 @@ fn publish_mp4(source: &Path, target: &Path) -> Result<()> {
             windows_sys::Win32::Storage::FileSystem::MoveFileW(source.as_ptr(), target.as_ptr())
         } == 0
         {
-            bail!("KICK MP4 저장 마무리 실패. partial.mp4 파일은 보존됩니다.");
+            bail!("KICK TS 저장 마무리 실패. partial.ts 파일은 보존됩니다.");
         }
     }
     #[cfg(not(windows))]
     {
         std::fs::hard_link(source, target).map_err(|_| {
-            anyhow::anyhow!("KICK MP4 저장 마무리 실패. partial.mp4 파일은 보존됩니다.")
+            anyhow::anyhow!("KICK TS 저장 마무리 실패. partial.ts 파일은 보존됩니다.")
         })?;
         std::fs::remove_file(source)?;
     }
@@ -696,7 +696,7 @@ fn output_stem(streamer: &str, title: &str, id: Uuid) -> String {
     let id = id.to_string();
     let mut prefix = format!("{}_{}", safe_name(streamer), safe_name(title));
     // Reserve the longest suffix and UUID within the common Unix component limit.
-    let budget = 255 - "_".len() - id.len() - ".partial.mp4".len();
+    let budget = 255 - "_".len() - id.len() - ".partial.ts.part-Frag1234567890.part".len();
     let mut end = prefix.len().min(budget);
     while !prefix.is_char_boundary(end) {
         end -= 1;
@@ -720,103 +720,129 @@ fn safe_name(raw: &str) -> String {
         .to_owned()
 }
 
-fn ffmpeg_command(ffmpeg: &Path, source: &Url, output: &Path) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(ffmpeg);
+fn yt_dlp_command(tool: &Path, source: &Url, output: &Path) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(tool);
     command
         .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-user_agent",
+            "--ignore-config",
+            "--no-playlist",
+            "--downloader",
+            "m3u8:native",
+            "--concurrent-fragments",
+            "4",
+            "--hls-use-mpegts",
+            "--fixup",
+            "never",
+            "--abort-on-unavailable-fragments",
+            "--force-overwrites",
+            "--newline",
+            "--progress",
+            "--progress-template",
+            "download:KICK_PROGRESS:%(progress.fragment_index)s:%(progress.fragment_count)s",
+            "--print",
+            "after_video:KICK_DONE %(id)s",
+            "--no-simulate",
+            "--user-agent",
             crate::support::PROVIDER_USER_AGENT,
-            "-headers",
-            "Origin: https://kick.com\r\n",
-            "-referer",
+            "--add-header",
+            "Origin:https://kick.com",
+            "--referer",
             "https://kick.com/",
-            "-i",
-        ])
-        .arg(source.as_str())
-        .args([
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a:0?",
-            "-c",
-            "copy",
-            "-bsf:a",
-            "aac_adtstoasc",
-            "-avoid_negative_ts",
-            "make_zero",
-            "-movflags",
-            "+frag_keyframe+empty_moov+default_base_moof",
-            "-flush_packets",
-            "1",
-            "-f",
-            "mp4",
-            "-progress",
-            "pipe:1",
-            "-nostats",
-            "-y",
+            "-o",
         ])
         .arg(output)
-        .stdin(std::process::Stdio::piped())
+        .arg(source.as_str())
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     command
 }
 
-async fn download_mp4(
-    ffmpeg: &Path,
+fn partial_size(output: &Path) -> u64 {
+    let mut part = output.as_os_str().to_os_string();
+    part.push(".part");
+    std::fs::metadata(output).map(|m| m.len()).unwrap_or(0).max(
+        std::fs::metadata(Path::new(&part))
+            .map(|m| m.len())
+            .unwrap_or(0),
+    )
+}
+
+fn fragment_progress(line: &str) -> Option<f64> {
+    let (index, count) = line.strip_prefix("KICK_PROGRESS:")?.split_once(':')?;
+    let index = index.parse::<u64>().ok()?;
+    let count = count.parse::<u64>().ok()?;
+    (count > 0 && index <= count).then_some(index as f64 / count as f64)
+}
+
+async fn download_ts(
+    tool: &Path,
     source: &Url,
     output: &Path,
     duration: u64,
     status: &Arc<RwLock<VodJobStatus>>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader};
     if cancel.load(Ordering::Acquire) {
         return Ok(());
     }
     let (mut child, mut tree) =
-        crate::platform_runtime::spawn_owned(&mut ffmpeg_command(ffmpeg, source, output))
+        crate::platform_runtime::spawn_owned(&mut yt_dlp_command(tool, source, output))
             .await
-            .map_err(|_| anyhow::anyhow!("KICK FFmpeg 시작 실패"))?;
+            .map_err(|_| anyhow::anyhow!("KICK yt-dlp 시작 실패"))?;
     let stdout = child
         .stdout
         .take()
         .ok_or_else(|| anyhow::anyhow!("KICK 진행률 파이프를 열지 못했습니다."))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("KICK 진행률 파이프 오류"))?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(32);
-    let reader = tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(time) = line
-                .strip_prefix("out_time_us=")
-                .and_then(|s| s.parse::<u64>().ok())
-                && tx.send(time as f64 / 1_000_000.0).await.is_err()
-            {
-                break;
+    fn reader_task<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
+        stream: R,
+        tx: tokio::sync::mpsc::Sender<f64>,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stream).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let progress = if line.starts_with("KICK_DONE ") {
+                    Some(2.0)
+                } else {
+                    fragment_progress(&line)
+                };
+                if let Some(progress) = progress
+                    && tx.send(progress).await.is_err()
+                {
+                    break;
+                }
             }
-        }
-    });
+        })
+    }
+    let reader = reader_task(stdout, tx.clone());
+    let error_reader = reader_task(stderr, tx);
     let mut seconds = 0.0;
+    let mut completed = false;
     let mut cancel_deadline = None;
     let result = loop {
         while let Ok(time) = rx.try_recv() {
-            seconds = time;
+            completed |= time == 2.0;
+            if time != 2.0 {
+                seconds = time * duration as f64;
+            }
             let mut state = status.write().await;
-            state.percent = (time / duration as f64 * 100.0).clamp(0.0, 99.0);
-            let size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+            state.percent = (seconds / duration as f64 * 100.0).clamp(0.0, 99.0);
+            let size = partial_size(output);
             state.message = format!(
-                "KICK VOD 다운로드 중 · {:.0} / {duration}초 · {:.1} MB",
-                time,
+                "KICK VOD 다운로드 중 · {:.1}% · {:.1} MB",
+                state.percent,
                 size as f64 / 1_048_576.0
             );
         }
         if cancel.load(Ordering::Acquire) && cancel_deadline.is_none() {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(b"q\n").await;
-            }
+            let _ = tree.terminate(&mut child).await;
             cancel_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(5));
         }
         match child.try_wait() {
@@ -826,16 +852,16 @@ async fn download_mp4(
                     break Ok(());
                 }
                 if !exit.success() {
-                    let size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+                    let size = partial_size(output);
                     break Err(anyhow::anyhow!(
-                        "[download.ffmpeg.exit] KICK FFmpeg 다운로드 실패 (exit={exit}, bytes={size}, media_seconds={seconds:.1}). partial.mp4는 보존됩니다. 재시도는 새 파일로 시작합니다."
+                        "[download.ytdlp.exit] KICK yt-dlp 다운로드 실패 (exit={exit}, bytes={size}, media_seconds={seconds:.1}). partial.ts / .part 부분 파일은 보존됩니다. 재시도는 새 파일로 시작합니다."
                     ));
                 }
                 break Ok(());
             }
             Err(_) => {
                 let _ = tree.terminate(&mut child).await;
-                break Err(anyhow::anyhow!("KICK FFmpeg 상태 확인 실패"));
+                break Err(anyhow::anyhow!("KICK yt-dlp 상태 확인 실패"));
             }
             _ => {}
         }
@@ -847,35 +873,43 @@ async fn download_mp4(
     };
     // Drain progress already queued before EOF. Do not wait on orphan pipe handles.
     let mut reader = reader;
+    let mut error_reader = error_reader;
     let drain = async {
         while let Some(time) = rx.recv().await {
-            seconds = time;
+            completed |= time == 2.0;
+            if time != 2.0 {
+                seconds = time * duration as f64;
+            }
         }
         let _ = (&mut reader).await;
+        let _ = (&mut error_reader).await;
     };
     if tokio::time::timeout(Duration::from_secs(2), drain)
         .await
         .is_err()
     {
         reader.abort();
+        error_reader.abort();
         let _ = reader.await;
+        let _ = error_reader.await;
     }
     result?;
     if cancel.load(Ordering::Acquire) {
         return Ok(());
     }
     if std::fs::metadata(output).map(|m| m.len()).unwrap_or(0) == 0
-        || seconds + 10.0 < duration as f64
+        || !completed
+        || seconds < duration as f64
     {
         bail!(
-            "[download.incomplete] KICK 다운로드가 영상 끝까지 도달하지 못했습니다. partial.mp4는 보존됩니다."
+            "[download.incomplete] KICK 다운로드가 영상 끝까지 도달하지 못했습니다. partial.ts / .part 부분 파일은 보존됩니다."
         );
     }
     use std::io::Read;
-    let mut header = [0u8; 12];
+    let mut header = [0u8; 377];
     std::fs::File::open(output)?.read_exact(&mut header)?;
-    if &header[4..8] != b"ftyp" {
-        bail!("KICK 출력이 실제 MP4가 아닙니다. 부분 파일은 보존됩니다.");
+    if header[0] != 0x47 || header[188] != 0x47 || header[376] != 0x47 {
+        bail!("KICK 출력이 MPEG-TS가 아닙니다. 부분 파일은 보존됩니다.");
     }
     Ok(())
 }
@@ -984,8 +1018,8 @@ mod tests {
         let id = Uuid::new_v4();
         for title in ["한".repeat(60), "🎥".repeat(60), "é".repeat(60)] {
             let stem = output_stem(&"a".repeat(60), &title, id);
-            let partial = format!("{stem}.partial.mp4");
-            let final_name = format!("{stem}.mp4");
+            let partial = format!("{stem}.partial.ts");
+            let final_name = format!("{stem}.ts");
             assert!(partial.len() <= 255);
             assert!(final_name.len() <= 255);
             assert!(stem.ends_with(&id.to_string()));
@@ -1000,7 +1034,7 @@ mod tests {
                     .create_new(true)
                     .open(&source)
                     .unwrap();
-                publish_mp4(&source, &target).unwrap();
+                publish_ts(&source, &target).unwrap();
                 assert!(target.exists());
                 assert!(!source.exists());
             }
@@ -1137,27 +1171,31 @@ mod tests {
         );
     }
     #[test]
-    fn command_is_direct_mp4_without_credentials_or_second_full_file() {
-        let command = ffmpeg_command(
-            Path::new("ffmpeg"),
+    fn command_is_parallel_ts_without_credentials_or_second_full_file() {
+        let command = yt_dlp_command(
+            Path::new("yt-dlp"),
             &media_url("https://stream.kick.com/hls/index.m3u8").unwrap(),
-            Path::new("out.partial.mp4"),
+            Path::new("out.partial.ts"),
         );
         let args: Vec<_> = command
             .as_std()
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert!(args.windows(2).any(|a| a == ["-c", "copy"]));
         assert!(
             args.windows(2)
-                .any(|a| { a == ["-user_agent", crate::support::PROVIDER_USER_AGENT] })
+                .any(|a| a == ["--concurrent-fragments", "4"])
         );
         assert!(
             args.windows(2)
-                .any(|a| a == ["-headers", "Origin: https://kick.com\r\n"])
+                .any(|a| { a == ["--user-agent", crate::support::PROVIDER_USER_AGENT] })
         );
-        assert!(args.windows(2).any(|a| a == ["-f", "mp4"]));
+        assert!(
+            args.windows(2)
+                .any(|a| a == ["--add-header", "Origin:https://kick.com"])
+        );
+        assert!(args.iter().any(|a| a == "--hls-use-mpegts"));
+        assert!(args.iter().any(|a| a == "--abort-on-unavailable-fragments"));
         assert!(
             !args
                 .iter()
@@ -1165,33 +1203,34 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn direct_process_checks_mp4_and_complete_duration_and_preserves_failures() {
+    async fn direct_process_checks_ts_and_complete_fragments_and_preserves_failures() {
         use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
         let fixture = ProviderFixture::new();
-        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let ffmpeg = fixture.tool(ToolKind::YtDlp);
         let source = media_url("https://stream.kick.com/hls/index.m3u8").unwrap();
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
         let cancel = AtomicBool::new(false);
         for (mode, success) in [
             ("kick-direct-success", true),
             ("kick-direct-truncated", false),
+            ("kick-direct-invalid", false),
             ("run-partial-fail", false),
         ] {
             fixture.set_mode(&ffmpeg, mode);
-            let output = fixture.root().join(format!("{mode}.partial.mp4"));
-            let result = download_mp4(&ffmpeg, &source, &output, 60, &status, &cancel).await;
+            let output = fixture.root().join(format!("{mode}.partial.ts"));
+            let result = download_ts(&ffmpeg, &source, &output, 60, &status, &cancel).await;
             assert_eq!(result.is_ok(), success, "{mode}");
             assert!(output.exists(), "partial output must be preserved");
         }
         assert!(!fixture.invocations().contains("session_token"));
-        let source = fixture.root().join("kick-direct-success.partial.mp4");
-        let target = fixture.root().join("complete.mp4");
-        publish_mp4(&source, &target).unwrap();
+        let source = fixture.root().join("kick-direct-success.partial.ts");
+        let target = fixture.root().join("complete.ts");
+        publish_ts(&source, &target).unwrap();
         assert!(!source.exists());
         assert!(target.exists());
-        let another = fixture.root().join("another.mp4");
+        let another = fixture.root().join("another.ts");
         std::fs::write(&another, b"other").unwrap();
-        assert!(publish_mp4(&another, &target).is_err());
+        assert!(publish_ts(&another, &target).is_err());
         assert_eq!(std::fs::read(&another).unwrap(), b"other");
     }
 
@@ -1199,15 +1238,15 @@ mod tests {
     async fn cancel_terminates_only_owned_descendants() {
         use crate::{test_support::ProviderFixture, tool_discovery::ToolKind};
         let fixture = ProviderFixture::new();
-        let ffmpeg = fixture.tool(ToolKind::Ffmpeg);
+        let ffmpeg = fixture.tool(ToolKind::YtDlp);
         fixture.set_mode(&ffmpeg, "run-spawn-child");
         let mut unrelated = fixture.spawn_unrelated();
         fixture.wait_for_unrelated().await;
         let source = media_url("https://stream.kick.com/hls/index.m3u8").unwrap();
-        let output = fixture.root().join("cancel.partial.mp4");
+        let output = fixture.root().join("cancel.partial.ts");
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
         let cancel = AtomicBool::new(false);
-        let operation = download_mp4(&ffmpeg, &source, &output, 60, &status, &cancel);
+        let operation = download_ts(&ffmpeg, &source, &output, 60, &status, &cancel);
         let trigger = async {
             fixture
                 .wait_for_path(&fixture.child_ready_path(&ffmpeg))

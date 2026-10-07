@@ -11,7 +11,7 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
     match platform {
         PlatformId::Soop => soop::vod::valid_thumbnail_url(url),
         PlatformId::Chzzk => chzzk::vod::valid_thumbnail_url(url),
-        PlatformId::Kick => false,
+        PlatformId::Kick => kick::live::valid_thumbnail_url(url),
     }
 }
 
