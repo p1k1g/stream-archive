@@ -741,11 +741,50 @@ fn publish_ts(source: &Path, target: &Path) -> Result<()> {
             bail!("KICK TS 저장 마무리 실패. partial.ts 파일은 보존됩니다.");
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        std::fs::hard_link(source, target).map_err(|_| {
-            anyhow::anyhow!("KICK TS 저장 마무리 실패. partial.ts 파일은 보존됩니다.")
-        })?;
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let source = CString::new(source.as_os_str().as_bytes())?;
+        let target = CString::new(target.as_os_str().as_bytes())?;
+        // Atomic same-filesystem move without replacement, including exFAT/FAT.
+        // Do not fall back to exists()+rename(), which could overwrite a racing writer.
+        #[cfg(target_os = "linux")]
+        let result = {
+            unsafe extern "C" {
+                fn renameat2(
+                    oldfd: i32,
+                    old: *const std::ffi::c_char,
+                    newfd: i32,
+                    new: *const std::ffi::c_char,
+                    flags: u32,
+                ) -> i32;
+            }
+            // AT_FDCWD=-100; RENAME_NOREPLACE=1.
+            unsafe { renameat2(-100, source.as_ptr(), -100, target.as_ptr(), 1) }
+        };
+        #[cfg(target_os = "macos")]
+        let result = {
+            unsafe extern "C" {
+                fn renamex_np(
+                    old: *const std::ffi::c_char,
+                    new: *const std::ffi::c_char,
+                    flags: u32,
+                ) -> i32;
+            }
+            // RENAME_EXCL=0x4.
+            unsafe { renamex_np(source.as_ptr(), target.as_ptr(), 0x4) }
+        };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            bail!(
+                "KICK TS 저장 마무리 실패 (os_error={:?}). partial.ts 파일은 보존됩니다.",
+                error.raw_os_error()
+            );
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        std::fs::hard_link(source, target)?;
         std::fs::remove_file(source)?;
     }
     Ok(())

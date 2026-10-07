@@ -97,3 +97,5 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 - [ ] 새 앱에서 공개/구독 VOD 분석 썸네일 확인
 - [ ] TS 전체 다운로드, 선택 화질, 영상 길이와 끝부분 재생·탐색 확인
 - [ ] 취소, 조각 실패, 디스크 부족 시 성공 알림이 나오지 않는지 확인
+
+최종 TS 게시에는 Windows `MoveFileW`, Linux `renameat2(RENAME_NOREPLACE)`, macOS `renamex_np(RENAME_EXCL)`를 사용합니다. 같은 저장 폴더 안에서 파일을 복사하지 않고 이동하며 기존 대상 파일을 덮어쓰지 않습니다. Linux/macOS도 hard link 지원을 요구하지 않습니다. 저장장치가 해당 rename 연산을 거부하면 부분 파일을 보존하고 실패를 보고합니다. exFAT/FAT 실제 장치 검증은 수동 RC로 남겨둡니다.
