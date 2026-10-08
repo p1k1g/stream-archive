@@ -20,7 +20,7 @@ use crate::{
     },
     queue_service::VodQueueManager,
     runtime_owner::{RuntimeOwnerGuard, runtime_owner_active},
-    security::unprotect_secret,
+    security::read_provider_settings,
     store::{self, Store},
     support::{
         platform::{PlatformId, live::LiveSession},
@@ -445,26 +445,20 @@ impl StreamArchiveCore {
     /// Secret values are decrypted only inside the shared service boundary and
     /// are never returned to the native frontend or written to logs.
     pub async fn test_soop_auth(&self) -> Result<String> {
-        let settings = self.store.live_settings_with_secrets()?;
-        let username = settings.get("SOOP_USERNAME").cloned().unwrap_or_default();
-        let password = unprotect_secret(
-            settings
-                .get("SOOP_PASSWORD")
-                .map(String::as_str)
-                .unwrap_or(""),
-            "SOOP_PASSWORD",
+        let mut settings = read_provider_settings(
+            &self.store,
+            &[
+                "SOOP_USERNAME",
+                "SOOP_PASSWORD",
+                "CLOUDFLARE_WORKER_URL",
+                "CLOUDFLARE_API_KEY",
+            ],
+            &["SOOP_PASSWORD", "CLOUDFLARE_API_KEY"],
         )?;
-        let worker_url = settings
-            .get("CLOUDFLARE_WORKER_URL")
-            .cloned()
-            .unwrap_or_default();
-        let worker_key = unprotect_secret(
-            settings
-                .get("CLOUDFLARE_API_KEY")
-                .map(String::as_str)
-                .unwrap_or(""),
-            "CLOUDFLARE_API_KEY",
-        )?;
+        let username = settings.remove("SOOP_USERNAME").unwrap_or_default();
+        let password = settings.remove("SOOP_PASSWORD").unwrap_or_default();
+        let worker_url = settings.remove("CLOUDFLARE_WORKER_URL").unwrap_or_default();
+        let worker_key = settings.remove("CLOUDFLARE_API_KEY").unwrap_or_default();
 
         for (label, value) in [
             ("SOOP username", username.as_str()),

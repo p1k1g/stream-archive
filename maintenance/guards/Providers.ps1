@@ -26,7 +26,7 @@ Assert-Match $chzzk 'is_ascii_hexdigit' 'CHZZK channel ID hex validation is miss
 # Authentication must stay encrypted-at-rest and hot-loadable.
 Assert-Match $backend '"CHZZK_NID_AUT"' 'CHZZK_NID_AUT is not registered as a hidden setting.'
 Assert-Match $backend '"CHZZK_NID_SES"' 'CHZZK_NID_SES is not registered as a hidden setting.'
-Assert-Match $auth 'unprotect_secret' 'CHZZK auth does not decrypt through the common secret boundary.'
+Assert-Match $auth 'read_provider_settings' 'CHZZK auth does not decrypt through the common secret boundary.'
 Assert-Match $auth 'pub fn load\(\)' 'CHZZK auth hot-load entrypoint is missing.'
 Assert-Match $auth 'ChzzkAuthState::Missing' 'Missing CHZZK auth state coverage is missing.'
 Assert-Match $auth 'ChzzkAuthState::Partial' 'Partial CHZZK auth state coverage is missing.'
