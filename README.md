@@ -19,13 +19,19 @@ Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행�
 ![Stream Archive Windows Native LIVE 화면](docs/images/live.png)
 
 <details>
-<summary>채널 및 대기열 화면 보기</summary>
+<summary>채널 관리 · VOD · 대기열 화면 보기</summary>
 
 ### 채널
 
-SOOP/CHZZK/KICK 녹화 채널을 등록하고 관리합니다. KICK 공개 LIVE를 지원하며 Phase 26.2에서는 공개·구독 VOD 분석과 다운로드를 추가합니다.
+SOOP/CHZZK/KICK 채널을 등록하고 방송 감시 여부와 채널별 저장 폴더를 설정합니다.
 
 ![Stream Archive Windows Native 채널 화면](docs/images/channels.png)
+
+### VOD 다운로드
+
+URL 분석 후 제목과 썸네일을 확인하고, 화질·PART·저장 경로를 선택해 다운로드하거나 대기열에 추가합니다.
+
+![Stream Archive Windows Native VOD 분석 화면](docs/images/vod.png)
 
 ### 대기열 (Queue)
 
@@ -35,7 +41,7 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
 </details>
 
-위 이미지는 채널과 작업이 등록되지 않은 초기 화면 예시입니다.
+위 이미지는 실제 Windows Native 앱의 LIVE 녹화, 채널 관리, CHZZK VOD 분석 및 다운로드 진행 화면입니다. 화면에 표시된 채널·영상은 사용 예시입니다.
 
 ## 다운로드 및 지원 환경
 
@@ -65,12 +71,12 @@ SOOP LIVE를 사용하려면 [backend/worker.js](backend/worker.js)를 본인의
 2. 공개된 Windows ZIP과 함께 제공되는 `.sha256`을 확인한 뒤 새 폴더에 압축을 풉니다.
 3. `StreamArchive.exe`를 더블클릭하거나 `RUN.bat`를 실행합니다. Rust 설치나 source build는 필요하지 않습니다.
 4. **설정 → 일반**에서 저장 경로와 필요한 서비스 설정을 구성합니다. SOOP LIVE는 위 Worker 사전 설정을 먼저 완료합니다. 외부 도구는 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 준비합니다.
-5. **설정 → 관리**의 Diagnostics에서 도구 탐색·버전 확인 결과를 확인합니다.
+5. **진단** 화면에서 도구 탐색·버전 확인 결과를 확인합니다.
 6. 채널을 등록해 LIVE 녹화를 시작하거나, VOD URL을 입력해 다운로드합니다.
 
 Explorer에서 직접 실행해도 실행 파일 옆의 `backend\`와 `data\stream-archive.db`를 기본 경로로 사용합니다.
 
-창을 정상 종료하면 애플리케이션이 소유한 LIVE/VOD 프로세스를 정리합니다. 계속 녹화하려면 애플리케이션을 실행한 상태로 유지하세요.
+창의 닫기 동작은 설정에 따라 프로그램 종료, 시스템 트레이 이동 또는 선택 확인으로 처리합니다. 트레이로 이동하면 방송 감시·녹화·다운로드를 유지하고, 프로그램을 종료하면 애플리케이션이 소유한 LIVE/VOD 프로세스를 정리합니다. 다운로드 완료·실패 알림은 설정에서 켜거나 끌 수 있습니다.
 
 ### Linux / macOS
 
@@ -99,7 +105,7 @@ cd stream-archive
 
 | 기능 | SOOP | CHZZK | KICK |
 |---|:---:|:---:|:---:|
-| LIVE 자동 녹화 | ✅ | ✅ | 공개 LIVE (Phase 26.1) |
+| LIVE 자동 녹화 | ✅ | ✅ | 공개 LIVE |
 | VOD 분석·다운로드 | ✅ | ✅ | 공개 / 구독 VOD (구독 인증 필요) |
 | Queue / History | ✅ | ✅ | VOD Queue / LIVE·VOD History |
 | 취소·재시도 | ✅ | ✅ | LIVE 중지·재확인 / VOD 취소·새 파일 재시도 (이어받기 미지원) |
@@ -111,7 +117,7 @@ cd stream-archive
 - 자동 백업 정책, Backup / Restore, Diagnostics / Runtime Logs
 - Windows DPAPI / Linux Secret Service / macOS Keychain을 통한 비밀정보 보호
 
-지원 대상은 SOOP/CHZZK의 일반 LIVE/VOD, KICK 공개 LIVE 및 Phase 26.2의 KICK VOD입니다. KICK은 채널 URL의 마지막 이름(slug)을 등록합니다. API 차단은 오프라인으로 처리하지 않으며, 최신 Streamlink 및 JS challenge 처리용 Chromium 계열 브라우저가 필요할 수 있습니다. 개발 브랜치의 실제 환경 검증과 배포 포함 여부는 별도로 확인합니다. [KICK LIVE 사용 조건과 수동 QA](docs/PHASE26_1_KICK_LIVE.md)를 참고하세요. 클립, CATCH, 쇼츠·짧은 영상, 별도 게시물·커뮤니티 콘텐츠 등은 지원하지 않습니다.
+지원 대상은 SOOP/CHZZK의 일반 LIVE/VOD, KICK 공개 LIVE 및 공개·구독 VOD입니다. KICK은 채널 URL의 마지막 이름(slug)을 등록합니다. API 차단은 오프라인으로 처리하지 않으며, 최신 Streamlink 및 JS challenge 처리용 Chromium 계열 브라우저가 필요할 수 있습니다. 실제 서비스·계정 환경의 수동 검증은 자동 CI 검증과 별도로 관리합니다. [KICK LIVE 사용 조건과 수동 QA](docs/PHASE26_1_KICK_LIVE.md)를 참고하세요. 클립, CATCH, 쇼츠·짧은 영상, 별도 게시물·커뮤니티 콘텐츠 등은 지원하지 않습니다.
 
 ## 기본 사용법
 
@@ -119,7 +125,7 @@ cd stream-archive
 
 1. **채널** 화면에서 플랫폼과 채널을 등록하고 저장합니다.
 2. 출력 경로와 필요한 인증정보를 설정합니다.
-3. **LIVE** 화면에서 Watcher를 시작합니다.
+3. **LIVE** 화면에서 방송 감시를 시작합니다.
 4. 방송이 시작되면 녹화를 시작하며 상태와 저장공간을 확인할 수 있습니다.
 5. 방송 종료·수동 중지·앱 종료 시 애플리케이션이 소유한 녹화 프로세스를 정리합니다.
 
@@ -131,13 +137,17 @@ cd stream-archive
 4. **대기열**에서 진행·실패·취소·재시도 상태를 확인합니다.
 5. **기록**에서 LIVE/VOD 작업 내역을 확인합니다.
 
-Phase 25.5에서 SOOP VOD의 단일·다중 PART 해석과 공개·구독 인증 흐름을 정리했습니다. Phase 25.6에서는 인증 만료 후 이어받기와 SOOP/CHZZK 분석 결과 썸네일을 개선하고 있습니다. 실제 계정의 장시간 다운로드와 릴리스 포함 여부는 별도로 확인합니다. [이어받기 정책 및 수동 QA](docs/PHASE25_6_VOD_RESUME_THUMBNAILS.md)를 참고하세요.
+SOOP VOD는 단일·다중 PART 분석과 인증 만료 후 이어받기를 지원합니다. 서비스별 재시도·이어받기 조건은 [이어받기 정책 및 수동 QA](docs/PHASE25_6_VOD_RESUME_THUMBNAILS.md)를 참고하세요.
+
+KICK VOD는 yt-dlp로 4개 조각을 병렬 다운로드하고 MPEG-TS(`.ts`)로 저장합니다. MP4 remux와 이어받기는 하지 않으며, 재시도는 새 파일로 시작합니다. LIVE/VOD 첫 프레임 썸네일에는 FFmpeg가 필요합니다. [KICK VOD 사용 조건 및 수동 검증](docs/PHASE26_2_KICK_VOD.md)을 참고하세요.
+
+KICK 구독 VOD의 `session_token`은 **설정 → 일반**에 입력하고 저장합니다. 입력란을 비운 채 저장하면 기존 인증정보가 유지됩니다. 새 값으로 교체하려면 새 토큰을 입력해 저장하고, 제거하려면 **KICK 인증정보 삭제** 버튼을 사용하세요. 이 버튼은 앱에 저장된 인증정보를 제거하며 브라우저 로그아웃이나 서비스 측 세션 해제를 대신하지 않습니다.
 
 ## 데이터·백업·업그레이드
 
 설정, Channels, Queue, History와 백업 정책의 기준 데이터는 `data/stream-archive.db`입니다. `STREAM_ARCHIVE_DATA_DIR`로 데이터 경로를 지정할 수 있습니다.
 
-- **설정 → 관리**에서 백업 정책, 백업 생성·무결성 확인·Restore를 관리합니다.
+- **설정 → 백업 / 복원**에서 백업 정책, 백업 생성·무결성 확인·Restore를 관리합니다.
 - 기본 백업 폴더는 portable 패키지 밖의 형제 디렉터리 `stream-archive-backups`입니다. `STREAM_ARCHIVE_BACKUP_DIR`로 고정할 수 있습니다.
 - Windows 오프라인 백업은 앱을 종료한 뒤 `BACKUP_DATA.bat`를 사용합니다. 복구 명령과 안전 조건은 [운영 가이드](docs/OPERATIONS.md)를 따릅니다.
 - 업그레이드 전 정상 종료·백업·무결성 확인을 수행하고 이전 패키지를 보관합니다. 새 패키지는 별도 폴더에 풀고 기존 데이터 경로를 유지합니다.
@@ -177,19 +187,3 @@ Stream Archive는 독립적인 오픈소스 프로젝트이며 SOOP, NAVER, CHZZ
 사용자는 적용되는 법률·저작권 규정·각 서비스 이용약관을 준수해야 합니다. 이 프로젝트는 콘텐츠 이용 권한이나 서비스 접근 제한을 우회할 권리를 부여하지 않습니다.
 
 코드는 **GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)**로 공개합니다. [LICENSE](LICENSE)를 참고하세요. 외부 도구는 각각의 라이선스를 따르며 자세한 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다.
-
-### Windows 시스템 트레이 및 다운로드 알림
-
-Phase 24.1에서 닫기 버튼의 프로그램 종료 / 시스템 트레이 이동 선택을 추가했습니다. 기본값은 프로그램 종료이며, 트레이 이동 시 녹화·다운로드·채널 감시를 유지합니다. [사용 방법 및 수동 검증](docs/PHASE24_1_WINDOWS_TRAY.md)을 참고하세요.
-
-Phase 24.2에서 Windows 다운로드 완료·실패 알림을 추가했습니다. 설정에서 끌 수 있으며, 연속 결과는 묶어서 표시합니다. portable 실행 중의 native 트레이 알림으로 알림 센터 지속 보관이나 앱 종료 후 클릭은 보장하지 않습니다. [알림 정책 및 수동 검증](docs/PHASE24_2_WINDOWS_NOTIFICATIONS.md)을 참고하세요. 실제 환경의 수동 검증과 공개 릴리스 포함 여부는 별도로 확인합니다.
-
-### Windows UI/UX 정리
-
-Phase 25에서 dark theme·mint accent와 화면별 정보 구성을 정리하고 있습니다. LIVE의 방송 감시 버튼 통합, 복수 저장 볼륨 표시, Queue 진행 목록과 별도 Diagnostics 메뉴가 포함됩니다. 기존 기능과 공유 Rust runtime은 유지합니다. [구현 범위 및 수동 QA](docs/PHASE25_UI_UX_REFRESH.md)를 참고하세요. 현재 README screenshot은 Phase 25 이전 UI입니다.
-
-Phase 25.2에서 LIVE 상태·버튼, 저장 공간 배치, 채널 관리와 닫기 선택을 정리했고, Phase 25.3에서 채널 프로필 이미지를 추가했습니다. Phase 25.4에서는 이를 오프라인 플랫폼 로고 / 방송 중 썸네일로 전환하고 채널 저장 폴더 선택을 추가하고 있습니다. [캐시 정책 및 수동 QA](docs/PHASE25_4_LIVE_THUMBNAILS_FOLDER_PICKER.md)를 참고하세요.
-
-### Phase 26.2 — KICK VOD
-
-🚧 KICK 공개·구독 VOD 분석, `session_token` 보호 저장, yt-dlp의 4개 조각 병렬 다운로드와 MPEG-TS(`.ts`) 저장을 추가합니다. 다운로드에는 yt-dlp, LIVE/VOD 첫 프레임 썸네일에는 FFmpeg가 필요합니다. MP4 remux는 하지 않으며 재시도는 새 파일로 시작합니다. 이어받기는 지원하지 않습니다. [구현 범위 및 수동 검증](docs/PHASE26_2_KICK_VOD.md)
