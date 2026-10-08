@@ -77,6 +77,69 @@ fn cleanup_kick_secrets(store: &Store, delete: &mut impl FnMut(&str) -> Result<(
     Ok(())
 }
 
+fn rollback_provider_configuration(
+    store: &Store,
+    updates: &BTreeMap<String, String>,
+    journals: &[(String, String)],
+    delete: &mut impl FnMut(&str, &str) -> Result<()>,
+) -> Result<()> {
+    let mut first_error = None;
+    for (key, cleanup_key) in journals {
+        if let Some(value) = updates.get(key) {
+            let result: Result<()> = (|| {
+                delete(key, value)?;
+                if let Some(reference) = crate::security::native_cleanup_reference(value, key)? {
+                    store.finish_secret_cleanup(cleanup_key, &reference)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error).context("저장 실패 후 새 native credential 정리가 필요합니다."),
+        None => Ok(()),
+    }
+}
+
+fn save_provider_configuration(
+    store: &Store,
+    settings: &BTreeMap<String, String>,
+    secrets: &BTreeMap<String, String>,
+    mut protect: impl FnMut(&str, &str, &str) -> Result<String>,
+    delete: &mut impl FnMut(&str, &str) -> Result<()>,
+) -> Result<()> {
+    let mut updates = settings.clone();
+    let mut journals = Vec::new();
+    let preparation = (|| -> Result<()> {
+        for (key, value) in secrets.iter().filter(|(_, value)| !value.is_empty()) {
+            let cleanup_key = if key == "KICK_SESSION_TOKEN" {
+                KICK_CLEANUP_KEY.to_string()
+            } else {
+                format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS")
+            };
+            cleanup_provider_secrets(store, key, &cleanup_key, &mut |reference| {
+                delete(key, reference)
+            })?;
+            let protected = protect(key, value, &cleanup_key)?;
+            updates.insert(key.clone(), protected);
+            journals.push((key.clone(), cleanup_key));
+        }
+        Ok(())
+    })();
+    if let Err(error) = preparation {
+        rollback_provider_configuration(store, &updates, &journals, delete)
+            .with_context(|| format!("provider secret preparation failed: {error:#}"))?;
+        return Err(error);
+    }
+    if !updates.is_empty() {
+        commit_provider_configuration(store, &updates, &journals, delete)?;
+    }
+    Ok(())
+}
+
 fn commit_provider_configuration(
     store: &Store,
     updates: &BTreeMap<String, String>,
@@ -88,15 +151,8 @@ fn commit_provider_configuration(
             crate::security::native_cleanup_reference(value, key)
         })
     {
-        for (key, cleanup_key) in journals {
-            if let Some(value) = updates.get(key) {
-                delete(key, value)
-                    .context("저장 실패 후 새 native credential 정리가 필요합니다.")?;
-                if let Some(reference) = crate::security::native_cleanup_reference(value, key)? {
-                    store.finish_secret_cleanup(cleanup_key, &reference)?;
-                }
-            }
-        }
+        rollback_provider_configuration(store, updates, journals, delete)
+            .with_context(|| format!("provider SQLite commit failed: {error:#}"))?;
         return Err(error);
     }
     for (key, cleanup_key) in journals {
@@ -386,35 +442,17 @@ impl StreamArchiveCore {
             None
         };
         self.store.refresh_config_cache()?;
-        let mut updates = settings.clone();
-        let mut journals = Vec::new();
-        for (key, value) in secrets.iter().filter(|(_, value)| !value.is_empty()) {
-            let cleanup_key = if key == "KICK_SESSION_TOKEN" {
-                KICK_CLEANUP_KEY.to_string()
-            } else {
-                format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS")
-            };
-            cleanup_provider_secrets(&self.store, key, &cleanup_key, &mut |reference| {
-                crate::security::delete_protected_secret(reference, key)
-            })?;
-            let protected =
+        save_provider_configuration(
+            &self.store,
+            settings,
+            secrets,
+            |_, value, cleanup_key| {
                 crate::security::protect_secret_with_cleanup_intent(value, |reference| {
-                    self.store.retain_secret_cleanup(&cleanup_key, reference)
-                })?;
-            updates.insert(key.clone(), protected);
-            journals.push((key.clone(), cleanup_key));
-        }
-        if !updates.is_empty() {
-            commit_provider_configuration(&self.store, &updates, &journals, &mut |key, value| {
-                crate::security::delete_protected_secret(value, key)
-            })?;
-            self.logs
-                .push(format!(
-                    "[CORE] native provider configuration updated: {}",
-                    updates.keys().cloned().collect::<Vec<_>>().join(", ")
-                ))
-                .await;
-        }
+                    self.store.retain_secret_cleanup(cleanup_key, reference)
+                })
+            },
+            &mut |key, value| crate::security::delete_protected_secret(value, key),
+        )?;
         self.store.configured_secrets()
     }
 
@@ -924,6 +962,67 @@ mod tests {
 
     const OLD_KICK_REFERENCE: &str = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
     const NEW_KICK_REFERENCE: &str = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
+
+    #[test]
+    fn later_native_store_failure_rolls_back_all_prepared_credentials() {
+        for fail_first_cleanup in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path().join("test.db")).unwrap();
+            let original = BTreeMap::from([
+                ("CHZZK_NID_AUT".into(), "old-aut".into()),
+                ("KICK_SESSION_TOKEN".into(), "old-kick".into()),
+                ("SOOP_PASSWORD".into(), "old-soop".into()),
+            ]);
+            store.sync_settings(&original, "test").unwrap();
+            let mut deleted = Vec::new();
+            let result = save_provider_configuration(
+                &store,
+                &BTreeMap::new(),
+                &original,
+                |key, _, cleanup_key| {
+                    if key == "SOOP_PASSWORD" {
+                        bail!("native store failed");
+                    }
+                    let reference = if key == "CHZZK_NID_AUT" {
+                        OLD_KICK_REFERENCE
+                    } else {
+                        NEW_KICK_REFERENCE
+                    };
+                    store.retain_secret_cleanup(cleanup_key, reference)?;
+                    Ok(reference.into())
+                },
+                &mut |key, reference| {
+                    deleted.push((key.to_string(), reference.to_string()));
+                    if fail_first_cleanup && key == "CHZZK_NID_AUT" {
+                        bail!("native cleanup failed");
+                    }
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(deleted.len(), 2);
+            for (key, value) in &original {
+                assert_eq!(store.setting_value(key).unwrap().as_ref(), Some(value));
+            }
+            assert!(
+                store
+                    .pending_secret_cleanup(KICK_CLEANUP_KEY)
+                    .unwrap()
+                    .is_empty()
+            );
+            let pending = store
+                .pending_secret_cleanup("STREAM_ARCHIVE_CHZZK_NID_AUT_CLEANUP_REFS")
+                .unwrap();
+            assert_eq!(
+                pending,
+                if fail_first_cleanup {
+                    vec![OLD_KICK_REFERENCE.to_string()]
+                } else {
+                    Vec::new()
+                }
+            );
+        }
+    }
 
     #[test]
     fn provider_clear_retries_native_cleanup_and_preserves_other_settings() {
