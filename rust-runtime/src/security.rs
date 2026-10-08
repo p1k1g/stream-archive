@@ -133,15 +133,26 @@ fn read_provider_settings_with(
     secret_keys: &[&str],
     mut unprotect: impl FnMut(&str, &str) -> Result<String>,
 ) -> Result<std::collections::BTreeMap<String, String>> {
+    with_provider_settings(store, keys, |mut values| {
+        for key in secret_keys {
+            let reference = values.get(*key).map(String::as_str).unwrap_or_default();
+            let plain = unprotect(reference, key)?;
+            values.insert((*key).into(), plain);
+        }
+        Ok(values)
+    })
+}
+
+/// Refresh and consume a settings snapshot under the native-secret read lock.
+/// The callback must finish native lookups before returning; never perform HTTP here.
+pub(crate) fn with_provider_settings<T>(
+    store: &crate::store::Store,
+    keys: &[&str],
+    read: impl FnOnce(std::collections::BTreeMap<String, String>) -> Result<T>,
+) -> Result<T> {
     let _guard = kick_secret_read_guard(store, std::time::Duration::from_secs(5))?;
     store.refresh_config_cache()?;
-    let mut values = store.settings_for_keys(keys)?;
-    for key in secret_keys {
-        let reference = values.get(*key).map(String::as_str).unwrap_or_default();
-        let plain = unprotect(reference, key)?;
-        values.insert((*key).into(), plain);
-    }
-    Ok(values)
+    read(store.settings_for_keys(keys)?)
 }
 
 pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
