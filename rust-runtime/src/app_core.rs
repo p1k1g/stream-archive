@@ -150,22 +150,33 @@ fn cleanup_provider_secrets(
     Ok(())
 }
 
-fn clear_provider_secret_in_store(
+fn clear_provider_secrets_in_store(
     store: &Store,
-    key: &str,
-    mut delete: impl FnMut(&str) -> Result<()>,
+    keys: &[&str],
+    mut delete: impl FnMut(&str, &str) -> Result<()>,
 ) -> Result<()> {
-    let cleanup_key = format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS");
-    store.sync_settings_retiring_secret(
-        &BTreeMap::from([(key.into(), String::new())]),
-        "native-provider",
-        key,
-        &cleanup_key,
-        |value| crate::security::native_cleanup_reference(value, key),
-    )?;
-    for reference in store.pending_secret_cleanup(&cleanup_key)? {
-        delete(&reference)?;
-        store.finish_secret_cleanup(&cleanup_key, &reference)?;
+    let values = keys
+        .iter()
+        .map(|key| ((*key).into(), String::new()))
+        .collect();
+    let journals: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            (
+                key.to_string(),
+                format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS"),
+            )
+        })
+        .collect();
+    // Clear the entire credential set before any fallible native cleanup.
+    store.sync_settings_retiring_secrets(&values, "native-provider", &journals, |key, value| {
+        crate::security::native_cleanup_reference(value, key)
+    })?;
+    for (key, cleanup_key) in journals {
+        for reference in store.pending_secret_cleanup(&cleanup_key)? {
+            delete(&key, &reference)?;
+            store.finish_secret_cleanup(&cleanup_key, &reference)?;
+        }
     }
     Ok(())
 }
@@ -416,12 +427,9 @@ impl StreamArchiveCore {
         };
         let _guard = self.config_write_lock.lock().await;
         let _secret_guard = crate::security::kick_secret_guard(&self.store)?;
-        for key in keys {
-            clear_provider_secret_in_store(&self.store, key, |value| {
-                crate::security::delete_protected_secret(value, key)
-            })?;
-        }
-        Ok(())
+        clear_provider_secrets_in_store(&self.store, keys, |key, value| {
+            crate::security::delete_protected_secret(value, key)
+        })
     }
 
     /// Explicit deletion; empty provider drafts continue to preserve saved values.
@@ -931,23 +939,49 @@ mod tests {
             .sync_settings(
                 &BTreeMap::from([
                     ("CHZZK_NID_AUT".into(), OLD_KICK_REFERENCE.into()),
+                    ("CHZZK_NID_SES".into(), NEW_KICK_REFERENCE.into()),
                     ("CLOUDFLARE_API_KEY".into(), "keep-worker".into()),
                 ]),
                 "test",
             )
             .unwrap();
         assert!(
-            clear_provider_secret_in_store(&store, "CHZZK_NID_AUT", |_| bail!("test failure"))
-                .is_err()
+            clear_provider_secrets_in_store(
+                &store,
+                &["CHZZK_NID_AUT", "CHZZK_NID_SES"],
+                |_, _| bail!("test failure")
+            )
+            .is_err()
         );
         assert_eq!(store.setting_value("CHZZK_NID_AUT").unwrap().unwrap(), "");
+        assert_eq!(store.setting_value("CHZZK_NID_SES").unwrap().unwrap(), "");
+        assert_eq!(
+            store
+                .pending_secret_cleanup("STREAM_ARCHIVE_CHZZK_NID_AUT_CLEANUP_REFS")
+                .unwrap(),
+            vec![OLD_KICK_REFERENCE]
+        );
+        assert_eq!(
+            store
+                .pending_secret_cleanup("STREAM_ARCHIVE_CHZZK_NID_SES_CLEANUP_REFS")
+                .unwrap(),
+            vec![NEW_KICK_REFERENCE]
+        );
         let mut deleted = Vec::new();
-        clear_provider_secret_in_store(&store, "CHZZK_NID_AUT", |value| {
+        clear_provider_secrets_in_store(&store, &["CHZZK_NID_AUT", "CHZZK_NID_SES"], |_, value| {
             deleted.push(value.to_string());
             Ok(())
         })
         .unwrap();
-        assert_eq!(deleted, vec![OLD_KICK_REFERENCE]);
+        assert_eq!(deleted, vec![OLD_KICK_REFERENCE, NEW_KICK_REFERENCE]);
+        for key in ["CHZZK_NID_AUT", "CHZZK_NID_SES"] {
+            assert!(
+                store
+                    .pending_secret_cleanup(&format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS"))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
         assert_eq!(
             store.setting_value("CLOUDFLARE_API_KEY").unwrap().unwrap(),
             "keep-worker"
