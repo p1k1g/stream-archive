@@ -1,8 +1,8 @@
 # Stream Archive 1.0.0 릴리스 노트
 
-상태: **첫 공개 안정 버전 준비 중 — 아직 공개하지 않음**
+상태: **첫 공개 안정 버전 공개 — 2026-10-08**
 
-Stream Archive 1.0.0은 첫 공개 안정 버전으로 준비하고 있습니다. 버전과 릴리스 문서 정리가 완료되어도 공개 승인을 뜻하지는 않습니다. 최종 merge, `v1.0.0` tag 생성과 GitHub Release 공개는 운영자가 결정합니다.
+Stream Archive 1.0.0은 첫 공개 안정 버전입니다. 운영자가 2026-10-08에 [v1.0.0 GitHub Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)를 공개했습니다. 공개 사실은 미완료 수동 QA의 성공을 뜻하지 않으며, 검증 증빙이 없는 항목은 수동 체크리스트에 미완료로 유지합니다.
 
 ## 주요 변경사항
 
@@ -21,7 +21,7 @@ Phase 23.10에서는 Windows 아이콘, LIVE 화면의 개발용 부제 제거, 
 - Diagnostics / Runtime Logs
 - OS별 비밀정보 보호
 
-인증정보 없이 실행하는 CI는 오프라인 서비스·미디어 도구 fixture로 명령 구성, 결과 매핑, timeout, 취소 및 소유한 하위 프로세스 정리를 검증합니다. 실제 서비스와 로그인 세션 검증은 공개 전 수동 QA로 남아 있습니다.
+인증정보 없이 실행하는 CI는 오프라인 서비스·미디어 도구 fixture로 명령 구성, 결과 매핑, timeout, 취소 및 소유한 하위 프로세스 정리를 검증합니다. 실제 서비스와 로그인 세션의 수동 QA는 별도 체크리스트에서 관리하며, 기록이 없는 항목은 미완료입니다.
 
 ## Windows Native
 
@@ -55,7 +55,7 @@ CI에서 검증하는 파일은 `stream-archive-linux-x64.tar.gz`와 `stream-arc
 | Linux x64 | `stream-archive-linux-x64.tar.gz` |
 | macOS arm64 | `stream-archive-macos-arm64.tar.gz` |
 
-모든 공식 패키지에는 `RELEASE_INFO.txt`와 패키지 내부 `SHA256SUMS.txt`가 들어갑니다. 최종 압축 파일에는 별도의 archive-level `.sha256` 파일이 함께 제공됩니다. 제품 및 패키지 metadata 버전은 1.0.0으로 검증하며, Windows EXE의 `ProductVersion`도 확인합니다.
+모든 공식 패키지에는 `RELEASE_INFO.txt`와 패키지 내부 `SHA256SUMS.txt`가 들어갑니다. 공개된 압축 파일의 archive-level `.sha256`은 [버전별 체크섬 디렉터리](releases/v1.0.0/)에 보존하며, [README 다운로드 안내](../README.md#다운로드-및-지원-환경)에서 패키지와 체크섬을 연결합니다. 제품 및 패키지 metadata 버전은 1.0.0으로 검증하며, Windows EXE의 `ProductVersion`도 확인합니다.
 
 공식 패키지의 런타임 `data/` 디렉터리는 비어 있어야 합니다. SQLite DB/WAL/SHM, 로그, 인증정보·cookies, 백업 DB, 다운로드한 미디어, process-state 파일은 배포 대상이 아닙니다. 손상된 압축 파일은 검증 단계에서 반드시 거부해야 합니다.
 
@@ -110,4 +110,4 @@ rollback 시 새 런타임을 종료하고 이전 패키지로 돌아갑니다. 
 
 자동 검증 범위는 Windows/Linux/macOS의 unit·integration fixture, 런타임 contract, Native compile, 패키지 체크섬, 새 디렉터리 압축 해제 smoke, 오프라인 백업·복구, 런타임 데이터 유출 거부 및 손상된 압축 파일 거부입니다. 1.0.0 revision의 근거는 해당 commit의 PR CI 결과이며, 이전 RC의 성공만으로 새 revision 검증을 대신하지 않습니다.
 
-[1.0.0 릴리스 마무리 문서](PHASE23_12_1_0_0_RELEASE_CLOSURE.md)와 [최종 수동 검증 체크리스트](MANUAL_RC_1_0_0.md)에 남은 작업을 기록합니다. 실제 서비스 세션, GUI 조작, 대표 데이터의 업그레이드·rollback, OS별 비밀정보 저장 및 공개할 정확한 artifact 점검은 수동 검증 항목입니다. 수행하지 않은 수동 QA는 완료로 표시하지 않습니다. 공개 승인, `v1.0.0` 및 GitHub Release 공개는 운영자가 결정합니다.
+[1.0.0 릴리스 마무리 문서](PHASE23_12_1_0_0_RELEASE_CLOSURE.md)와 [최종 수동 검증 체크리스트](MANUAL_RC_1_0_0.md)에 남은 작업을 기록합니다. 실제 서비스 세션, GUI 조작, 대표 데이터의 업그레이드·rollback, OS별 비밀정보 저장 및 공개할 정확한 artifact 점검은 수동 검증 항목입니다. 수행하지 않은 수동 QA는 완료로 표시하지 않습니다. 운영자의 [v1.0.0 GitHub Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0) 공개는 완료됐습니다. 공개 이후에도 미완료 수동 검증의 실제 결과와 증빙은 별도로 기록해야 합니다.

@@ -1,6 +1,8 @@
 # Phase 23.12 — 1.0.0 릴리스 마무리
 
-상태: **첫 공개 안정 버전 준비 중 — 공개 승인 및 최종 수동 검증 대기**
+상태: **첫 공개 안정 버전 공개 — 2026-10-08; 미완료 수동 검증 별도 관리**
+
+운영자가 [v1.0.0 GitHub Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)를 공개했습니다. 배포 패키지 생성은 [run 37741196303](https://github.com/p1k1g/stream-archive/actions/runs/37741196303)의 네 job이 모두 성공한 기록을 참조합니다. 공개된 패키지의 체크섬은 [버전별 디렉터리](releases/v1.0.0/)에 보존합니다. 이 공개 기록은 아래 수동 RC 항목의 완료 증빙을 대신하지 않습니다.
 
 ## 기준 revision과 작업 범위
 
@@ -61,4 +63,4 @@ artifact 생성 workflow도 업로드 전에 Cargo·패키지 버전과 Windows 
 
 필수 CI 실패, 수동 gate 실패 또는 필요한 증빙 미확보 상태에서는 공개하지 않습니다. Ready for review는 코드 검토 준비 상태이며 수동 RC 완료나 공개 승인을 뜻하지 않습니다. 환경·인증정보가 없어 검증하지 못한 경우 미검증으로 기록하고, 완료로 표시하지 않습니다.
 
-운영자가 최종 merge, `v1.0.0` tag 및 GitHub Release 공개를 결정합니다. 현재 공개 준비 상태를 이미 출시한 것으로 표현하지 않습니다.
+운영자가 최종 merge 및 `v1.0.0` tag / GitHub Release 공개를 수행했습니다. 현재 공개 사실은 [v1.0.0 GitHub Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 확인합니다. 아래 체크리스트에 증빙이 없는 수동 검증은 공개 이후에도 미완료로 남기며, 이 문서 갱신으로 기존 gate를 완료하거나 면제하지 않습니다.
