@@ -541,10 +541,47 @@ fn provider_clear_kick_token_uses_core_and_does_not_expose_values() {
     );
     assert!(
         !layout
-            .cli(&["providers", "clear-secret", "SOOP_PASSWORD"])
+            .cli(&["providers", "clear-secret", "UNSUPPORTED_SECRET"])
             .status
             .success()
     );
+}
+
+#[test]
+fn cli_clears_soop_and_chzzk_credentials_without_touching_worker() {
+    let layout = Layout::new();
+    assert_success("init", &layout.cli(&["init"]));
+    let conn = Connection::open(layout.data.join("stream-archive.db")).unwrap();
+    for key in [
+        "SOOP_PASSWORD",
+        "CHZZK_NID_AUT",
+        "CHZZK_NID_SES",
+        "CLOUDFLARE_API_KEY",
+    ] {
+        conn.execute("INSERT INTO settings(key,value,source,updated_at) VALUES(?1,'legacy-fixture','test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value", [key]).unwrap();
+    }
+    for key in ["SOOP_PASSWORD", "CHZZK_NID_AUT", "CHZZK_NID_SES"] {
+        assert_success(
+            "clear provider",
+            &layout.cli(&["providers", "clear-secret", key]),
+        );
+    }
+    for key in ["SOOP_PASSWORD", "CHZZK_NID_AUT", "CHZZK_NID_SES"] {
+        let value: String = conn
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(value.is_empty());
+    }
+    let worker: String = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key='CLOUDFLARE_API_KEY'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(worker, "legacy-fixture");
 }
 
 #[cfg(target_os = "linux")]

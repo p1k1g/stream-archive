@@ -351,7 +351,7 @@ impl Store {
         )?;
         let mut target = self.conn()?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let source = Self::restore_source_preserving_kick(&source, &target)?;
+        let source = Self::restore_source_preserving_credentials(&source, &target)?;
         let backup = Backup::new(&source, &mut target)?;
         backup.run_to_completion(256, std::time::Duration::from_millis(2), None)?;
         drop(backup);
@@ -367,7 +367,7 @@ impl Store {
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn restore_source_preserving_kick(
+    fn restore_source_preserving_credentials(
         source: &Connection,
         current: &Connection,
     ) -> Result<Connection> {
@@ -383,6 +383,16 @@ impl Store {
         for key in [
             "KICK_SESSION_TOKEN",
             "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS",
+            "SOOP_USERNAME",
+            "SOOP_PASSWORD",
+            "CLOUDFLARE_WORKER_URL",
+            "CLOUDFLARE_API_KEY",
+            "CHZZK_NID_AUT",
+            "CHZZK_NID_SES",
+            "STREAM_ARCHIVE_SOOP_PASSWORD_CLEANUP_REFS",
+            "STREAM_ARCHIVE_CLOUDFLARE_API_KEY_CLEANUP_REFS",
+            "STREAM_ARCHIVE_CHZZK_NID_AUT_CLEANUP_REFS",
+            "STREAM_ARCHIVE_CHZZK_NID_SES_CLEANUP_REFS",
         ] {
             let row: Option<(String, String, String)> = current
                 .query_row(
@@ -399,49 +409,8 @@ impl Store {
                 )?;
             }
         }
-        // Keep retirement intents from both the live DB and backup. Restoring
-        // a provider reference must not make that active credential deletable.
-        for secret_key in [
-            "SOOP_PASSWORD",
-            "CLOUDFLARE_API_KEY",
-            "CHZZK_NID_AUT",
-            "CHZZK_NID_SES",
-        ] {
-            let cleanup_key = format!("STREAM_ARCHIVE_{secret_key}_CLEANUP_REFS");
-            let read = |conn: &Connection, key: &str| -> Result<String> {
-                Ok(conn
-                    .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
-                        row.get(0)
-                    })
-                    .optional()?
-                    .unwrap_or_default())
-            };
-            let restored = read(&tx, secret_key)?;
-            let active = read(current, secret_key)?;
-            let mut pending: Vec<String> = Vec::new();
-            for encoded in [read(&tx, &cleanup_key)?, read(current, &cleanup_key)?] {
-                if !encoded.is_empty() {
-                    for reference in serde_json::from_str::<Vec<String>>(&encoded)
-                        .context("invalid provider cleanup references")?
-                    {
-                        if !pending.contains(&reference) {
-                            pending.push(reference);
-                        }
-                    }
-                }
-            }
-            if active != restored
-                && let Some(reference) =
-                    crate::security::native_cleanup_reference(&active, secret_key)?
-                && !pending.contains(&reference)
-            {
-                pending.push(reference);
-            }
-            pending.retain(|reference| reference != &restored);
-            tx.execute("INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'native-secret-cleanup',?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,source=excluded.source,updated_at=excluded.updated_at", params![cleanup_key, serde_json::to_string(&pending)?, Utc::now().to_rfc3339()])?;
-        }
         tx.commit()?;
-        // Both preserved rows are present before the backup API touches the live
+        // All preserved rows are present before the backup API touches the live
         // DB, so failures cannot leave a restored obsolete native reference.
         Ok(staged)
     }
@@ -1200,48 +1169,75 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn restore_merges_provider_cleanup_and_excludes_restored_active_reference() {
+    fn restore_preserves_provider_credentials_and_cleanup_including_clear_and_absence() {
         let dir = tempdir().unwrap();
-        let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();
         let old = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
         let current = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
-        let orphan = "native-secret:v1:123e4567-e89b-12d3-a456-426614174002";
-        let key = "CHZZK_NID_AUT";
-        let journal = "STREAM_ARCHIVE_CHZZK_NID_AUT_CLEANUP_REFS";
-        store
-            .sync_settings(
-                &BTreeMap::from([
-                    (key.into(), old.into()),
-                    (
-                        journal.into(),
-                        serde_json::to_string(&vec![orphan]).unwrap(),
-                    ),
-                ]),
-                "test",
-            )
-            .unwrap();
-        let backup = dir.path().join("backup.db");
-        store.backup_to(&backup).unwrap();
-        let original = fs::read(&backup).unwrap();
-        store
-            .sync_settings(
-                &BTreeMap::from([
-                    (key.into(), current.into()),
-                    (
-                        journal.into(),
-                        serde_json::to_string(&vec![old, orphan]).unwrap(),
-                    ),
-                ]),
-                "test",
-            )
-            .unwrap();
-        store.restore_from(&backup).unwrap();
-        assert_eq!(store.setting_value(key).unwrap().as_deref(), Some(old));
-        assert_eq!(
-            store.pending_secret_cleanup(journal).unwrap(),
-            vec![orphan, current]
-        );
-        assert_eq!(fs::read(backup).unwrap(), original);
+        for key in [
+            "SOOP_PASSWORD",
+            "CLOUDFLARE_API_KEY",
+            "CHZZK_NID_AUT",
+            "CHZZK_NID_SES",
+        ] {
+            for value in [Some(current), Some(""), None] {
+                let store = Store::open(
+                    dir.path()
+                        .join(format!("{key}-{}.db", value.unwrap_or("absent").len())),
+                )
+                .unwrap();
+                let journal = format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS");
+                store
+                    .sync_settings(
+                        &BTreeMap::from([
+                            (key.into(), old.into()),
+                            (
+                                journal.clone(),
+                                serde_json::to_string(&vec![current]).unwrap(),
+                            ),
+                            ("TEST_RESTORE".into(), "backup".into()),
+                        ]),
+                        "test",
+                    )
+                    .unwrap();
+                let backup = dir.path().join(format!(
+                    "{key}-{}-backup.db",
+                    value.unwrap_or("absent").len()
+                ));
+                store.backup_to(&backup).unwrap();
+                let original = fs::read(&backup).unwrap();
+                if let Some(value) = value {
+                    store
+                        .sync_settings(
+                            &BTreeMap::from([
+                                (key.into(), value.into()),
+                                (journal.clone(), serde_json::to_string(&vec![old]).unwrap()),
+                            ]),
+                            "test",
+                        )
+                        .unwrap();
+                } else {
+                    store
+                        .conn()
+                        .unwrap()
+                        .execute(
+                            "DELETE FROM settings WHERE key=?1 OR key=?2",
+                            params![key, journal],
+                        )
+                        .unwrap();
+                }
+                store.restore_from(&backup).unwrap();
+                assert_eq!(store.setting_value(key).unwrap().as_deref(), value);
+                assert_eq!(
+                    store.setting_value(&journal).unwrap(),
+                    value.map(|_| serde_json::to_string(&vec![old]).unwrap())
+                );
+                assert_eq!(
+                    store.setting_value("TEST_RESTORE").unwrap().as_deref(),
+                    Some("backup")
+                );
+                assert_eq!(fs::read(&backup).unwrap(), original);
+            }
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1317,7 +1313,7 @@ mod tests {
             );
             assert_eq!(
                 store.setting_value("SOOP_PASSWORD").unwrap().as_deref(),
-                Some("backup-soop-secret")
+                Some("current-soop-secret")
             );
             assert_eq!(fs::read(&backup).unwrap(), original);
             assert!(crate::security::kick_secret_guard(&observer).is_ok());

@@ -32,7 +32,7 @@
 
 KICK 토큰 교체는 새 참조와 이전 native 참조의 정리 대기 기록을 기존 SQLite `settings` 테이블에 함께 commit합니다. commit 실패 시 새로 만든 KICK native credential을 회수합니다. commit 후 이전 항목을 삭제하고, 삭제 실패 시 opaque 참조만 정리 대기로 보존하여 다음 저장/삭제에서 재시도합니다. 정리 대기에는 평문 토큰을 저장하지 않으며 DB schema migration은 없습니다.
 
-Linux/macOS에서 Backup을 Restore할 때 `KICK_SESSION_TOKEN`과 native 정리 대기 참조는 복원 직전 canonical DB의 현재 상태를 유지합니다. 토큰을 교체했다면 현재 토큰을 사용하고, 삭제했거나 설정하지 않았다면 미설정을 유지합니다. 오래된 백업의 native 참조로 되돌리지 않습니다. 나머지 설정·채널·History 등은 기존대로 복원하며 Windows DPAPI 복원 방식은 변경하지 않습니다.
+Linux/macOS에서 Backup을 Restore할 때 `KICK_SESSION_TOKEN`과 native 정리 대기 참조는 복원 직전 canonical DB의 현재 상태를 유지합니다. 토큰을 교체했다면 현재 토큰을 사용하고, 삭제했거나 설정하지 않았다면 미설정을 유지합니다. 오래된 백업의 native 참조로 되돌리지 않습니다. SOOP/CHZZK/Worker 인증정보·연결 설정도 아래 보완 정책대로 현재 상태를 유지합니다. 그 외 설정·채널·History 등은 기존대로 복원하며 Windows DPAPI 복원 방식은 변경하지 않습니다.
 
 ## 오류 로그
 
@@ -90,7 +90,7 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 
 사용자 선택에 따라 Linux/macOS Restore는 현재 KICK 인증정보와 cleanup journal을 유지합니다. 동일 DB별 인증정보 잠금 아래에서 최신 canonical 행을 읽고, SQLite 내부 임시 DB에 복원 대상과 현재 두 행을 먼저 구성한 뒤 canonical DB로 복원합니다. 원본 백업과 체크섬은 변경하지 않고 native secret을 복호화하거나 다시 저장하지 않습니다. 준비 실패나 인증정보 잠금 경합 시 복원하지 않으며, 복원 도중 오래된 토큰/cleanup 참조가 되살아나는 중간 상태를 만들지 않습니다. 기존 safety backup과 runtime-owner/LIVE/VOD/Queue 사전 조건을 유지합니다.
 
-자동 테스트는 현재 토큰 교체·삭제·미설정, 오래된 owning-store cache와 최신 observer 값, cleanup journal 유지, 다른 provider 설정의 정상 복원, 원본 백업 불변, 준비 실패/잠금 경합 시 live DB 보존, managed Restore와 safety backup을 검증합니다. 실제 native store 세션 수동 QA는 완료 처리하지 않습니다.
+자동 테스트는 현재 토큰 교체·삭제·미설정, 오래된 owning-store cache와 최신 observer 값, cleanup journal 유지, 다른 provider 인증정보의 현재 상태 유지, 원본 백업 불변, 준비 실패/잠금 경합 시 live DB 보존, managed Restore와 safety backup을 검증합니다. 실제 native store 세션 수동 QA는 완료 처리하지 않습니다.
 
 ## 2026-10-07 다운로드 방식 변경 검증
 
@@ -107,4 +107,4 @@ KICK HLS 주소는 yt-dlp의 `--batch-file -` stdin과 FFmpeg의 `pipe:0` concat
 
 SOOP 비밀번호·CHZZK 쿠키·Worker API key를 새 값으로 교체할 때도 native 항목 생성 전 정리 참조를 기록하고, 설정 전환과 이전 참조의 정리 기록을 동일 SQLite transaction에서 저장합니다. 정리 실패 시 참조를 유지하며 다음 저장 또는 해당 인증정보 삭제로 재시도합니다. SOOP 삭제 버튼은 비밀번호만 제거하고 Worker 설정은 유지합니다.
 
-Linux/macOS Restore는 SOOP/CHZZK/Worker 설정 자체는 기존 정책대로 복원하되, 현재 DB와 백업의 정리 기록을 합칩니다. 복원으로 교체되는 현재 native 참조도 정리 대상으로 보존하고, 복원 후 활성 참조는 정리 대상에서 제외합니다. KICK의 현재 토큰 유지 정책은 그대로입니다. 과거 버전에서 이미 참조를 잃은 native 항목까지 자동으로 발견하거나 제거한다고 보장하지 않습니다.
+사용자 승인에 따라 Linux/macOS Restore는 SOOP 비밀번호·CHZZK 쿠키·Worker API key와 각 cleanup journal도 복원 직전 현재 값·삭제·미설정 상태를 유지합니다. 인증정보가 다른 계정·Worker와 조합되지 않도록 SOOP 사용자명과 Worker URL도 현재 상태를 유지합니다. 오래된 백업의 이미 삭제된 native 참조를 되살리지 않습니다. KICK 정책도 동일하며 Windows DPAPI 복원 방식은 변경하지 않습니다. 과거 버전에서 이미 참조를 잃은 native 항목까지 자동으로 발견하거나 제거한다고 보장하지 않습니다.

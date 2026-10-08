@@ -156,6 +156,8 @@ KICK 구독 VOD의 `session_token`은 **설정 → 일반**에 입력하고 저�
 - 새 버전 실행 후 설정·Channels·Queue·History를 확인하고 재실행 후에도 유지되는지 확인합니다.
 - rollback 시 임의 schema downgrade 호환성을 가정하지 않습니다. 실제 DB 상태에서 필요한 경우에만 검증한 업그레이드 전 백업을 복구합니다.
 
+Linux/macOS Restore는 SOOP·CHZZK·KICK·Worker 인증정보와 정리 대기 기록을 현재 상태로 유지합니다. SOOP 사용자명·Worker URL도 현재 값을 유지하며, 다른 설정·채널·기록은 백업에서 복원합니다. 삭제·미설정 인증정보를 옛 백업에서 되살리지 않습니다. Windows DPAPI 복원 방식은 그대로입니다.
+
 Windows는 CurrentUser DPAPI, Linux는 `secret-tool`을 통한 Secret Service, macOS는 Keychain을 사용합니다. Linux에는 사용 가능한 Secret Service 세션이 필요하며, native store가 없을 때 평문 저장으로 자동 fallback하지 않습니다. 다른 PC·OS로 DB만 옮겼을 때 같은 비밀정보를 사용할 수 있다고 가정하지 마세요.
 
 ## 알려진 제한사항 및 문제 해결

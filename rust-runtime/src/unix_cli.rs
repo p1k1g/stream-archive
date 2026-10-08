@@ -225,17 +225,23 @@ async fn command_providers(args: &[String]) -> Result<()> {
             println!("updated provider secret: {key}");
         }
         [action, key] if action == "clear-secret" => {
-            if key != "KICK_SESSION_TOKEN" {
-                bail!("providers clear-secret currently supports only KICK_SESSION_TOKEN");
+            match key.as_str() {
+                "KICK_SESSION_TOKEN" => core.clear_kick_token().await?,
+                "SOOP_PASSWORD" => core.clear_provider_credentials("SOOP").await?,
+                "CHZZK_NID_AUT" | "CHZZK_NID_SES" => {
+                    core.clear_provider_credentials("CHZZK").await?
+                }
+                _ => bail!(
+                    "clear-secret supports SOOP_PASSWORD, CHZZK_NID_AUT, CHZZK_NID_SES and KICK_SESSION_TOKEN"
+                ),
             }
-            core.clear_kick_token().await?;
             println!("cleared provider secret: {key}");
         }
         [action] if action == "test-soop" => {
             println!("{}", core.test_soop_auth().await?);
         }
         _ => bail!(
-            "usage: stream-archive-cli providers status [--json] | providers set <KEY> <VALUE> | providers secret <KEY> --stdin | providers clear-secret KICK_SESSION_TOKEN | providers test-soop"
+            "usage: stream-archive-cli providers status [--json] | providers set <KEY> <VALUE> | providers secret <KEY> --stdin | providers clear-secret <KEY> | providers test-soop"
         ),
     }
     core.shutdown().await;

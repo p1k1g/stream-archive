@@ -606,3 +606,14 @@ KICK 인증정보 삭제는 shared core에서 SQLite 설정 비우기와 이전 
 ```bash
 stream-archive-cli providers clear-secret KICK_SESSION_TOKEN
 ```
+
+### SOOP / CHZZK 인증정보 삭제
+
+```bash
+stream-archive-cli providers clear-secret SOOP_PASSWORD
+stream-archive-cli providers clear-secret CHZZK_NID_AUT
+```
+
+SOOP는 비밀번호만 삭제하고 사용자명·Worker 설정을 유지합니다. CHZZK는 `CHZZK_NID_AUT` 또는 `CHZZK_NID_SES` 중 어느 키를 지정해도 두 쿠키를 함께 삭제합니다. 삭제가 즉시 적용되며 native 정리 실패 시 같은 명령으로 재시도합니다.
+
+Linux/macOS Restore는 모든 provider 인증정보와 cleanup journal, SOOP 사용자명·Worker URL의 현재 상태를 유지합니다. 다른 설정·데이터는 백업에서 복원합니다.
