@@ -222,3 +222,5 @@ Streamlink, yt-dlp, FFmpeg는 외부 의존성이며 공식 패키지에 재배�
 애플리케이션은 자신이 생성하고 소유한 child-process tree만 종료할 수 있습니다. `taskkill /IM ffmpeg.exe`, `taskkill /IM streamlink.exe`, `taskkill /IM yt-dlp.exe` 또는 같은 방식의 process-name 기반 일괄 종료를 사용하지 않습니다.
 
 패키지 재빌드·복구 중 파일 잠금으로 실패하면 관계없는 미디어 도구를 종료하지 말고 Stream Archive를 정상 종료한 뒤 다시 시도합니다.
+
+Linux/macOS Restore는 SOOP·CHZZK·KICK·Worker 인증정보와 정리 대기 기록을 현재 상태로 유지합니다. SOOP 사용자명·Worker URL도 현재 값을 유지하며, 다른 설정·채널·기록은 백업에서 복원합니다. 삭제·미설정 인증정보를 옛 백업에서 되살리지 않습니다. Windows DPAPI 복원 방식은 그대로입니다.

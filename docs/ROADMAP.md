@@ -74,7 +74,7 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 
 첫 공개 안정 버전 `1.0.0`을 준비 중입니다. [릴리스 노트](RELEASE_NOTES_1_0_0.md), [릴리스 마무리 절차](PHASE23_12_1_0_0_RELEASE_CLOSURE.md), [최종 수동 검증 체크리스트](MANUAL_RC_1_0_0.md)를 참고하세요. 로드맵의 완료 표시는 해당 구현·절차 정리를 뜻하며 실제 수동 QA 완료나 공개 승인을 의미하지 않습니다. 아직 `v1.0.0` tag / GitHub Release는 공개하지 않았습니다.
 
-## 1.0.0 이후 개발
+## 공개 준비 중 추가 개발
 
 - Phase 24.1 ✅ Windows 닫기 동작 / 시스템 트레이 ([설계 및 수동 QA](PHASE24_1_WINDOWS_TRAY.md))
 - Phase 24.2 ✅ Windows 다운로드 완료·실패 알림 ([알림 정책 및 수동 QA](PHASE24_2_WINDOWS_NOTIFICATIONS.md))
@@ -91,4 +91,6 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 
 - Phase 26.1 ✅ KICK 공개 LIVE 지원 ([사용 조건 및 수동 QA](PHASE26_1_KICK_LIVE.md))
 
-- 🚧 Phase 26.2 — KICK VOD: playback 인증, 화질 선택, yt-dlp 4개 조각 병렬 다운로드 및 MPEG-TS 저장, FFmpeg 첫 프레임 썸네일. [범위 및 수동 RC](PHASE26_2_KICK_VOD.md)
+- Phase 26.2 ✅ KICK VOD: playback 인증, 화질 선택, yt-dlp 4개 조각 병렬 다운로드 및 MPEG-TS 저장, FFmpeg 첫 프레임 썸네일. [범위 및 수동 RC](PHASE26_2_KICK_VOD.md)
+
+- Phase 26.3 🚧 README 및 사용 가이드 정리: 최신 실제 화면, 한국어 메뉴 경로와 KICK 다운로드·인증정보 관리 안내 반영.

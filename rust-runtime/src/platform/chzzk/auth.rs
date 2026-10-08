@@ -1,4 +1,4 @@
-use crate::{security::unprotect_secret, store};
+use crate::{security::read_provider_settings, store};
 use anyhow::Result;
 
 use super::super::live::HttpCookie;
@@ -23,14 +23,13 @@ impl ChzzkAuth {
     // Reload per operation so settings changes apply without restarting the watcher.
     pub fn load() -> Result<Self> {
         let db = store::global()?;
-        let nid_aut = unprotect_secret(
-            &db.setting_value(NID_AUT_KEY)?.unwrap_or_default(),
-            NID_AUT_KEY,
+        let mut settings = read_provider_settings(
+            &db,
+            &[NID_AUT_KEY, NID_SES_KEY],
+            &[NID_AUT_KEY, NID_SES_KEY],
         )?;
-        let nid_ses = unprotect_secret(
-            &db.setting_value(NID_SES_KEY)?.unwrap_or_default(),
-            NID_SES_KEY,
-        )?;
+        let nid_aut = settings.remove(NID_AUT_KEY).unwrap_or_default();
+        let nid_ses = settings.remove(NID_SES_KEY).unwrap_or_default();
         Ok(Self { nid_aut, nid_ses })
     }
 

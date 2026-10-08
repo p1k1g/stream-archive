@@ -6,7 +6,7 @@ use crate::{
         VodAnalysisView, VodAnalyzeRequest, VodDownloadRequest, VodJobStatus, VodPartInfo,
         VodQualityOption,
     },
-    security::unprotect_secret,
+    security::read_provider_settings,
     store,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -826,15 +826,11 @@ async fn renew_base_cookie(
 }
 
 async fn login_cookie(_backend: &Path, vod_url: &str, logs: &LogBuffer) -> Result<CookieJar> {
-    let settings = store::global()?.live_settings_with_secrets()?;
-    let username = settings.get("SOOP_USERNAME").cloned().unwrap_or_default();
-    let password = unprotect_secret(
-        settings
-            .get("SOOP_PASSWORD")
-            .map(String::as_str)
-            .unwrap_or(""),
-        "SOOP_PASSWORD",
-    )?;
+    let db = store::global()?;
+    let mut settings =
+        read_provider_settings(&db, &["SOOP_USERNAME", "SOOP_PASSWORD"], &["SOOP_PASSWORD"])?;
+    let username = settings.remove("SOOP_USERNAME").unwrap_or_default();
+    let password = settings.remove("SOOP_PASSWORD").unwrap_or_default();
     if username.is_empty() || password.is_empty() {
         bail!("SOOP 아이디와 비밀번호를 먼저 설정해 주세요.");
     }

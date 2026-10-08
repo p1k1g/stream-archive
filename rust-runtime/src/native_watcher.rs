@@ -1,8 +1,8 @@
 use crate::{
-    backend::LogBuffer,
+    backend::{HIDDEN_SETTING_KEYS, LogBuffer, SAFE_SETTING_KEYS},
     model::{Channel, ChannelRuntimeStatus, NativeWatcherStatus as WatcherStatus},
     recorder::{RecorderConfig, RecorderManager, Recording, RecordingPoll},
-    security::unprotect_secret,
+    security::{unprotect_secret, with_provider_settings},
     store,
     support::platform::{
         PlatformId,
@@ -198,16 +198,17 @@ impl NativeWatcherManager {
         runtime.command_tx = None;
 
         let db = store::global()?;
-        let settings = db.live_settings_with_secrets()?;
         let channels = db.channels()?;
         for channel in &channels {
             ensure_supported(channel.platform)?;
         }
-        let config = WatcherConfig::from_values(
+        let (settings, config) = WatcherConfig::load_if_changed(
+            &db,
             &self.backend_dir,
-            &settings,
             channels_require_soop(&channels),
+            None,
         )?;
+        let config = config.ok_or_else(|| anyhow!("initial watcher configuration is missing"))?;
         let (stop_tx, stop_rx) = oneshot::channel();
         let (command_tx, command_rx) = mpsc::channel(32);
         let backend_dir = self.backend_dir.clone();
@@ -472,30 +473,24 @@ async fn run_native_watcher(
 
                 if now >= next_setting_check {
                     next_setting_check = now + Duration::from_secs(1);
-                    if let Err(err) = store::global().and_then(|db| db.refresh_config_cache()) {
-                        logs.push(format!("[RUST:WARN] SQLite config cache refresh failed: {err:#}")).await;
-                    }
-                    match store::global().and_then(|db| db.live_settings_with_secrets()) {
-                        Ok(values) if values != last_settings => {
-                            let require_soop = states.values().any(|state| {
-                                state.channel.enabled && state.channel.platform == PlatformId::Soop
-                            });
-                            match WatcherConfig::from_values(&backend_dir, &values, require_soop) {
-                                Ok(new_config) => {
-                                    let auth_changed = new_config.soop_username != config.soop_username
-                                        || new_config.soop_password != config.soop_password;
-                                    config = new_config;
-                                    last_settings = values;
-                                    logs.push("[RUST] SQLite settings hot reload applied").await;
-                                    if auth_changed && require_soop {
-                                        refresh_soop_login(&mut sessions, &config, &logs, "refresh").await;
-                                    }
-                                }
-                                Err(err) => logs.push(format!("[RUST:WARN] SQLite settings reload rejected; previous values kept: {err:#}")).await,
+                    let require_soop = states.values().any(|state| {
+                        state.channel.enabled && state.channel.platform == PlatformId::Soop
+                    });
+                    match store::global().and_then(|db| WatcherConfig::load_if_changed(
+                        &db, &backend_dir, require_soop, Some(&last_settings),
+                    )) {
+                        Ok((values, Some(new_config))) => {
+                            let auth_changed = new_config.soop_username != config.soop_username
+                                || new_config.soop_password != config.soop_password;
+                            config = new_config;
+                            last_settings = values;
+                            logs.push("[RUST] SQLite settings hot reload applied").await;
+                            if auth_changed && require_soop {
+                                refresh_soop_login(&mut sessions, &config, &logs, "refresh").await;
                             }
                         }
-                        Ok(_) => {}
-                        Err(err) => logs.push(format!("[RUST:WARN] SQLite settings read failed; previous values kept: {err:#}")).await,
+                        Ok((_, None)) => {}
+                        Err(err) => logs.push(format!("[RUST:WARN] SQLite settings reload rejected; previous values kept: {err:#}")).await,
                     }
                 }
 
@@ -506,13 +501,14 @@ async fn run_native_watcher(
                             let signature = channel_signature(&channels);
                             if signature != last_channel_signature {
                                 let require_soop = channels_require_soop(&channels);
-                                match WatcherConfig::from_values(&backend_dir, &last_settings, require_soop) {
+                                match store::global().and_then(|db| WatcherConfig::load_if_changed(&db, &backend_dir, require_soop, None)) {
                                     Err(err) => logs.push(format!("[RUST:WARN] channel reload rejected by platform configuration: {err:#}")).await,
-                                    Ok(new_config) => {
+                                    Ok((values, Some(new_config))) => {
                                         if let Err(err) = ensure_sessions(&mut sessions, &channels, &client) {
                                             logs.push(format!("[RUST:WARN] channel reload contains unsupported platform: {err:#}")).await;
                                         } else {
                                             config = new_config;
+                                            last_settings = values;
                                             if require_soop {
                                                 refresh_soop_login(&mut sessions, &config, &logs, "channel reload").await;
                                             }
@@ -521,6 +517,7 @@ async fn run_native_watcher(
                                             logs.push("[RUST] SQLite channel hot reload applied").await;
                                         }
                                     }
+                                    Ok((_, None)) => {}
                                 }
                             }
                         }
@@ -1171,6 +1168,24 @@ async fn update_snapshot(
 }
 
 impl WatcherConfig {
+    fn load_if_changed(
+        db: &store::Store,
+        backend_dir: &Path,
+        require_soop: bool,
+        previous: Option<&BTreeMap<String, String>>,
+    ) -> Result<(BTreeMap<String, String>, Option<Self>)> {
+        let mut keys = SAFE_SETTING_KEYS.to_vec();
+        keys.extend_from_slice(HIDDEN_SETTING_KEYS);
+        with_provider_settings(db, &keys, |values| {
+            let config = if previous == Some(&values) {
+                None
+            } else {
+                Some(Self::from_values(backend_dir, &values, require_soop)?)
+            };
+            Ok((values, config))
+        })
+    }
+
     fn from_values(
         backend_dir: &Path,
         map: &BTreeMap<String, String>,
@@ -1431,6 +1446,77 @@ mod tests {
             account: "0123456789abcdef0123456789abcdef".into(),
             outdir: String::new(),
         }
+    }
+
+    #[test]
+    fn watcher_initial_and_reload_snapshots_observe_external_secret_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("streamlink.exe"), b"test fixture").unwrap();
+        let path = dir.path().join("test.db");
+        let owner = store::Store::open(path.clone()).unwrap();
+        owner
+            .sync_settings(
+                &BTreeMap::from([
+                    ("SOOP_USERNAME".into(), "test-user".into()),
+                    (
+                        "SOOP_PASSWORD".into(),
+                        "native-secret:v1:123e4567-e89b-12d3-a456-426614174000".into(),
+                    ),
+                    (
+                        "CLOUDFLARE_WORKER_URL".into(),
+                        "https://worker.example".into(),
+                    ),
+                    ("CLOUDFLARE_API_KEY".into(), "test-worker-key".into()),
+                    (
+                        "OUTPUT_DIR".into(),
+                        dir.path().join("output").display().to_string(),
+                    ),
+                ]),
+                "test",
+            )
+            .unwrap();
+        let observer = store::Store::open_observer(path).unwrap();
+        // Owner cache still contains a retired native reference; no watcher refreshed it.
+        observer
+            .sync_settings(
+                &BTreeMap::from([("SOOP_PASSWORD".into(), "replacement".into())]),
+                "test",
+            )
+            .unwrap();
+        let (initial, config) =
+            WatcherConfig::load_if_changed(&owner, dir.path(), true, None).unwrap();
+        assert_eq!(config.unwrap().soop_password, "replacement");
+        assert!(
+            WatcherConfig::load_if_changed(&owner, dir.path(), true, Some(&initial))
+                .unwrap()
+                .1
+                .is_none()
+        );
+        observer
+            .sync_settings(
+                &BTreeMap::from([("SOOP_PASSWORD".into(), String::new())]),
+                "test",
+            )
+            .unwrap();
+        let (cleared, config) =
+            WatcherConfig::load_if_changed(&owner, dir.path(), true, Some(&initial)).unwrap();
+        assert_eq!(config.unwrap().soop_password, "");
+        // Channel reload must also acquire a fresh snapshot, even without a settings tick.
+        observer
+            .sync_settings(
+                &BTreeMap::from([("SOOP_PASSWORD".into(), "new-login".into())]),
+                "test",
+            )
+            .unwrap();
+        assert_eq!(
+            WatcherConfig::load_if_changed(&owner, dir.path(), true, None)
+                .unwrap()
+                .1
+                .unwrap()
+                .soop_password,
+            "new-login"
+        );
+        assert_ne!(cleared, initial);
     }
 
     #[test]

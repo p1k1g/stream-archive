@@ -70,14 +70,14 @@ fn kick_secret_lock_file(store: &crate::store::Store) -> Result<std::fs::File> {
     }
     let file = options
         .open(std::path::PathBuf::from(path))
-        .context("KICK 인증정보 잠금 파일을 열지 못했습니다.")?;
+        .context("인증정보 잠금 파일을 열지 못했습니다.")?;
     Ok(file)
 }
 
 pub(crate) fn kick_secret_guard(store: &crate::store::Store) -> Result<std::fs::File> {
     let file = kick_secret_lock_file(store)?;
     fs2::FileExt::try_lock_exclusive(&file)
-        .context("다른 프로세스가 KICK 인증정보를 사용 중입니다. 잠시 후 재시도하세요.")?;
+        .context("다른 프로세스가 인증정보를 사용 중입니다. 잠시 후 재시도하세요.")?;
     Ok(file)
 }
 
@@ -92,11 +92,11 @@ fn kick_secret_read_guard(
             Ok(()) => return Ok(file),
             Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
                 if std::time::Instant::now() >= deadline {
-                    bail!("KICK 인증정보 잠금 대기 시간이 초과되었습니다. 잠시 후 재시도하세요.");
+                    bail!("인증정보 잠금 대기 시간이 초과되었습니다. 잠시 후 재시도하세요.");
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            Err(error) => return Err(error).context("KICK 인증정보 읽기 잠금 실패"),
+            Err(error) => return Err(error).context("인증정보 읽기 잠금 실패"),
         }
     }
 }
@@ -116,6 +116,43 @@ fn read_kick_token_with(
         .setting_value("KICK_SESSION_TOKEN")?
         .unwrap_or_default();
     unprotect(&reference)
+}
+
+/// Read a current provider snapshot while native deletion is excluded.
+pub(crate) fn read_provider_settings(
+    store: &crate::store::Store,
+    keys: &[&str],
+    secret_keys: &[&str],
+) -> Result<std::collections::BTreeMap<String, String>> {
+    read_provider_settings_with(store, keys, secret_keys, unprotect_secret)
+}
+
+fn read_provider_settings_with(
+    store: &crate::store::Store,
+    keys: &[&str],
+    secret_keys: &[&str],
+    mut unprotect: impl FnMut(&str, &str) -> Result<String>,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    with_provider_settings(store, keys, |mut values| {
+        for key in secret_keys {
+            let reference = values.get(*key).map(String::as_str).unwrap_or_default();
+            let plain = unprotect(reference, key)?;
+            values.insert((*key).into(), plain);
+        }
+        Ok(values)
+    })
+}
+
+/// Refresh and consume a settings snapshot under the native-secret read lock.
+/// The callback must finish native lookups before returning; never perform HTTP here.
+pub(crate) fn with_provider_settings<T>(
+    store: &crate::store::Store,
+    keys: &[&str],
+    read: impl FnOnce(std::collections::BTreeMap<String, String>) -> Result<T>,
+) -> Result<T> {
+    let _guard = kick_secret_read_guard(store, std::time::Duration::from_secs(5))?;
+    store.refresh_config_cache()?;
+    read(store.settings_for_keys(keys)?)
 }
 
 pub fn unprotect_secret(value: &str, name: &str) -> Result<String> {
@@ -235,7 +272,7 @@ pub(crate) fn protect_native_secret_with(
     }
     let reference = Uuid::new_v4().hyphenated().to_string();
     let protected = format!("{NATIVE_SECRET_PREFIX}{reference}");
-    retain(&protected).context("KICK native cleanup intent could not be saved")?;
+    retain(&protected).context("native cleanup intent could not be saved")?;
     store(&reference, value).context("native secret store failed")?;
     Ok(protected)
 }
@@ -777,6 +814,71 @@ mod tests {
             assert!(kick_secret_guard(&observer).is_ok());
         }
         assert!(read_kick_token_with(&owner, |_| bail!("native lookup failed")).is_err());
+        assert!(kick_secret_guard(&observer).is_ok());
+    }
+
+    #[test]
+    fn provider_lookup_refreshes_observer_changes_and_locks_through_pair_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let owner = crate::store::Store::open(path.clone()).unwrap();
+        let observer = crate::store::Store::open_observer(path).unwrap();
+        let keys = [
+            "SOOP_USERNAME",
+            "SOOP_PASSWORD",
+            "CHZZK_NID_AUT",
+            "CHZZK_NID_SES",
+            "CLOUDFLARE_API_KEY",
+        ];
+        let secrets = [
+            "SOOP_PASSWORD",
+            "CHZZK_NID_AUT",
+            "CHZZK_NID_SES",
+            "CLOUDFLARE_API_KEY",
+        ];
+        for value in ["old-reference", "replacement-reference", ""] {
+            let writer = kick_secret_guard(&observer).unwrap();
+            observer
+                .sync_settings(
+                    &keys
+                        .iter()
+                        .map(|key| ((*key).into(), value.into()))
+                        .collect(),
+                    "test",
+                )
+                .unwrap();
+            let reader_owner = owner.clone();
+            let reader_observer = observer.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                let result =
+                    read_provider_settings_with(&reader_owner, &keys, &secrets, |reference, _| {
+                        assert_eq!(reference, value);
+                        assert!(kick_secret_guard(&reader_observer).is_err());
+                        Ok(reference.into())
+                    });
+                tx.send(result).unwrap();
+            });
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_millis(50))
+                    .is_err()
+            );
+            drop(writer);
+            let snapshot = rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            for key in keys {
+                assert_eq!(snapshot[key], value);
+            }
+            reader.join().unwrap();
+        }
+        assert!(
+            read_provider_settings_with(&owner, &keys, &secrets, |_, _| bail!(
+                "test native failure"
+            ))
+            .is_err()
+        );
         assert!(kick_secret_guard(&observer).is_ok());
     }
 

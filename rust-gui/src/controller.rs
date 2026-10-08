@@ -71,6 +71,7 @@ enum Request {
     },
     ProviderTestSoop,
     ClearKickToken,
+    ClearProviderCredentials(String),
     LiveStatus {
         poll: bool,
     },
@@ -724,6 +725,16 @@ fn worker_loop(
                     )),
                 }
             }
+            Request::ClearProviderCredentials(provider) => match runtime
+                .block_on(core.clear_provider_credentials(&provider))
+            {
+                Ok(()) => {
+                    configuration_snapshot(core, &format!("{provider} 인증정보를 삭제했습니다."))
+                }
+                Err(error) => Response::ConfigError(format!(
+                    "{provider} 인증정보 삭제가 완료되지 않았습니다. 삭제를 다시 시도하세요: {error:#}"
+                )),
+            },
             Request::ClearKickToken => match runtime.block_on(core.clear_kick_token()) {
                 Ok(()) => configuration_snapshot(core, "KICK 인증정보를 삭제했습니다."),
                 Err(error) => Response::ConfigError(format!("KICK 인증정보 삭제 실패: {error:#}")),
@@ -1905,6 +1916,18 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     worker_url: state.get_cloudflare_worker_url().to_string(),
                     secrets,
                 },
+            );
+        }
+    });
+
+    let weak = ui.as_weak();
+    let provider_sender = sender.clone();
+    state.on_clear_provider_credentials(move |provider| {
+        if let Some(ui) = weak.upgrade() {
+            send_config(
+                &ui,
+                &provider_sender,
+                Request::ClearProviderCredentials(provider.to_string()),
             );
         }
     });

@@ -1,6 +1,8 @@
 # Phase 26.2 — KICK VOD
 
-상태: 구현 및 자동 검증 진행 중. 실제 서비스 검증은 아래 수동 항목을 따로 확인합니다.
+상태: 구현 및 자동 검증 완료, main 반영 완료(PR #124). 실제 서비스·OS 환경의 수동 검증과 공개 승인은 별도입니다.
+
+자동 검증 근거: commit `461a97bfd0ef954c579c053d55e381d5029667ef`의 [GitHub Actions](https://github.com/p1k1g/stream-archive/actions/runs/37636257358)에서 Windows/Linux/macOS `core-check`와 `windows-check`가 통과했습니다. 수동 체크리스트의 미확인 항목은 그대로 유지합니다.
 
 ## 인증과 분석
 
@@ -30,7 +32,7 @@
 
 KICK 토큰 교체는 새 참조와 이전 native 참조의 정리 대기 기록을 기존 SQLite `settings` 테이블에 함께 commit합니다. commit 실패 시 새로 만든 KICK native credential을 회수합니다. commit 후 이전 항목을 삭제하고, 삭제 실패 시 opaque 참조만 정리 대기로 보존하여 다음 저장/삭제에서 재시도합니다. 정리 대기에는 평문 토큰을 저장하지 않으며 DB schema migration은 없습니다.
 
-Linux/macOS에서 Backup을 Restore할 때 `KICK_SESSION_TOKEN`과 native 정리 대기 참조는 복원 직전 canonical DB의 현재 상태를 유지합니다. 토큰을 교체했다면 현재 토큰을 사용하고, 삭제했거나 설정하지 않았다면 미설정을 유지합니다. 오래된 백업의 native 참조로 되돌리지 않습니다. 나머지 설정·채널·History 등은 기존대로 복원하며 Windows DPAPI 복원 방식은 변경하지 않습니다.
+Linux/macOS에서 Backup을 Restore할 때 `KICK_SESSION_TOKEN`과 native 정리 대기 참조는 복원 직전 canonical DB의 현재 상태를 유지합니다. 토큰을 교체했다면 현재 토큰을 사용하고, 삭제했거나 설정하지 않았다면 미설정을 유지합니다. 오래된 백업의 native 참조로 되돌리지 않습니다. SOOP/CHZZK/Worker 인증정보·연결 설정도 아래 보완 정책대로 현재 상태를 유지합니다. 그 외 설정·채널·History 등은 기존대로 복원하며 Windows DPAPI 복원 방식은 변경하지 않습니다.
 
 ## 오류 로그
 
@@ -88,7 +90,7 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 
 사용자 선택에 따라 Linux/macOS Restore는 현재 KICK 인증정보와 cleanup journal을 유지합니다. 동일 DB별 인증정보 잠금 아래에서 최신 canonical 행을 읽고, SQLite 내부 임시 DB에 복원 대상과 현재 두 행을 먼저 구성한 뒤 canonical DB로 복원합니다. 원본 백업과 체크섬은 변경하지 않고 native secret을 복호화하거나 다시 저장하지 않습니다. 준비 실패나 인증정보 잠금 경합 시 복원하지 않으며, 복원 도중 오래된 토큰/cleanup 참조가 되살아나는 중간 상태를 만들지 않습니다. 기존 safety backup과 runtime-owner/LIVE/VOD/Queue 사전 조건을 유지합니다.
 
-자동 테스트는 현재 토큰 교체·삭제·미설정, 오래된 owning-store cache와 최신 observer 값, cleanup journal 유지, 다른 provider 설정의 정상 복원, 원본 백업 불변, 준비 실패/잠금 경합 시 live DB 보존, managed Restore와 safety backup을 검증합니다. 실제 native store 세션 수동 QA는 완료 처리하지 않습니다.
+자동 테스트는 현재 토큰 교체·삭제·미설정, 오래된 owning-store cache와 최신 observer 값, cleanup journal 유지, 다른 provider 인증정보의 현재 상태 유지, 원본 백업 불변, 준비 실패/잠금 경합 시 live DB 보존, managed Restore와 safety backup을 검증합니다. 실제 native store 세션 수동 QA는 완료 처리하지 않습니다.
 
 ## 2026-10-07 다운로드 방식 변경 검증
 
@@ -100,3 +102,9 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 - [ ] 취소, 조각 실패, 디스크 부족 시 성공 알림이 나오지 않는지 확인
 
 KICK HLS 주소는 yt-dlp의 `--batch-file -` stdin과 FFmpeg의 `pipe:0` concat 입력(HLS 주소와 HTTP 옵션)으로 전달합니다. 실제 주소를 child argv·환경변수·임시 파일에 기록하지 않습니다. FFmpeg 입력은 `pipe,https,tls,tcp,crypto` protocol whitelist로 제한합니다. 원본 tool stderr는 그대로 로그에 남기지 않습니다.
+
+## SOOP / CHZZK 인증정보 삭제 보완
+
+SOOP 비밀번호·CHZZK 쿠키·Worker API key를 새 값으로 교체할 때도 native 항목 생성 전 정리 참조를 기록하고, 설정 전환과 이전 참조의 정리 기록을 동일 SQLite transaction에서 저장합니다. 정리 실패 시 참조를 유지하며 다음 저장 또는 해당 인증정보 삭제로 재시도합니다. SOOP 삭제 버튼은 비밀번호만 제거하고 Worker 설정은 유지합니다.
+
+사용자 승인에 따라 Linux/macOS Restore는 SOOP 비밀번호·CHZZK 쿠키·Worker API key와 각 cleanup journal도 복원 직전 현재 값·삭제·미설정 상태를 유지합니다. 인증정보가 다른 계정·Worker와 조합되지 않도록 SOOP 사용자명과 Worker URL도 현재 상태를 유지합니다. 오래된 백업의 이미 삭제된 native 참조를 되살리지 않습니다. KICK 정책도 동일하며 Windows DPAPI 복원 방식은 변경하지 않습니다. 과거 버전에서 이미 참조를 잃은 native 항목까지 자동으로 발견하거나 제거한다고 보장하지 않습니다.
