@@ -117,6 +117,26 @@ fn clear_kick_token_in_store(
     cleanup_kick_secrets(store, &mut delete)
 }
 
+fn clear_provider_secret_in_store(
+    store: &Store,
+    key: &str,
+    mut delete: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    let cleanup_key = format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS");
+    store.sync_settings_retiring_secret(
+        &BTreeMap::from([(key.into(), String::new())]),
+        "native-provider",
+        key,
+        &cleanup_key,
+        |value| crate::security::native_cleanup_reference(value, key),
+    )?;
+    for reference in store.pending_secret_cleanup(&cleanup_key)? {
+        delete(&reference)?;
+        store.finish_secret_cleanup(&cleanup_key, &reference)?;
+    }
+    Ok(())
+}
+
 impl StreamArchiveCore {
     /// Open the canonical SQLite store and assemble the shared runtime spine.
     ///
@@ -358,6 +378,22 @@ impl StreamArchiveCore {
                 .await;
         }
         self.store.configured_secrets()
+    }
+
+    /// Clear saved login secrets without changing Worker configuration or other providers.
+    pub async fn clear_provider_credentials(&self, provider: &str) -> Result<()> {
+        let keys: &[&str] = match provider {
+            "SOOP" => &["SOOP_PASSWORD"],
+            "CHZZK" => &["CHZZK_NID_AUT", "CHZZK_NID_SES"],
+            _ => bail!("unsupported credential deletion provider"),
+        };
+        let _guard = self.config_write_lock.lock().await;
+        for key in keys {
+            clear_provider_secret_in_store(&self.store, key, |value| {
+                crate::security::delete_protected_secret(value, key)
+            })?;
+        }
+        Ok(())
     }
 
     /// Explicit deletion; empty provider drafts continue to preserve saved values.
@@ -858,6 +894,37 @@ mod tests {
 
     const OLD_KICK_REFERENCE: &str = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
     const NEW_KICK_REFERENCE: &str = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
+
+    #[test]
+    fn provider_clear_retries_native_cleanup_and_preserves_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.db")).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([
+                    ("CHZZK_NID_AUT".into(), OLD_KICK_REFERENCE.into()),
+                    ("CLOUDFLARE_API_KEY".into(), "keep-worker".into()),
+                ]),
+                "test",
+            )
+            .unwrap();
+        assert!(
+            clear_provider_secret_in_store(&store, "CHZZK_NID_AUT", |_| bail!("test failure"))
+                .is_err()
+        );
+        assert_eq!(store.setting_value("CHZZK_NID_AUT").unwrap().unwrap(), "");
+        let mut deleted = Vec::new();
+        clear_provider_secret_in_store(&store, "CHZZK_NID_AUT", |value| {
+            deleted.push(value.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(deleted, vec![OLD_KICK_REFERENCE]);
+        assert_eq!(
+            store.setting_value("CLOUDFLARE_API_KEY").unwrap().unwrap(),
+            "keep-worker"
+        );
+    }
 
     #[test]
     fn kick_replacement_removes_previous_native_item_only_after_commit() {
