@@ -6,9 +6,9 @@ Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행�
 
 [릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.0.0 릴리스 노트](docs/RELEASE_NOTES_1_0_0.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
 
-> **1.0.0 공개 준비 중**
+> **1.0.0 패키지 생성·자동 검증 완료 — Release 공개 준비 중**
 >
-> 첫 공개 안정 버전을 준비하고 있습니다. 아직 `v1.0.0` GitHub Release는 공개하지 않았습니다. 최종 수동 검증 및 공개 승인은 [릴리스 마무리 절차](docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md)와 [수동 RC 체크리스트](docs/MANUAL_RC_1_0_0.md)에서 관리합니다.
+> [1.0.0 패키지 빌드](https://github.com/p1k1g/stream-archive/actions/runs/37741196303)에서 Windows/Linux/macOS artifact와 자동 검증이 완료됐습니다. 아래 다운로드 링크로 패키지를 받을 수 있습니다. 아직 `v1.0.0` GitHub Release는 공개하지 않았으며, 최종 수동 검증 및 공개 승인은 [릴리스 마무리 절차](docs/PHASE23_12_1_0_0_RELEASE_CLOSURE.md)와 [수동 RC 체크리스트](docs/MANUAL_RC_1_0_0.md)에서 관리합니다.
 
 ## 화면 미리보기
 
@@ -45,13 +45,15 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
 ## 다운로드 및 지원 환경
 
-1.0.0 공개 후 [GitHub Releases](https://github.com/p1k1g/stream-archive/releases)에서 다음 파일을 받으세요. 현재 표는 공개 예정 패키지 안내이며 다운로드 가능한 Release가 있다는 의미는 아닙니다.
+[Release 페이지](https://github.com/p1k1g/stream-archive/releases)에서 공개 릴리스를 확인할 수 있습니다. 현재 1.0.0 패키지는 아래 **Actions artifact 다운로드** 링크로 제공합니다.
 
-| 운영체제 | 패키지 | 실행 방식 |
-|---|---|---|
-| Windows x64 | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
-| Linux x64 | `stream-archive-linux-x64.tar.gz` | CLI·headless |
-| macOS arm64 | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
+| 운영체제 | Actions artifact 다운로드 | 내부 패키지 | 실행 방식 |
+|---|---|---|---|
+| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/actions/runs/37741196303/artifacts/11534380772) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
+| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/actions/runs/37741196303/artifacts/11533817302) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
+| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/actions/runs/37741196303/artifacts/11533089370) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
+
+Actions artifact 다운로드에는 GitHub 로그인이 필요하며, 위 artifact는 **2026-10-15 만료 예정**입니다. 다운로드한 artifact ZIP 안에 실제 패키지와 해당 `.sha256` 파일이 들어 있습니다. artifact ZIP을 먼저 풀고, 내부 패키지의 체크섬을 확인한 뒤 패키지를 압축 해제하세요. Release 공개 후에는 이 링크를 Release asset의 영구 다운로드 링크로 교체합니다.
 
 패키지 build와 smoke는 각 플랫폼의 CI에서 검증합니다. 실제 서비스 세션, GUI 조작 및 OS별 비밀정보 저장의 최종 수동 검증은 별도로 관리합니다. Linux/macOS에는 GUI를 제공하지 않으며, 검증하지 않은 아키텍처의 지원을 주장하지 않습니다.
 
@@ -68,7 +70,7 @@ SOOP LIVE를 사용하려면 [backend/worker.js](backend/worker.js)를 본인의
 ### Windows
 
 1. [Streamlink](https://streamlink.github.io/install.html), [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation), [FFmpeg](https://ffmpeg.org/download.html)를 준비합니다.
-2. 공개된 Windows ZIP과 함께 제공되는 `.sha256`을 확인한 뒤 새 폴더에 압축을 풉니다.
+2. 위 Windows 다운로드 링크에서 artifact를 받아 압축을 푼 뒤, 내부 `stream-archive-windows-x64.zip`과 `.sha256`을 확인하고 새 폴더에 패키지를 압축 해제합니다.
 3. `StreamArchive.exe`를 더블클릭하거나 `RUN.bat`를 실행합니다. Rust 설치나 source build는 필요하지 않습니다.
 4. **설정 → 일반**에서 저장 경로와 필요한 서비스 설정을 구성합니다. SOOP LIVE는 위 Worker 사전 설정을 먼저 완료합니다. 외부 도구는 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 준비합니다.
 5. **진단** 화면에서 도구 탐색·버전 확인 결과를 확인합니다.
