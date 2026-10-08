@@ -1,6 +1,8 @@
 # Phase 26.2 — KICK VOD
 
-상태: 구현 및 자동 검증 진행 중. 실제 서비스 검증은 아래 수동 항목을 따로 확인합니다.
+상태: 구현 및 자동 검증 완료, main 반영 완료(PR #124). 실제 서비스·OS 환경의 수동 검증과 공개 승인은 별도입니다.
+
+자동 검증 근거: commit `461a97bfd0ef954c579c053d55e381d5029667ef`의 [GitHub Actions](https://github.com/p1k1g/stream-archive/actions/runs/37636257358)에서 Windows/Linux/macOS `core-check`와 `windows-check`가 통과했습니다. 수동 체크리스트의 미확인 항목은 그대로 유지합니다.
 
 ## 인증과 분석
 
@@ -100,3 +102,9 @@ KICK 토큰 분석은 security 경계에서 저장·삭제와 동일한 DB별 �
 - [ ] 취소, 조각 실패, 디스크 부족 시 성공 알림이 나오지 않는지 확인
 
 KICK HLS 주소는 yt-dlp의 `--batch-file -` stdin과 FFmpeg의 `pipe:0` concat 입력(HLS 주소와 HTTP 옵션)으로 전달합니다. 실제 주소를 child argv·환경변수·임시 파일에 기록하지 않습니다. FFmpeg 입력은 `pipe,https,tls,tcp,crypto` protocol whitelist로 제한합니다. 원본 tool stderr는 그대로 로그에 남기지 않습니다.
+
+## SOOP / CHZZK 인증정보 삭제 보완
+
+SOOP 비밀번호·CHZZK 쿠키·Worker API key를 새 값으로 교체할 때도 native 항목 생성 전 정리 참조를 기록하고, 설정 전환과 이전 참조의 정리 기록을 동일 SQLite transaction에서 저장합니다. 정리 실패 시 참조를 유지하며 다음 저장 또는 해당 인증정보 삭제로 재시도합니다. SOOP 삭제 버튼은 비밀번호만 제거하고 Worker 설정은 유지합니다.
+
+Linux/macOS Restore는 SOOP/CHZZK/Worker 설정 자체는 기존 정책대로 복원하되, 현재 DB와 백업의 정리 기록을 합칩니다. 복원으로 교체되는 현재 native 참조도 정리 대상으로 보존하고, 복원 후 활성 참조는 정리 대상에서 제외합니다. KICK의 현재 토큰 유지 정책은 그대로입니다. 과거 버전에서 이미 참조를 잃은 native 항목까지 자동으로 발견하거나 제거한다고 보장하지 않습니다.

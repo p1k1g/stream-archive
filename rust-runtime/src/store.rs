@@ -399,6 +399,47 @@ impl Store {
                 )?;
             }
         }
+        // Keep retirement intents from both the live DB and backup. Restoring
+        // a provider reference must not make that active credential deletable.
+        for secret_key in [
+            "SOOP_PASSWORD",
+            "CLOUDFLARE_API_KEY",
+            "CHZZK_NID_AUT",
+            "CHZZK_NID_SES",
+        ] {
+            let cleanup_key = format!("STREAM_ARCHIVE_{secret_key}_CLEANUP_REFS");
+            let read = |conn: &Connection, key: &str| -> Result<String> {
+                Ok(conn
+                    .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                        row.get(0)
+                    })
+                    .optional()?
+                    .unwrap_or_default())
+            };
+            let restored = read(&tx, secret_key)?;
+            let active = read(current, secret_key)?;
+            let mut pending: Vec<String> = Vec::new();
+            for encoded in [read(&tx, &cleanup_key)?, read(current, &cleanup_key)?] {
+                if !encoded.is_empty() {
+                    for reference in serde_json::from_str::<Vec<String>>(&encoded)
+                        .context("invalid provider cleanup references")?
+                    {
+                        if !pending.contains(&reference) {
+                            pending.push(reference);
+                        }
+                    }
+                }
+            }
+            if active != restored
+                && let Some(reference) =
+                    crate::security::native_cleanup_reference(&active, secret_key)?
+                && !pending.contains(&reference)
+            {
+                pending.push(reference);
+            }
+            pending.retain(|reference| reference != &restored);
+            tx.execute("INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'native-secret-cleanup',?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,source=excluded.source,updated_at=excluded.updated_at", params![cleanup_key, serde_json::to_string(&pending)?, Utc::now().to_rfc3339()])?;
+        }
         tx.commit()?;
         // Both preserved rows are present before the backup API touches the live
         // DB, so failures cannot leave a restored obsolete native reference.
@@ -541,6 +582,22 @@ impl Store {
         cleanup_key: &str,
         retire: impl FnOnce(&str) -> Result<Option<String>>,
     ) -> Result<()> {
+        let mut retire = Some(retire);
+        self.sync_settings_retiring_secrets(
+            values,
+            source,
+            &[(secret_key.into(), cleanup_key.into())],
+            |_, value| retire.take().expect("single retirement callback")(value),
+        )
+    }
+
+    pub(crate) fn sync_settings_retiring_secrets(
+        &self,
+        values: &BTreeMap<String, String>,
+        source: &str,
+        secret_keys: &[(String, String)],
+        mut retire: impl FnMut(&str, &str) -> Result<Option<String>>,
+    ) -> Result<()> {
         let mut conn = self.conn()?;
         let mut cache = self
             .settings_cache
@@ -555,25 +612,29 @@ impl Store {
                 .optional()?
                 .unwrap_or_default())
         };
-        let previous = read(secret_key)?;
-        let pending = read(cleanup_key)?;
-        let mut pending: Vec<String> = if pending.is_empty() {
-            Vec::new()
-        } else {
-            serde_json::from_str(&pending).context("invalid secret cleanup references")?
-        };
-        if values
-            .get(secret_key)
-            .is_some_and(|value| value != &previous)
-            && let Some(reference) = retire(&previous)?
-            && !pending.contains(&reference)
-        {
-            pending.push(reference);
+        let mut journals = BTreeMap::new();
+        for (secret_key, cleanup_key) in secret_keys {
+            let previous = read(secret_key)?;
+            let pending = read(cleanup_key)?;
+            let mut pending: Vec<String> = if pending.is_empty() {
+                Vec::new()
+            } else {
+                serde_json::from_str(&pending).context("invalid secret cleanup references")?
+            };
+            if values
+                .get(secret_key)
+                .is_some_and(|value| value != &previous)
+                && let Some(reference) = retire(secret_key, &previous)?
+                && !pending.contains(&reference)
+            {
+                pending.push(reference);
+            }
+            if let Some(value) = values.get(secret_key) {
+                pending.retain(|reference| reference != value);
+            }
+            let pending = serde_json::to_string(&pending)?;
+            journals.insert(cleanup_key.clone(), pending);
         }
-        if let Some(value) = values.get(secret_key) {
-            pending.retain(|reference| reference != value);
-        }
-        let pending = serde_json::to_string(&pending)?;
         let now = Utc::now().to_rfc3339();
         for (key, value) in values {
             tx.execute(
@@ -581,15 +642,17 @@ impl Store {
                 params![key, value, source, now],
             )?;
         }
-        tx.execute(
+        for (cleanup_key, pending) in &journals {
+            tx.execute(
             "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'native-secret-cleanup',?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
             params![cleanup_key, pending, now],
         )?;
+        }
         tx.commit()?;
         for (key, value) in values {
             cache.insert(key.clone(), value.clone());
         }
-        cache.insert(cleanup_key.to_string(), pending);
+        cache.extend(journals);
         Ok(())
     }
 
@@ -1077,6 +1140,108 @@ mod tests {
             crate::history_service::load_history(store.path(), &Default::default()).unwrap();
         assert_eq!(history.live[0].platform, PlatformId::Kick);
         assert_eq!(history.live[0].title.as_deref(), Some("방송 제목"));
+    }
+
+    #[test]
+    fn provider_replacement_journals_all_superseded_references_atomically() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();
+        let old = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
+        let new = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
+        let keys = ["SOOP_PASSWORD", "CHZZK_NID_AUT", "CHZZK_NID_SES"];
+        store
+            .sync_settings(
+                &keys
+                    .iter()
+                    .map(|key| (key.to_string(), old.into()))
+                    .collect(),
+                "test",
+            )
+            .unwrap();
+        let journals: Vec<_> = keys
+            .iter()
+            .map(|key| {
+                (
+                    key.to_string(),
+                    format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS"),
+                )
+            })
+            .collect();
+        for (_, journal) in &journals {
+            store.retain_secret_cleanup(journal, new).unwrap();
+        }
+        let updates = keys
+            .iter()
+            .map(|key| (key.to_string(), new.into()))
+            .collect();
+        assert!(
+            store
+                .sync_settings_retiring_secrets(&updates, "test", &journals, |key, value| {
+                    if key == "CHZZK_NID_SES" {
+                        anyhow::bail!("fixture failure");
+                    }
+                    crate::security::native_cleanup_reference(value, key)
+                })
+                .is_err()
+        );
+        for key in keys {
+            assert_eq!(store.setting_value(key).unwrap().as_deref(), Some(old));
+        }
+        store
+            .sync_settings_retiring_secrets(&updates, "test", &journals, |key, value| {
+                crate::security::native_cleanup_reference(value, key)
+            })
+            .unwrap();
+        for (key, journal) in journals {
+            assert_eq!(store.setting_value(&key).unwrap().as_deref(), Some(new));
+            assert_eq!(store.pending_secret_cleanup(&journal).unwrap(), vec![old]);
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn restore_merges_provider_cleanup_and_excludes_restored_active_reference() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join(DATABASE_FILE)).unwrap();
+        let old = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
+        let current = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
+        let orphan = "native-secret:v1:123e4567-e89b-12d3-a456-426614174002";
+        let key = "CHZZK_NID_AUT";
+        let journal = "STREAM_ARCHIVE_CHZZK_NID_AUT_CLEANUP_REFS";
+        store
+            .sync_settings(
+                &BTreeMap::from([
+                    (key.into(), old.into()),
+                    (
+                        journal.into(),
+                        serde_json::to_string(&vec![orphan]).unwrap(),
+                    ),
+                ]),
+                "test",
+            )
+            .unwrap();
+        let backup = dir.path().join("backup.db");
+        store.backup_to(&backup).unwrap();
+        let original = fs::read(&backup).unwrap();
+        store
+            .sync_settings(
+                &BTreeMap::from([
+                    (key.into(), current.into()),
+                    (
+                        journal.into(),
+                        serde_json::to_string(&vec![old, orphan]).unwrap(),
+                    ),
+                ]),
+                "test",
+            )
+            .unwrap();
+        store.restore_from(&backup).unwrap();
+        assert_eq!(store.setting_value(key).unwrap().as_deref(), Some(old));
+        assert_eq!(
+            store.pending_secret_cleanup(journal).unwrap(),
+            vec![orphan, current]
+        );
+        assert_eq!(fs::read(backup).unwrap(), original);
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

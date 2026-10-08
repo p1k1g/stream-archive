@@ -235,7 +235,7 @@ pub(crate) fn protect_native_secret_with(
     }
     let reference = Uuid::new_v4().hyphenated().to_string();
     let protected = format!("{NATIVE_SECRET_PREFIX}{reference}");
-    retain(&protected).context("KICK native cleanup intent could not be saved")?;
+    retain(&protected).context("native cleanup intent could not be saved")?;
     store(&reference, value).context("native secret store failed")?;
     Ok(protected)
 }

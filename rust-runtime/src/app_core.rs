@@ -20,7 +20,7 @@ use crate::{
     },
     queue_service::VodQueueManager,
     runtime_owner::{RuntimeOwnerGuard, runtime_owner_active},
-    security::{protect_secret, unprotect_secret},
+    security::unprotect_secret,
     store::{self, Store},
     support::{
         platform::{PlatformId, live::LiveSession},
@@ -77,30 +77,47 @@ fn cleanup_kick_secrets(store: &Store, delete: &mut impl FnMut(&str) -> Result<(
     Ok(())
 }
 
+fn commit_provider_configuration(
+    store: &Store,
+    updates: &BTreeMap<String, String>,
+    journals: &[(String, String)],
+    delete: &mut impl FnMut(&str, &str) -> Result<()>,
+) -> Result<()> {
+    if let Err(error) =
+        store.sync_settings_retiring_secrets(updates, "native-provider", journals, |key, value| {
+            crate::security::native_cleanup_reference(value, key)
+        })
+    {
+        for (key, cleanup_key) in journals {
+            if let Some(value) = updates.get(key) {
+                delete(key, value)
+                    .context("저장 실패 후 새 native credential 정리가 필요합니다.")?;
+                if let Some(reference) = crate::security::native_cleanup_reference(value, key)? {
+                    store.finish_secret_cleanup(cleanup_key, &reference)?;
+                }
+            }
+        }
+        return Err(error);
+    }
+    for (key, cleanup_key) in journals {
+        cleanup_provider_secrets(store, key, cleanup_key, &mut |value| delete(key, value))
+            .context("새 인증정보는 저장됐지만 이전 인증정보 정리가 완료되지 않았습니다. 삭제 또는 저장을 다시 시도하세요.")?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn commit_kick_configuration(
     store: &Store,
     updates: &BTreeMap<String, String>,
     delete: &mut impl FnMut(&str) -> Result<()>,
 ) -> Result<()> {
-    if let Err(error) = store.sync_settings_retiring_secret(
+    commit_provider_configuration(
+        store,
         updates,
-        "native-provider",
-        "KICK_SESSION_TOKEN",
-        KICK_CLEANUP_KEY,
-        |value| crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN"),
-    ) {
-        if let Some(value) = updates.get("KICK_SESSION_TOKEN") {
-            delete(value).context("KICK 저장 실패 후 새 native credential 정리가 필요합니다.")?;
-            if let Some(reference) =
-                crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN")?
-            {
-                store.finish_secret_cleanup(KICK_CLEANUP_KEY, &reference)?;
-            }
-        }
-        return Err(error);
-    }
-    cleanup_kick_secrets(store, delete)
-        .context("KICK 새 인증정보는 저장됐지만 이전 native credential 정리가 완료되지 않았습니다.")
+        &[("KICK_SESSION_TOKEN".into(), KICK_CLEANUP_KEY.into())],
+        &mut |_, value| delete(value),
+    )
 }
 
 fn clear_kick_token_in_store(
@@ -115,6 +132,22 @@ fn clear_kick_token_in_store(
         |value| crate::security::native_cleanup_reference(value, "KICK_SESSION_TOKEN"),
     )?;
     cleanup_kick_secrets(store, &mut delete)
+}
+
+fn cleanup_provider_secrets(
+    store: &Store,
+    key: &str,
+    cleanup_key: &str,
+    delete: &mut impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    for reference in store.pending_secret_cleanup(cleanup_key)? {
+        if store.setting_value(key)?.as_deref() == Some(&reference) {
+            continue;
+        }
+        delete(&reference)?;
+        store.finish_secret_cleanup(cleanup_key, &reference)?;
+    }
+    Ok(())
 }
 
 fn clear_provider_secret_in_store(
@@ -336,40 +369,34 @@ impl StreamArchiveCore {
         validate_secret_updates(secrets)?;
 
         let _guard = self.config_write_lock.lock().await;
-        let mut delete =
-            |value: &str| crate::security::delete_protected_secret(value, "KICK_SESSION_TOKEN");
-        let kick = secrets
-            .get("KICK_SESSION_TOKEN")
-            .filter(|value| !value.is_empty());
-        let _secret_guard = if kick.is_some() {
+        let _secret_guard = if secrets.values().any(|value| !value.is_empty()) {
             Some(crate::security::kick_secret_guard(&self.store)?)
         } else {
             None
         };
-        if kick.is_some() {
-            cleanup_kick_secrets(&self.store, &mut delete)?;
-        }
+        self.store.refresh_config_cache()?;
         let mut updates = settings.clone();
-        for (key, value) in secrets {
-            if key != "KICK_SESSION_TOKEN" && !value.is_empty() {
-                updates.insert(key.clone(), protect_secret(value)?);
-            }
-        }
-        // Create KICK last so another provider's protection failure cannot orphan it.
-        if let Some(value) = kick {
+        let mut journals = Vec::new();
+        for (key, value) in secrets.iter().filter(|(_, value)| !value.is_empty()) {
+            let cleanup_key = if key == "KICK_SESSION_TOKEN" {
+                KICK_CLEANUP_KEY.to_string()
+            } else {
+                format!("STREAM_ARCHIVE_{key}_CLEANUP_REFS")
+            };
+            cleanup_provider_secrets(&self.store, key, &cleanup_key, &mut |reference| {
+                crate::security::delete_protected_secret(reference, key)
+            })?;
             let protected =
                 crate::security::protect_secret_with_cleanup_intent(value, |reference| {
-                    self.store
-                        .retain_secret_cleanup(KICK_CLEANUP_KEY, reference)
+                    self.store.retain_secret_cleanup(&cleanup_key, reference)
                 })?;
-            updates.insert("KICK_SESSION_TOKEN".into(), protected);
+            updates.insert(key.clone(), protected);
+            journals.push((key.clone(), cleanup_key));
         }
         if !updates.is_empty() {
-            if kick.is_some() {
-                commit_kick_configuration(&self.store, &updates, &mut delete)?;
-            } else {
-                self.store.sync_settings(&updates, "native-provider")?;
-            }
+            commit_provider_configuration(&self.store, &updates, &journals, &mut |key, value| {
+                crate::security::delete_protected_secret(value, key)
+            })?;
             self.logs
                 .push(format!(
                     "[CORE] native provider configuration updated: {}",
@@ -388,6 +415,7 @@ impl StreamArchiveCore {
             _ => bail!("unsupported credential deletion provider"),
         };
         let _guard = self.config_write_lock.lock().await;
+        let _secret_guard = crate::security::kick_secret_guard(&self.store)?;
         for key in keys {
             clear_provider_secret_in_store(&self.store, key, |value| {
                 crate::security::delete_protected_secret(value, key)
