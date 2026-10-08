@@ -53,7 +53,9 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 | Linux x64 | [Linux 다운로드](https://github.com/user-attachments/files/33206260/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
 | macOS arm64 | [macOS 다운로드](https://github.com/user-attachments/files/33206269/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
 
-현재 공개 Release에는 별도 `.sha256` 파일이 첨부되지 않았습니다. 체크섬 파일은 [패키지 빌드의 Actions artifact](https://github.com/p1k1g/stream-archive/actions/runs/37741196303)에 패키지와 함께 포함되어 있습니다. artifact 다운로드에는 GitHub 로그인이 필요하며 보관 기간이 제한됩니다. 패키지를 실행하기 전에 해당 체크섬을 확인하세요.
+공개된 패키지의 SHA-256은 저장소에 보존합니다. 체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/raw/refs/heads/main/docs/releases/v1.0.0/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/raw/refs/heads/main/docs/releases/v1.0.0/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/raw/refs/heads/main/docs/releases/v1.0.0/stream-archive-macos-arm64.tar.gz.sha256)
+
+체크섬은 [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0) 본문에 첨부된 세 패키지를 다운로드하여 계산했습니다. Actions artifact의 보관 기간과 무관하게 사용할 수 있습니다. 패키지와 해당 `.sha256`을 같은 폴더에 저장하고 실행 전에 확인하세요.
 
 패키지 build와 smoke는 각 플랫폼의 CI에서 검증합니다. 실제 서비스 세션, GUI 조작 및 OS별 비밀정보 저장의 최종 수동 검증은 별도로 관리합니다. Linux/macOS에는 GUI를 제공하지 않으며, 검증하지 않은 아키텍처의 지원을 주장하지 않습니다.
 
@@ -70,7 +72,7 @@ SOOP LIVE를 사용하려면 [backend/worker.js](backend/worker.js)를 본인의
 ### Windows
 
 1. [Streamlink](https://streamlink.github.io/install.html), [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation), [FFmpeg](https://ffmpeg.org/download.html)를 준비합니다.
-2. 위 Windows 패키지를 다운로드하고, 패키지 빌드의 Actions artifact에서 `.sha256`을 받아 체크섬을 확인한 뒤 새 폴더에 압축을 풉니다.
+2. 위 Windows 패키지와 `.sha256`을 다운로드해 체크섬을 확인한 뒤 새 폴더에 압축을 풉니다.
 3. `StreamArchive.exe`를 더블클릭하거나 `RUN.bat`를 실행합니다. Rust 설치나 source build는 필요하지 않습니다.
 4. **설정 → 일반**에서 저장 경로와 필요한 서비스 설정을 구성합니다. SOOP LIVE는 위 Worker 사전 설정을 먼저 완료합니다. 외부 도구는 실행 파일 경로를 지정하거나 `PATH`에서 찾을 수 있도록 준비합니다.
 5. **진단** 화면에서 도구 탐색·버전 확인 결과를 확인합니다.
