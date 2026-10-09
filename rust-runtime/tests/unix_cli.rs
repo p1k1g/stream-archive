@@ -702,6 +702,29 @@ fn unix_cli_serve_sigterm_is_graceful_and_does_not_kill_unrelated_runtime() {
     );
 }
 
+#[test]
+fn unterminated_control_client_does_not_block_sigterm_cleanup() {
+    use std::{io::Write, os::unix::net::UnixStream};
+    let layout = Layout::new();
+    layout.init();
+    let mut owner = spawn_runtime(&layout, CLI, &["serve"]);
+    let socket = runtime_control_socket_path(&layout.data.join("stream-archive.db")).unwrap();
+    wait_for_path(&socket, Duration::from_secs(5));
+    let mut client = UnixStream::connect(&socket).unwrap();
+    client.write_all(b"{\"command\":\"logs\"").unwrap();
+    // Leave the connection open without a newline or EOF through shutdown.
+    thread::sleep(Duration::from_millis(100));
+    send_sigterm(owner.id());
+    let status = wait_for_exit(&mut owner, Duration::from_secs(3));
+    assert!(
+        status.success(),
+        "stalled client prevented clean SIGTERM: {status}"
+    );
+    assert!(!socket.exists(), "runtime socket survived shutdown");
+    drop(client);
+    assert_success("status after shutdown", &layout.cli(&["status", "--json"]));
+}
+
 fn wait_for_queue_state(db: &std::path::Path, id: &str, expected: &str) {
     let started = Instant::now();
     loop {

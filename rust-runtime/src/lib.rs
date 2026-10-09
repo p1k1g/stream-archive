@@ -1,6 +1,8 @@
 pub mod app_core;
 pub mod backend;
+mod background_tasks;
 pub mod backup_service;
+mod bounded_lines;
 pub mod diagnostics;
 pub mod download_events;
 pub mod environment_settings;

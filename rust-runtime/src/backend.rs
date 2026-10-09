@@ -52,10 +52,35 @@ pub const SAFE_SETTING_KEYS: &[&str] = &[
 ];
 
 const LOG_CAPACITY: usize = 400;
+const LOG_LINE_BYTES: usize = 8 * 1024;
+const LOG_BUFFER_BYTES: usize = 1024 * 1024;
+const TRUNCATED: &str = " … [log truncated]";
+
+struct BufferedLogs {
+    lines: VecDeque<String>,
+    bytes: usize,
+}
+
+fn bounded_log_line(mut line: String) -> String {
+    if line.len() <= LOG_LINE_BYTES {
+        if line.capacity() > LOG_LINE_BYTES {
+            line.shrink_to_fit();
+        }
+        return line;
+    }
+    let mut end = LOG_LINE_BYTES - TRUNCATED.len();
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    // A new allocation avoids retaining the original oversized capacity.
+    let mut bounded = line[..end].to_owned();
+    bounded.push_str(TRUNCATED);
+    bounded
+}
 
 #[derive(Clone)]
 pub struct LogBuffer {
-    inner: Arc<RwLock<VecDeque<String>>>,
+    inner: Arc<RwLock<BufferedLogs>>,
     events: broadcast::Sender<()>,
 }
 
@@ -69,16 +94,23 @@ impl LogBuffer {
     pub fn new() -> Self {
         let (events, _) = broadcast::channel(128);
         Self {
-            inner: Arc::new(RwLock::new(VecDeque::with_capacity(LOG_CAPACITY))),
+            inner: Arc::new(RwLock::new(BufferedLogs {
+                lines: VecDeque::with_capacity(LOG_CAPACITY),
+                bytes: 0,
+            })),
             events,
         }
     }
 
     pub async fn push(&self, line: impl Into<String>) {
         let mut logs = self.inner.write().await;
-        logs.push_back(line.into());
-        while logs.len() > LOG_CAPACITY {
-            logs.pop_front();
+        let line = bounded_log_line(line.into());
+        logs.bytes += line.len();
+        logs.lines.push_back(line);
+        while logs.lines.len() > LOG_CAPACITY || logs.bytes > LOG_BUFFER_BYTES {
+            if let Some(line) = logs.lines.pop_front() {
+                logs.bytes -= line.len();
+            }
         }
         drop(logs);
         let _ = self.events.send(());
@@ -90,8 +122,8 @@ impl LogBuffer {
 
     pub async fn tail(&self, max_lines: usize) -> Vec<String> {
         let logs = self.inner.read().await;
-        let start = logs.len().saturating_sub(max_lines.max(1));
-        logs.iter().skip(start).cloned().collect()
+        let start = logs.lines.len().saturating_sub(max_lines.max(1));
+        logs.lines.iter().skip(start).cloned().collect()
     }
 }
 
@@ -175,4 +207,46 @@ pub fn resolve_backend_dir() -> Result<PathBuf> {
     bail!(
         "backend directory not found. Expected ./backend or <exe-dir>/backend. Set STREAM_ARCHIVE_BACKEND_DIR for an explicit location."
     )
+}
+
+#[cfg(test)]
+mod bounded_log_tests {
+    use super::*;
+    #[tokio::test]
+    async fn byte_budget_and_line_count_evict_oldest_entries() {
+        let logs = LogBuffer::new();
+        for i in 0..1000 {
+            logs.push(format!("{i}:{}", "x".repeat(LOG_LINE_BYTES)))
+                .await;
+        }
+        let snapshot = logs.tail(usize::MAX).await;
+        assert!(snapshot.len() <= LOG_CAPACITY);
+        assert!(snapshot.iter().all(|s| s.len() <= LOG_LINE_BYTES));
+        assert!(snapshot.iter().map(|s| s.len()).sum::<usize>() <= LOG_BUFFER_BYTES);
+        assert!(snapshot.last().unwrap().starts_with("999:"));
+        let state = logs.inner.read().await;
+        assert_eq!(state.bytes, snapshot.iter().map(|s| s.len()).sum::<usize>());
+    }
+    #[tokio::test]
+    async fn normal_tail_and_unicode_truncation_preserve_notification() {
+        let logs = LogBuffer::new();
+        let mut events = logs.subscribe();
+        logs.push("정상 로그").await;
+        assert!(events.try_recv().is_ok());
+        assert_eq!(logs.tail(1).await, vec!["정상 로그"]);
+        let oversized = bounded_log_line("한글".repeat(LOG_LINE_BYTES));
+        assert!(oversized.len() <= LOG_LINE_BYTES);
+        assert!(oversized.ends_with(TRUNCATED));
+        assert!(oversized.capacity() < LOG_LINE_BYTES * 2);
+        let mut overallocated = String::with_capacity(4 * 1024 * 1024);
+        overallocated.push_str("small");
+        let small = bounded_log_line(overallocated);
+        assert_eq!(small, "small");
+        assert!(small.capacity() <= LOG_LINE_BYTES);
+        for i in 0..500 {
+            logs.push(i.to_string()).await;
+        }
+        assert_eq!(logs.tail(1000).await.len(), LOG_CAPACITY);
+        assert_eq!(logs.tail(2).await, vec!["498", "499"]);
+    }
 }

@@ -380,27 +380,44 @@ impl BackupManager {
     }
 }
 
-pub fn spawn_auto_backup(manager: BackupManager, logs: LogBuffer) {
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(30)).await;
-        loop {
-            match manager.create_auto_if_due().await {
-                Ok(Some(item)) => {
-                    logs.push(format!(
-                        "[BACKUP] automatic backup created file={} size={} sha256={}",
-                        item.file_name, item.size_bytes, item.sha256
-                    ))
-                    .await;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    logs.push(format!("[BACKUP:WARN] automatic backup failed: {error:#}"))
-                        .await;
-                }
+pub(crate) async fn run_auto_backup(
+    manager: BackupManager,
+    logs: LogBuffer,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) {
+    tokio::select! {
+        biased;
+        _ = crate::background_tasks::stopped(&mut stop) => return,
+        _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+    }
+    loop {
+        // Cancellation can interrupt waiting for the operation lock. Once the
+        // synchronous SQLite backup starts, its transaction/cleanup completes.
+        let result = tokio::select! {
+            biased;
+            _ = crate::background_tasks::stopped(&mut stop) => break,
+            result = manager.create_auto_if_due() => result,
+        };
+        match result {
+            Ok(Some(item)) => {
+                logs.push(format!(
+                    "[BACKUP] automatic backup created file={} size={} sha256={}",
+                    item.file_name, item.size_bytes, item.sha256
+                ))
+                .await;
             }
-            tokio::time::sleep(AUTO_CHECK_INTERVAL).await;
+            Ok(None) => {}
+            Err(error) => {
+                logs.push(format!("[BACKUP:WARN] automatic backup failed: {error:#}"))
+                    .await;
+            }
         }
-    });
+        tokio::select! {
+            biased;
+            _ = crate::background_tasks::stopped(&mut stop) => break,
+            _ = tokio::time::sleep(AUTO_CHECK_INTERVAL) => {}
+        }
+    }
 }
 
 fn is_backup_database_name(path: &Path) -> bool {

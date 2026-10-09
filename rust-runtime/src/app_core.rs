@@ -7,6 +7,7 @@
 
 use crate::{
     backend::LogBuffer,
+    background_tasks::{BackgroundTasks, Kind, stopped},
     backup_service::{BackupManager, BackupPolicy, BackupSnapshot, RestoreOutcome},
     history_service::{HistoryFilter, load_history},
     model::{
@@ -48,6 +49,7 @@ const NATIVE_PROVIDER_SECRET_KEYS: &[&str] = &[
 
 #[derive(Clone)]
 pub struct StreamArchiveCore {
+    background_tasks: Arc<BackgroundTasks>,
     backend_dir: Arc<PathBuf>,
     store: Store,
     logs: LogBuffer,
@@ -305,6 +307,7 @@ impl StreamArchiveCore {
             )?
         });
         Ok(Self {
+            background_tasks: Arc::new(BackgroundTasks::default()),
             backend_dir: Arc::new(backend_dir),
             store,
             logs,
@@ -928,7 +931,11 @@ impl StreamArchiveCore {
     }
 
     pub fn spawn_auto_backup(&self) {
-        crate::backup_service::spawn_auto_backup(self.backups.clone(), self.logs.clone());
+        let manager = self.backups.clone();
+        let logs = self.logs.clone();
+        self.background_tasks.start(Kind::Backup, move |stop| {
+            crate::backup_service::run_auto_backup(manager, logs, stop)
+        });
     }
 
     /// Keep VOD history synchronized for headless/native runtime callers.
@@ -936,29 +943,67 @@ impl StreamArchiveCore {
         let store = self.store.clone();
         let vod = self.vod.clone();
         let logs = self.logs.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                let status = vod.status().await;
-                if let Err(err) = store.upsert_vod(&status) {
-                    logs.push(format!("[DB:WARN] VOD history sync failed: {err:#}"))
-                        .await;
+        self.background_tasks
+            .start(Kind::VodHistory, move |mut stop| async move {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = stopped(&mut stop) => break,
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    }
+                    let status = vod.status().await;
+                    if let Err(err) = store.upsert_vod(&status) {
+                        logs.push(format!("[DB:WARN] VOD history sync failed: {err:#}"))
+                            .await;
+                    }
                 }
-            }
-        });
+            });
     }
 
     /// Stop new Queue claims first, then only runtime children owned by Stream Archive.
     pub async fn shutdown(&self) {
+        self.background_tasks.request_stop();
         self.queue.shutdown().await;
         let _ = self.vod.cancel().await;
         let _ = self.watcher.stop().await;
+        self.background_tasks.shutdown().await;
+        // Persist the terminal result after the last periodic writer has joined.
+        if let Err(error) = self.store.upsert_vod(&self.vod.status().await) {
+            self.logs
+                .push(format!(
+                    "[DB:WARN] final VOD history sync failed: {error:#}"
+                ))
+                .await;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn background_start_is_shared_by_core_clones_and_shutdown_releases_captures() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("stream-archive.db")).unwrap();
+        let core = StreamArchiveCore::assemble(directory.path().to_path_buf(), store).unwrap();
+        let clone = core.clone();
+        let vod = Arc::downgrade(&core.vod);
+        for _ in 0..100 {
+            core.spawn_auto_backup();
+            clone.spawn_auto_backup();
+            core.spawn_vod_history_sync();
+            clone.spawn_vod_history_sync();
+        }
+        assert_eq!(core.background_tasks.task_count(), 2);
+        tokio::join!(core.shutdown(), clone.shutdown());
+        clone.spawn_auto_backup();
+        clone.spawn_vod_history_sync();
+        assert_eq!(core.background_tasks.task_count(), 0);
+        drop(core);
+        drop(clone);
+        assert!(vod.upgrade().is_none());
+    }
 
     const OLD_KICK_REFERENCE: &str = "native-secret:v1:123e4567-e89b-12d3-a456-426614174000";
     const NEW_KICK_REFERENCE: &str = "native-secret:v1:123e4567-e89b-12d3-a456-426614174001";
