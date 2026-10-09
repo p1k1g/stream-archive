@@ -29,7 +29,6 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
     process::Command,
     sync::{Mutex, RwLock},
     task::JoinHandle,
@@ -1521,7 +1520,7 @@ async fn run_progress(
     let err_copy = err_lines.clone();
     let log_copy = logs.clone();
     let mut stderr_task = tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
+        let mut lines = crate::bounded_lines::BoundedLines::new(stderr);
         while let Ok(Some(line)) = lines.next_line().await {
             let redacted = redact(&line);
             if !redacted.trim().is_empty() {
@@ -1534,7 +1533,7 @@ async fn run_progress(
             }
         }
     });
-    let mut lines = BufReader::new(stdout).lines();
+    let mut lines = crate::bounded_lines::BoundedLines::new(stdout);
     let re = Regex::new(r"(?P<p>\d+(?:\.\d+)?)%").unwrap();
     loop {
         if cancel.load(Ordering::SeqCst) {

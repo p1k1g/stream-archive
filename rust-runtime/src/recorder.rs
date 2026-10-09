@@ -13,10 +13,7 @@ use std::{
     process::Stdio,
     time::{Duration, Instant},
 };
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    process::{Child, Command},
-};
+use tokio::process::{Child, Command};
 use uuid::Uuid;
 
 const GB: u64 = 1024 * 1024 * 1024;
@@ -283,7 +280,7 @@ impl RecorderManager {
             let logs = self.logs.clone();
             let account = account.to_string();
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
+                let mut lines = crate::bounded_lines::BoundedLines::new(stderr);
                 while let Ok(Some(line)) = lines.next_line().await {
                     let line = line.trim();
                     if !line.is_empty() {

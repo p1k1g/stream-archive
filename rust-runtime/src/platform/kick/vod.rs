@@ -957,7 +957,7 @@ async fn download_ts(
     status: &Arc<RwLock<VodJobStatus>>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::AsyncWriteExt;
     if cancel.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -995,7 +995,7 @@ async fn download_ts(
         expected: u64,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stream).lines();
+            let mut lines = crate::bounded_lines::BoundedLines::new(stream);
             while let Ok(Some(line)) = lines.next_line().await {
                 let progress = if line.starts_with("KICK_DONE ") {
                     Some(2.0)

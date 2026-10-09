@@ -94,3 +94,8 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - Phase 26.2 ✅ KICK VOD: playback 인증, 화질 선택, yt-dlp 4개 조각 병렬 다운로드 및 MPEG-TS 저장, FFmpeg 첫 프레임 썸네일. [범위 및 수동 RC](PHASE26_2_KICK_VOD.md)
 
 - Phase 26.3 🚧 README 및 사용 가이드 정리: 최신 실제 화면, 한국어 메뉴 경로와 KICK 다운로드·인증정보 관리 안내 반영.
+
+## 공개 이후 안정성 보완
+
+- Phase 27.1 조사: 메모리·리소스 소유 및 해제 경로 확인. Windows 장시간 heap 검증은 별도 진행.
+- Phase 27.2 🚧 메모리·리소스 lifecycle 보완: background task 소유·종료, Unix control I/O 및 로그 byte 제한. [구현 범위 및 수동 검증](PHASE27_2_RESOURCE_LIFECYCLE.md)

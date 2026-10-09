@@ -30,7 +30,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::AsyncWriteExt,
     process::Command,
     sync::{Mutex, RwLock, mpsc},
     task::JoinHandle,
@@ -834,7 +834,7 @@ where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
+        let mut lines = crate::bounded_lines::BoundedLines::new(reader);
         while let Ok(Some(line)) = lines.next_line().await {
             if tx.send(line).await.is_err() {
                 break;
