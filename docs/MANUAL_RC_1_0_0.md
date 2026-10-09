@@ -2,6 +2,8 @@
 
 상태: **수동 검증 필요 — 아래 항목은 모두 미완료**
 
+2026-10-08에 [v1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)가 공개됐습니다. 이는 아래 수동 QA의 완료 기록이 아닙니다. 공개 후에도 실제 결과와 증빙이 확인된 항목만 완료로 기록합니다.
+
 최종 공개 대상으로 선택한 1.0.0 압축 파일을 새 디렉터리에 풀어 검증합니다. 개발 checkout이나 다른 revision의 결과로 대신하지 않습니다. 자동 CI 성공은 실제 서비스 세션·GUI·native secret store의 수동 성공을 뜻하지 않습니다. 인증정보나 환경이 없으면 `미검증`으로 기록하며 PASS로 표시하지 않습니다.
 
 이 문서는 [Phase 23.9 문서](PHASE23_9_FINAL_MANUAL_RC_RELEASE_PREP.md)의 5절 및 7–14절에 남은 gate를 유지합니다. 해당 조건을 면제하지 않으며 아래 한국어 세부 항목과 함께 충족해야 합니다. Windows의 과거 headless gate는 Phase 23.10 Native-only contract에 따라 적용하지 않지만 Linux/macOS CLI·headless 검증은 유지합니다.
