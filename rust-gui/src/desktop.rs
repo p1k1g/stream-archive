@@ -81,9 +81,50 @@ fn close_request_blocked(
     (!settings_loaded && settings_busy) || close_choice_busy || dialog_visible || exit_pending
 }
 
+// Explorer can briefly reject icon registration while restarting. Only restore
+// a hidden window after repeated failures; a visible window needs no fallback.
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct TrayRecovery {
+    failures: u8,
+}
+
+#[cfg(any(windows, test))]
+impl TrayRecovery {
+    fn should_restore(&mut self, registered: bool, visible: bool) -> bool {
+        if registered || visible {
+            self.failures = 0;
+            return false;
+        }
+        self.failures = self.failures.saturating_add(1);
+        self.failures >= 3
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::close_request_blocked;
+    use super::{TrayRecovery, close_request_blocked};
+
+    #[test]
+    fn transient_tray_failure_does_not_restore_hidden_window() {
+        let mut recovery = TrayRecovery::default();
+        assert!(!recovery.should_restore(false, false));
+        assert!(!recovery.should_restore(false, false));
+        assert!(!recovery.should_restore(true, false));
+        assert!(!recovery.should_restore(false, false));
+        assert!(!recovery.should_restore(false, false));
+        assert!(recovery.should_restore(false, false));
+    }
+
+    #[test]
+    fn visible_window_resets_tray_failure_streak() {
+        let mut recovery = TrayRecovery::default();
+        for _ in 0..3 {
+            recovery.should_restore(false, false);
+        }
+        assert!(!recovery.should_restore(false, true));
+        assert!(!recovery.should_restore(false, false));
+    }
 
     #[test]
     fn loaded_settings_work_does_not_block_close() {

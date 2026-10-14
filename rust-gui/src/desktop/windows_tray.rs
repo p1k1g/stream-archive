@@ -286,6 +286,7 @@ fn restore(ui: &MainWindow) {
     use slint::winit_030::WinitWindowAccessor;
     ui.window()
         .with_winit_window(|window| window.focus_window());
+    ui.window().request_redraw();
 }
 
 pub fn bind(ui: &MainWindow) -> Desktop {
@@ -401,6 +402,7 @@ pub fn bind(ui: &MainWindow) -> Desktop {
     let timer_tray = tray.clone();
     let timer = Timer::default();
     let mut last_poll = Instant::now();
+    let mut recovery = super::TrayRecovery::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
         let Some(ui) = weak.upgrade() else { return };
         let state = ui.global::<AppState>();
@@ -468,16 +470,17 @@ pub fn bind(ui: &MainWindow) -> Desktop {
             }
             if let Some(tray) = timer_tray.as_ref().as_ref() {
                 *tray.state.status.borrow_mut() = state.get_desktop_status().to_string();
-                if !tray
+                let registered = tray
                     .state
-                    .ensure(&format!("Stream Archive — {}", state.get_desktop_status()))
-                    && !ui.window().is_visible()
-                {
+                    .ensure(&format!("Stream Archive — {}", state.get_desktop_status()));
+                if !state.get_desktop_exit_pending()
+                    && recovery.should_restore(registered, ui.window().is_visible()) {
                     restore(&ui);
-                    super::notify(
-                        &ui,
-                        "Windows 트레이를 복구하지 못해 창을 다시 표시했습니다.",
-                    );
+                    // A synchronous MessageBox here holds the Slint timer
+                    // callback open after show(), delaying the first repaint.
+                    state.set_desktop_recovery_message(
+                        "Windows 트레이를 복구하지 못해 창을 다시 표시했습니다. 녹화·다운로드는 계속 실행됩니다.".into());
+                    eprintln!("[DESKTOP:WARN] Windows tray registration failed repeatedly; restoring the window without a modal dialog");
                 }
             }
         }
