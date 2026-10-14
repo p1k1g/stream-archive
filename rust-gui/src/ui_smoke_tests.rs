@@ -54,6 +54,32 @@ fn native_navigation_and_watcher_toggle_preserve_input_guards() {
     state.set_runtime_ready(true);
     state.set_live_loaded(true);
     state.set_live_busy(false);
+    state.set_desktop_recovery_message(
+        "Windows 트레이를 복구하지 못해 창을 다시 표시했습니다.".into(),
+    );
+    render(&window, 1120, 720);
+    // Recovery is an in-window banner; it must not capture navigation or require
+    // a native modal message loop before Slint can paint the restored window.
+    click(&ui, 70.0, 137.0);
+    assert_eq!(state.get_active_page(), "Channels");
+    let mut dismissed = false;
+    for y in (25..105).step_by(5) {
+        for x in (990..1095).step_by(5) {
+            click(&ui, x as f32, y as f32);
+            if state.get_desktop_recovery_message().is_empty() {
+                dismissed = true;
+                break;
+            }
+        }
+        if dismissed {
+            break;
+        }
+    }
+    assert!(
+        dismissed,
+        "recovery banner confirmation must remain accessible"
+    );
+    state.set_active_page("LIVE".into());
     let starts = Rc::new(Cell::new(0));
     let stops = Rc::new(Cell::new(0));
     let counter = starts.clone();

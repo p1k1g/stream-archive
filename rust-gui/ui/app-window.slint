@@ -113,6 +113,7 @@ export global AppState {
     in-out property <bool> desktop-exit-pending: false;
     in-out property <bool> desktop-poll-pending: false;
     in-out property <string> desktop-status: "상태 확인 중";
+    in-out property <string> desktop-recovery-message: "";
     callback desktop-exit();
     callback desktop-poll();
     in-out property <bool> download-notifications-enabled: true;
@@ -334,6 +335,20 @@ export component MainWindow inherits Window {
             VerticalLayout {
                 padding: 20px;
                 spacing: 14px;
+
+                if AppState.desktop-recovery-message != "": Rectangle {
+                    background: Theme.surface;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    border-radius: 6px;
+                    vertical-stretch: 0;
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 10px;
+                        Text { text: AppState.desktop-recovery-message; color: Theme.warning; wrap: word-wrap; }
+                        Button { text: "확인"; horizontal-stretch: 0; clicked => { AppState.desktop-recovery-message = ""; } }
+                    }
+                }
 
                 VerticalLayout {
                     height: 56px; vertical-stretch: 0; spacing: 4px;
