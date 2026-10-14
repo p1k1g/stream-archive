@@ -1,6 +1,6 @@
 # Stream Archive 1.0.1 릴리스 노트
 
-상태: **안정화 패치 준비 중 — 아직 공개하지 않음**
+상태: **안정화 패치 공개 — 2026-10-14**
 
 1.0.0 이후의 메모리·리소스 lifecycle 및 Windows tray 복구 보완을 포함하는 패치입니다. 제품과 패키지 버전을 1.0.1로 맞춥니다. 공개된 1.0.0 Release·tag·패키지·체크섬은 보존합니다.
 
@@ -46,10 +46,10 @@ Windows DPAPI, Linux Secret Service, macOS Keychain의 기존 비밀정보 보�
 
 ## 검증 및 알려진 제한사항
 
-27.2 PR #128과 27.3 PR #129의 Windows/Linux/macOS CI 및 windows-check는 통과했습니다. 1.0.1 버전 전환 자체는 해당 PR CI로 별도 검증하고, 공개 패키지는 merge 이후의 정확한 commit으로 release artifact workflow를 실행해 확인해야 합니다.
+27.2 PR #128과 27.3 PR #129의 Windows/Linux/macOS CI 및 windows-check는 통과했습니다. 1.0.1 버전 전환은 [PR CI #451](https://github.com/p1k1g/stream-archive/actions/runs/38525223946)에서 검증했습니다. 공개 패키지는 merge commit `fc4df67c210cdfefb088af6b3d6c833bb9e783e1`의 [release artifact run](https://github.com/p1k1g/stream-archive/actions/runs/38528515892)에서 빌드했으며 release-contracts와 Windows/Linux/macOS package job이 모두 성공했습니다.
 
 수동 Windows GUI/Explorer/tray/notification 및 실제 provider 인증·장시간 실행 검증은 자동 검증과 별개입니다. Phase 26 빌드에서 관찰된 약 5일 후 흰 화면과 Private Bytes 약 1.6GB의 원인 전체가 해결됐다고 주장하지 않습니다. 메모리 누수가 전혀 없다고 보장하지 않습니다. Authenticode 및 macOS signing/notarization은 적용하지 않습니다.
 
 ## 릴리스 상태
 
-아직 v1.0.1 tag나 GitHub Release를 생성하지 않았습니다. 공개 절차와 미완료 수동 QA는 [1.0.1 공개 체크리스트](RELEASE_CHECKLIST_1_0_1.md)에서 관리합니다. 패키지 공개 전에 README의 기존 1.0.0 다운로드를 1.0.1로 바꾸지 않습니다.
+[v1.0.1 GitHub Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1)를 공개했습니다. tag는 검증한 merge commit `fc4df67c210cdfefb088af6b3d6c833bb9e783e1`을 가리킵니다. 세 플랫폼 archive와 대응 `.sha256`을 정식 assets로 업로드했고 로그인 없는 다운로드 및 hash 일치를 확인했습니다. [보존 체크섬](releases/v1.0.1/)과 [공개 체크리스트](RELEASE_CHECKLIST_1_0_1.md)를 참고하세요. 공개는 미완료 수동 QA의 성공을 뜻하지 않습니다.

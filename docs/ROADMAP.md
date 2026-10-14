@@ -100,4 +100,4 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - Phase 27.1 조사: 메모리·리소스 소유 및 해제 경로 확인. Windows 장시간 heap 검증은 별도 진행.
 - Phase 27.2 ✅ 메모리·리소스 lifecycle 보완: background task 소유·종료, Unix control I/O 및 로그 byte 제한. [구현 범위 및 수동 검증](PHASE27_2_RESOURCE_LIFECYCLE.md)
 - Phase 27.3 ✅ Windows tray 자동 복구의 비차단 안내 및 창 redraw. [구현 범위 및 수동 검증](PHASE27_3_TRAY_RECOVERY.md)
-- 1.0.1 🚧 안정화 패치 릴리스 준비. [릴리스 노트](RELEASE_NOTES_1_0_1.md) · [공개 체크리스트](RELEASE_CHECKLIST_1_0_1.md)
+- 1.0.1 ✅ 안정화 패치 공개 (2026-10-14). [릴리스 노트](RELEASE_NOTES_1_0_1.md) · [공개 체크리스트](RELEASE_CHECKLIST_1_0_1.md)
