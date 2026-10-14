@@ -10,6 +10,8 @@ Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행�
 >
 > [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)가 공개됐습니다. Windows/Linux/macOS 패키지와 자동 검증 결과는 [패키지 빌드](https://github.com/p1k1g/stream-archive/actions/runs/37741196303)에서 확인할 수 있습니다. 실제 서비스·GUI·OS별 비밀정보 저장의 수동 검증 상태는 [수동 RC 체크리스트](docs/MANUAL_RC_1_0_0.md)에서 별도로 관리합니다.
 
+> **1.0.1 안정화 패치 준비 중:** 현재 소스는 27.2 메모리·리소스 lifecycle 보완과 27.3 Windows tray 복구 수정을 포함합니다. [1.0.1 릴리스 노트](docs/RELEASE_NOTES_1_0_1.md)와 [공개 체크리스트](docs/RELEASE_CHECKLIST_1_0_1.md)를 참고하세요. 아래 다운로드는 아직 공개된 **1.0.0**이며, 1.0.1 패키지를 공개한 뒤 갱신합니다.
+
 ## 화면 미리보기
 
 ### LIVE
