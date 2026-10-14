@@ -27,6 +27,8 @@ PR CI의 패키지 smoke는 merge 후 공개할 artifact 빌드를 대신하지 
 
 ## 실제 서비스·데이터·비밀정보 저장
 
+- [ ] Worker 연결 및 Streamlink / yt-dlp / FFmpeg Diagnostics
+
 - [ ] SOOP LIVE / VOD 시작·완료·취소·재시도
 - [ ] CHZZK LIVE / VOD 시작·완료·취소·재시도
 - [ ] KICK 공개 LIVE 및 공개·구독 VOD

@@ -112,6 +112,6 @@ Pull Request의 런타임 검증은 `.github/workflows/rust-runtime-check.yml`�
 - Windows portable 패키지 및 ZIP build·검증
 - Linux/macOS TAR.GZ build, 패키지 내부·압축 파일 체크섬 및 새 압축 해제 CLI smoke
 
-릴리스 workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식입니다. GitHub Release/tag를 만들지 않고 검증한 Actions artifact만 업로드합니다. artifact job 전에 런타임·패키징 contract gate가 통과해야 하며, 업로드 전 정확한 1.0.0 metadata와 Windows EXE 버전도 확인합니다. artifact 보관 기간은 7일입니다.
+릴리스 workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식입니다. GitHub Release/tag를 만들지 않고 검증한 Actions artifact만 업로드합니다. artifact job 전에 런타임·패키징 contract gate가 통과해야 하며, 업로드 전 정확한 1.0.1 metadata와 Windows EXE 버전도 확인합니다. artifact 보관 기간은 7일입니다.
 
-PR CI는 각 플랫폼의 GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-arm64` 패키지를 실제 조립하고 체크섬·새 압축 해제 smoke까지 검증합니다. 실제 인증정보가 필요한 로그인·세션 smoke와 공개 판정은 자동 CI 범위 밖입니다. 남은 항목은 [1.0.0 수동 검증 체크리스트](MANUAL_RC_1_0_0.md)에서 관리합니다.
+PR CI는 각 플랫폼의 GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-arm64` 패키지를 실제 조립하고 체크섬·새 압축 해제 smoke까지 검증합니다. 실제 인증정보가 필요한 로그인·세션 smoke와 공개 판정은 자동 CI 범위 밖입니다. 남은 항목은 [1.0.1 공개 및 수동 검증 체크리스트](RELEASE_CHECKLIST_1_0_1.md)에서 관리합니다.
