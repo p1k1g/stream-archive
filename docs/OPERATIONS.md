@@ -161,7 +161,7 @@ Phase 23.6에서 정립한 Unix 압축 파일은 `bin/`, `backend/`, 비어 있�
 
 rollback 전에 새 런타임을 종료합니다. 먼저 이전 패키지로 돌아가고, 실제 DB 상태에서 필요한 경우에만 업그레이드 전 백업을 복구합니다. 임의 schema downgrade 호환성을 가정하지 않습니다.
 
-[1.0.0 최종 수동 검증 체크리스트](https://github.com/p1k1g/stream-archive/blob/main/docs/MANUAL_RC_1_0_0.md)에 이전 버전 실행 가능 여부, 새 버전 실행 후 DB 호환 상태 및 필요한 백업 복구 증빙을 기록합니다. 확인하지 않은 rollback을 성공으로 표시하지 않습니다.
+[1.0.1 공개 및 수동 검증 체크리스트](https://github.com/p1k1g/stream-archive/blob/main/docs/RELEASE_CHECKLIST_1_0_1.md)에 이전 버전 실행 가능 여부, 새 버전 실행 후 DB 호환 상태 및 필요한 백업 복구 증빙을 기록합니다. 확인하지 않은 rollback을 성공으로 표시하지 않습니다.
 
 <a id="portable-package-replacement"></a>
 
@@ -200,7 +200,7 @@ Linux/macOS:
 
 검증기는 필수 파일, 실행 권한, 비어 있는 런타임 데이터, 내부 `SHA256SUMS.txt`, 압축 파일 체크섬 및 금지한 legacy·runtime artifact를 확인합니다. 공백·비ASCII 문자가 포함된 새 압축 해제 경로에서 CLI도 실행합니다.
 
-Streamlink, yt-dlp, FFmpeg는 외부 의존성이며 공식 패키지에 재배포하지 않습니다. 최종 공개 artifact의 정확한 파일 점검은 [수동 RC 체크리스트](https://github.com/p1k1g/stream-archive/blob/main/docs/MANUAL_RC_1_0_0.md)를 따릅니다.
+Streamlink, yt-dlp, FFmpeg는 외부 의존성이며 공식 패키지에 재배포하지 않습니다. 최종 공개 artifact의 정확한 파일 점검은 [1.0.1 공개 체크리스트](https://github.com/p1k1g/stream-archive/blob/main/docs/RELEASE_CHECKLIST_1_0_1.md)를 따릅니다.
 
 <a id="runtime-environment-overrides"></a>
 
