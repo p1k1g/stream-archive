@@ -13,6 +13,7 @@ pub struct LiveModel {
     visible: bool,
     dirty: bool,
     awaiting_snapshot: bool,
+    generation: u64,
 }
 impl LiveModel {
     pub fn set_visible(&mut self, visible: bool) -> bool {
@@ -23,6 +24,7 @@ impl LiveModel {
         self.dirty = true;
         if visible {
             // A hidden cache is not necessarily the latest runtime state.
+            self.generation = self.generation.saturating_add(1);
             self.awaiting_snapshot = true;
         } else if self.rows.row_count() > 0 {
             self.rows.set_vec(Vec::new());
@@ -33,10 +35,15 @@ impl LiveModel {
     pub fn needs_snapshot(&self) -> bool {
         self.visible && self.awaiting_snapshot
     }
-    pub fn receive(&mut self, status: NativeWatcherStatus) {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub fn receive(&mut self, status: NativeWatcherStatus, generation: Option<u64>) {
         self.latest = Some(status);
         self.dirty = true;
-        self.awaiting_snapshot = false;
+        if generation == Some(self.generation) {
+            self.awaiting_snapshot = false;
+        }
     }
     pub fn invalidate_images(&mut self) {
         self.dirty = true;
@@ -143,16 +150,19 @@ mod tests {
     fn hidden_snapshots_keep_only_latest_and_reopen_waits_for_fresh_snapshot() {
         let mut model = LiveModel::default();
         model.set_visible(true);
-        model.receive(NativeWatcherStatus::default());
+        model.receive(NativeWatcherStatus::default(), Some(model.generation()));
         assert!(model.take_for_display().is_some());
         model.reconcile(vec![row("a", "1")]);
         model.set_visible(false);
         let resets = model.resets;
         for count in 0..1000 {
-            model.receive(NativeWatcherStatus {
-                recording_count: count,
-                ..Default::default()
-            });
+            model.receive(
+                NativeWatcherStatus {
+                    recording_count: count,
+                    ..Default::default()
+                },
+                Some(model.generation()),
+            );
             model.invalidate_images();
             assert!(model.take_for_display().is_none());
         }
@@ -162,11 +172,34 @@ mod tests {
         model.set_visible(true);
         assert!(model.needs_snapshot());
         assert!(model.take_for_display().is_none());
-        model.receive(NativeWatcherStatus {
-            recording_count: 7,
-            ..Default::default()
-        });
+        model.receive(
+            NativeWatcherStatus {
+                recording_count: 7,
+                ..Default::default()
+            },
+            Some(model.generation()),
+        );
         assert_eq!(model.take_for_display().unwrap().recording_count, 7);
         assert!(model.take_for_display().is_none());
+    }
+    #[test]
+    fn pre_reopen_and_untagged_responses_cannot_satisfy_fresh_wait() {
+        let mut model = LiveModel::default();
+        model.set_visible(true);
+        let old = model.generation();
+        model.receive(NativeWatcherStatus::default(), Some(old));
+        model.take_for_display().unwrap();
+        model.set_visible(false);
+        model.set_visible(true);
+        assert_ne!(old, model.generation());
+        for generation in [Some(old), None] {
+            model.receive(NativeWatcherStatus::default(), generation);
+            assert!(model.latest.is_some()); // Background tracking still progresses.
+            assert!(model.needs_snapshot());
+            assert!(model.take_for_display().is_none());
+        }
+        model.receive(NativeWatcherStatus::default(), Some(model.generation()));
+        assert!(!model.needs_snapshot());
+        assert!(model.take_for_display().is_some());
     }
 }

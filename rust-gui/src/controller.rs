@@ -74,6 +74,7 @@ enum Request {
     ClearProviderCredentials(String),
     LiveStatus {
         poll: bool,
+        generation: u64,
     },
     LiveRefresh,
     LiveStart,
@@ -169,6 +170,7 @@ enum Response {
     ConfigError(String),
     Picked(usize, Option<String>),
     Live {
+        generation: Option<u64>,
         status: NativeWatcherStatus,
         refresh_thumbnails: bool,
         message: Option<String>,
@@ -321,9 +323,11 @@ fn live_status(
     core: &StreamArchiveCore,
     runtime: &tokio::runtime::Runtime,
     poll: bool,
+    generation: Option<u64>,
 ) -> Response {
     match runtime.block_on(core.watcher_status()) {
         Ok(status) => Response::Live {
+            generation,
             status,
             refresh_thumbnails: false,
             message: None,
@@ -535,7 +539,10 @@ fn worker_loop(
     {
         return;
     }
-    if responses.send(live_status(core, runtime, false)).is_err() {
+    if responses
+        .send(live_status(core, runtime, false, None))
+        .is_err()
+    {
         return;
     }
     if responses.send(storage_status(core, false)).is_err() {
@@ -747,9 +754,11 @@ fn worker_loop(
                     Response::ConfigError(format!("SOOP / Worker 테스트 실패: {error:#}"))
                 }
             },
-            Request::LiveStatus { poll } => live_status(core, runtime, poll),
+            Request::LiveStatus { poll, generation } => {
+                live_status(core, runtime, poll, Some(generation))
+            }
             Request::LiveRefresh => {
-                let mut response = live_status(core, runtime, false);
+                let mut response = live_status(core, runtime, false, None);
                 if let Response::Live {
                     refresh_thumbnails, ..
                 } = &mut response
@@ -761,6 +770,7 @@ fn worker_loop(
             Request::StorageLoad { poll } => storage_status(core, poll),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
                 Ok(status) => Response::Live {
+                    generation: None,
                     status,
                     refresh_thumbnails: false,
                     message: Some("LIVE Watcher를 시작했습니다".into()),
@@ -773,6 +783,7 @@ fn worker_loop(
             },
             Request::LiveStop => match runtime.block_on(core.stop_watcher()) {
                 Ok(status) => Response::Live {
+                    generation: None,
                     status,
                     refresh_thumbnails: false,
                     message: Some("LIVE Watcher를 중지했습니다".into()),
@@ -794,6 +805,7 @@ fn worker_loop(
                 match runtime.block_on(core.channel_action(target, action)) {
                     Ok(()) => match runtime.block_on(core.watcher_status()) {
                         Ok(status) => Response::Live {
+                            generation: None,
                             status,
                             refresh_thumbnails: false,
                             message: Some(match action {
@@ -820,6 +832,7 @@ fn worker_loop(
                 match runtime.block_on(core.channel_password(target, password)) {
                     Ok(()) => match runtime.block_on(core.watcher_status()) {
                         Ok(status) => Response::Live {
+                            generation: None,
                             status,
                             refresh_thumbnails: false,
                             message: Some(
@@ -2549,6 +2562,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let thumbnail_sender = sender.clone();
     let mut vod_thumbnail_pending = false;
     let mut vod_thumbnail_attempt: Option<(u64, String)> = None;
+    let live_generation = Rc::new(Cell::new(0u64));
+    let response_live_generation = live_generation.clone();
     let mut live_model = crate::live_model::LiveModel::default();
     state.set_live_rows(live_model.rows.clone().into());
     let mut pending_storage = None;
@@ -2566,6 +2581,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
         let visible = ui.window().is_visible();
         let page = stream_archive_server::resource_trace::Page::from_name(app.get_active_page().as_str());
         if live_model.set_visible(visible && page == stream_archive_server::resource_trace::Page::Live) {
+            response_live_generation.set(live_model.generation());
+            next_fresh_request = Instant::now();
             app.set_live_loaded(false);
             pending_storage = None;
             if !app.get_storage_busy() && !response_storage_poll_flag.get()
@@ -2785,6 +2802,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     }
                 }
                 Response::Live {
+                    generation,
                     status,
                     refresh_thumbnails,
                     message,
@@ -2797,7 +2815,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     }
                     live_polls = live_polls.saturating_add(u64::from(poll));
                     thumbnails.sync(&status, refresh_thumbnails);
-                    live_model.receive(status);
+                    live_model.receive(status, generation);
                     request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
                     response_thumbnail_tracking.set(thumbnails.is_tracking());
                     if let Some(message) = message {
@@ -3024,7 +3042,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         }
         if live_model.needs_snapshot() && Instant::now() >= next_fresh_request
             && !app.get_live_busy() && !response_live_poll_flag.get()
-            && thumbnail_sender.send(Request::LiveStatus { poll: true }).is_ok() {
+            && thumbnail_sender.send(Request::LiveStatus { poll: true, generation: live_model.generation() }).is_ok() {
             response_live_poll_flag.set(true);
             next_fresh_request = Instant::now() + Duration::from_millis(1500);
         }
@@ -3081,7 +3099,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 return;
             }
             if live_poll_sender
-                .send(Request::LiveStatus { poll: true })
+                .send(Request::LiveStatus {
+                    poll: true,
+                    generation: live_generation.get(),
+                })
                 .is_ok()
             {
                 live_poll_flag.set(true);
