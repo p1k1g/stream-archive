@@ -1618,6 +1618,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let (sender, requests) = mpsc::channel();
     let (responses, receiver) = mpsc::channel();
     let state = ui.global::<AppState>();
+    state.set_app_version(concat!("v", env!("CARGO_PKG_VERSION")).into());
     state.set_settings_busy(true);
     state.set_config_busy(true);
     state.set_live_busy(true);

@@ -27,7 +27,7 @@ jobs:
           for manifest, name in [('rust-runtime/Cargo.toml', 'stream-archive-server'), ('rust-gui/Cargo.toml', 'stream-archive-gui')]:
               data = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1', '--manifest-path', manifest]))
               package = next(p for p in data['packages'] if p['name'] == name)
-              assert package['version'] == '1.0.1', (name, package['version'])
+              assert package['version'] == '1.0.2', (name, package['version'])
           PYVERSION
 
       - name: Validate release/runtime contracts
@@ -85,9 +85,9 @@ jobs:
         shell: powershell
         run: |
           $metadata = Get-Content -LiteralPath './dist/stream-archive/RELEASE_INFO.txt'
-          if ($metadata -notcontains 'version=1.0.1') { throw 'Expected stable artifact version=1.0.1' }
+          if ($metadata -notcontains 'version=1.0.2') { throw 'Expected stable artifact version=1.0.2' }
           $version = (Get-Item './dist/stream-archive/StreamArchive.exe').VersionInfo.ProductVersion
-          if ($version -ne '1.0.1') { throw "Expected executable ProductVersion=1.0.1, got $version" }
+          if ($version -ne '1.0.2') { throw "Expected executable ProductVersion=1.0.2, got $version" }
 
       - name: Build Windows release archive
         shell: powershell
@@ -165,7 +165,7 @@ jobs:
         shell: bash
         run: |
           metadata="$(find dist -type f -path '*/unix-*/stream-archive/RELEASE_INFO.txt' -print -quit)"
-          grep -qx 'version=1.0.1' "$metadata"
+          grep -qx 'version=1.0.2' "$metadata"
 
       - name: Resolve release artifact
         id: package

@@ -72,7 +72,7 @@ unset soop_password
 2. 인증 테스트 결과를 확인합니다. 이 테스트는 SOOP 로그인 및 Worker endpoint 인증 확인이며 녹화 성공을 보장하지 않습니다.
 3. 실제 SOOP 채널을 등록하고 저장한 뒤 LIVE Watcher를 시작합니다.
 4. 방송 중인 채널에서 URL 조회, 녹화 시작·진행·종료, 출력 파일 및 History를 확인합니다.
-5. 최종 결과는 [1.0.1 공개 및 수동 검증 체크리스트](RELEASE_CHECKLIST_1_0_1.md)에 기록합니다.
+5. 최종 결과는 [1.0.2 공개 및 수동 검증 체크리스트](RELEASE_CHECKLIST_1_0_2.md)에 기록합니다.
 
 Worker의 endpoint는 다음과 같습니다.
 
