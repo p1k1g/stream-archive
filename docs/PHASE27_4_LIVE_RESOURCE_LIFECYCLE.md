@@ -1,6 +1,6 @@
 # Phase 27.4 — LIVE model 수명과 리소스 계측
 
-상태: PR #132 merge 완료. Windows/Linux/macOS CI와 최종 Codex review 검증 완료. 1.0.2 공개 준비 중이며 장시간 Windows 비교 검증은 수동 항목으로 유지함.
+상태: PR #132 merge 완료. Windows/Linux/macOS CI와 최종 Codex review 검증 완료. 1.0.2 공개 완료. 장시간 Windows 비교 검증은 수동 항목으로 유지함.
 
 1.0.1 장시간 기록에서 Private Bytes가 184.3MiB에서 926.6MiB로 증가했고, 증가와 정체가 반복됐다. 이 변경이 전체 증가 원인을 해결했다고 주장하지 않는다. 실제 Windows heap 비교와 장시간 실행은 수동 검증으로 남긴다.
 

@@ -4,13 +4,11 @@
 
 Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행을 제공합니다. Queue, History, 백업·복구, Diagnostics를 한곳에서 관리할 수 있습니다.
 
-[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.0.1 릴리스 노트](docs/RELEASE_NOTES_1_0_1.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
+[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.0.2 릴리스 노트](docs/RELEASE_NOTES_1_0_2.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
 
-> **Stream Archive 1.0.1 안정화 패치 공개 — 2026-10-14**
+> **Stream Archive 1.0.2 안정화 패치 공개 — 2026-10-19**
 >
-> [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1)는 27.2 메모리·리소스 lifecycle 보완과 27.3 Windows tray 복구 수정을 포함합니다. [공개 패키지 빌드](https://github.com/p1k1g/stream-archive/actions/runs/38528515892)는 Windows/Linux/macOS 모두 통과했습니다. 실제 GUI·서비스 세션·장시간 실행의 미완료 항목은 [공개·수동 QA 체크리스트](docs/RELEASE_CHECKLIST_1_0_1.md)에 남겨두었습니다. 기존 [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)는 보존합니다.
-
-1.0.2는 Phase 27.4 LIVE lifecycle 보완을 포함해 공개 준비 중입니다. [1.0.2 릴리스 노트](docs/RELEASE_NOTES_1_0_2.md) · [공개 체크리스트](docs/RELEASE_CHECKLIST_1_0_2.md). 아래 다운로드는 공개가 확인된 1.0.1을 유지합니다.
+> [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2)는 Phase 27.4의 LIVE model 수명·이전 썸네일 정리·LIVE/저장공간 재표시 조회 순서 보완과 선택적 리소스 계측을 포함합니다. [정식 배포 파일 빌드](https://github.com/p1k1g/stream-archive/actions/runs/39261515426)는 Windows/Linux/macOS 모두 통과했습니다. 실제 GUI·서비스 세션·장시간 메모리 비교의 미완료 항목은 [공개·수동 QA 체크리스트](docs/RELEASE_CHECKLIST_1_0_2.md)에 남겨두었습니다. 장시간 메모리 증가 원인 전체가 해결됐다고 단정하지 않습니다. 기존 [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1)와 [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)는 보존합니다.
 
 ## 화면 미리보기
 
@@ -47,17 +45,17 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
 ## 다운로드 및 지원 환경
 
-[1.0.1 Release 페이지](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1)와 아래 정식 Release asset 링크에서 패키지를 다운로드할 수 있습니다.
+[1.0.2 Release 페이지](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2)와 아래 정식 Release asset 링크에서 패키지를 다운로드할 수 있습니다.
 
 | 운영체제 | 다운로드 | 패키지 | 실행 방식 |
 |---|---|---|---|
-| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.1/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
-| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.1/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
-| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.1/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
+| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.2/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
+| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.2/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
+| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.2/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
 
-공개된 패키지의 SHA-256은 Release assets와 [버전별 체크섬 디렉터리](docs/releases/v1.0.1/)에 보존합니다. 체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.1/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.1/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.1/stream-archive-macos-arm64.tar.gz.sha256)
+공개된 패키지의 SHA-256은 Release assets와 [버전별 체크섬 디렉터리](docs/releases/v1.0.2/)에 보존합니다. 체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.2/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.2/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.2/stream-archive-macos-arm64.tar.gz.sha256)
 
-로그인하지 않은 요청으로 패키지와 `.sha256` 6개를 다운로드하고, 빌드 artifact 및 공개 asset의 hash가 일치함을 확인했습니다. Actions artifact의 보관 기간과 무관하게 사용할 수 있습니다. 패키지와 해당 `.sha256`을 같은 폴더에 저장하고 실행 전에 확인하세요. 이전 버전은 [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 받을 수 있으며 [기존 체크섬](docs/releases/v1.0.0/)도 유지합니다.
+로그인하지 않은 요청으로 패키지와 `.sha256` 6개를 다운로드하고, 빌드 artifact 및 공개 asset의 hash가 일치함을 확인했습니다. Actions artifact의 보관 기간과 무관하게 사용할 수 있습니다. 패키지와 해당 `.sha256`을 같은 폴더에 저장하고 실행 전에 확인하세요. 이전 버전은 [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1)와 [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 받을 수 있으며 [1.0.1 체크섬](docs/releases/v1.0.1/)과 [1.0.0 체크섬](docs/releases/v1.0.0/)도 유지합니다.
 
 패키지 build와 smoke는 각 플랫폼의 CI에서 검증합니다. 실제 서비스 세션, GUI 조작 및 OS별 비밀정보 저장의 최종 수동 검증은 별도로 관리합니다. Linux/macOS에는 GUI를 제공하지 않으며, 검증하지 않은 아키텍처의 지원을 주장하지 않습니다.
 
@@ -180,7 +178,7 @@ Windows는 CurrentUser DPAPI, Linux는 `secret-tool`을 통한 Secret Service, m
 
 | 문서 | 내용 |
 |---|---|
-| [1.0.1 릴리스 노트](docs/RELEASE_NOTES_1_0_1.md) | 지원 범위·변경사항·제한사항 |
+| [1.0.2 릴리스 노트](docs/RELEASE_NOTES_1_0_2.md) | 지원 범위·변경사항·제한사항 |
 | [운영 가이드](docs/OPERATIONS.md) | 백업·복구·업그레이드·rollback |
 | [Cloudflare Worker 설정](docs/CLOUDFLARE_WORKER.md) | SOOP LIVE용 Worker 생성·secret·앱 연결 |
 | [Unix CLI 가이드](docs/UNIX_CLI.md) | Linux/macOS 명령 및 운영 조건 |

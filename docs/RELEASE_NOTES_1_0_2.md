@@ -1,6 +1,6 @@
 # Stream Archive 1.0.2 릴리스 노트
 
-상태: **안정화 패치 공개 준비 중**
+상태: **안정화 패치 공개 — 2026-10-19**
 
 1.0.1 이후 Phase 27.4의 LIVE 화면 model 수명, 이전 썸네일 정리 및 재표시 조회 순서 보완을 포함합니다. 제품·패키지 버전을 1.0.2로 맞추며 기존 1.0.0/1.0.1 Release·tag·패키지·체크섬을 보존합니다.
 
@@ -49,10 +49,10 @@ rollback은 새 런타임을 종료한 뒤 이전 패키지를 사용하고, 필
 
 ## 검증 및 알려진 제한사항
 
-Phase 27.4 [PR #132](https://github.com/p1k1g/stream-archive/pull/132)의 [최종 CI](https://github.com/p1k1g/stream-archive/actions/runs/39254608178)에서 Windows/Linux/macOS core-check와 windows-check가 통과했고 Windows GUI 테스트 69개가 성공했습니다. Codex 지적 3건을 수정한 최종 commit 재검토는 추가 지적 없이 완료됐습니다. 1.0.2 버전 전환 CI와 최종 공개 artifact 검증 결과는 [공개 체크리스트](RELEASE_CHECKLIST_1_0_2.md)에 별도로 기록합니다.
+Phase 27.4 [PR #132](https://github.com/p1k1g/stream-archive/pull/132)의 [최종 CI](https://github.com/p1k1g/stream-archive/actions/runs/39254608178)에서 Windows/Linux/macOS core-check와 windows-check가 통과했고 Windows GUI 테스트 69개가 성공했습니다. Codex 지적 3건을 수정한 최종 commit 재검토는 추가 지적 없이 완료됐습니다. 1.0.2 [버전 전환 PR #133](https://github.com/p1k1g/stream-archive/pull/133)의 [CI](https://github.com/p1k1g/stream-archive/actions/runs/39257847073)와 [merge 후 main CI](https://github.com/p1k1g/stream-archive/actions/runs/39261368105)도 모두 통과했습니다. 정식 패키지는 merge commit `c21aa2dee57fa4f5cac9caab188b70da239fecc4`의 [release artifact run](https://github.com/p1k1g/stream-archive/actions/runs/39261515426)에서 빌드했으며 release-contracts와 세 플랫폼 package job이 모두 성공했습니다. 다운로드본에서 버전·commit·package-local/전체 archive checksum 및 runtime data·외부 미디어 도구 binary 미포함을 확인했습니다.
 
 실제 provider 인증, Windows GUI/tray/notification 조작, OS별 secret store 및 며칠간의 메모리 비교는 자동 CI와 별개이며 미수행 항목을 완료로 표시하지 않습니다. 1.0.1 장시간 실행에서 관찰된 Private Bytes 증가 원인 전체가 해결됐다고 단정하지 않으며 메모리 누수가 전혀 없다고 보장하지 않습니다. Authenticode 및 macOS signing/notarization은 적용하지 않습니다.
 
 ## 릴리스 상태
 
-공개 준비 중입니다. 최종 merge commit에서 canonical release artifact workflow를 실행하고 세 플랫폼 archive와 `.sha256`을 검증한 뒤 v1.0.2 tag 및 GitHub Release로 공개합니다. 공개 확인 전에는 README의 1.0.1 다운로드 링크를 유지합니다. 공개는 미완료 수동 QA의 성공을 뜻하지 않습니다.
+[v1.0.2 GitHub Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2)를 공개했습니다. tag는 검증한 merge commit `c21aa2dee57fa4f5cac9caab188b70da239fecc4`를 가리킵니다. 세 플랫폼 archive와 대응 `.sha256`을 정식 assets로 첨부했고 로그인 없는 다운로드 및 hash 일치를 확인했습니다. [보존 체크섬](releases/v1.0.2/)과 [공개 체크리스트](RELEASE_CHECKLIST_1_0_2.md)를 참고하세요. 공개는 미완료 수동 QA의 성공을 뜻하지 않습니다.
