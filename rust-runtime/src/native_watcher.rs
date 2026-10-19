@@ -140,6 +140,7 @@ impl ChannelState {
         static REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         self.completion_revision = REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.completed_broadcast_id = Some(broadcast_id.to_owned());
+        self.thumbnail_url = None;
     }
 }
 
@@ -157,11 +158,13 @@ struct Runtime {
 }
 
 struct WatcherControl {
+    trace: crate::resource_trace::ResourceTrace,
     stop_rx: oneshot::Receiver<()>,
     command_rx: mpsc::Receiver<WatcherCommand>,
 }
 
 pub struct NativeWatcherManager {
+    trace: crate::resource_trace::ResourceTrace,
     backend_dir: PathBuf,
     logs: LogBuffer,
     runtime: Mutex<Runtime>,
@@ -170,7 +173,15 @@ pub struct NativeWatcherManager {
 
 impl NativeWatcherManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
+        Self::new_with_trace(backend_dir, logs, Default::default())
+    }
+    pub(crate) fn new_with_trace(
+        backend_dir: PathBuf,
+        logs: LogBuffer,
+        trace: crate::resource_trace::ResourceTrace,
+    ) -> Self {
         Self {
+            trace,
             backend_dir,
             logs,
             runtime: Mutex::new(Runtime {
@@ -244,6 +255,7 @@ impl NativeWatcherManager {
             };
         }
 
+        let trace = self.trace.clone();
         let task = tokio::spawn(async move {
             let result = run_native_watcher(
                 backend_dir,
@@ -253,6 +265,7 @@ impl NativeWatcherManager {
                 logs.clone(),
                 snapshot.clone(),
                 WatcherControl {
+                    trace,
                     stop_rx,
                     command_rx,
                 },
@@ -442,7 +455,9 @@ async fn run_native_watcher(
         .build()?;
     let mut sessions = create_sessions(&initial_channels, &client)?;
     refresh_soop_login(&mut sessions, &config, &logs, "initial").await;
-    let recorder = RecorderManager::new(logs.clone());
+    let trace = control.trace.clone();
+    let recorder = RecorderManager::new_with_trace(logs.clone(), trace.clone());
+    let mut next_trace = Instant::now();
 
     clear_all_stream_passwords();
     let mut last_channel_signature = channel_signature(&initial_channels);
@@ -514,6 +529,8 @@ async fn run_native_watcher(
                                             }
                                             apply_channels(&mut states, channels, &recorder, &logs).await;
                                             last_channel_signature = signature;
+                                            trace.record(crate::resource_trace::Event::ChannelsReloaded,
+                                                crate::resource_trace::Sample { channels: Some(states.len()), ..Default::default() });
                                             logs.push("[RUST] SQLite channel hot reload applied").await;
                                         }
                                     }
@@ -529,16 +546,32 @@ async fn run_native_watcher(
                 monitor_recordings(&mut states, &config, &recorder, &logs).await;
                 poll_channels(&mut states, &config, &mut sessions, &recorder, &logs).await;
                 update_snapshot(&states, &snapshot).await;
+                if trace.enabled() && now >= next_trace {
+                    next_trace = now + Duration::from_secs(60);
+                    trace.record(crate::resource_trace::Event::WatcherSample,
+                        crate::resource_trace::Sample {
+                            channels: Some(states.len()),
+                            recordings: Some(states.values().filter(|s| s.recording.is_some()).count()),
+                            ..Default::default()
+                        });
+                }
             }
         }
     }
-
     for state in states.values_mut() {
         stop_state_recording(state, "WATCHER EXIT", &recorder, &logs).await;
     }
     mark_watcher_stopped(&mut states);
     clear_all_stream_passwords();
     update_snapshot(&states, &snapshot).await;
+    trace.record(
+        crate::resource_trace::Event::WatcherStopped,
+        crate::resource_trace::Sample {
+            channels: Some(states.len()),
+            recordings: Some(0),
+            ..Default::default()
+        },
+    );
     Ok(())
 }
 
@@ -771,6 +804,7 @@ async fn poll_channels(
         let session = match session_for(sessions, platform) {
             Ok(session) => session,
             Err(err) => {
+                state.thumbnail_url = None;
                 state.status = "ERROR".into();
                 state.detail = Some(err.to_string());
                 continue;
@@ -785,6 +819,7 @@ async fn poll_channels(
                 state.detail = None;
             }
             Ok(LiveProbe::AuthRequired) => {
+                state.thumbnail_url = None;
                 state.status = "AUTH".into();
                 match recover_auth_required(session, config).await {
                     Ok(_) => state.next_check = Instant::now(),
@@ -839,6 +874,7 @@ async fn poll_channels(
                             state.detail = Some("방송 비밀번호가 올바르지 않거나 보호 스트림 확인에 실패했습니다. 다시 입력하세요.".into());
                             logs.push(format!("[RUST:WARN] protected stream resolve failed {}/{}; password cleared: {err:#}", platform, state.channel.account)).await;
                         } else {
+                            state.thumbnail_url = None;
                             state.status = "ERROR".into();
                             state.detail = Some(err.to_string());
                             logs.push(format!(
@@ -851,6 +887,7 @@ async fn poll_channels(
                 }
             }
             Err(err) => {
+                state.thumbnail_url = None;
                 state.status = "ERROR".into();
                 state.detail = Some(err.to_string());
                 logs.push(format!(
@@ -1740,6 +1777,7 @@ mod thumbnail_completion_tests {
         state.last_broadcast_id = Some("123".into());
         state.thumbnail_url = Some("https://fixture.invalid/thumbnail.jpg".into());
         state.recording_finished("123");
+        assert!(state.thumbnail_url.is_none());
         let first = state.completion_revision;
         state.recording_finished("123");
         assert!(state.completion_revision > first);

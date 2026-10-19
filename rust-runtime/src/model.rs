@@ -31,6 +31,20 @@ pub struct ChannelRuntimeStatus {
     pub detail: Option<String>,
 }
 
+impl ChannelRuntimeStatus {
+    /// Preview metadata is current only for a known broadcast. A failed probe may
+    /// retain recording ownership; don't mistake that for a failed recorder.
+    pub fn has_current_live_thumbnail(&self) -> bool {
+        self.bno.is_some()
+            && self.thumbnail_url.is_some()
+            && !matches!(
+                self.status.as_str(),
+                "OFFLINE" | "DISABLED" | "WATCHER_STOPPED"
+            )
+            && (!matches!(self.status.as_str(), "ERROR" | "AUTH") || self.file.is_some())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct NativeWatcherStatus {
     pub running: bool,

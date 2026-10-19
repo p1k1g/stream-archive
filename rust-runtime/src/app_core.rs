@@ -53,6 +53,7 @@ pub struct StreamArchiveCore {
     backend_dir: Arc<PathBuf>,
     store: Store,
     logs: LogBuffer,
+    resource_trace: crate::resource_trace::ResourceTrace,
     watcher: Arc<NativeWatcherManager>,
     vod: Arc<VodManager>,
     queue: Arc<VodQueueManager>,
@@ -286,7 +287,18 @@ impl StreamArchiveCore {
         recover_queue: bool,
     ) -> Result<Self> {
         let logs = LogBuffer::new();
-        let watcher = Arc::new(NativeWatcherManager::new(backend_dir.clone(), logs.clone()));
+        let resource_trace = if recover_queue {
+            crate::resource_trace::ResourceTrace::from_environment(
+                store.path().parent().unwrap_or(&backend_dir),
+            )
+        } else {
+            Default::default()
+        };
+        let watcher = Arc::new(NativeWatcherManager::new_with_trace(
+            backend_dir.clone(),
+            logs.clone(),
+            resource_trace.clone(),
+        ));
         let vod = Arc::new(VodManager::new(backend_dir.clone(), logs.clone()));
         let config_write_lock = Arc::new(Mutex::new(()));
         let lifecycle_lock = Arc::new(Mutex::new(()));
@@ -311,6 +323,7 @@ impl StreamArchiveCore {
             backend_dir: Arc::new(backend_dir),
             store,
             logs,
+            resource_trace,
             watcher,
             vod,
             queue,
@@ -550,6 +563,10 @@ impl StreamArchiveCore {
         ))
     }
 
+    pub fn resource_trace(&self) -> crate::resource_trace::ResourceTrace {
+        self.resource_trace.clone()
+    }
+
     pub fn channels(&self) -> Result<Vec<Channel>> {
         self.store.channels()
     }
@@ -572,10 +589,7 @@ impl StreamArchiveCore {
                     && row.account == account
                     && row.completion_revision == completion_revision
                     && row.bno.as_deref() == Some(broadcast_id)
-                    && !matches!(
-                        row.status.as_str(),
-                        "OFFLINE" | "DISABLED" | "WATCHER_STOPPED"
-                    )
+                    && row.has_current_live_thumbnail()
             })
             .and_then(|row| row.thumbnail_url.clone())
             .ok_or_else(|| anyhow::anyhow!("현재 방송의 썸네일 정보가 없습니다."))?;
@@ -617,10 +631,7 @@ impl StreamArchiveCore {
                     && row.account == account
                     && row.bno.as_deref() == Some(broadcast_id)
                     && row.completion_revision == completion_revision
-                    && !matches!(
-                        row.status.as_str(),
-                        "OFFLINE" | "DISABLED" | "WATCHER_STOPPED"
-                    )
+                    && row.has_current_live_thumbnail()
             })
         {
             anyhow::bail!("썸네일 요청 중 방송 상태가 변경되었습니다.");
@@ -640,6 +651,13 @@ impl StreamArchiveCore {
         validate_channels(channels)?;
         let _guard = self.config_write_lock.lock().await;
         self.store.sync_channels(channels)?;
+        self.resource_trace.record(
+            crate::resource_trace::Event::ChannelsSaved,
+            crate::resource_trace::Sample {
+                channels: Some(channels.len()),
+                ..Default::default()
+            },
+        );
         let saved = self.store.channels()?;
         self.logs
             .push(format!(

@@ -146,12 +146,19 @@ pub(crate) fn timestamp_rebase_player_args(output_file: &Path) -> Result<String>
 
 #[derive(Clone)]
 pub struct RecorderManager {
+    trace: crate::resource_trace::ResourceTrace,
     logs: LogBuffer,
 }
 
 impl RecorderManager {
     pub fn new(logs: LogBuffer) -> Self {
-        Self { logs }
+        Self::new_with_trace(logs, Default::default())
+    }
+    pub(crate) fn new_with_trace(
+        logs: LogBuffer,
+        trace: crate::resource_trace::ResourceTrace,
+    ) -> Self {
+        Self { logs, trace }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -322,6 +329,13 @@ impl RecorderManager {
             ))
             .await;
 
+        self.trace.record(
+            crate::resource_trace::Event::RecordingStarted,
+            crate::resource_trace::Sample {
+                owned_pid: Some(pid),
+                ..Default::default()
+            },
+        );
         Ok(Recording {
             pid,
             bno,
@@ -386,6 +400,13 @@ impl RecorderManager {
     }
 
     pub async fn log_finished(&self, channel: &str, account: &str, rec: &Recording, reason: &str) {
+        self.trace.record(
+            crate::resource_trace::Event::RecordingFinished,
+            crate::resource_trace::Sample {
+                owned_pid: Some(rec.pid),
+                ..Default::default()
+            },
+        );
         let size = fs::metadata(&rec.file)
             .map(|m| m.len())
             .unwrap_or(rec.last_size);

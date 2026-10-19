@@ -7,6 +7,7 @@ mod diagnostic_text;
 mod formatting;
 mod history_adapter;
 mod live_adapter;
+mod live_model;
 mod maintenance_adapter;
 mod native_picker;
 mod native_shell;

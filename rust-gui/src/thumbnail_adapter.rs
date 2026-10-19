@@ -33,6 +33,18 @@ impl Thumbnails {
         !self.entries.is_empty() || !self.pending.is_empty()
     }
 
+    pub fn metrics(&self) -> (usize, usize, u64) {
+        let bytes = self
+            .entries
+            .values()
+            .map(|entry| {
+                let size = entry.image.size();
+                u64::from(size.width) * u64::from(size.height) * 4
+            })
+            .sum();
+        (self.entries.len(), self.pending.len(), bytes)
+    }
+
     pub fn image(&self, target: &str) -> Image {
         self.entries
             .get(target)
@@ -43,14 +55,7 @@ impl Thumbnails {
         let active: Vec<_> = status
             .channels
             .iter()
-            .filter(|row| {
-                status.running
-                    && row.bno.is_some()
-                    && !matches!(
-                        row.status.as_str(),
-                        "OFFLINE" | "DISABLED" | "WATCHER_STOPPED"
-                    )
-            })
+            .filter(|row| status.running && row.has_current_live_thumbnail())
             .take(MAX_THUMBNAILS)
             .collect();
         self.entries.retain(|target, _| {
@@ -253,6 +258,47 @@ mod tests {
         let t = token(&mut cache);
         cache.complete(t, None);
         assert!(cache.requests().is_empty());
+    }
+    #[test]
+    fn failed_probe_after_completion_cannot_reload_preview_even_on_manual_refresh() {
+        let mut cache = Thumbnails::default();
+        let mut state = status("1");
+        cache.sync(&state, false);
+        let old = token(&mut cache);
+        state.channels[0].status = "ERROR".into();
+        state.channels[0].completion_revision = 1;
+        state.channels[0].completed_broadcast_id = Some("1".into());
+        // Even a stale snapshot retaining URL/id must not authorize a preview.
+        cache.sync(&state, true);
+        cache.complete(old, Some(image()));
+        assert_eq!(cache.image("SOOP:test").size().width, 0);
+        assert!(cache.requests().is_empty());
+        assert_eq!(cache.metrics(), (0, 0, 0));
+        state.channels[0].status = "RECORDING".into();
+        state.channels[0].file = Some("fixture.ts".into());
+        state.channels[0].bno = Some("2".into());
+        cache.sync(&state, false);
+        let current = token(&mut cache);
+        cache.complete(current, Some(image()));
+        assert_eq!(cache.metrics(), (1, 0, 8));
+    }
+    #[test]
+    fn recording_probe_error_keeps_image_but_lost_metadata_rejects_late_reply() {
+        let mut cache = Thumbnails::default();
+        let mut state = status("1");
+        state.channels[0].file = Some("fixture.ts".into());
+        cache.sync(&state, false);
+        let current = token(&mut cache);
+        cache.complete(current, Some(image()));
+        state.channels[0].status = "ERROR".into();
+        cache.sync(&state, false);
+        assert_eq!(cache.image("SOOP:test").size().width, 2);
+        cache.sync(&state, true);
+        let late = token(&mut cache);
+        state.channels[0].thumbnail_url = None;
+        cache.sync(&state, false);
+        cache.complete(late, Some(image()));
+        assert_eq!(cache.metrics(), (0, 0, 0));
     }
     #[test]
     fn cache_and_inflight_requests_are_bounded_even_during_refresh() {
