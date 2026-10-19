@@ -1,12 +1,12 @@
 //! Opt-in, bounded lifecycle evidence. No credentials, paths, URLs or channel identifiers.
 use std::{
+    collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, SyncSender},
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
 };
@@ -27,8 +27,12 @@ pub enum Event {
     ChannelsReloaded,
     RecordingStarted,
     RecordingFinished,
+    TraceGap,
 }
 impl Event {
+    fn periodic(self) -> bool {
+        matches!(self, Self::Sample | Self::WatcherSample)
+    }
     fn name(self) -> &'static str {
         match self {
             Self::Started => "started",
@@ -40,6 +44,7 @@ impl Event {
             Self::ChannelsReloaded => "channels_reloaded",
             Self::RecordingStarted => "recording_started",
             Self::RecordingFinished => "recording_finished",
+            Self::TraceGap => "trace_gap",
         }
     }
 }
@@ -126,16 +131,94 @@ impl Record {
         )
     }
 }
+#[derive(Default)]
+struct QueueState {
+    rows: VecDeque<Record>,
+    dropped: u64,
+    closed: bool,
+}
+#[derive(Default)]
+struct TraceQueue {
+    state: Mutex<QueueState>,
+    ready: Condvar,
+}
+impl TraceQueue {
+    fn push(&self, record: Record) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // Coalesce periodic samples before they can consume lifecycle capacity.
+        let replace = state
+            .rows
+            .iter()
+            .position(|old| old.event.periodic() && old.event.name() == record.event.name());
+        if let Some(index) = replace {
+            state.rows.remove(index);
+            state.dropped = state.dropped.saturating_add(1);
+        } else if state.rows.len() == QUEUE_SIZE {
+            if record.event.periodic() {
+                state.dropped = state.dropped.saturating_add(1);
+                return;
+            }
+            // Preserve the newest boundary (especially a final finish/stop).
+            // If boundaries alone overflow, explicitly report the lost evidence.
+            let index = state
+                .rows
+                .iter()
+                .position(|old| old.event.periodic())
+                .unwrap_or(0);
+            state.rows.remove(index);
+            state.dropped = state.dropped.saturating_add(1);
+        }
+        state.rows.push_back(record);
+        self.ready.notify_one();
+    }
+    fn next(&self) -> (Option<Record>, u64) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        while state.rows.is_empty() && !state.closed {
+            state = self.ready.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        let dropped = state.dropped;
+        (state.rows.pop_front(), dropped)
+    }
+    fn close(&self) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        self.ready.notify_one();
+    }
+}
+fn drain_trace(
+    queue: &TraceQueue,
+    mut append: impl FnMut(&str) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut reported = 0;
+    loop {
+        let (record, dropped) = queue.next();
+        if dropped != reported {
+            append(
+                &Record {
+                    timestamp: chrono::Utc::now(),
+                    event: Event::TraceGap,
+                    sample: Sample::default(),
+                    dropped,
+                }
+                .csv(),
+            )?;
+            reported = dropped;
+        }
+        let Some(mut record) = record else {
+            return Ok(());
+        };
+        record.dropped = dropped;
+        append(&record.csv())?;
+    }
+}
 struct Inner {
-    sender: Option<SyncSender<Record>>,
+    queue: Arc<TraceQueue>,
     writer: Mutex<Option<JoinHandle<()>>>,
     enabled: Arc<AtomicBool>,
-    dropped: AtomicU64,
 }
 impl Drop for Inner {
     fn drop(&mut self) {
-        // Disconnect first, then drain/join once the final service owner is released.
-        self.sender.take();
+        // Close first, then drain/join once the final service owner is released.
+        self.queue.close();
         if let Some(writer) = self
             .writer
             .get_mut()
@@ -156,7 +239,8 @@ impl ResourceTrace {
         Self::start(data_dir.join("logs"))
     }
     fn start(directory: PathBuf) -> Self {
-        let (sender, receiver) = mpsc::sync_channel::<Record>(QUEUE_SIZE);
+        let queue = Arc::new(TraceQueue::default());
+        let writer_queue = queue.clone();
         let enabled = Arc::new(AtomicBool::new(true));
         let running = enabled.clone();
         let writer = std::thread::Builder::new()
@@ -164,10 +248,7 @@ impl ResourceTrace {
             .spawn(move || {
                 let result = (|| -> io::Result<()> {
                     let mut file = RotatingFile::open(directory, FILE_BYTES)?;
-                    for record in receiver {
-                        file.append(&record.csv())?;
-                    }
-                    Ok(())
+                    drain_trace(&writer_queue, |row| file.append(row))
                 })();
                 running.store(false, Ordering::Release);
                 if result.is_err() {
@@ -179,10 +260,9 @@ impl ResourceTrace {
             return Self::default();
         };
         let trace = Self(Some(Arc::new(Inner {
-            sender: Some(sender),
+            queue,
             writer: Mutex::new(Some(writer)),
             enabled,
-            dropped: AtomicU64::new(0),
         })));
         trace.record(Event::Started, Sample::default());
         trace
@@ -196,21 +276,12 @@ impl ResourceTrace {
         let Some(inner) = self.0.as_ref().filter(|_| self.enabled()) else {
             return;
         };
-        let record = Record {
+        inner.queue.push(Record {
             timestamp: chrono::Utc::now(),
             event,
             sample,
-            dropped: inner.dropped.load(Ordering::Relaxed),
-        };
-        match inner.sender.as_ref().unwrap().try_send(record) {
-            Ok(()) => {}
-            Err(mpsc::TrySendError::Full(_)) => {
-                inner.dropped.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                inner.enabled.store(false, Ordering::Release);
-            }
-        }
+            dropped: 0,
+        });
     }
 }
 struct RotatingFile {
@@ -341,21 +412,78 @@ mod tests {
         assert!(!trace.enabled());
         assert_eq!(Page::from_name("secret=do-not-log").name(), "Other");
     }
-    #[test]
-    fn queue_overload_drops_records_without_blocking() {
-        let (sender, _receiver) = mpsc::sync_channel(1);
-        let trace = ResourceTrace(Some(Arc::new(Inner {
-            sender: Some(sender),
-            writer: Mutex::new(None),
-            enabled: Arc::new(AtomicBool::new(true)),
-            dropped: AtomicU64::new(0),
-        })));
-        for _ in 0..100 {
-            trace.record(Event::Sample, Sample::default());
+    fn record(event: Event, pid: u32) -> Record {
+        Record {
+            timestamp: chrono::Utc::now(),
+            event,
+            sample: Sample {
+                owned_pid: Some(pid),
+                ..Default::default()
+            },
+            dropped: 0,
         }
+    }
+    #[test]
+    fn samples_coalesce_and_final_finish_survives_a_full_queue() {
+        let queue = TraceQueue::default();
+        for _ in 0..100 {
+            queue.push(record(Event::Sample, 0));
+        }
+        for pid in 1..QUEUE_SIZE as u32 {
+            queue.push(record(Event::RecordingStarted, pid));
+        }
+        queue.push(record(Event::RecordingFinished, 42));
+        let state = queue.state.lock().unwrap();
+        assert_eq!(state.rows.len(), QUEUE_SIZE);
+        assert_eq!(state.dropped, 100);
+        assert!(state.rows.iter().all(|r| !r.event.periodic()));
         assert_eq!(
-            trace.0.as_ref().unwrap().dropped.load(Ordering::Relaxed),
-            99
+            state.rows.back().unwrap().event.name(),
+            "recording_finished"
         );
+    }
+    #[test]
+    fn boundary_overflow_is_bounded_and_emits_gap_before_final_finish() {
+        let queue = TraceQueue::default();
+        for pid in 0..QUEUE_SIZE as u32 {
+            queue.push(record(Event::RecordingStarted, pid));
+        }
+        queue.push(record(Event::RecordingFinished, 42));
+        queue.close();
+        let mut csv = String::new();
+        drain_trace(&queue, |row| {
+            csv.push_str(row);
+            Ok(())
+        })
+        .unwrap();
+        let rows: Vec<_> = csv.lines().collect();
+        assert_eq!(rows.len(), QUEUE_SIZE + 1);
+        assert!(rows[0].contains(",trace_gap,"));
+        assert!(rows[0].ends_with(",1"));
+        assert!(rows.last().unwrap().contains(",recording_finished,"));
+        assert!(rows.last().unwrap().ends_with(",42,1"));
+    }
+    #[test]
+    fn final_dropped_sample_is_reported_even_without_a_later_event() {
+        let queue = TraceQueue::default();
+        queue.push(record(Event::RecordingStarted, 42));
+        let mut csv = String::new();
+        let mut appended = false;
+        drain_trace(&queue, |row| {
+            csv.push_str(row);
+            if !appended {
+                appended = true;
+                // Simulate producers filling the queue while the writer is busy.
+                for pid in 0..QUEUE_SIZE as u32 {
+                    queue.push(record(Event::RecordingFinished, pid));
+                }
+                queue.push(record(Event::Sample, 0));
+                queue.close();
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(csv.contains(",trace_gap,"));
+        assert!(csv.lines().last().unwrap().ends_with(",1"));
     }
 }

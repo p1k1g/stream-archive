@@ -42,7 +42,8 @@ try {
 - runtime event는 해당 event에 필요한 숫자 필드만 채운다. 빈 필드는 0을 의미하지 않는다. `ui_sample`의 채널/녹화 수는 마지막 UI snapshot이고 실제 background 상태 비교에는 `watcher_sample`을 사용한다.
 - `owned_pid`는 앱이 소유한 recorder PID다. 빠른 PID 재사용을 구분하려면 timestamp/event 순서도 함께 본다.
 - 계정, 방송 제목, 파일 경로, URL, 쿠키, 토큰, 인증값은 필드에 넣지 않는다. 지원하지 않는 탭 문자열은 `Other`로 기록한다.
-- writer queue는 64개로 제한하고 포화 시 진단 표본만 버린다. `dropped`는 누적 유실 횟수다. UI나 녹화가 파일 쓰기를 기다리지 않는다.
+- writer queue는 64개로 제한한다. 주기 표본은 종류별 최신 하나로 합치고 lifecycle 이벤트를 우선 보관한다. 포화 상태에서 새 lifecycle 이벤트는 주기 표본부터 제거하고, lifecycle 이벤트만 64개가 쌓이면 가장 오래된 이벤트를 제거해 최신 완료/중지 경계를 보관한다. queue의 짧은 메모리 갱신 동안만 lock을 사용하고 파일 I/O나 빈 queue 공간을 기다리지 않는다.
+- `dropped`는 합쳐지거나 유실된 항목의 누적 횟수다. 증가하면 별도 `trace_gap` 행을 기록하며 마지막 owner 종료 때도 남은 유실 수를 기록한다. gap 또는 archive rotation이 있는 구간에서는 시작 이벤트에 대응하는 완료 행이 없다는 이유만으로 프로세스 잔존을 판정하지 않는다. I/O 실패나 강제 종료 시 로그 완전성은 보장하지 않는다.
 - 파일은 1MiB, archive 3개로 총 약 4MiB 상한이다. `.1.csv`가 가장 최근 archive다. 용량을 초과하면 오래된 기록은 삭제되므로 비교 후 파일을 복사해 보관한다.
 - I/O 실패 시 계측 writer만 비활성화한다. 마지막 서비스 owner가 해제될 때 queue를 비우고 writer thread를 join한다. read-only observer는 writer를 시작하지 않는다.
 - 메모리 Working Set/Private Bytes/handles/threads는 기존 외부 BAT와 함께 기록한다. `rgba_bytes`는 CPU 원시 픽셀 기준이고 renderer/GPU 전체 크기가 아니다.
@@ -54,7 +55,7 @@ try {
 - 재표시 후 새 snapshot을 기다리고 변경 상태 반영.
 - 완료/오류/metadata 제거 후 수동 refresh 및 late response 차단, recorder 소유 상태의 이미지 유지.
 - 완료 revision 갱신과 runtime URL 제거.
-- 진단 파일 rotation/CSV 경계/queue 포화/마지막 owner의 thread 종료/기본 비활성화.
+- 진단 파일 rotation/CSV 경계/주기 표본 병합/queue 포화 시 완료 이벤트 우선 보관/최종 유실 표시/마지막 owner의 thread 종료/기본 비활성화.
 - 기존 fmt/unit/check/clippy, RuntimeContracts 및 Windows package 검증을 유지한다.
 
 ## Windows 비교 검증
