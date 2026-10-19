@@ -459,7 +459,7 @@ export component MainWindow inherits Window {
                                 border-color: Theme.border;
                                 VerticalLayout {
                                     padding: 16px;
-                                    Text { text: "현재 LIVE 런타임에 등록된 채널이 없습니다. 채널 탭에서 채널을 추가하세요."; color: Theme.muted; }
+                                    Text { text: AppState.live-loaded ? "현재 LIVE 런타임에 등록된 채널이 없습니다. 채널 탭에서 채널을 추가하세요." : "LIVE 상태를 확인하는 중..."; color: Theme.muted; }
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {

@@ -6,13 +6,13 @@ use crate::{
     maintenance_adapter, native_picker, native_shell, queue_adapter,
     settings_adapter::SettingsDraft, storage_adapter, vod_adapter,
 };
-use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
     rc::Rc,
     sync::mpsc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use stream_archive_server::{
     app_core::StreamArchiveCore,
@@ -130,6 +130,7 @@ enum Request {
 }
 
 enum Response {
+    ResourceTrace(stream_archive_server::resource_trace::ResourceTrace),
     VodThumbnail {
         generation: u64,
         job_id: String,
@@ -505,6 +506,7 @@ fn worker_loop(
     responses: &mpsc::Sender<Response>,
     stopping: &std::sync::atomic::AtomicBool,
 ) {
+    let _ = responses.send(Response::ResourceTrace(core.resource_trace()));
     let mut download_events = core.subscribe_download_events();
     // spawn_vod_history_sync uses tokio::spawn internally, so enter the runtime
     // while creating that long-lived task. The multi-thread runtime then keeps
@@ -1157,6 +1159,7 @@ fn render_live(
     ui: &MainWindow,
     status: NativeWatcherStatus,
     thumbnails: &crate::thumbnail_adapter::Thumbnails,
+    model: &mut crate::live_model::LiveModel,
 ) {
     let view = live_adapter::view(status);
     let rows: Vec<_> = view
@@ -1193,7 +1196,7 @@ fn render_live(
     state.set_live_recording_count(view.recording_count.into());
     state.set_live_offline_count(view.offline_count.into());
     state.set_live_error_count(view.error_count.into());
-    state.set_live_rows(ModelRc::new(VecModel::from(rows)));
+    model.reconcile(rows);
     state.set_live_loaded(true);
 }
 
@@ -2546,14 +2549,34 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let thumbnail_sender = sender.clone();
     let mut vod_thumbnail_pending = false;
     let mut vod_thumbnail_attempt: Option<(u64, String)> = None;
+    let mut live_model = crate::live_model::LiveModel::default();
+    state.set_live_rows(live_model.rows.clone().into());
+    let mut pending_storage = None;
+    let mut trace = stream_archive_server::resource_trace::ResourceTrace::default();
+    let mut previous_window = None;
+    let mut next_trace = Instant::now();
+    let mut next_fresh_request = Instant::now();
+    let mut live_polls = 0u64;
     let response_timer = Timer::default();
     response_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
         let Some(ui) = weak.upgrade() else {
             return;
         };
+        let app = ui.global::<AppState>();
+        let visible = ui.window().is_visible();
+        let page = stream_archive_server::resource_trace::Page::from_name(app.get_active_page().as_str());
+        if live_model.set_visible(visible && page == stream_archive_server::resource_trace::Page::Live) {
+            app.set_live_loaded(false);
+            pending_storage = None;
+            if !app.get_storage_busy() && !response_storage_poll_flag.get()
+                && thumbnail_sender.send(Request::StorageLoad { poll: true }).is_ok() {
+                response_storage_poll_flag.set(true);
+            }
+        }
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
             match response {
+                Response::ResourceTrace(service) => trace = service,
                 Response::VodThumbnail { generation, job_id, url, image } => {
                     vod_thumbnail_pending = false;
                     let draft = response_vod_draft.borrow();
@@ -2566,11 +2589,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 }
                 Response::Thumbnail { token, image } => {
                     thumbnails.complete(token, image);
-                    let rows: Vec<_> = state.get_live_rows().iter().map(|mut row| {
-                        row.thumbnail_image = thumbnails.image(&row.target);
-                        row
-                    }).collect();
-                    state.set_live_rows(ModelRc::new(VecModel::from(rows)));
+                    live_model.invalidate_images();
                     request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
                     response_thumbnail_tracking.set(thumbnails.is_tracking());
                 }
@@ -2776,8 +2795,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     } else {
                         state.set_live_busy(false);
                     }
+                    live_polls = live_polls.saturating_add(u64::from(poll));
                     thumbnails.sync(&status, refresh_thumbnails);
-                    render_live(&ui, status, &thumbnails);
+                    live_model.receive(status);
                     request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
                     response_thumbnail_tracking.set(thumbnails.is_tracking());
                     if let Some(message) = message {
@@ -2804,7 +2824,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     } else {
                         state.set_storage_busy(false);
                     }
-                    render_storage(&ui, snapshot);
+                    pending_storage = Some(snapshot);
                     state.set_storage_message(message.unwrap_or_default().into());
                 }
                 Response::StorageError { message, poll } => {
@@ -3002,6 +3022,41 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 }
             }
         }
+        if live_model.needs_snapshot() && Instant::now() >= next_fresh_request
+            && !app.get_live_busy() && !response_live_poll_flag.get()
+            && thumbnail_sender.send(Request::LiveStatus { poll: true }).is_ok() {
+            response_live_poll_flag.set(true);
+            next_fresh_request = Instant::now() + Duration::from_millis(1500);
+        }
+        if let Some(status) = live_model.take_for_display() {
+            render_live(&ui, status, &thumbnails, &mut live_model);
+        }
+        if visible && page == stream_archive_server::resource_trace::Page::Live {
+            if let Some(snapshot) = pending_storage.take() {
+                render_storage(&ui, snapshot);
+            }
+            request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
+            response_thumbnail_tracking.set(thumbnails.is_tracking());
+        }
+        if trace.enabled() {
+            let window = (visible, page);
+            let changed = previous_window != Some(window);
+            if changed || Instant::now() >= next_trace {
+                let (entries, pending, bytes) = thumbnails.metrics();
+                let sample = stream_archive_server::resource_trace::Sample {
+                    visible: Some(visible), page: Some(page),
+                    channels: live_model.latest.as_ref().map(|s| s.channel_count),
+                    recordings: live_model.latest.as_ref().map(|s| s.recording_count),
+                    thumbnails: Some(entries), pending: Some(pending), rgba_bytes: Some(bytes),
+                    live_polls: Some(live_polls), model_resets: Some(live_model.resets), row_updates: Some(live_model.row_updates),
+                    ..Default::default()
+                };
+                trace.record(if changed { stream_archive_server::resource_trace::Event::WindowChanged }
+                    else { stream_archive_server::resource_trace::Event::Sample }, sample);
+                previous_window = Some(window);
+                next_trace = Instant::now() + Duration::from_secs(60);
+            }
+        }
     });
 
     let weak = ui.as_weak();
@@ -3043,7 +3098,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
             return;
         };
         let state = ui.global::<AppState>();
-        if state.get_active_page().as_str() != "LIVE"
+        if !ui.window().is_visible()
+            || state.get_active_page().as_str() != "LIVE"
             || state.get_storage_busy()
             || storage_poll_flag.get()
         {

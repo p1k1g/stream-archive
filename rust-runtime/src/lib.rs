@@ -14,6 +14,7 @@ pub mod platform_runtime;
 pub mod primary_config;
 pub mod queue_service;
 pub mod recorder;
+pub mod resource_trace;
 pub mod security;
 pub mod storage_service;
 pub mod store;
