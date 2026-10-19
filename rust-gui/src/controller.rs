@@ -88,6 +88,7 @@ enum Request {
         password: String,
     },
     StorageLoad {
+        generation: u64,
         poll: bool,
     },
     VodStatus {
@@ -181,11 +182,13 @@ enum Response {
         poll: bool,
     },
     Storage {
+        generation: u64,
         snapshot: StorageSnapshot,
         message: Option<String>,
         poll: bool,
     },
     StorageError {
+        generation: u64,
         message: String,
         poll: bool,
     },
@@ -340,14 +343,16 @@ fn live_status(
     }
 }
 
-fn storage_status(core: &StreamArchiveCore, poll: bool) -> Response {
+fn storage_status(core: &StreamArchiveCore, poll: bool, generation: u64) -> Response {
     match core.storage_snapshot() {
         Ok(snapshot) => Response::Storage {
+            generation,
             snapshot,
             message: None,
             poll,
         },
         Err(error) => Response::StorageError {
+            generation,
             message: format!("저장 공간 새로고침 실패: {error:#}"),
             poll,
         },
@@ -545,7 +550,7 @@ fn worker_loop(
     {
         return;
     }
-    if responses.send(storage_status(core, false)).is_err() {
+    if responses.send(storage_status(core, false, 0)).is_err() {
         return;
     }
     if responses.send(vod_status(core, runtime, false)).is_err() {
@@ -767,7 +772,7 @@ fn worker_loop(
                 }
                 response
             }
-            Request::StorageLoad { poll } => storage_status(core, poll),
+            Request::StorageLoad { poll, generation } => storage_status(core, poll, generation),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
                 Ok(status) => Response::Live {
                     generation: None,
@@ -1609,6 +1614,7 @@ fn send_maintenance(ui: &MainWindow, sender: &mpsc::Sender<Request>, request: Re
 }
 
 pub fn bind(ui: &MainWindow) -> Controller {
+    let live_generation = Rc::new(Cell::new(0u64));
     let (sender, requests) = mpsc::channel();
     let (responses, receiver) = mpsc::channel();
     let state = ui.global::<AppState>();
@@ -1990,13 +1996,17 @@ pub fn bind(ui: &MainWindow) -> Controller {
 
     let weak = ui.as_weak();
     let storage_sender = sender.clone();
+    let storage_generation = live_generation.clone();
     state.on_storage_refresh(move || {
         if let Some(ui) = weak.upgrade() {
             let state = ui.global::<AppState>();
             if state.get_storage_busy() {
                 return;
             }
-            match storage_sender.send(Request::StorageLoad { poll: false }) {
+            match storage_sender.send(Request::StorageLoad {
+                poll: false,
+                generation: storage_generation.get(),
+            }) {
                 Ok(()) => {
                     state.set_storage_busy(true);
                     state.set_storage_message("저장 공간을 확인하는 중...".into());
@@ -2562,11 +2572,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let thumbnail_sender = sender.clone();
     let mut vod_thumbnail_pending = false;
     let mut vod_thumbnail_attempt: Option<(u64, String)> = None;
-    let live_generation = Rc::new(Cell::new(0u64));
     let response_live_generation = live_generation.clone();
     let mut live_model = crate::live_model::LiveModel::default();
     state.set_live_rows(live_model.rows.clone().into());
     let mut pending_storage = None;
+    let mut storage_refresh = crate::live_model::StorageRefresh::default();
     let mut trace = stream_archive_server::resource_trace::ResourceTrace::default();
     let mut previous_window = None;
     let mut next_trace = Instant::now();
@@ -2585,10 +2595,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
             next_fresh_request = Instant::now();
             app.set_live_loaded(false);
             pending_storage = None;
-            if !app.get_storage_busy() && !response_storage_poll_flag.get()
-                && thumbnail_sender.send(Request::StorageLoad { poll: true }).is_ok() {
-                response_storage_poll_flag.set(true);
-            }
+            app.set_storage_loaded(false);
+            app.set_storage_rows(ModelRc::default());
+            app.set_storage_message("".into());
+            storage_refresh.reopen(live_model.generation());
         }
         while let Ok(response) = receiver.try_recv() {
             let state = ui.global::<AppState>();
@@ -2833,6 +2843,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     state.set_live_message(message.into());
                 }
                 Response::Storage {
+                    generation,
                     snapshot,
                     message,
                     poll,
@@ -2842,16 +2853,21 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     } else {
                         state.set_storage_busy(false);
                     }
+                    if !storage_refresh.accepts(generation) {
+                        continue;
+                    }
                     pending_storage = Some(snapshot);
                     state.set_storage_message(message.unwrap_or_default().into());
                 }
-                Response::StorageError { message, poll } => {
+                Response::StorageError { generation, message, poll } => {
                     if poll {
                         response_storage_poll_flag.set(false);
                     } else {
                         state.set_storage_busy(false);
                     }
-                    state.set_storage_message(message.into());
+                    if storage_refresh.accepts(generation) {
+                        state.set_storage_message(message.into());
+                    }
                 }
                 Response::Vod {
                     status,
@@ -3050,6 +3066,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
             render_live(&ui, status, &thumbnails, &mut live_model);
         }
         if visible && page == stream_archive_server::resource_trace::Page::Live {
+            if storage_refresh.needs_request(app.get_storage_busy(), response_storage_poll_flag.get())
+                && thumbnail_sender.send(Request::StorageLoad { poll: true, generation: live_model.generation() }).is_ok() {
+                storage_refresh.requested();
+                response_storage_poll_flag.set(true);
+            }
             if let Some(snapshot) = pending_storage.take() {
                 render_storage(&ui, snapshot);
             }
@@ -3080,6 +3101,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let weak = ui.as_weak();
     let live_poll_sender = sender.clone();
     let live_poll_flag = live_poll_in_flight;
+    let live_poll_generation = live_generation.clone();
     let live_poll_timer = Timer::default();
     live_poll_timer.start(
         TimerMode::Repeated,
@@ -3101,7 +3123,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
             if live_poll_sender
                 .send(Request::LiveStatus {
                     poll: true,
-                    generation: live_generation.get(),
+                    generation: live_poll_generation.get(),
                 })
                 .is_ok()
             {
@@ -3113,6 +3135,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let weak = ui.as_weak();
     let storage_poll_sender = sender.clone();
     let storage_poll_flag = storage_poll_in_flight;
+    let storage_poll_generation = live_generation.clone();
     let storage_poll_timer = Timer::default();
     storage_poll_timer.start(TimerMode::Repeated, Duration::from_secs(30), move || {
         let Some(ui) = weak.upgrade() else {
@@ -3127,7 +3150,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
             return;
         }
         if storage_poll_sender
-            .send(Request::StorageLoad { poll: true })
+            .send(Request::StorageLoad {
+                poll: true,
+                generation: storage_poll_generation.get(),
+            })
             .is_ok()
         {
             storage_poll_flag.set(true);

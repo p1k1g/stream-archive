@@ -80,6 +80,28 @@ impl LiveModel {
         }
     }
 }
+// Reopen refresh intent survives an older in-flight request. Only responses
+// initiated in this visibility generation may populate the storage model.
+#[derive(Default)]
+pub struct StorageRefresh {
+    generation: u64,
+    pending: bool,
+}
+impl StorageRefresh {
+    pub fn reopen(&mut self, generation: u64) {
+        self.generation = generation;
+        self.pending = true;
+    }
+    pub fn needs_request(&self, busy: bool, in_flight: bool) -> bool {
+        self.pending && !busy && !in_flight
+    }
+    pub fn requested(&mut self) {
+        self.pending = false;
+    }
+    pub fn accepts(&self, generation: u64) -> bool {
+        self.generation == generation
+    }
+}
 // Slint 1.18 Image::default() is not equal even to another empty Image.
 // LIVE images are embedded RGBA or empty; compare the empty case explicitly.
 fn same_row(a: &LiveChannelRow, b: &LiveChannelRow) -> bool {
@@ -201,5 +223,24 @@ mod tests {
         model.receive(NativeWatcherStatus::default(), Some(model.generation()));
         assert!(!model.needs_snapshot());
         assert!(model.take_for_display().is_some());
+    }
+    #[test]
+    fn storage_reopen_waits_for_old_poll_then_requests_current_generation() {
+        let mut refresh = StorageRefresh::default();
+        refresh.reopen(1);
+        assert!(!refresh.needs_request(false, true));
+        assert!(!refresh.needs_request(true, false));
+        assert!(!refresh.accepts(0));
+        assert!(refresh.needs_request(false, false));
+        refresh.requested();
+        assert!(!refresh.needs_request(false, false));
+        assert!(refresh.accepts(1));
+        // Reopen again before generation 1 completes; its result cannot render.
+        refresh.reopen(2);
+        assert!(!refresh.accepts(1));
+        assert!(!refresh.needs_request(false, true));
+        assert!(refresh.needs_request(false, false));
+        refresh.requested();
+        assert!(refresh.accepts(2));
     }
 }
