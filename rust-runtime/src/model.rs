@@ -25,6 +25,7 @@ pub struct ChannelRuntimeStatus {
     pub bno: Option<String>,
     pub title: Option<String>,
     pub file: Option<String>,
+    pub output_dir: Option<String>,
     pub size_bytes: u64,
     pub started_at: Option<String>,
     pub suppressed: bool,

@@ -26,6 +26,7 @@ export struct LiveChannelRow {
     title: string,
     bno: string,
     file: string,
+    output-dir: string,
     size: string,
     started-at: string,
     suppressed: bool,
@@ -64,11 +65,11 @@ component LiveActions inherits HorizontalLayout {
     alignment: center;
     StatusPill { text: root.channel.status-label; tone: root.channel.status-tone; dot: true; boxed: true; }
     Rectangle { width: 1px; height: 24px; background: Theme.border; vertical-stretch: 0; }
-    if root.channel.can-stop-once: Button {
+    if root.channel.file != "" || root.channel.output-dir != "": Button {
         height: 34px;
         text: "저장 폴더 열기"; icon: @image-url("../assets/actions/folder.svg");
-        enabled: !AppState.live-busy && root.channel.file != "";
-        clicked => { AppState.live-open-folder(root.channel.file); }
+        enabled: !AppState.live-busy;
+        clicked => { AppState.live-open-folder(root.channel.file != "" ? root.channel.file : root.channel.output-dir); }
     }
     if root.channel.can-stop-once: Button {
         height: 34px;
@@ -174,6 +175,7 @@ export global AppState {
     in-out property <string> live-recording-count: "0";
     in-out property <string> live-offline-count: "0";
     in-out property <string> live-error-count: "0";
+    in-out property <string> live-filter: "ALL";
     in-out property <string> live-message: "LIVE 런타임을 불러오는 중...";
     in-out property <string> live-password-target: "";
     in-out property <string> live-password-label: "";
@@ -246,7 +248,7 @@ component NavItem inherits Rectangle {
     height: 40px;
     vertical-stretch: 0;
     forward-focus: focus;
-    border-radius: 6px;
+    border-radius: 8px;
     border-width: 1px;
     border-color: focus.has-focus ? Theme.accent : transparent;
     background: AppState.active-page == root.page ? Theme.selected : touch.has-hover ? Theme.surface : transparent;
@@ -260,6 +262,11 @@ component NavItem inherits Rectangle {
             MaintenanceState.section = "Diagnostics";
             MaintenanceState.refresh();
         }
+    }
+    if AppState.active-page == root.page: Rectangle {
+        x: 0px; y: 8px; width: 3px; height: parent.height - 16px;
+        border-radius: 2px;
+        background: Theme.accent;
     }
     Image {
         x: 12px; y: 11px; width: 18px; height: 18px;
@@ -371,14 +378,20 @@ export component MainWindow inherits Window {
                 if AppState.active-page == "LIVE": VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
-                        height: 36px; vertical-stretch: 0; spacing: 8px;
+                        height: 34px; vertical-stretch: 0; spacing: 8px;
                         StatusPill {
                             text: !AppState.live-loaded ? "상태 확인 중" : AppState.live-running ? "방송 감시 중" : "방송 감시 중지됨";
                             tone: AppState.live-running ? "ok" : "neutral"; dot: true; boxed: true;
                         }
+                        if AppState.live-started-at != "" && AppState.live-started-at != "-": Text {
+                            text: "시작 " + AppState.live-started-at;
+                            color: Theme.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                         Button {
-                            height: 34px;
+                            height: 32px;
                             icon: AppState.live-running ? @image-url("../assets/actions/stop.svg") : @image-url("../assets/actions/play.svg");
                             text: AppState.live-busy ? "처리 중…" : AppState.live-running ? "방송 감시 중지" : "방송 감시 시작";
                             primary: !AppState.live-running;
@@ -389,20 +402,45 @@ export component MainWindow inherits Window {
                             }
                         }
                         Button {
-                            height: 34px; text: "새로고침"; icon: @image-url("../assets/actions/refresh.svg");
+                            height: 32px; text: "새로고침"; icon: @image-url("../assets/actions/refresh.svg");
                             enabled: AppState.live-loaded && !AppState.live-busy && !AppState.storage-busy;
                             clicked => { AppState.live-refresh(); AppState.storage-refresh(); }
                         }
                     }
                     HorizontalLayout {
-                        height: 24px; vertical-stretch: 0; spacing: 18px; alignment: start;
-                        Text { text: "●  채널 " + AppState.live-channel-count; color: Theme.secondary; font-size: 13px; }
-                        Text { text: "●  녹화 중 " + AppState.live-recording-count; color: Theme.success; font-size: 13px; }
-                        Text { text: "●  오프라인 " + AppState.live-offline-count; color: Theme.muted; font-size: 13px; }
-                        Text { text: "●  오류 " + AppState.live-error-count; color: Theme.danger; font-size: 13px; }
+                        height: 28px; vertical-stretch: 0; spacing: 8px; alignment: start;
+                        Button {
+                            height: 28px;
+                            text: "전체 " + AppState.live-channel-count;
+                            selected: AppState.live-filter == "ALL";
+                            clicked => { AppState.live-filter = "ALL"; }
+                        }
+                        Button {
+                            height: 28px;
+                            text: "● 녹화 중 " + AppState.live-recording-count;
+                            selected: AppState.live-filter == "RECORDING";
+                            clicked => { AppState.live-filter = "RECORDING"; }
+                        }
+                        Button {
+                            height: 28px;
+                            text: "오프라인 " + AppState.live-offline-count;
+                            selected: AppState.live-filter == "OFFLINE";
+                            clicked => { AppState.live-filter = "OFFLINE"; }
+                        }
+                        Button {
+                            height: 28px;
+                            text: "오류 " + AppState.live-error-count;
+                            selected: AppState.live-filter == "ERROR";
+                            clicked => { AppState.live-filter = "ERROR"; }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        if AppState.live-message != "": Text {
+                            text: AppState.live-message;
+                            color: Theme.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
                     }
-                    Text { text: AppState.live-message; color: Theme.muted; wrap: word-wrap; font-size: 12px; vertical-stretch: 0; }
-                    Text { text: "엔진: " + AppState.live-engine + " · 시작: " + AppState.live-started-at; color: Theme.muted; font-size: 12px; vertical-stretch: 0; wrap: word-wrap; }
                     if AppState.live-password-target != "": Rectangle {
                         height: 108px;
                         vertical-stretch: 0;
@@ -452,10 +490,10 @@ export component MainWindow inherits Window {
                             spacing: 6px;
                             alignment: start;
                             if AppState.live-rows.length == 0: Rectangle {
-                                height: 82px;
+                                height: 76px;
                                 vertical-stretch: 0;
                                 background: Theme.surface;
-                                border-radius: 8px;
+                                border-radius: 10px;
                                 border-width: 1px;
                                 border-color: Theme.border;
                                 VerticalLayout {
@@ -464,70 +502,78 @@ export component MainWindow inherits Window {
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
-                                min-height: max(82px, live-content.min-height);
+                                visible: AppState.live-filter == "ALL" || (AppState.live-filter == "RECORDING" && row.status == "RECORDING") || (AppState.live-filter == "OFFLINE" && row.status != "RECORDING" && row.status-tone != "error") || (AppState.live-filter == "ERROR" && row.status-tone == "error");
+                                height: self.visible ? max(64px, live-content.min-height) : 0px;
                                 vertical-stretch: 0;
-                                background: Theme.surface; border-radius: 8px;
-                                border-width: 1px; border-color: Theme.border;
+                                background: row.status == "RECORDING" ? Theme.raised : Theme.surface;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: row.status == "RECORDING" ? Theme.accent : row.status-tone == "error" ? Theme.danger : Theme.border;
+                                opacity: row.status == "DISABLED" ? 0.72 : 1.0;
                                 live-content := VerticalLayout {
-                                    padding: 12px; spacing: 10px;
+                                    padding-left: 12px; padding-right: 12px; padding-top: 10px; padding-bottom: 10px; spacing: 8px;
                                     HorizontalLayout {
                                         spacing: 12px;
-                                    VerticalLayout {
-                                        width: row.thumbnail-image.width > 0 ? 120px : 40px;
-                                        horizontal-stretch: 0; vertical-stretch: 0; spacing: 4px;
-                                        Rectangle {
-                                            width: parent.width;
-                                            height: row.thumbnail-image.width > 0 ? 67.5px : 40px;
-                                            border-radius: 6px; clip: true; background: Theme.surface;
-                                            if row.thumbnail-image.width > 0: Image { width: parent.width; height: parent.height; source: row.thumbnail-image; image-fit: contain; }
-                                            if row.thumbnail-image.width == 0: Image {
-                                                width: parent.width; height: parent.height;
-                                                source: row.platform == "KICK" ? @image-url("../assets/platform-kick.svg") : row.platform == "CHZZK" ? @image-url("../assets/platform-chzzk.png") : @image-url("../assets/platform-soop.png");
-                                                image-fit: contain;
+                                        VerticalLayout {
+                                            width: row.thumbnail-image.width > 0 ? 120px : 40px;
+                                            horizontal-stretch: 0; vertical-stretch: 0; spacing: 2px; alignment: center;
+                                            Rectangle {
+                                                width: parent.width;
+                                                height: row.thumbnail-image.width > 0 ? 67.5px : 40px;
+                                                border-radius: 8px; clip: true; background: Theme.canvas;
+                                                if row.thumbnail-image.width > 0: Image { width: parent.width; height: parent.height; source: row.thumbnail-image; image-fit: contain; }
+                                                if row.thumbnail-image.width == 0: Image {
+                                                    width: parent.width; height: parent.height;
+                                                    source: row.platform == "KICK" ? @image-url("../assets/platform-kick.svg") : row.platform == "CHZZK" ? @image-url("../assets/platform-chzzk.png") : @image-url("../assets/platform-soop.png");
+                                                    image-fit: contain;
+                                                }
                                             }
                                         }
-                                        Text { text: row.platform; height: 14px; vertical-stretch: 0; font-size: 10px; color: Theme.muted; horizontal-alignment: center; }
-                                    }
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: 5px;
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: 3px;
 
-                                        Text {
-                                            min-height: 24px;
-                                            vertical-stretch: 0;
-                                            text: row.name != "" ? row.name : row.account;
-                                            color: Theme.text;
-                                            font-size: 14px;
-                                            font-weight: 700;
-                                            vertical-alignment: center;
-                                            wrap: word-wrap;
+                                            HorizontalLayout {
+                                                spacing: 8px; alignment: start;
+                                                Text {
+                                                    text: row.name != "" ? row.name : row.account;
+                                                    color: Theme.text;
+                                                    font-size: 14px;
+                                                    font-weight: 700;
+                                                    vertical-alignment: center;
+                                                }
+                                                Text {
+                                                    text: row.platform + " · " + row.account;
+                                                    color: Theme.muted;
+                                                    font-size: 11px;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            if row.title != "": Text { text: row.title; color: Theme.secondary; wrap: word-wrap; font-size: 12px; }
+                                            if row.file != "" || row.size != "" || row.started-at != "": Text {
+                                                text: (row.size != "" ? row.size : "") + (row.started-at != "" ? (row.size != "" ? " · " : "") + row.started-at : "") + (row.file != "" ? " · " + row.file : "");
+                                                color: row.status == "RECORDING" ? Theme.success : Theme.muted;
+                                                font-size: 12px;
+                                                wrap: word-wrap;
+                                            }
+                                            if row.suppressed: Text {
+                                                text: "현재 방송은 방송이 바뀌거나 모니터링을 재개할 때까지 제외됩니다.";
+                                                color: Theme.warning;
+                                                font-size: 12px;
+                                                wrap: word-wrap;
+                                            }
+                                            if row.detail != "": Text {
+                                                text: row.detail;
+                                                color: row.status-tone == "error" ? Theme.danger : Theme.muted;
+                                                font-size: 12px;
+                                                wrap: word-wrap;
+                                            }
                                         }
-                                        Text { text: row.account; color: Theme.muted; font-size: 12px; }
-                                        if row.title != "": Text { text: row.title; color: Theme.secondary; wrap: word-wrap; }
-                                        if row.bno != "": Text { text: "방송: " + row.bno; color: Theme.muted; font-size: 12px; }
-                                        if row.file != "": Text { text: "파일: " + row.file; color: Theme.secondary; wrap: word-wrap; font-size: 12px; }
-                                        if row.size != "" || row.started-at != "": Text {
-                                            text: (row.size != "" ? "크기: " + row.size : "") + (row.started-at != "" ? "  ·  시작: " + row.started-at : "");
-                                            color: Theme.muted;
-                                            font-size: 12px;
-                                        }
-                                        if row.suppressed: Text {
-                                            text: "현재 방송은 방송이 바뀌거나 모니터링을 재개할 때까지 제외됩니다.";
-                                            color: Theme.warning;
-                                            font-size: 12px;
-                                            wrap: word-wrap;
-                                        }
-                                        if row.detail != "": Text {
-                                            text: row.detail;
-                                            color: row.status-tone == "error" ? Theme.danger : Theme.muted;
-                                            font-size: 12px;
-                                            wrap: word-wrap;
-                                        }
-                                    }
 
-                                        if root.width >= 1340px: LiveActions { channel: row; }
+                                        if root.width >= 1040px: LiveActions { channel: row; }
                                     }
-                                    if root.width < 1340px: HorizontalLayout {
+                                    if root.width < 1040px: HorizontalLayout {
                                         Rectangle { horizontal-stretch: 1; }
                                         LiveActions { channel: row; }
                                     }
@@ -537,34 +583,31 @@ export component MainWindow inherits Window {
                     }
                     Rectangle {
                         height: storage-content.min-height; vertical-stretch: 0;
-                        background: Theme.surface; border-radius: 8px;
+                        background: Theme.surface; border-radius: 10px;
                         border-width: 1px; border-color: Theme.border;
                         storage-content := VerticalLayout {
-                            padding: 12px; spacing: 12px;
+                            padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px; spacing: 6px;
                             HorizontalLayout {
-                                height: 34px; vertical-stretch: 0; spacing: 8px;
-                                Text { text: "저장 공간"; color: Theme.text; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                                height: 28px; vertical-stretch: 0; spacing: 8px;
+                                Text { text: "저장 공간"; color: Theme.text; font-size: 13px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
                                 Text { text: "최소 여유 " + AppState.storage-threshold; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                                 Button { text: "새로고침"; enabled: !AppState.storage-busy; clicked => { AppState.storage-refresh(); } }
                             }
                             if AppState.storage-message != "": Text { text: AppState.storage-message; color: Theme.muted; font-size: 12px; wrap: word-wrap; vertical-stretch: 0; }
                             ScrollView {
-                                height: min(126px, storage-volumes.min-height); vertical-stretch: 0;
+                                height: min(86px, storage-volumes.min-height); vertical-stretch: 0;
                                 storage-volumes := VerticalLayout {
-                                    spacing: 12px; alignment: start;
-                                    if AppState.storage-rows.length == 0: Text { text: AppState.storage-loaded ? "표시할 저장소가 없습니다." : "저장 공간을 확인하는 중..."; color: Theme.muted; }
+                                    spacing: 6px; alignment: start;
+                                    if AppState.storage-rows.length == 0: Text { text: AppState.storage-loaded ? "표시할 저장소가 없습니다." : "저장 공간을 확인하는 중..."; color: Theme.muted; font-size: 12px; }
                                     for row in AppState.storage-rows: Rectangle {
-                                        min-height: max(34px, volume-content.min-height); vertical-stretch: 0;
+                                        min-height: max(26px, volume-content.min-height); vertical-stretch: 0;
                                         background: transparent;
                                         volume-content := HorizontalLayout {
-                                            spacing: 14px;
-                                            Text { width: 42px; vertical-alignment: center; text: row.volume; color: Theme.text; font-weight: 600; wrap: word-wrap; }
-                                            VerticalLayout {
-                                                horizontal-stretch: 1; alignment: center; spacing: 2px;
-                                                Text { text: row.capacity + " · 사용률 " + row.used; color: Theme.secondary; font-size: 12px; wrap: word-wrap; vertical-stretch: 0; }
-                                                if row.detail != "": Text { text: row.detail; color: row.status-tone == "error" ? Theme.danger : Theme.warning; font-size: 12px; wrap: word-wrap; vertical-stretch: 0; }
-                                            }
-                                            StatusPill { text: row.status; tone: row.status-tone; boxed: true; }
+                                            spacing: 12px;
+                                            Text { width: 36px; vertical-alignment: center; text: row.volume; color: Theme.text; font-size: 12px; font-weight: 600; }
+                                            Text { horizontal-stretch: 1; vertical-alignment: center; text: row.capacity + " · 사용률 " + row.used; color: Theme.secondary; font-size: 12px; wrap: word-wrap; }
+                                            if row.detail != "": Text { vertical-alignment: center; text: row.detail; color: row.status-tone == "error" ? Theme.danger : Theme.warning; font-size: 12px; }
+                                            StatusPill { text: row.status; tone: row.status-tone; boxed: false; }
                                         }
                                     }
                                 }
@@ -583,48 +626,43 @@ export component MainWindow inherits Window {
                         Button { text: "저장값 다시 불러오기"; enabled: AppState.config-loaded && !AppState.config-busy; clicked => { AppState.reload-configuration(); } }
                     }
                     Text { text: AppState.config-message; color: Theme.muted; font-size: 12px; wrap: word-wrap; vertical-stretch: 0; }
+                    Rectangle {
+                        height: 30px; vertical-stretch: 0;
+                        background: Theme.sidebar; border-radius: 6px;
+                        border-width: 1px; border-color: Theme.border;
+                        HorizontalLayout {
+                            padding-left: 10px; padding-right: 10px; spacing: 6px;
+                            Text { width: 96px; text: "플랫폼"; color: Theme.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                            Text { width: 82px; text: "방송 감시"; color: Theme.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                            Text { min-width: 96px; horizontal-stretch: 1; text: "채널 이름"; color: Theme.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                            Text { min-width: 150px; horizontal-stretch: 1.5; text: "계정 / 채널 ID"; color: Theme.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                            Text { min-width: 130px; horizontal-stretch: 2; text: "저장 폴더"; color: Theme.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                            Text { width: 128px; text: "작업"; color: Theme.muted; font-size: 11px; font-weight: 600; horizontal-alignment: right; vertical-alignment: center; }
+                        }
+                    }
                     ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
-                            spacing: 7px; alignment: start;
+                            spacing: 5px; alignment: start;
                             if AppState.channel-config-rows.length == 0: Text { text: "등록된 채널이 없습니다. 채널을 추가하고 저장하세요."; color: Theme.muted; wrap: word-wrap; }
                             for row[index] in AppState.channel-config-rows: Rectangle {
-                                min-height: max(72px, channel-content.min-height); vertical-stretch: 0;
+                                min-height: max(48px, channel-content.min-height); vertical-stretch: 0;
                                 background: Theme.surface; border-radius: 8px;
                                 border-width: 1px; border-color: Theme.border;
+                                opacity: row.enabled ? 1.0 : 0.7;
                                 channel-content := HorizontalLayout {
-                                    padding: 10px; spacing: 6px;
-                                    VerticalLayout {
-                                        width: 96px; spacing: 4px;
-                                        Text { text: "플랫폼"; color: Theme.muted; font-size: 12px; }
-                                        ComboBox { model: ["SOOP", "CHZZK", "KICK"]; min-width: 0px; current-index: row.platform == "KICK" ? 2 : row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
+                                    padding-left: 10px; padding-right: 10px; padding-top: 7px; padding-bottom: 7px; spacing: 6px;
+                                    ComboBox { width: 96px; model: ["SOOP", "CHZZK", "KICK"]; current-index: row.platform == "KICK" ? 2 : row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
+                                    Button { width: 82px; text: row.enabled ? "사용" : "사용 안 함"; selected: row.enabled; enabled: !AppState.config-busy; clicked => { AppState.channel-toggle-enabled(index); } }
+                                    LineEdit { min-width: 96px; horizontal-stretch: 1; height: 32px; font-size: 13px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
+                                    LineEdit { min-width: 150px; horizontal-stretch: 1.5; height: 32px; font-size: 12px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
+                                    HorizontalLayout {
+                                        min-width: 130px; horizontal-stretch: 2; spacing: 4px;
+                                        LineEdit { min-width: 40px; horizontal-stretch: 1; height: 32px; font-size: 13px; text <=> row.outdir; placeholder-text: "기본 경로 사용"; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "outdir", value); } }
+                                        Button { text: "폴더 선택"; width: 74px; height: 32px; enabled: !AppState.config-busy; clicked => { AppState.channel-pick-output(index); } }
                                     }
-                                    VerticalLayout {
-                                        width: 82px; spacing: 4px;
-                                        Text { text: "방송 감시"; color: Theme.muted; font-size: 12px; }
-                                        Button { text: row.enabled ? "사용" : "사용 안 함"; selected: row.enabled; enabled: !AppState.config-busy; clicked => { AppState.channel-toggle-enabled(index); } }
-                                    }
-                                    VerticalLayout {
-                                        width: root.channel-name-column-width; spacing: 4px;
-                                        Text { text: "채널 이름"; color: Theme.muted; font-size: 12px; }
-                                        LineEdit { min-width: 0px; height: 34px; font-size: 13px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
-                                    }
-                                    VerticalLayout {
-                                        width: min(230px, 210px + max(0px, root.width - 1000px) / 6); spacing: 4px;
-                                        Text { text: "계정 / 채널 ID"; color: Theme.muted; font-size: 12px; }
-                                        LineEdit { min-width: 0px; height: 34px; font-size: 12px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
-                                    }
-                                    VerticalLayout {
-                                        min-width: 120px; horizontal-stretch: 2; spacing: 4px;
-                                        Text { text: "저장 폴더"; color: Theme.muted; font-size: 12px; }
-                                        HorizontalLayout {
-                                            spacing: 4px;
-                                            LineEdit { min-width: 40px; horizontal-stretch: 1; height: 34px; font-size: 13px; text <=> row.outdir; placeholder-text: "기본 경로 사용"; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "outdir", value); } }
-                                            Button { text: "폴더 선택"; width: 76px; height: 34px; enabled: !AppState.config-busy; clicked => { AppState.channel-pick-output(index); } }
-                                        }
-                                    }
-                                    VerticalLayout { alignment: end; Button { text: "이름 조회"; enabled: !AppState.config-busy && row.account != ""; clicked => { AppState.channel-resolve(index); } } }
-                                    VerticalLayout { alignment: end; Button { text: "삭제"; danger: true; enabled: !AppState.config-busy; clicked => { AppState.channel-remove(index); } } }
+                                    Button { text: "이름 조회"; width: 70px; height: 32px; enabled: !AppState.config-busy && row.account != ""; clicked => { AppState.channel-resolve(index); } }
+                                    Button { text: "삭제"; width: 52px; height: 32px; danger: true; enabled: !AppState.config-busy; clicked => { AppState.channel-remove(index); } }
                                 }
                             }
                         }
@@ -1041,9 +1079,13 @@ export component MainWindow inherits Window {
                                             LineEdit { height: 34px; text <=> AppState.kick-session-token-draft; input-type: password; enabled: !AppState.config-busy; }
                                         }
                                         Text { text: "KICK 구독 VOD는 브라우저의 session_token을 입력하세요. 갱신은 새 값을 저장하고, 삭제는 아래 버튼을 사용합니다."; color: Theme.muted; wrap: word-wrap; font-size: 11px; }
-                                        Button { text: "SOOP 비밀번호 삭제"; enabled: !AppState.config-busy; clicked => { AppState.clear-provider-credentials("SOOP"); } }
-                                        Button { text: "CHZZK 인증정보 삭제 (NID_AUT / NID_SES)"; enabled: !AppState.config-busy; clicked => { AppState.clear-provider-credentials("CHZZK"); } }
-                                        Button { text: "KICK 인증정보 삭제"; enabled: !AppState.config-busy && AppState.kick-session-token-configured; clicked => { AppState.clear-kick-token(); } }
+                                        HorizontalLayout {
+                                            height: 32px; vertical-stretch: 0; spacing: 8px;
+                                            Text { text: "개별 인증정보 삭제:"; color: Theme.muted; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; }
+                                            Button { height: 30px; text: "SOOP 비밀번호 삭제"; danger: true; enabled: !AppState.config-busy; clicked => { AppState.clear-provider-credentials("SOOP"); } }
+                                            Button { height: 30px; text: "CHZZK 인증정보 삭제 (NID_AUT / NID_SES)"; danger: true; enabled: !AppState.config-busy; clicked => { AppState.clear-provider-credentials("CHZZK"); } }
+                                            Button { height: 30px; text: "KICK 인증정보 삭제"; danger: true; enabled: !AppState.config-busy && AppState.kick-session-token-configured; clicked => { AppState.clear-kick-token(); } }
+                                        }
                                         Text {
                                             text: "새 비밀 값을 입력해 저장하면 기존 값이 교체됩니다. 빈칸으로 저장하면 기존 값이 유지됩니다. 삭제 버튼은 즉시 적용되며 SOOP 사용자명·Worker 설정은 유지합니다. 비밀 값은 보호 저장되며 UI로 다시 읽어오지 않습니다.";
                                             color: Theme.muted;

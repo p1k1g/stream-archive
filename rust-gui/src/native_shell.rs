@@ -6,6 +6,9 @@ pub fn containing_directory(file_path: &str) -> Result<PathBuf, String> {
         return Err("recording file path is empty".into());
     }
     let path = Path::new(file_path);
+    if path.is_dir() {
+        return Ok(path.to_path_buf());
+    }
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

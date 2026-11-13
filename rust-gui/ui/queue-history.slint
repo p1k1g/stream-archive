@@ -408,17 +408,20 @@ export component HistoryPage inherits VerticalLayout {
             }
 
             for row in QueueHistoryState.history-rows: Rectangle {
-                min-height: max(96px, content-2.min-height);
+                min-height: max(56px, content-2.min-height);
                 vertical-stretch: 0;
                 background: Theme.surface;
-                border-radius: 8px;
+                border-radius: 10px;
                 border-width: 1px;
-                border-color: Theme.border;
+                border-color: row.state-tone == "error" ? Theme.danger : Theme.border;
                 content-2 := VerticalLayout {
-                    padding: 8px;
-                    spacing: 2px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 3px;
                     HorizontalLayout {
-                        min-height: 21px;
+                        min-height: 22px;
                         vertical-stretch: 0;
                         spacing: 8px;
                         Text {
@@ -426,17 +429,27 @@ export component HistoryPage inherits VerticalLayout {
                             color: Theme.text;
                             font-size: 13px;
                             font-weight: 700;
-                            horizontal-stretch: 1;
                             vertical-stretch: 0;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: row.subject;
+                            color: Theme.muted;
+                            font-size: 11px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                             wrap: word-wrap;
                         }
                         StatusPill { text: row.state; tone: row.state-tone; }
                     }
-                    Text { vertical-stretch: 0; text: row.subject; color: Theme.secondary; font-size: 11px; wrap: word-wrap; }
-                    if row.detail != "": Text { vertical-stretch: 0; text: row.detail; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
-                    Text { vertical-stretch: 0; text: row.timing; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
-                    if row.file != "": Text { vertical-stretch: 0; text: "파일: " + row.file; color: Theme.secondary; font-size: 11px; wrap: word-wrap; }
+                    Text {
+                        vertical-stretch: 0;
+                        text: row.timing + (row.detail != "" ? " · " + row.detail : "") + (row.file != "" ? " · " + row.file : "");
+                        color: Theme.secondary;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
                     if row.meta != "": Text { vertical-stretch: 0; text: row.meta; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                 }
             }

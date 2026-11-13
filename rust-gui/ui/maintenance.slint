@@ -60,6 +60,8 @@ export global MaintenanceState {
     callback cancel-restore();
     callback refresh-logs();
     callback toggle-log-auto-refresh();
+    callback open-logs-folder();
+    callback clear-logs();
 }
 
 component SectionButton inherits Button {
@@ -385,22 +387,23 @@ export component MaintenancePage inherits VerticalLayout {
             spacing: 8px;
             alignment: start;
             Rectangle {
-                min-height: max(64px, content-5.min-height);
+                min-height: max(46px, content-5.min-height);
                 vertical-stretch: 0;
                 background: MaintenanceState.diagnostic-runtime-ready ? Theme.success-surface : Theme.danger-surface;
-                border-radius: 8px;
+                border-radius: 10px;
                 border-width: 1px;
-                border-color: MaintenanceState.diagnostic-runtime-ready ? Theme.border : Theme.border;
-                content-5 := VerticalLayout {
-                    padding: 11px;
-                    spacing: 4px;
+                border-color: Theme.border;
+                content-5 := HorizontalLayout {
+                    padding-left: 12px; padding-right: 12px; padding-top: 10px; padding-bottom: 10px;
+                    spacing: 12px;
                     Text {
-                        text: MaintenanceState.diagnostic-runtime-ready ? "런타임 사용 가능" : "차단 오류 확인 필요";
+                        text: MaintenanceState.diagnostic-runtime-ready ? "● 런타임 사용 가능" : "● 차단 오류 확인 필요";
                         color: MaintenanceState.diagnostic-runtime-ready ? Theme.success : Theme.danger;
                         font-weight: 700;
                         font-size: 13px;
+                        vertical-alignment: center;
                     }
-                    SummaryLabel { text: MaintenanceState.diagnostic-summary; }
+                    SummaryLabel { text: MaintenanceState.diagnostic-summary; horizontal-stretch: 1; vertical-alignment: center; }
                 }
             }
             Text {
@@ -411,15 +414,15 @@ export component MaintenancePage inherits VerticalLayout {
                 vertical-stretch: 0;
             }
             for row in MaintenanceState.diagnostic-rows: Rectangle {
-                min-height: max(88px, content-6.min-height);
+                min-height: max(52px, content-6.min-height);
                 vertical-stretch: 0;
                 background: Theme.surface;
-                border-radius: 8px;
+                border-radius: 10px;
                 border-width: 1px;
-                border-color: Theme.border;
+                border-color: row.status-tone == "error" ? Theme.danger : Theme.border;
                 content-6 := VerticalLayout {
-                    padding: 11px;
-                    spacing: 4px;
+                    padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px;
+                    spacing: 3px;
                     HorizontalLayout {
                         min-height: 20px;
                         vertical-stretch: 0;
@@ -427,6 +430,7 @@ export component MaintenancePage inherits VerticalLayout {
                         Text {
                             text: row.category + " · " + row.name;
                             color: Theme.text;
+                            font-size: 13px;
                             font-weight: 700;
                             horizontal-stretch: 1;
                             wrap: word-wrap;
@@ -434,11 +438,17 @@ export component MaintenancePage inherits VerticalLayout {
                         Text {
                             text: row.requirement + " · " + row.status;
                             color: row.status-tone == "error" ? Theme.danger : row.status-tone == "warn" ? Theme.warning : Theme.success;
+                            font-size: 12px;
                             font-weight: 700;
                         }
                     }
-                    Text { text: row.summary; color: Theme.secondary; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
-                    if row.detail != "": SummaryLabel { text: row.detail; }
+                    Text {
+                        text: row.summary + (row.detail != "" ? " — " + row.detail : "");
+                        color: Theme.secondary;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                        vertical-stretch: 0;
+                    }
                     if row.remediation != "": Text {
                         text: "조치: " + row.remediation;
                         color: row.status-tone == "error" ? Theme.danger : Theme.warning;
@@ -468,6 +478,19 @@ export component MaintenancePage inherits VerticalLayout {
                 text: "로그 새로고침";
                 enabled: !MaintenanceState.busy;
                 clicked => { MaintenanceState.refresh-logs(); }
+            }
+            Button {
+                height: 34px;
+                text: "로그 폴더 열기";
+                enabled: !MaintenanceState.busy;
+                clicked => { MaintenanceState.open-logs-folder(); }
+            }
+            Button {
+                height: 34px;
+                text: "로그 내용 삭제";
+                danger: true;
+                enabled: !MaintenanceState.busy;
+                clicked => { MaintenanceState.clear-logs(); }
             }
             Text {
                 text: MaintenanceState.log-message;

@@ -286,11 +286,47 @@ impl StreamArchiveCore {
         runtime_owner: Option<Arc<RuntimeOwnerGuard>>,
         recover_queue: bool,
     ) -> Result<Self> {
-        let logs = LogBuffer::new();
+        let data_dir = store.path().parent().unwrap_or(&backend_dir);
+        let app_root = data_dir.parent().unwrap_or(data_dir);
+        let logs = if recover_queue {
+            let settings = store.safe_settings().unwrap_or_default();
+            let enabled = settings
+                .get("LOG_ENABLED")
+                .map(|v| !v.trim().eq_ignore_ascii_case("N"))
+                .unwrap_or(true);
+            if enabled {
+                let raw_dir = settings
+                    .get("LOG_DIR")
+                    .map(|v| v.trim())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or("log");
+                let cleaned = raw_dir.trim_start_matches(".\\").trim_start_matches("./");
+                let log_dir = if cleaned.is_empty()
+                    || cleaned.eq_ignore_ascii_case("logs")
+                    || cleaned.eq_ignore_ascii_case("log")
+                {
+                    app_root.join("log")
+                } else {
+                    let candidate = Path::new(cleaned);
+                    if candidate.is_absolute() {
+                        candidate.to_path_buf()
+                    } else {
+                        app_root.join(candidate)
+                    }
+                };
+                let retention_days = settings
+                    .get("LOG_RETENTION_DAYS")
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .unwrap_or(30);
+                LogBuffer::with_file_sink(log_dir, retention_days)
+            } else {
+                LogBuffer::new()
+            }
+        } else {
+            LogBuffer::new()
+        };
         let resource_trace = if recover_queue {
-            crate::resource_trace::ResourceTrace::from_environment(
-                store.path().parent().unwrap_or(&backend_dir),
-            )
+            crate::resource_trace::ResourceTrace::from_environment(data_dir)
         } else {
             Default::default()
         };
@@ -946,6 +982,14 @@ impl StreamArchiveCore {
 
     pub async fn runtime_logs(&self, max_lines: usize) -> Vec<String> {
         self.logs.tail(max_lines.clamp(1, 400)).await
+    }
+
+    pub fn logs_dir(&self) -> Option<PathBuf> {
+        self.logs.log_dir().map(Path::to_path_buf)
+    }
+
+    pub async fn clear_runtime_logs(&self) {
+        self.logs.clear().await;
     }
 
     pub fn spawn_auto_backup(&self) {

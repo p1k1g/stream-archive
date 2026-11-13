@@ -1,9 +1,13 @@
 use anyhow::{Context, Result, bail};
+use chrono::Local;
 use std::{
     collections::{BTreeMap, VecDeque},
     env,
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime},
 };
 use tokio::sync::{RwLock, broadcast};
 
@@ -78,10 +82,89 @@ fn bounded_log_line(mut line: String) -> String {
     bounded
 }
 
+struct LogFileSink {
+    dir: PathBuf,
+    lock: Mutex<()>,
+}
+
+impl LogFileSink {
+    fn new(dir: PathBuf, retention_days: u64) -> Self {
+        let _ = fs::create_dir_all(&dir);
+        prune_expired_logs(&dir, retention_days);
+        Self {
+            dir,
+            lock: Mutex::new(()),
+        }
+    }
+
+    fn append_line(&self, line: &str) {
+        let now = Local::now();
+        let file_path = self
+            .dir
+            .join(format!("runtime-{}.log", now.format("%Y-%m-%d")));
+        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = fs::create_dir_all(&self.dir);
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+        {
+            let _ = writeln!(file, "[{}] {line}", now.format("%Y-%m-%d %H:%M:%S%.3f"));
+        }
+    }
+
+    fn clear_files(&self) {
+        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if (name.starts_with("runtime-") && name.ends_with(".log")) || name == "panic.log" {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+}
+
+fn prune_expired_logs(dir: &Path, retention_days: u64) {
+    if retention_days == 0 {
+        return;
+    }
+    let Some(cutoff) =
+        SystemTime::now().checked_sub(Duration::from_secs(retention_days.saturating_mul(86_400)))
+    else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !(name.starts_with("runtime-") && name.ends_with(".log")) {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata()
+            && meta.is_file()
+            && let Ok(modified) = meta.modified()
+            && modified < cutoff
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct LogBuffer {
     inner: Arc<RwLock<BufferedLogs>>,
     events: broadcast::Sender<()>,
+    file_sink: Option<Arc<LogFileSink>>,
 }
 
 impl Default for LogBuffer {
@@ -92,6 +175,14 @@ impl Default for LogBuffer {
 
 impl LogBuffer {
     pub fn new() -> Self {
+        Self::with_sink(None)
+    }
+
+    pub fn with_file_sink(dir: PathBuf, retention_days: u64) -> Self {
+        Self::with_sink(Some(Arc::new(LogFileSink::new(dir, retention_days))))
+    }
+
+    fn with_sink(file_sink: Option<Arc<LogFileSink>>) -> Self {
         let (events, _) = broadcast::channel(128);
         Self {
             inner: Arc::new(RwLock::new(BufferedLogs {
@@ -99,20 +190,29 @@ impl LogBuffer {
                 bytes: 0,
             })),
             events,
+            file_sink,
         }
     }
 
+    pub fn log_dir(&self) -> Option<&Path> {
+        self.file_sink.as_deref().map(|sink| sink.dir.as_path())
+    }
+
     pub async fn push(&self, line: impl Into<String>) {
-        let mut logs = self.inner.write().await;
         let line = bounded_log_line(line.into());
-        logs.bytes += line.len();
-        logs.lines.push_back(line);
-        while logs.lines.len() > LOG_CAPACITY || logs.bytes > LOG_BUFFER_BYTES {
-            if let Some(line) = logs.lines.pop_front() {
-                logs.bytes -= line.len();
+        {
+            let mut logs = self.inner.write().await;
+            logs.bytes += line.len();
+            logs.lines.push_back(line.clone());
+            while logs.lines.len() > LOG_CAPACITY || logs.bytes > LOG_BUFFER_BYTES {
+                if let Some(line) = logs.lines.pop_front() {
+                    logs.bytes -= line.len();
+                }
             }
         }
-        drop(logs);
+        if let Some(sink) = &self.file_sink {
+            sink.append_line(&line);
+        }
         let _ = self.events.send(());
     }
 
@@ -124,6 +224,18 @@ impl LogBuffer {
         let logs = self.inner.read().await;
         let start = logs.lines.len().saturating_sub(max_lines.max(1));
         logs.lines.iter().skip(start).cloned().collect()
+    }
+
+    pub async fn clear(&self) {
+        {
+            let mut logs = self.inner.write().await;
+            logs.lines.clear();
+            logs.bytes = 0;
+        }
+        if let Some(sink) = &self.file_sink {
+            sink.clear_files();
+        }
+        let _ = self.events.send(());
     }
 }
 
@@ -248,5 +360,20 @@ mod bounded_log_tests {
         }
         assert_eq!(logs.tail(1000).await.len(), LOG_CAPACITY);
         assert_eq!(logs.tail(2).await, vec!["498", "499"]);
+    }
+
+    #[tokio::test]
+    async fn file_sink_persists_timestamped_lines_to_daily_log() {
+        let temp = tempfile::tempdir().unwrap();
+        let logs = LogBuffer::with_file_sink(temp.path().to_path_buf(), 30);
+        assert_eq!(logs.log_dir(), Some(temp.path()));
+        logs.push("[RUST:ERR] sample error line").await;
+        let file_name = format!("runtime-{}.log", Local::now().format("%Y-%m-%d"));
+        let log_path = temp.path().join(file_name);
+        let contents = fs::read_to_string(&log_path).unwrap();
+        assert!(contents.contains("[RUST:ERR] sample error line"));
+        logs.clear().await;
+        assert!(logs.tail(10).await.is_empty());
+        assert!(!log_path.exists());
     }
 }
