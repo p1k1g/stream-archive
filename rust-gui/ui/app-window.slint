@@ -652,7 +652,7 @@ export component MainWindow inherits Window {
                                 opacity: row.enabled ? 1.0 : 0.7;
                                 channel-content := HorizontalLayout {
                                     padding-left: 10px; padding-right: 10px; padding-top: 7px; padding-bottom: 7px; spacing: 6px;
-                                    ComboBox { width: 96px; model: ["SOOP", "CHZZK", "KICK"]; current-index: row.platform == "KICK" ? 2 : row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
+                                    ComboBox { model: ["SOOP", "CHZZK", "KICK"]; width: 96px; current-index: row.platform == "KICK" ? 2 : row.platform == "CHZZK" ? 1 : 0; enabled: !AppState.config-busy; selected(value) => { AppState.channel-select-platform(index, value); } }
                                     Button { width: 82px; text: row.enabled ? "사용" : "사용 안 함"; selected: row.enabled; enabled: !AppState.config-busy; clicked => { AppState.channel-toggle-enabled(index); } }
                                     LineEdit { min-width: 96px; horizontal-stretch: 1; height: 32px; font-size: 13px; text <=> row.name; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "name", value); } }
                                     LineEdit { min-width: 150px; horizontal-stretch: 1.5; height: 32px; font-size: 12px; text <=> row.account; enabled: !AppState.config-busy; edited(value) => { AppState.channel-edited(index, "account", value); } accepted => { AppState.channel-resolve(index); } }
