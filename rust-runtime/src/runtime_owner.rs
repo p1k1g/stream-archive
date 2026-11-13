@@ -67,14 +67,11 @@ impl Drop for RuntimeOwnerGuard {
 }
 
 fn lock_is_contended(error: &std::io::Error) -> bool {
-    if error.kind() == ErrorKind::WouldBlock {
-        return true;
-    }
     #[cfg(windows)]
     if matches!(error.raw_os_error(), Some(32 | 33)) {
         return true;
     }
-    false
+    error.kind() == ErrorKind::WouldBlock
 }
 
 pub fn runtime_owner_active(database_path: &Path) -> Result<bool> {
