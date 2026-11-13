@@ -129,6 +129,8 @@ enum Request {
     LogsLoad {
         poll: bool,
     },
+    LogsClear,
+    OpenLogsFolder,
 }
 
 enum Response {
@@ -228,6 +230,8 @@ enum Response {
         lines: Vec<String>,
         poll: bool,
     },
+    LogsCleared,
+    LogsFolderPath(Result<String, String>),
     MaintenanceError {
         message: String,
         poll: bool,
@@ -322,17 +326,17 @@ fn configuration_snapshot(core: &StreamArchiveCore, message: &str) -> Response {
     }
 }
 
-fn live_status(
+async fn live_status_async(
     core: &StreamArchiveCore,
-    runtime: &tokio::runtime::Runtime,
     poll: bool,
     generation: Option<u64>,
+    refresh_thumbnails: bool,
 ) -> Response {
-    match runtime.block_on(core.watcher_status()) {
+    match core.watcher_status().await {
         Ok(status) => Response::Live {
             generation,
             status,
-            refresh_thumbnails: false,
+            refresh_thumbnails,
             message: None,
             poll,
         },
@@ -341,6 +345,15 @@ fn live_status(
             poll,
         },
     }
+}
+
+fn live_status(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    poll: bool,
+    generation: Option<u64>,
+) -> Response {
+    runtime.block_on(live_status_async(core, poll, generation, false))
 }
 
 fn storage_status(core: &StreamArchiveCore, poll: bool, generation: u64) -> Response {
@@ -639,11 +652,16 @@ fn worker_loop(
             }
             Request::Shutdown => break,
             Request::DesktopStatus => {
-                let status = runtime.block_on(desktop_snapshot(core));
-                Response::DesktopStatus(match status {
-                    Ok((summary, _)) => summary,
-                    Err(error) => format!("상태 확인 실패: {error}"),
-                })
+                let core = core.clone();
+                let responses = responses.clone();
+                runtime.spawn(async move {
+                    let status = desktop_snapshot(&core).await;
+                    let _ = responses.send(Response::DesktopStatus(match status {
+                        Ok((summary, _)) => summary,
+                        Err(error) => format!("상태 확인 실패: {error}"),
+                    }));
+                });
+                continue;
             }
             Request::PrepareExit => Response::ExitCheck(
                 runtime
@@ -710,16 +728,24 @@ fn worker_loop(
                 index,
                 platform,
                 account,
-            } => match runtime.block_on(core.resolve_channel_name(platform, &account)) {
-                Ok(name) => Response::ChannelResolved {
-                    index,
-                    account,
-                    name,
-                },
-                Err(error) => Response::ConfigError(format!(
-                    "채널 이름 조회 실패 {platform}/{account}: {error:#}"
-                )),
-            },
+            } => {
+                let core = core.clone();
+                let responses = responses.clone();
+                runtime.spawn(async move {
+                    let response = match core.resolve_channel_name(platform, &account).await {
+                        Ok(name) => Response::ChannelResolved {
+                            index,
+                            account,
+                            name,
+                        },
+                        Err(error) => Response::ConfigError(format!(
+                            "채널 이름 조회 실패 {platform}/{account}: {error:#}"
+                        )),
+                    };
+                    let _ = responses.send(response);
+                });
+                continue;
+            }
             Request::ProviderSave {
                 username,
                 worker_url,
@@ -753,24 +779,36 @@ fn worker_loop(
                 Ok(()) => configuration_snapshot(core, "KICK 인증정보를 삭제했습니다."),
                 Err(error) => Response::ConfigError(format!("KICK 인증정보 삭제 실패: {error:#}")),
             },
-            Request::ProviderTestSoop => match runtime.block_on(core.test_soop_auth()) {
-                Ok(message) => Response::ConfigMessage(message),
-                Err(error) => {
-                    Response::ConfigError(format!("SOOP / Worker 테스트 실패: {error:#}"))
-                }
-            },
+            Request::ProviderTestSoop => {
+                let core = core.clone();
+                let responses = responses.clone();
+                runtime.spawn(async move {
+                    let response = match core.test_soop_auth().await {
+                        Ok(message) => Response::ConfigMessage(message),
+                        Err(error) => {
+                            Response::ConfigError(format!("SOOP / Worker 테스트 실패: {error:#}"))
+                        }
+                    };
+                    let _ = responses.send(response);
+                });
+                continue;
+            }
             Request::LiveStatus { poll, generation } => {
-                live_status(core, runtime, poll, Some(generation))
+                let core = core.clone();
+                let responses = responses.clone();
+                runtime.spawn(async move {
+                    let _ = responses
+                        .send(live_status_async(&core, poll, Some(generation), false).await);
+                });
+                continue;
             }
             Request::LiveRefresh => {
-                let mut response = live_status(core, runtime, false, None);
-                if let Response::Live {
-                    refresh_thumbnails, ..
-                } = &mut response
-                {
-                    *refresh_thumbnails = true;
-                }
-                response
+                let core = core.clone();
+                let responses = responses.clone();
+                runtime.spawn(async move {
+                    let _ = responses.send(live_status_async(&core, false, None, true).await);
+                });
+                continue;
             }
             Request::StorageLoad { poll, generation } => storage_status(core, poll, generation),
             Request::LiveStart => match runtime.block_on(core.start_watcher()) {
@@ -1053,6 +1091,25 @@ fn worker_loop(
                 lines: runtime.block_on(core.runtime_logs(200)),
                 poll,
             },
+            Request::LogsClear => {
+                runtime.block_on(core.clear_runtime_logs());
+                Response::LogsCleared
+            }
+            Request::OpenLogsFolder => {
+                let target = core.logs_dir().or_else(|| {
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|exe| exe.parent().map(|p| p.join("log")))
+                });
+                let result = match target {
+                    Some(dir) => match std::fs::create_dir_all(&dir) {
+                        Ok(()) => Ok(dir.display().to_string()),
+                        Err(err) => Err(format!("로그 폴더를 생성할 수 없습니다: {err}")),
+                    },
+                    None => Err("로그 폴더 경로를 확인할 수 없습니다.".to_string()),
+                };
+                Response::LogsFolderPath(result)
+            }
         };
         if responses.send(response).is_err() {
             break;
@@ -1154,7 +1211,10 @@ fn request_thumbnails(
     thumbnails: &mut crate::thumbnail_adapter::Thumbnails,
     sender: &mpsc::Sender<Request>,
 ) {
-    if !ui.window().is_visible() || ui.global::<AppState>().get_active_page().as_str() != "LIVE" {
+    if !ui.window().is_visible()
+        || ui.window().is_minimized()
+        || ui.global::<AppState>().get_active_page().as_str() != "LIVE"
+    {
         return;
     }
     for (token, platform, account, broadcast_id, completion_revision) in thumbnails.requests() {
@@ -1195,6 +1255,7 @@ fn render_live(
             title: row.title.into(),
             bno: row.bno.into(),
             file: row.file.into(),
+            output_dir: row.output_dir.into(),
             size: row.size.into(),
             started_at: row.started_at.into(),
             suppressed: row.suppressed,
@@ -2532,6 +2593,22 @@ pub fn bind(ui: &MainWindow) -> Controller {
     });
 
     let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_open_logs_folder(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::OpenLogsFolder);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let maintenance_sender = sender.clone();
+    maintenance_state.on_clear_logs(move || {
+        if let Some(ui) = weak.upgrade() {
+            send_maintenance(&ui, &maintenance_sender, Request::LogsClear);
+        }
+    });
+
+    let weak = ui.as_weak();
     let response_live_poll_flag = live_poll_in_flight.clone();
     let response_storage_poll_flag = storage_poll_in_flight.clone();
     let response_vod_poll_flag = vod_poll_in_flight.clone();
@@ -2589,7 +2666,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
             return;
         };
         let app = ui.global::<AppState>();
-        let visible = ui.window().is_visible();
+        let visible = ui.window().is_visible() && !ui.window().is_minimized();
         let page = stream_archive_server::resource_trace::Page::from_name(app.get_active_page().as_str());
         if live_model.set_visible(visible && page == stream_archive_server::resource_trace::Page::Live) {
             response_live_generation.set(live_model.generation());
@@ -3011,6 +3088,24 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     }
                     render_logs(&ui, lines);
                 }
+                Response::LogsCleared => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    maintenance_state.set_busy(false);
+                    maintenance_state.set_message("로그 내용을 삭제했습니다.".into());
+                    render_logs(&ui, Vec::new());
+                }
+                Response::LogsFolderPath(result) => {
+                    let maintenance_state = ui.global::<MaintenanceState>();
+                    maintenance_state.set_busy(false);
+                    match result.and_then(|dir| native_shell::open_containing_directory(&dir)) {
+                        Ok(()) => {
+                            maintenance_state.set_message("로그 폴더를 열었습니다.".into());
+                        }
+                        Err(err) => {
+                            maintenance_state.set_message(format!("로그 폴더 열기 실패: {err}").into());
+                        }
+                    }
+                }
                 Response::MaintenanceError { message, poll } => {
                     let maintenance_state = ui.global::<MaintenanceState>();
                     if poll {
@@ -3114,7 +3209,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
             let state = ui.global::<AppState>();
             if !live_poll_needed(
                 state.get_active_page().as_str(),
-                ui.window().is_visible(),
+                ui.window().is_visible() && !ui.window().is_minimized(),
                 state.get_live_busy(),
                 live_poll_flag.get(),
                 thumbnail_tracking.get(),
@@ -3144,6 +3239,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         };
         let state = ui.global::<AppState>();
         if !ui.window().is_visible()
+            || ui.window().is_minimized()
             || state.get_active_page().as_str() != "LIVE"
             || state.get_storage_busy()
             || storage_poll_flag.get()

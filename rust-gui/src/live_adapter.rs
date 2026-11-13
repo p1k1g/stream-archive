@@ -15,6 +15,7 @@ pub struct LiveChannelView {
     pub title: String,
     pub bno: String,
     pub file: String,
+    pub output_dir: String,
     pub size: String,
     pub started_at: String,
     pub suppressed: bool,
@@ -96,6 +97,7 @@ fn channel_view(channel: ChannelRuntimeStatus, watcher_running: bool) -> LiveCha
         title: channel.title.unwrap_or_default(),
         bno: channel.bno.unwrap_or_default(),
         file: channel.file.unwrap_or_default(),
+        output_dir: channel.output_dir.unwrap_or_default(),
         size: if channel.size_bytes == 0 {
             String::new()
         } else {

@@ -481,7 +481,7 @@ async fn run_native_watcher(
             _ = &mut control.stop_rx => break,
             Some(command) = control.command_rx.recv() => {
                 handle_command(command, &mut states, &recorder, &logs).await;
-                update_snapshot(&states, &snapshot).await;
+                update_snapshot(&states, &snapshot, &config.output_dir).await;
             }
             _ = tokio::time::sleep(Duration::from_millis(400)) => {
                 let now = Instant::now();
@@ -545,7 +545,7 @@ async fn run_native_watcher(
                 check_recording_broadcasts(&mut states, &config, &mut sessions, &recorder, &logs).await;
                 monitor_recordings(&mut states, &config, &recorder, &logs).await;
                 poll_channels(&mut states, &config, &mut sessions, &recorder, &logs).await;
-                update_snapshot(&states, &snapshot).await;
+                update_snapshot(&states, &snapshot, &config.output_dir).await;
                 if trace.enabled() && now >= next_trace {
                     next_trace = now + Duration::from_secs(60);
                     trace.record(crate::resource_trace::Event::WatcherSample,
@@ -563,7 +563,7 @@ async fn run_native_watcher(
     }
     mark_watcher_stopped(&mut states);
     clear_all_stream_passwords();
-    update_snapshot(&states, &snapshot).await;
+    update_snapshot(&states, &snapshot, &config.output_dir).await;
     trace.record(
         crate::resource_trace::Event::WatcherStopped,
         crate::resource_trace::Sample {
@@ -1138,6 +1138,7 @@ async fn stop_state_recording(
 async fn update_snapshot(
     states: &HashMap<String, ChannelState>,
     snapshot: &Arc<RwLock<WatcherStatus>>,
+    default_output_dir: &Path,
 ) {
     let mut ordered: Vec<&ChannelState> = states.values().collect();
     ordered.sort_by(|a, b| {
@@ -1187,6 +1188,11 @@ async fn update_snapshot(
                 .or_else(|| state.last_broadcast_id.clone()),
             title: rec.map(|r| r.title.clone()),
             file: rec.map(|r| r.file.display().to_string()),
+            output_dir: if rec.is_some() {
+                None
+            } else {
+                existing_channel_output_dir(&state.channel, default_output_dir)
+            },
             size_bytes: rec
                 .and_then(|r| fs::metadata(&r.file).ok().map(|m| m.len()))
                 .unwrap_or(0),
@@ -1318,13 +1324,22 @@ fn resolve_streamlink(backend_dir: &Path, map: &BTreeMap<String, String>) -> Res
     bail!("streamlink executable not found; set STREAMLINK_PATH or STREAMLINK_FALLBACK")
 }
 
-fn channel_output_dir(channel: &Channel, default: &Path) -> Result<PathBuf> {
+fn resolve_channel_output_dir(channel: &Channel, default: &Path) -> PathBuf {
     let base = if channel.outdir.trim().is_empty() {
         default.to_path_buf()
     } else {
         PathBuf::from(channel.outdir.trim())
     };
-    let dir = base.join(safe_name(&channel.name, 80));
+    base.join(safe_name(&channel.name, 80))
+}
+
+fn existing_channel_output_dir(channel: &Channel, default: &Path) -> Option<String> {
+    let dir = resolve_channel_output_dir(channel, default);
+    dir.is_dir().then(|| dir.display().to_string())
+}
+
+fn channel_output_dir(channel: &Channel, default: &Path) -> Result<PathBuf> {
+    let dir = resolve_channel_output_dir(channel, default);
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -1782,7 +1797,12 @@ mod thumbnail_completion_tests {
         state.recording_finished("123");
         assert!(state.completion_revision > first);
         let snapshot = Arc::new(RwLock::new(WatcherStatus::default()));
-        update_snapshot(&HashMap::from([("SOOP:test".into(), state)]), &snapshot).await;
+        update_snapshot(
+            &HashMap::from([("SOOP:test".into(), state)]),
+            &snapshot,
+            Path::new(""),
+        )
+        .await;
         let snapshot = snapshot.read().await;
         assert_eq!(
             snapshot.channels[0].completed_broadcast_id.as_deref(),

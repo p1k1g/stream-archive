@@ -259,7 +259,7 @@ impl RecorderManager {
             .arg(&stream_url)
             .arg(&config.quality)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         if let Some(parent) = config.streamlink.parent()
@@ -283,19 +283,11 @@ impl RecorderManager {
             .id()
             .ok_or_else(|| anyhow!("Streamlink PID unavailable"))?;
 
+        if let Some(stdout) = child.stdout.take() {
+            spawn_streamlink_log_reader(stdout, self.logs.clone(), account.to_string());
+        }
         if let Some(stderr) = child.stderr.take() {
-            let logs = self.logs.clone();
-            let account = account.to_string();
-            tokio::spawn(async move {
-                let mut lines = crate::bounded_lines::BoundedLines::new(stderr);
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let line = line.trim();
-                    if !line.is_empty() {
-                        logs.push(format!("[RUST:STREAMLINK:{account}] {line}"))
-                            .await;
-                    }
-                }
-            });
+            spawn_streamlink_log_reader(stderr, self.logs.clone(), account.to_string());
         }
 
         let started_at = Utc::now();
@@ -440,6 +432,22 @@ impl RecorderManager {
             ))
             .await;
     }
+}
+
+fn spawn_streamlink_log_reader<R>(stream: R, logs: LogBuffer, account: String)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut lines = crate::bounded_lines::BoundedLines::new(stream);
+        while let Ok(Some(line)) = lines.next_line().await {
+            let line = line.trim();
+            if !line.is_empty() {
+                logs.push(format!("[RUST:STREAMLINK:{account}] {line}"))
+                    .await;
+            }
+        }
+    });
 }
 
 async fn preflight_plugin_input(

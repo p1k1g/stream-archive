@@ -117,6 +117,7 @@ fn same_row(a: &LiveChannelRow, b: &LiveChannelRow) -> bool {
         && a.title == b.title
         && a.bno == b.bno
         && a.file == b.file
+        && a.output_dir == b.output_dir
         && a.size == b.size
         && a.started_at == b.started_at
         && a.suppressed == b.suppressed

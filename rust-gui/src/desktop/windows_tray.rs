@@ -279,13 +279,16 @@ pub struct Desktop {
 }
 
 fn restore(ui: &MainWindow) {
-    ui.window().set_minimized(false);
     if let Err(error) = ui.show() {
         eprintln!("창 복원 실패: {error}");
     }
+    ui.window().set_minimized(false);
     use slint::winit_030::WinitWindowAccessor;
-    ui.window()
-        .with_winit_window(|window| window.focus_window());
+    ui.window().with_winit_window(|window| {
+        window.set_visible(true);
+        window.focus_window();
+        window.request_redraw();
+    });
     ui.window().request_redraw();
 }
 

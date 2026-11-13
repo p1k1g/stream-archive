@@ -1463,17 +1463,11 @@ fn finalizing_path(target: &Path) -> PathBuf {
 }
 
 fn is_lock_contention(err: &std::io::Error) -> bool {
-    if err.kind() == std::io::ErrorKind::WouldBlock {
+    #[cfg(windows)]
+    if matches!(err.raw_os_error(), Some(32) | Some(33)) {
         return true;
     }
-    #[cfg(windows)]
-    {
-        matches!(err.raw_os_error(), Some(32) | Some(33))
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    err.kind() == std::io::ErrorKind::WouldBlock
 }
 
 fn collision_candidate(dir: &Path, base: &str, extension: &str, number: usize) -> PathBuf {
