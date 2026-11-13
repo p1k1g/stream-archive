@@ -169,12 +169,10 @@ pub(super) fn test_process_group(pid: i32) -> Result<i32, io::Error> {
 #[cfg(test)]
 pub(super) fn test_process_running(pid: i32) -> bool {
     let rc = unsafe { posix_kill(pid, 0) };
-    if rc != 0 && io::Error::last_os_error().raw_os_error() == Some(ESRCH) {
-        return false;
-    }
+    let alive = !(rc != 0 && io::Error::last_os_error().raw_os_error() == Some(ESRCH));
 
     #[cfg(target_os = "linux")]
-    {
+    if alive {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
         if let Ok(stat) = stat
             && let Some(after_name) = stat.rsplit_once(')').map(|(_, rest)| rest.trim_start())
@@ -184,7 +182,7 @@ pub(super) fn test_process_running(pid: i32) -> bool {
         }
     }
 
-    true
+    alive
 }
 
 #[cfg(test)]
