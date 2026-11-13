@@ -502,7 +502,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
-                                visible: AppState.live-filter == "ALL" || (AppState.live-filter == "RECORDING" && row.status == "RECORDING") || (AppState.live-filter == "OFFLINE" && row.status != "RECORDING" && row.status-tone != "error") || (AppState.live-filter == "ERROR" && row.status-tone == "error");
+                                visible: AppState.live-filter == "ALL" || (AppState.live-filter == "RECORDING" && row.status == "RECORDING") || (AppState.live-filter == "OFFLINE" && row.status != "RECORDING" && row.status != "ERROR" && row.status != "LOW_DISK" && row.status != "STALLED") || (AppState.live-filter == "ERROR" && (row.status == "ERROR" || row.status == "LOW_DISK" || row.status == "STALLED"));
                                 height: self.visible ? max(64px, live-content.min-height) : 0px;
                                 vertical-stretch: 0;
                                 background: row.status == "RECORDING" ? Theme.raised : Theme.surface;

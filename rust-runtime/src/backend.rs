@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use std::{
     collections::{BTreeMap, VecDeque},
     env,
@@ -84,7 +84,8 @@ fn bounded_log_line(mut line: String) -> String {
 
 struct LogFileSink {
     dir: PathBuf,
-    lock: Mutex<()>,
+    retention_days: u64,
+    state: Mutex<Option<NaiveDate>>,
 }
 
 impl LogFileSink {
@@ -93,16 +94,22 @@ impl LogFileSink {
         prune_expired_logs(&dir, retention_days);
         Self {
             dir,
-            lock: Mutex::new(()),
+            retention_days,
+            state: Mutex::new(Some(Local::now().date_naive())),
         }
     }
 
     fn append_line(&self, line: &str) {
         let now = Local::now();
+        let today = now.date_naive();
         let file_path = self
             .dir
             .join(format!("runtime-{}.log", now.format("%Y-%m-%d")));
-        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut last_date = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if *last_date != Some(today) {
+            prune_expired_logs(&self.dir, self.retention_days);
+            *last_date = Some(today);
+        }
         let _ = fs::create_dir_all(&self.dir);
         if let Ok(mut file) = OpenOptions::new()
             .create(true)
@@ -114,7 +121,7 @@ impl LogFileSink {
     }
 
     fn clear_files(&self) {
-        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return;
         };
