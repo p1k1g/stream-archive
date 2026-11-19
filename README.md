@@ -4,11 +4,11 @@
 
 Windows에서는 Slint Native GUI를, Linux/macOS에서는 CLI·headless 실행을 제공합니다. Queue, History, 백업·복구, Diagnostics를 한곳에서 관리할 수 있습니다.
 
-[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.0.4 릴리스 노트](docs/RELEASE_NOTES_1_0_4.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
+[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.0.5 릴리스 노트](docs/RELEASE_NOTES_1_0_5.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
 
-> **Stream Archive 1.0.4 공개 — 2026-11-19**
+> **Stream Archive 1.0.5 공개 — 2026-11-19**
 >
-> [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4)는 Windows 트레이 대기 중 그래픽 드라이버 업데이트·리셋 시 종료 방지 및 대기 메모리 절감, 비동기 트레이 다운로드 알림·비차단 폴더 선택기, 유휴 폴링·SQLite·백그라운드 파일 로깅 최적화, 비UTF-8 자식 프로세스 출력 대응 및 LIVE 필터·UI 안정화를 포함합니다. 기존 [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)는 보존합니다.
+> [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5)는 Windows 오프라인 백업·복구, 릴리스 메타데이터·ZIP 패키징/PE 아이콘·버전 검증 및 런타임 계약 가드를 모두 순수 Rust(`StreamArchive.exe` CLI / `runtime_contracts`)로 통합하고 기존 PowerShell(`.ps1`) 스크립트 의존성을 완전히 제거했습니다. 기존 PowerShell 백업 메타데이터(UTF-8 BOM) 복원 호환성도 유지합니다. 기존 [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)는 보존합니다.
 
 ## 화면 미리보기
 
@@ -45,17 +45,17 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
 ## 다운로드 및 지원 환경
 
-[1.0.4 Release 페이지](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4)와 아래 정식 Release asset 링크에서 패키지를 다운로드할 수 있습니다.
+[1.0.5 Release 페이지](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5)와 아래 정식 Release asset 링크에서 패키지를 다운로드할 수 있습니다.
 
 | 운영체제 | 다운로드 | 패키지 | 실행 방식 |
 |---|---|---|---|
-| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.4/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
-| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.4/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
-| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.4/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
+| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.5/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
+| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.5/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
+| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.5/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
 
-체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.4/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.4/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.4/stream-archive-macos-arm64.tar.gz.sha256)
+체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.5/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.5/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.5/stream-archive-macos-arm64.tar.gz.sha256)
 
-이전 버전은 [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 받을 수 있으며 [1.0.2 체크섬](docs/releases/v1.0.2/), [1.0.1 체크섬](docs/releases/v1.0.1/), [1.0.0 체크섬](docs/releases/v1.0.0/)도 유지합니다.
+이전 버전은 [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 받을 수 있으며 [1.0.2 체크섬](docs/releases/v1.0.2/), [1.0.1 체크섬](docs/releases/v1.0.1/), [1.0.0 체크섬](docs/releases/v1.0.0/)도 유지합니다.
 
 패키지 build와 smoke는 각 플랫폼의 CI에서 검증합니다. 실제 서비스 세션, GUI 조작 및 OS별 비밀정보 저장의 최종 수동 검증은 별도로 관리합니다. Linux/macOS에는 GUI를 제공하지 않으며, 검증하지 않은 아키텍처의 지원을 주장하지 않습니다.
 
@@ -178,8 +178,8 @@ Windows는 CurrentUser DPAPI, Linux는 `secret-tool`을 통한 Secret Service, m
 
 | 문서 | 내용 |
 |---|---|
-| [1.0.4 릴리스 노트](docs/RELEASE_NOTES_1_0_4.md) | 지원 범위·변경사항·안내 |
-| [1.0.3 릴리스 노트](docs/RELEASE_NOTES_1_0_3.md) | 이전 버전 릴리스 노트 |
+| [1.0.5 릴리스 노트](docs/RELEASE_NOTES_1_0_5.md) | 지원 범위·변경사항·안내 |
+| [1.0.4 릴리스 노트](docs/RELEASE_NOTES_1_0_4.md) | 이전 버전 릴리스 노트 |
 | [운영 가이드](docs/OPERATIONS.md) | 백업·복구·업그레이드·rollback |
 | [Cloudflare Worker 설정](docs/CLOUDFLARE_WORKER.md) | SOOP LIVE용 Worker 생성·secret·앱 연결 |
 | [Unix CLI 가이드](docs/UNIX_CLI.md) | Linux/macOS 명령 및 운영 조건 |
