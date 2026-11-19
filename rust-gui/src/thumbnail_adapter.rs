@@ -1,6 +1,6 @@
 //! UI-thread LIVE snapshot cache. No disk cache, network or provider logic here.
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use stream_archive_server::{
     model::NativeWatcherStatus, support::platform::PlatformId, thumbnail_service::ThumbnailImage,
 };
@@ -57,14 +57,18 @@ impl Thumbnails {
             .iter()
             .filter(|row| status.running && row.has_current_live_thumbnail())
             .take(MAX_THUMBNAILS)
-            .collect();
-        self.entries.retain(|target, _| {
-            active.iter().any(|row| {
-                crate::live_adapter::scoped_target(row.platform, &row.account) == *target
+            .map(|row| {
+                (
+                    crate::live_adapter::scoped_target(row.platform, &row.account),
+                    row,
+                )
             })
-        });
-        for row in active {
-            let target = crate::live_adapter::scoped_target(row.platform, &row.account);
+            .collect();
+        let active_targets: HashSet<&str> =
+            active.iter().map(|(target, _)| target.as_str()).collect();
+        self.entries
+            .retain(|target, _| active_targets.contains(target.as_str()));
+        for (target, row) in active {
             let broadcast = row.bno.as_deref().unwrap();
             let changed = self.entries.get(&target).is_none_or(|entry| {
                 entry.broadcast != broadcast || entry.completion_revision != row.completion_revision
@@ -118,16 +122,16 @@ impl Thumbnails {
         }
         requests
     }
-    pub fn complete(&mut self, token: u64, image: Option<ThumbnailImage>) {
+    pub fn complete(&mut self, token: u64, image: Option<ThumbnailImage>) -> bool {
         let Some(target) = self.pending.remove(&token) else {
-            return;
+            return false;
         };
         let Some(entry) = self
             .entries
             .get_mut(&target)
             .filter(|entry| entry.generation == token)
         else {
-            return;
+            return false;
         };
         if let Some(image) = image {
             let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
@@ -136,7 +140,9 @@ impl Thumbnails {
                 image.height,
             );
             entry.image = Image::from_rgba8(pixels);
+            return true;
         }
+        false
     }
 }
 

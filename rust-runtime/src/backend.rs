@@ -6,7 +6,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 use tokio::sync::{RwLock, broadcast};
@@ -82,58 +82,149 @@ fn bounded_log_line(mut line: String) -> String {
     bounded
 }
 
+const LOG_FILE_MAX_BYTES: u64 = 20 * 1024 * 1024;
+const LOG_FILE_MAX_ROTATIONS: usize = 5;
+
+enum LogSinkCommand {
+    Line(String),
+    Clear(std::sync::mpsc::SyncSender<()>),
+    #[cfg(test)]
+    Flush(std::sync::mpsc::SyncSender<()>),
+}
+
 struct LogFileSink {
     dir: PathBuf,
-    retention_days: u64,
-    state: Mutex<Option<NaiveDate>>,
+    tx: std::sync::mpsc::SyncSender<LogSinkCommand>,
 }
 
 impl LogFileSink {
     fn new(dir: PathBuf, retention_days: u64) -> Self {
         let _ = fs::create_dir_all(&dir);
         prune_expired_logs(&dir, retention_days);
-        Self {
-            dir,
-            retention_days,
-            state: Mutex::new(Some(Local::now().date_naive())),
-        }
+        let (tx, rx) = std::sync::mpsc::sync_channel::<LogSinkCommand>(1024);
+        let worker_dir = dir.clone();
+        let _ = std::thread::Builder::new()
+            .name("runtime-log-writer".into())
+            .spawn(move || run_log_writer(worker_dir, retention_days, rx));
+        Self { dir, tx }
     }
 
     fn append_line(&self, line: &str) {
         let now = Local::now();
-        let today = now.date_naive();
-        let file_path = self
-            .dir
-            .join(format!("runtime-{}.log", now.format("%Y-%m-%d")));
-        let mut last_date = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if *last_date != Some(today) {
-            prune_expired_logs(&self.dir, self.retention_days);
-            *last_date = Some(today);
-        }
-        let _ = fs::create_dir_all(&self.dir);
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)
-        {
-            let _ = writeln!(file, "[{}] {line}", now.format("%Y-%m-%d %H:%M:%S%.3f"));
-        }
+        let formatted = format!("[{}] {line}", now.format("%Y-%m-%d %H:%M:%S%.3f"));
+        let _ = self.tx.try_send(LogSinkCommand::Line(formatted));
     }
 
     fn clear_files(&self) {
-        let _guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let Ok(entries) = fs::read_dir(&self.dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if (name.starts_with("runtime-") && name.ends_with(".log")) || name == "panic.log" {
-                let _ = fs::remove_file(path);
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        if self.tx.send(LogSinkCommand::Clear(done_tx)).is_ok() {
+            let _ = done_rx.recv_timeout(Duration::from_secs(2));
+        }
+    }
+
+    #[cfg(test)]
+    fn flush(&self) {
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        if self.tx.send(LogSinkCommand::Flush(done_tx)).is_ok() {
+            let _ = done_rx.recv_timeout(Duration::from_secs(2));
+        }
+    }
+}
+
+fn rotate_daily_log(dir: &Path, date_str: &str) {
+    let base = dir.join(format!("runtime-{date_str}.log"));
+    let oldest = dir.join(format!("runtime-{date_str}.{LOG_FILE_MAX_ROTATIONS}.log"));
+    let _ = fs::remove_file(&oldest);
+    for idx in (1..LOG_FILE_MAX_ROTATIONS).rev() {
+        let src = dir.join(format!("runtime-{date_str}.{idx}.log"));
+        let dst = dir.join(format!("runtime-{date_str}.{}.log", idx + 1));
+        if src.exists() {
+            let _ = fs::rename(&src, &dst);
+        }
+    }
+    if base.exists() {
+        let _ = fs::rename(&base, dir.join(format!("runtime-{date_str}.1.log")));
+    }
+}
+
+fn run_log_writer(
+    dir: PathBuf,
+    retention_days: u64,
+    rx: std::sync::mpsc::Receiver<LogSinkCommand>,
+) {
+    use std::io::BufWriter;
+    let mut current_date: Option<NaiveDate> = Some(Local::now().date_naive());
+    let mut current_file: Option<BufWriter<fs::File>> = None;
+    let mut current_bytes: u64 = 0;
+
+    while let Ok(cmd) = rx.recv() {
+        match cmd {
+            LogSinkCommand::Line(formatted) => {
+                let today = Local::now().date_naive();
+                let date_str = today.format("%Y-%m-%d").to_string();
+                if current_date != Some(today) {
+                    if let Some(mut w) = current_file.take() {
+                        let _ = w.flush();
+                    }
+                    prune_expired_logs(&dir, retention_days);
+                    current_date = Some(today);
+                    current_bytes = 0;
+                }
+                if current_file.is_some() && current_bytes >= LOG_FILE_MAX_BYTES {
+                    if let Some(mut w) = current_file.take() {
+                        let _ = w.flush();
+                    }
+                    rotate_daily_log(&dir, &date_str);
+                    current_bytes = 0;
+                }
+                if current_file.is_none() {
+                    let _ = fs::create_dir_all(&dir);
+                    let path = dir.join(format!("runtime-{date_str}.log"));
+                    if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
+                        current_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
+                        current_file = Some(BufWriter::new(file));
+                    }
+                }
+                if let Some(writer) = current_file.as_mut() {
+                    if writeln!(writer, "{formatted}").is_ok() {
+                        current_bytes = current_bytes.saturating_add(formatted.len() as u64 + 1);
+                        let _ = writer.flush();
+                    } else {
+                        current_file = None;
+                    }
+                }
+            }
+            LogSinkCommand::Clear(done) => {
+                if let Some(mut w) = current_file.take() {
+                    let _ = w.flush();
+                }
+                current_bytes = 0;
+                if let Ok(entries) = fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                            continue;
+                        };
+                        if (name.starts_with("runtime-") && name.ends_with(".log"))
+                            || name == "panic.log"
+                        {
+                            let _ = fs::remove_file(path);
+                        }
+                    }
+                }
+                let _ = done.send(());
+            }
+            #[cfg(test)]
+            LogSinkCommand::Flush(done) => {
+                if let Some(writer) = current_file.as_mut() {
+                    let _ = writer.flush();
+                }
+                let _ = done.send(());
             }
         }
+    }
+    if let Some(mut w) = current_file.take() {
+        let _ = w.flush();
     }
 }
 
@@ -375,6 +466,7 @@ mod bounded_log_tests {
         let logs = LogBuffer::with_file_sink(temp.path().to_path_buf(), 30);
         assert_eq!(logs.log_dir(), Some(temp.path()));
         logs.push("[RUST:ERR] sample error line").await;
+        logs.file_sink.as_ref().unwrap().flush();
         let file_name = format!("runtime-{}.log", Local::now().format("%Y-%m-%d"));
         let log_path = temp.path().join(file_name);
         let contents = fs::read_to_string(&log_path).unwrap();

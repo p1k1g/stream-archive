@@ -119,9 +119,15 @@ impl State {
 }
 
 struct Tray {
-    state: Box<State>,
+    state: *mut State,
 }
 impl Tray {
+    fn state(&self) -> &State {
+        // SAFETY: `self.state` is allocated with `Box::into_raw` in `Tray::new` and only
+        // freed in `Drop` after `GWLP_USERDATA` is cleared and the hidden window is destroyed.
+        unsafe { &*self.state }
+    }
+
     fn new(events: mpsc::Sender<Event>) -> Result<Self, String> {
         // Native resources and callbacks stay on the Slint UI thread.
         unsafe {
@@ -171,7 +177,7 @@ impl Tray {
                 let _ = DestroyWindow(hwnd);
                 return Err("TaskbarCreated message registration failed".into());
             }
-            let state = Box::new(State {
+            let state = Box::into_raw(Box::new(State {
                 hwnd,
                 icon,
                 taskbar_created,
@@ -179,10 +185,10 @@ impl Tray {
                 notices: RefCell::new(NoticeQueue::default()),
                 notice_visible: Cell::new(false),
                 events,
-            });
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_ref() as *const State as isize);
+            }));
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, state as isize);
             let tray = Self { state };
-            if !tray.state.ensure("Stream Archive") {
+            if !tray.state().ensure("Stream Archive") {
                 return Err("Windows 트레이 아이콘 등록 실패".into());
             }
             Ok(tray)
@@ -192,10 +198,16 @@ impl Tray {
 impl Drop for Tray {
     fn drop(&mut self) {
         unsafe {
-            let _ = Shell_NotifyIconW(NIM_DELETE, &self.state.data(""));
-            SetWindowLongPtrW(self.state.hwnd, GWLP_USERDATA, 0);
-            let _ = DestroyWindow(self.state.hwnd);
-            let _ = DestroyIcon(self.state.icon);
+            let state = &*self.state;
+            let hwnd = state.hwnd;
+            let icon = state.icon;
+            // Clear GWLP_USERDATA before Shell_NotifyIconW/DestroyWindow so re-entrant
+            // window messages during teardown cannot observe a freeing State pointer.
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            let _ = Shell_NotifyIconW(NIM_DELETE, &state.data(""));
+            let _ = DestroyWindow(hwnd);
+            let _ = DestroyIcon(icon);
+            drop(Box::from_raw(self.state));
         }
     }
 }
@@ -278,17 +290,132 @@ pub struct Desktop {
     _tray: Rc<Option<Tray>>,
 }
 
-fn restore(ui: &MainWindow) {
-    if let Err(error) = ui.show() {
-        eprintln!("창 복원 실패: {error}");
+fn apply_native_window_icon(window: &slint::winit_030::winit::window::Window) {
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut _);
+    unsafe {
+        let Ok(module) = GetModuleHandleW(None) else {
+            return;
+        };
+        if let Ok(small) = LoadImageW(
+            Some(module.into()),
+            PCWSTR(std::ptr::without_provenance(1)),
+            IMAGE_ICON,
+            16,
+            16,
+            LR_SHARED,
+        ) {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(small.0 as isize)),
+            );
+        }
+        if let Ok(big) = LoadImageW(
+            Some(module.into()),
+            PCWSTR(std::ptr::without_provenance(1)),
+            IMAGE_ICON,
+            32,
+            32,
+            LR_SHARED,
+        ) {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(big.0 as isize)),
+            );
+        }
     }
-    ui.window().set_minimized(false);
-    use slint::winit_030::WinitWindowAccessor;
+}
+
+fn apply_restored_window_chrome(ui: &MainWindow, restore_maximized: bool) -> bool {
+    if !ui.window().is_visible() {
+        return true;
+    }
+    use slint::winit_030::{WinitWindowAccessor, winit::dpi};
+    let mut applied = false;
     ui.window().with_winit_window(|window| {
+        applied = true;
+        // Un-minimize before inspecting bounds; Win32 reports (-32000, -32000) / (0, 0) while minimized.
+        window.set_minimized(false);
+        window.set_min_inner_size(Some(dpi::LogicalSize::new(1000.0_f64, 650.0_f64)));
+        if let Ok(pos) = window.outer_position()
+            && (pos.x <= -10_000 || pos.y <= -10_000)
+        {
+            window.set_outer_position(dpi::LogicalPosition::new(120.0_f64, 80.0_f64));
+        }
+        let size = window.inner_size();
+        if size.width < 200 || size.height < 200 {
+            let _ = window.request_inner_size(dpi::LogicalSize::new(1120.0_f64, 720.0_f64));
+        }
+        apply_native_window_icon(window);
+        if restore_maximized {
+            window.set_maximized(true);
+        }
         window.set_visible(true);
         window.focus_window();
         window.request_redraw();
     });
+    if applied {
+        ui.window().set_minimized(false);
+        ui.window().request_redraw();
+    }
+    applied
+}
+
+static RESTORE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn schedule_restore_chrome_retry(
+    weak: slint::Weak<MainWindow>,
+    restore_maximized: bool,
+    generation: u64,
+    remaining: u32,
+) {
+    if remaining == 0 {
+        return;
+    }
+    Timer::single_shot(Duration::from_millis(60), move || {
+        if RESTORE_GENERATION.load(std::sync::atomic::Ordering::Acquire) != generation {
+            return;
+        }
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        if !apply_restored_window_chrome(&ui, restore_maximized) {
+            schedule_restore_chrome_retry(weak, restore_maximized, generation, remaining - 1);
+        }
+    });
+}
+
+pub fn sync_recreated_window(ui: &MainWindow, restore_maximized: bool) {
+    let generation = RESTORE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+    if apply_restored_window_chrome(ui, restore_maximized) {
+        return;
+    }
+    // Retry for up to ~2.4s to handle slower wgpu/TDR window recreation after driver resets.
+    schedule_restore_chrome_retry(ui.as_weak(), restore_maximized, generation, 40);
+}
+
+fn restore(ui: &MainWindow, hidden_maximized: &Cell<bool>) {
+    let was_hidden = !ui.window().is_visible();
+    let restore_maximized = if was_hidden {
+        hidden_maximized.replace(false)
+    } else {
+        false
+    };
+    if let Err(error) = ui.show() {
+        crate::append_gui_crash_log(&format!("tray restore ui.show failed: {error}"));
+    }
+    ui.window().set_minimized(false);
+    sync_recreated_window(ui, restore_maximized);
     ui.window().request_redraw();
 }
 
@@ -305,7 +432,7 @@ pub fn bind(ui: &MainWindow) -> Desktop {
     let clear_tray = tray.clone();
     ui.global::<AppState>().on_clear_download_notices(move || {
         if let Some(tray) = clear_tray.as_ref().as_ref() {
-            tray.state.clear_notice();
+            tray.state().clear_notice();
         }
     });
     let weak = ui.as_weak();
@@ -318,7 +445,7 @@ pub fn bind(ui: &MainWindow) -> Desktop {
                 return;
             }
             if let Some(tray) = notice_tray.as_ref().as_ref() {
-                tray.state
+                tray.state()
                     .notices
                     .borrow_mut()
                     .add(Summary { completed, failed }, Instant::now());
@@ -332,6 +459,8 @@ pub fn bind(ui: &MainWindow) -> Desktop {
     let weak = ui.as_weak();
     let apply_tray = tray.clone();
     let informed = Cell::new(false);
+    let hidden_maximized = Rc::new(Cell::new(false));
+    let hide_maximized = hidden_maximized.clone();
     ui.global::<AppState>().on_close_apply(move |action| {
         let Some(ui) = weak.upgrade() else { return };
         let state = ui.global::<AppState>();
@@ -341,7 +470,7 @@ pub fn bind(ui: &MainWindow) -> Desktop {
         if action == "TRAY" {
             if let Some(tray) = apply_tray.as_ref().as_ref()
                 && tray
-                    .state
+                    .state()
                     .ensure(&format!("Stream Archive — {}", state.get_desktop_status()))
             {
                 if !informed.get() {
@@ -349,9 +478,10 @@ pub fn bind(ui: &MainWindow) -> Desktop {
                 }
                 // Explorer may restart while the information dialog is open.
                 if tray
-                    .state
+                    .state()
                     .ensure(&format!("Stream Archive — {}", state.get_desktop_status()))
                 {
+                    hide_maximized.set(ui.window().is_maximized());
                     match ui.hide() {
                         Ok(()) => {
                             informed.set(true);
@@ -405,6 +535,8 @@ pub fn bind(ui: &MainWindow) -> Desktop {
     let timer_tray = tray.clone();
     let timer = Timer::default();
     let mut last_poll = Instant::now();
+    let mut last_tray_sync = Instant::now();
+    let mut last_tooltip = String::from("Stream Archive");
     let mut recovery = super::TrayRecovery::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
         let Some(ui) = weak.upgrade() else { return };
@@ -412,26 +544,26 @@ pub fn bind(ui: &MainWindow) -> Desktop {
         let mut recover = false;
         while let Ok(event) = receiver.try_recv() {
             match event {
-                Event::Open => restore(&ui),
+                Event::Open => restore(&ui, &hidden_maximized),
                 Event::Exit => {
-                    restore(&ui);
+                    restore(&ui, &hidden_maximized);
                     state.invoke_desktop_exit();
                 }
                 Event::ShellRestart => {
                     recover = true;
                     if let Some(tray) = timer_tray.as_ref().as_ref() {
-                        tray.state.notice_visible.set(false);
-                        tray.state.notices.borrow_mut().closed();
+                        tray.state().notice_visible.set(false);
+                        tray.state().notices.borrow_mut().closed();
                     }
                 }
                 Event::NoticeClosed => {
                     if let Some(tray) = timer_tray.as_ref().as_ref() {
-                        tray.state.notice_visible.set(false);
-                        tray.state.notices.borrow_mut().closed();
+                        tray.state().notice_visible.set(false);
+                        tray.state().notices.borrow_mut().closed();
                     }
                 }
                 Event::History => {
-                    restore(&ui);
+                    restore(&ui, &hidden_maximized);
                     state.set_active_page("History".into());
                     let history = ui.global::<QueueHistoryState>();
                     history.set_history_view("VOD".into());
@@ -446,21 +578,20 @@ pub fn bind(ui: &MainWindow) -> Desktop {
         }
         if let Some(tray) = timer_tray.as_ref().as_ref() {
             if !state.get_download_notifications_enabled() || state.get_desktop_exit_pending() {
-                tray.state.clear_notice();
+                tray.state().clear_notice();
             } else {
-                let summary = tray.state.notices.borrow_mut().take(Instant::now());
+                let summary = tray.state().notices.borrow_mut().take(Instant::now());
                 if let Some(summary) = summary {
                     // Best effort only; never block downloads or show a modal error.
-                    if !tray
-                        .state
-                        .ensure(&format!("Stream Archive — {}", state.get_desktop_status()))
-                        || !tray.state.show_notice(summary)
-                    {
-                        tray.state.notices.borrow_mut().closed();
+                    let tip = format!("Stream Archive — {}", state.get_desktop_status());
+                    if !tray.state().ensure(&tip) || !tray.state().show_notice(summary) {
+                        tray.state().notices.borrow_mut().closed();
                         state.set_download_notifications_status(
                             "Windows 알림 전송 실패. History에서 결과를 확인하세요.".into(),
                         );
                     } else {
+                        last_tooltip = tip;
+                        last_tray_sync = Instant::now();
                         state.set_download_notifications_status("".into());
                     }
                 }
@@ -472,18 +603,31 @@ pub fn bind(ui: &MainWindow) -> Desktop {
                 state.invoke_desktop_poll();
             }
             if let Some(tray) = timer_tray.as_ref().as_ref() {
-                *tray.state.status.borrow_mut() = state.get_desktop_status().to_string();
-                let registered = tray
-                    .state
-                    .ensure(&format!("Stream Archive — {}", state.get_desktop_status()));
-                if !state.get_desktop_exit_pending()
-                    && recovery.should_restore(registered, ui.window().is_visible()) {
-                    restore(&ui);
-                    // A synchronous MessageBox here holds the Slint timer
-                    // callback open after show(), delaying the first repaint.
-                    state.set_desktop_recovery_message(
-                        "Windows 트레이를 복구하지 못해 창을 다시 표시했습니다. 녹화·다운로드는 계속 실행됩니다.".into());
-                    eprintln!("[DESKTOP:WARN] Windows tray registration failed repeatedly; restoring the window without a modal dialog");
+                let desktop_status = state.get_desktop_status().to_string();
+                *tray.state().status.borrow_mut() = desktop_status.clone();
+                let tip = format!("Stream Archive — {desktop_status}");
+                let visible = ui.window().is_visible();
+                let need_tray_ipc = recover
+                    || tip != last_tooltip
+                    || (!visible && last_tray_sync.elapsed() >= Duration::from_secs(20));
+                if need_tray_ipc {
+                    last_tray_sync = Instant::now();
+                    let registered = tray.state().ensure(&tip);
+                    if registered {
+                        last_tooltip = tip;
+                    }
+                    if !state.get_desktop_exit_pending()
+                        && recovery.should_restore(registered, visible)
+                    {
+                        restore(&ui, &hidden_maximized);
+                        // A synchronous MessageBox here holds the Slint timer
+                        // callback open after show(), delaying the first repaint.
+                        state.set_desktop_recovery_message(
+                            "Windows 트레이를 복구하지 못해 창을 다시 표시했습니다. 녹화·다운로드는 계속 실행됩니다.".into());
+                        crate::append_gui_crash_log(
+                            "[DESKTOP:WARN] Windows tray registration failed repeatedly; restoring window",
+                        );
+                    }
                 }
             }
         }

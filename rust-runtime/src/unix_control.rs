@@ -104,7 +104,11 @@ impl RuntimeControlServer {
                                 core.logs()
                                     .push(format!("[RUNTIME:WARN] local control accept failed: {error}"))
                                     .await;
-                                break;
+                                // EBADF (9 on Linux/macOS) means the listener socket is closed.
+                                if error.raw_os_error() == Some(9) {
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             }
                         }
                     }

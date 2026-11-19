@@ -70,17 +70,28 @@ fn row(volume: &StorageVolume) -> StorageRowView {
 }
 
 fn root_label(path: &str) -> String {
-    let bytes = path.as_bytes();
+    let normalized = path
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| path.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or_else(|| path.to_string());
+    let bytes = normalized.as_bytes();
     if bytes.len() >= 2 && bytes[1] == b':' {
         if bytes.len() >= 3 && matches!(bytes[2], b'\\' | b'/') {
-            return path[..3].to_string();
+            return normalized[..3].to_string();
         }
-        return path[..2].to_string();
+        return normalized[..2].to_string();
     }
-    if path.starts_with('/') {
+    if let Some(rest) = normalized.strip_prefix(r"\\") {
+        let mut parts = rest.split(['\\', '/']).filter(|part| !part.is_empty());
+        if let (Some(server), Some(share)) = (parts.next(), parts.next()) {
+            return format!(r"\\{server}\{share}");
+        }
+    }
+    if normalized.starts_with('/') {
         return "/".into();
     }
-    path.to_string()
+    normalized
 }
 
 pub fn threshold_label(threshold_gb: f64) -> String {
@@ -165,5 +176,18 @@ mod tests {
         assert_eq!(row.status, "확인 불가");
         assert_eq!(row.status_tone, "error");
         assert!(row.detail.contains("no existing parent"));
+    }
+
+    #[test]
+    fn root_label_strips_extended_prefix_and_shortens_unc_paths() {
+        assert_eq!(root_label(r"\\?\D:\LIVE\soop"), r"D:\");
+        assert_eq!(
+            root_label(r"\\nas\recordings\live\sub"),
+            r"\\nas\recordings"
+        );
+        assert_eq!(
+            root_label(r"\\?\UNC\nas\recordings\live"),
+            r"\\nas\recordings"
+        );
     }
 }

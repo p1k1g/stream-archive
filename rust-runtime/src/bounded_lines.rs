@@ -21,14 +21,25 @@ impl<R: AsyncRead + Unpin> BoundedLines<R> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn next_line(&mut self) -> io::Result<Option<String>> {
+        self.next_line_inner(false).await
+    }
+
+    /// Reads the next bounded line while replacing invalid UTF-8 bytes (e.g. Windows
+    /// CP949 console output from external media tools) instead of aborting the pipe.
+    pub(crate) async fn next_line_lossy(&mut self) -> io::Result<Option<String>> {
+        self.next_line_inner(true).await
+    }
+
+    async fn next_line_inner(&mut self, lossy: bool) -> io::Result<Option<String>> {
         loop {
             let bytes = self.reader.fill_buf().await?;
             if bytes.is_empty() {
                 if self.line.is_empty() && !self.overflow {
                     return Ok(None);
                 }
-                return self.finish().map(Some);
+                return self.finish(lossy).map(Some);
             }
             let newline = bytes.iter().position(|b| *b == b'\n');
             let count = newline.map_or(bytes.len(), |i| i + 1);
@@ -42,12 +53,12 @@ impl<R: AsyncRead + Unpin> BoundedLines<R> {
             }
             self.reader.consume(count);
             if newline.is_some() {
-                return self.finish().map(Some);
+                return self.finish(lossy).map(Some);
             }
         }
     }
 
-    fn finish(&mut self) -> io::Result<String> {
+    fn finish(&mut self, lossy: bool) -> io::Result<String> {
         if std::mem::take(&mut self.overflow) {
             return Ok(OMITTED.into());
         }
@@ -58,7 +69,11 @@ impl<R: AsyncRead + Unpin> BoundedLines<R> {
             }
         }
         let bytes = std::mem::take(&mut self.line);
-        String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        if lossy {
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        } else {
+            String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        }
     }
 }
 
@@ -125,6 +140,17 @@ mod tests {
         assert_eq!(
             lines.next_line().await.unwrap_err().kind(),
             io::ErrorKind::InvalidData
+        );
+
+        let mut lossy = BoundedLines::new(&b"ok\n\xb0\xa1\r\nafter\n"[..]);
+        assert_eq!(
+            lossy.next_line_lossy().await.unwrap().as_deref(),
+            Some("ok")
+        );
+        assert!(lossy.next_line_lossy().await.unwrap().is_some());
+        assert_eq!(
+            lossy.next_line_lossy().await.unwrap().as_deref(),
+            Some("after")
         );
     }
 }

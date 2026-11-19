@@ -257,7 +257,6 @@ component NavItem inherits Rectangle {
     accessible-action-default => { root.navigate(); }
     function navigate() {
         AppState.active-page = root.page;
-        if root.page == "LIVE" { AppState.storage-refresh(); }
         if root.page == "Diagnostics" {
             MaintenanceState.section = "Diagnostics";
             MaintenanceState.refresh();
@@ -498,12 +497,14 @@ export component MainWindow inherits Window {
                                 border-color: Theme.border;
                                 VerticalLayout {
                                     padding: 16px;
-                                    Text { text: AppState.live-loaded ? "현재 LIVE 런타임에 등록된 채널이 없습니다. 채널 탭에서 채널을 추가하세요." : "LIVE 상태를 확인하는 중..."; color: Theme.muted; }
+                                    Text {
+                                        text: !AppState.live-loaded ? "LIVE 상태를 확인하는 중..." : (AppState.live-channel-count == "0" || AppState.live-channel-count == "") ? "현재 LIVE 런타임에 등록된 채널이 없습니다. 채널 탭에서 채널을 추가하세요." : "선택한 필터 조건에 해당하는 채널이 없습니다.";
+                                        color: Theme.muted;
+                                    }
                                 }
                             }
                             for row in AppState.live-rows: Rectangle {
-                                visible: AppState.live-filter == "ALL" || (AppState.live-filter == "RECORDING" && row.status == "RECORDING") || (AppState.live-filter == "OFFLINE" && row.status != "RECORDING" && row.status != "ERROR" && row.status != "LOW_DISK" && row.status != "STALLED") || (AppState.live-filter == "ERROR" && (row.status == "ERROR" || row.status == "LOW_DISK" || row.status == "STALLED"));
-                                height: self.visible ? max(64px, live-content.min-height) : 0px;
+                                height: max(64px, live-content.min-height);
                                 vertical-stretch: 0;
                                 background: row.status == "RECORDING" ? Theme.raised : Theme.surface;
                                 border-radius: 10px;
@@ -604,7 +605,7 @@ export component MainWindow inherits Window {
                                         background: transparent;
                                         volume-content := HorizontalLayout {
                                             spacing: 12px;
-                                            Text { width: 36px; vertical-alignment: center; text: row.volume; color: Theme.text; font-size: 12px; font-weight: 600; }
+                                            Text { min-width: 36px; max-width: 140px; overflow: elide; horizontal-stretch: 0; vertical-alignment: center; text: row.volume; color: Theme.text; font-size: 12px; font-weight: 600; }
                                             Text { horizontal-stretch: 1; vertical-alignment: center; text: row.capacity + " · 사용률 " + row.used; color: Theme.secondary; font-size: 12px; wrap: word-wrap; }
                                             if row.detail != "": Text { vertical-alignment: center; text: row.detail; color: row.status-tone == "error" ? Theme.danger : Theme.warning; font-size: 12px; }
                                             StatusPill { text: row.status; tone: row.status-tone; boxed: false; }

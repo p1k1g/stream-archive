@@ -4,18 +4,52 @@ use slint::{Model, VecModel};
 use std::rc::Rc;
 use stream_archive_server::model::NativeWatcherStatus;
 
-#[derive(Default)]
 pub struct LiveModel {
     pub rows: Rc<VecModel<LiveChannelRow>>,
     pub latest: Option<NativeWatcherStatus>,
     pub resets: u64,
     pub row_updates: u64,
+    filter: String,
     visible: bool,
     dirty: bool,
     awaiting_snapshot: bool,
     generation: u64,
 }
+impl Default for LiveModel {
+    fn default() -> Self {
+        Self {
+            rows: Rc::new(VecModel::default()),
+            latest: None,
+            resets: 0,
+            row_updates: 0,
+            filter: "ALL".into(),
+            visible: false,
+            dirty: false,
+            awaiting_snapshot: false,
+            generation: 0,
+        }
+    }
+}
 impl LiveModel {
+    pub fn set_filter(&mut self, filter: &str) -> bool {
+        if self.filter == filter {
+            return false;
+        }
+        self.filter = filter.to_string();
+        self.dirty = true;
+        true
+    }
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+    pub fn matches_filter(filter: &str, status: &str) -> bool {
+        match filter {
+            "RECORDING" => status == "RECORDING",
+            "OFFLINE" => status == "OFFLINE",
+            "ERROR" => matches!(status, "ERROR" | "LOW_DISK" | "STALLED" | "AUTH"),
+            _ => true,
+        }
+    }
     pub fn set_visible(&mut self, visible: bool) -> bool {
         if self.visible == visible {
             return false;
@@ -243,5 +277,18 @@ mod tests {
         assert!(refresh.needs_request(false, false));
         refresh.requested();
         assert!(refresh.accepts(2));
+    }
+    #[test]
+    fn filter_matching_aligns_offline_and_error_counts() {
+        assert!(LiveModel::matches_filter("ALL", "PAUSED"));
+        assert!(LiveModel::matches_filter("RECORDING", "RECORDING"));
+        assert!(!LiveModel::matches_filter("RECORDING", "OFFLINE"));
+        assert!(LiveModel::matches_filter("OFFLINE", "OFFLINE"));
+        assert!(!LiveModel::matches_filter("OFFLINE", "PAUSED"));
+        assert!(!LiveModel::matches_filter("OFFLINE", "DISABLED"));
+        for status in ["ERROR", "LOW_DISK", "STALLED", "AUTH"] {
+            assert!(LiveModel::matches_filter("ERROR", status));
+        }
+        assert!(!LiveModel::matches_filter("ERROR", "OFFLINE"));
     }
 }

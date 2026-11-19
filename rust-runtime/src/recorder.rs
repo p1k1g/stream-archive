@@ -58,6 +58,12 @@ pub struct Recording {
     last_monitor: Instant,
 }
 
+impl Recording {
+    pub(crate) fn last_size(&self) -> u64 {
+        self.last_size
+    }
+}
+
 pub enum RecordingPoll {
     Running,
     Exited(Option<i32>),
@@ -158,6 +164,7 @@ impl RecorderManager {
         logs: LogBuffer,
         trace: crate::resource_trace::ResourceTrace,
     ) -> Self {
+        cleanup_stale_cookie_files();
         Self { logs, trace }
     }
 
@@ -227,6 +234,7 @@ impl RecorderManager {
             .max(10)
             .saturating_add(config.monitor_interval.max(1));
         let mut command = Command::new(&config.streamlink);
+        crate::platform_runtime::configure_utf8_cli(&mut command);
         if let Some(cookie) = cookie_file.as_ref() {
             command.arg("--http-cookies-file").arg(cookie.path());
         }
@@ -440,7 +448,7 @@ where
 {
     tokio::spawn(async move {
         let mut lines = crate::bounded_lines::BoundedLines::new(stream);
-        while let Ok(Some(line)) = lines.next_line().await {
+        while let Ok(Some(line)) = lines.next_line_lossy().await {
             let line = line.trim();
             if !line.is_empty() {
                 logs.push(format!("[RUST:STREAMLINK:{account}] {line}"))
@@ -450,30 +458,77 @@ where
     });
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct PreflightCacheKey {
+    streamlink: PathBuf,
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+    host: String,
+    needs_cookie_file: bool,
+}
+
+fn preflight_cache() -> &'static std::sync::Mutex<std::collections::HashSet<PreflightCacheKey>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashSet<PreflightCacheKey>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
 async fn preflight_plugin_input(
     config: &RecorderConfig,
     url: &str,
     needs_cookie_file: bool,
 ) -> Result<()> {
+    const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(10);
+    let cache_key = fs::metadata(&config.streamlink).ok().and_then(|meta| {
+        let host = reqwest::Url::parse(url)
+            .ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))?;
+        Some(PreflightCacheKey {
+            streamlink: config.streamlink.clone(),
+            modified: meta.modified().ok(),
+            len: meta.len(),
+            host,
+            needs_cookie_file,
+        })
+    });
+    if let Some(key) = cache_key.as_ref()
+        && preflight_cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(key)
+    {
+        return Ok(());
+    }
+
     let mut can_handle = Command::new(&config.streamlink);
     can_handle
         .arg("--can-handle-url")
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
     if let Some(parent) = config.streamlink.parent()
         && parent.is_dir()
     {
         can_handle.current_dir(parent);
     }
     configure_background_command(&mut can_handle);
-    let status = can_handle.status().await.with_context(|| {
-        format!(
-            "failed to inspect Streamlink plugin support: {}",
-            config.streamlink.display()
-        )
-    })?;
+    let status = tokio::time::timeout(PREFLIGHT_TIMEOUT, can_handle.status())
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "timed out inspecting Streamlink plugin support: {}",
+                config.streamlink.display()
+            )
+        })?
+        .with_context(|| {
+            format!(
+                "failed to inspect Streamlink plugin support: {}",
+                config.streamlink.display()
+            )
+        })?;
     if !status.success() {
         bail!(
             "현재 Streamlink이 이 플랫폼 URL을 처리할 수 없습니다. Streamlink을 최신 버전으로 업데이트하세요: {url}"
@@ -482,19 +537,27 @@ async fn preflight_plugin_input(
 
     if needs_cookie_file {
         let mut help = Command::new(&config.streamlink);
-        help.arg("--help").stdin(Stdio::null());
+        help.arg("--help").stdin(Stdio::null()).kill_on_drop(true);
         if let Some(parent) = config.streamlink.parent()
             && parent.is_dir()
         {
             help.current_dir(parent);
         }
         configure_background_command(&mut help);
-        let output = help.output().await.with_context(|| {
-            format!(
-                "failed to inspect Streamlink cookie-file support: {}",
-                config.streamlink.display()
-            )
-        })?;
+        let output = tokio::time::timeout(PREFLIGHT_TIMEOUT, help.output())
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "timed out inspecting Streamlink cookie-file support: {}",
+                    config.streamlink.display()
+                )
+            })?
+            .with_context(|| {
+                format!(
+                    "failed to inspect Streamlink cookie-file support: {}",
+                    config.streamlink.display()
+                )
+            })?;
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         if !text.contains("--http-cookies-file") {
@@ -503,7 +566,39 @@ async fn preflight_plugin_input(
             );
         }
     }
+    if let Some(key) = cache_key {
+        let mut guard = preflight_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() > 64 {
+            guard.clear();
+        }
+        guard.insert(key);
+    }
     Ok(())
+}
+
+fn cleanup_stale_cookie_files() {
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(Duration::from_secs(3600)) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !(name.starts_with("stream-archive-cookies-") && name.ends_with(".txt")) {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata()
+            && meta.is_file()
+            && let Ok(modified) = meta.modified()
+            && modified < cutoff
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> Result<CookieFile> {
@@ -538,9 +633,22 @@ fn write_cookie_file(cookies: &[crate::support::platform::live::HttpCookie]) -> 
             cookie.value
         ));
     }
-    fs::write(&path, text)
+    write_private_cookie_file(&path, text.as_bytes())
         .with_context(|| format!("failed to create Streamlink cookie file {}", path.display()))?;
     Ok(CookieFile(path))
+}
+
+fn write_private_cookie_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)
 }
 
 pub fn free_gb(path: &Path) -> Result<f64> {
