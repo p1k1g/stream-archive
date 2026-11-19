@@ -60,13 +60,19 @@ Windows에서는 내부 claim 파일에 Hidden 속성을 지정해 Explorer에�
 
 Windows 오프라인 유지보수 백업 전 `StreamArchive.exe`를 정상 종료합니다. 공식 Windows 패키지는 Native-only입니다. 개발용 또는 Unix 호환 headless 런타임을 따로 실행했다면 해당 소유자도 종료합니다. 관계없는 `streamlink`, `ffmpeg`, `yt-dlp` 프로세스를 종료하지 않습니다.
 
-repository root 또는 portable package root에서 실행합니다.
+portable package root에서 실행합니다.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1
+```cmd
+BACKUP_DATA.bat
 ```
 
-스크립트는 다음을 수행합니다.
+또는 `StreamArchive.exe`를 직접 호출합니다.
+
+```cmd
+StreamArchive.exe --backup
+```
+
+오프라인 백업 명령은 다음을 수행합니다.
 
 - `StreamArchive.exe` 또는 `stream-archive-server.exe` 실행 중에는 거부
 - SQLite header 검증
@@ -78,14 +84,14 @@ powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.
 
 보관 정책 지정:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1 -Keep 30 -RetentionDays 30
+```cmd
+BACKUP_DATA.bat --keep 30 --retention-days 30
 ```
 
 데이터 디렉터리 지정:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.ps1 -DataDir D:\StreamArchiveData
+```cmd
+BACKUP_DATA.bat --data-dir D:\StreamArchiveData
 ```
 
 <a id="restore"></a>
@@ -96,11 +102,11 @@ powershell -ExecutionPolicy Bypass -File .\maintenance\Backup-StreamArchiveData.
 
 오프라인 복구:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\maintenance\Restore-StreamArchiveData.ps1 -BackupFile ..\stream-archive-backups\stream_archive_manual_YYYYMMDD_HHMMSS.db
+```cmd
+RESTORE_DATA.bat --backup-file ..\stream-archive-backups\stream_archive_manual_YYYYMMDD_HHMMSS.db
 ```
 
-복구 스크립트는 다음을 수행합니다.
+복구 명령은 다음을 수행합니다.
 
 - `StreamArchive.exe` 또는 `stream-archive-server.exe` 실행 중에는 거부
 - SQLite header 검증
@@ -183,13 +189,13 @@ Phase 23.6부터 패키지 조립과 검증을 분리합니다.
 
 Windows:
 
-```powershell
-.\BUILD_PORTABLE.bat
-powershell -ExecutionPolicy Bypass -File .\maintenance\Verify-WindowsPackage.ps1 -Root .\dist\stream-archive -RequireCleanData
-powershell -ExecutionPolicy Bypass -File .\maintenance\New-WindowsReleaseArchive.ps1 -PackageRoot .\dist\stream-archive -OutputDir .\dist\release
+```cmd
+BUILD_PORTABLE.bat
+.\dist\stream-archive\StreamArchive.exe --verify-windows-package --root .\dist\stream-archive --require-clean-data
+.\dist\stream-archive\StreamArchive.exe --new-windows-release-archive --package-root .\dist\stream-archive --output-dir .\dist\release
 ```
 
-`New-WindowsReleaseArchive.ps1`도 ZIP을 열기 전에 같은 clean-data verifier를 수행합니다. 기존 DB를 보존한 로컬 `BUILD_PORTABLE.bat` 결과는 staging에서 런타임 데이터를 분리하기 전에는 공식 배포 형태의 압축 파일로 만들 수 없습니다. 운영 데이터 원본을 삭제하는 절차가 아닙니다. CI·배포 검증은 생성한 ZIP과 archive-level `.sha256`도 확인합니다.
+`--new-windows-release-archive`도 ZIP을 열기 전에 같은 clean-data verifier를 수행합니다. 기존 DB를 보존한 로컬 `BUILD_PORTABLE.bat` 결과는 staging에서 런타임 데이터를 분리하기 전에는 공식 배포 형태의 압축 파일로 만들 수 없습니다. 운영 데이터 원본을 삭제하는 절차가 아닙니다. CI·배포 검증은 생성한 ZIP과 archive-level `.sha256`도 확인합니다.
 
 Linux/macOS:
 

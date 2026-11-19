@@ -92,8 +92,8 @@ cargo clippy --locked --manifest-path rust-runtime/Cargo.toml --all-targets --al
 
 Runtime contracts:
 
-```powershell
-.\maintenance\Test-RuntimeContracts.ps1
+```bash
+cargo test --locked --manifest-path rust-runtime/Cargo.toml --test runtime_contracts
 ```
 
 ## Architecture boundary

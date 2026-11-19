@@ -24,19 +24,19 @@ Linux/macOS는 Phase 23.5에서 완성한 `stream-archive-cli` 기반 headless d
 
 ### 개발 / 로컬 실행
 
-```powershell
-.\RUN_DEV.bat
+```cmd
+RUN_DEV.bat
 ```
 
 ### Windows portable package
 
 Windows에서 실제 실행·테스트·배포에 사용하는 단일 빌드 진입점은 다음입니다.
 
-```powershell
-.\BUILD_PORTABLE.bat
+```cmd
+BUILD_PORTABLE.bat
 ```
 
-`BUILD_PORTABLE.bat`은 Slint Native GUI를 tracked `Cargo.lock`으로 release build합니다. GUI build가 shared Rust core를 dependency로 함께 컴파일하며, Windows 공식 package에는 별도의 headless server binary를 넣지 않습니다.
+`BUILD_PORTABLE.bat`은 Slint Native GUI를 tracked `Cargo.lock`으로 release build합니다. GUI build가 shared Rust core를 dependency로 함께 컴파일하며, Windows 공식 package에는 별도의 headless server binary나 PowerShell 스크립트를 넣지 않습니다.
 
 ```text
 rust-gui release build + shared Rust core dependency
@@ -59,17 +59,18 @@ BACKUP_DATA.bat
 RESTORE_DATA.bat
 RELEASE_INFO.txt
 SHA256SUMS.txt
+LICENSE
+THIRD_PARTY_NOTICES.md
 backend\
 data\
-maintenance\...
 docs\...
 ```
 
-`RUN.bat`과 `StreamArchive.exe`가 Windows 공식 portable package의 Native 실행 경로입니다. Windows release ZIP은 별도의 headless launcher/server를 포함하지 않습니다.
+`RUN.bat`과 `StreamArchive.exe`가 Windows 공식 portable package의 Native 실행 경로입니다. `BACKUP_DATA.bat`·`RESTORE_DATA.bat` 및 패키지/아카이브 검증(`--verify-windows-package`, `--new-windows-release-archive`)도 별도 PowerShell 스크립트 없이 `StreamArchive.exe` 내장 Rust CLI로 동작합니다. Windows release ZIP은 별도의 headless launcher/server를 포함하지 않습니다.
 
 별도의 `BUILD_RELEASE.bat` wrapper는 사용하지 않습니다. 컴파일 결과만 확인해야 하는 개발 작업에서는 Cargo를 직접 실행할 수 있습니다.
 
-```powershell
+```cmd
 cargo build --locked --release --manifest-path .\rust-runtime\Cargo.toml
 cargo build --locked --release --manifest-path .\rust-gui\Cargo.toml
 ```
@@ -107,11 +108,11 @@ Pull Request의 런타임 검증은 `.github/workflows/rust-runtime-check.yml`�
 - Windows / Linux / macOS Rust unit tests 및 재현 가능한 미디어 도구 subprocess 검증
 - Windows / Linux / macOS native compile 검증
 - Windows / Linux / macOS strict Clippy (`-D warnings`)
-- Windows 런타임 contract guard
+- Windows / Linux / macOS 런타임 contract guard (`cargo test --locked --manifest-path rust-runtime/Cargo.toml --test runtime_contracts`)
 - source archive에서 릴리스 metadata 생성 smoke (Windows/Linux/macOS)
-- Windows portable 패키지 및 ZIP build·검증
+- Windows portable 패키지 및 ZIP build·검증 (`StreamArchive.exe --verify-windows-package`, `--new-windows-release-archive`)
 - Linux/macOS TAR.GZ build, 패키지 내부·압축 파일 체크섬 및 새 압축 해제 CLI smoke
 
-릴리스 workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식입니다. GitHub Release/tag를 만들지 않고 검증한 Actions artifact만 업로드합니다. artifact job 전에 런타임·패키징 contract gate가 통과해야 하며, 업로드 전 정확한 1.0.2 metadata와 Windows EXE 버전도 확인합니다. artifact 보관 기간은 7일입니다.
+릴리스 workflow는 `.github/workflows/rust-runtime-release.yml`의 수동 `workflow_dispatch` 방식입니다. GitHub Release/tag를 만들지 않고 검증한 Actions artifact만 업로드합니다. artifact job 전에 런타임·패키징 contract gate가 통과해야 하며, 업로드 전 `Cargo.toml` 기준 metadata 버전과 Windows EXE `ProductVersion`도 동적으로 확인합니다. artifact 보관 기간은 7일입니다.
 
 PR CI는 각 플랫폼의 GitHub-hosted runner에서 `windows-x64`, `linux-x64`, `macos-arm64` 패키지를 실제 조립하고 체크섬·새 압축 해제 smoke까지 검증합니다. 실제 인증정보가 필요한 로그인·세션 smoke와 공개 판정은 자동 CI 범위 밖입니다. 남은 항목은 [1.0.2 공개 및 수동 검증 체크리스트](RELEASE_CHECKLIST_1_0_2.md)에서 관리합니다.

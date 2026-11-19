@@ -226,6 +226,9 @@ fn run_windows_event_loop(ui: &MainWindow) -> Result<(), slint::PlatformError> {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    if stream_archive_server::release_tooling::handle_native_cli_args() {
+        return Ok(());
+    }
     #[cfg(windows)]
     if std::env::var_os("SLINT_DESTROY_WINDOW_ON_HIDE").is_none() {
         // SAFETY: executed at startup on the main thread before any background threads are spawned.

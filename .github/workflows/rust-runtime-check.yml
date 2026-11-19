@@ -89,11 +89,14 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PYVERSION'
-          import json, subprocess
+          import json, re, subprocess
+          versions = {}
           for manifest, name in [('rust-runtime/Cargo.toml', 'stream-archive-server'), ('rust-gui/Cargo.toml', 'stream-archive-gui')]:
               data = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1', '--manifest-path', manifest]))
               package = next(p for p in data['packages'] if p['name'] == name)
-              assert package['version'] == '1.0.4', (name, package['version'])
+              assert re.fullmatch(r'\d+\.\d+\.\d+', package['version']), (name, package['version'])
+              versions[name] = package['version']
+          assert versions['stream-archive-server'] == versions['stream-archive-gui'], versions
           PYVERSION
 
       - name: Rust format check
@@ -202,8 +205,9 @@ jobs:
         if: ${{ matrix.platform != 'windows' }}
         shell: bash
         run: |
+          expected="$(python3 -c "import json, subprocess; d=json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1', '--manifest-path', 'rust-runtime/Cargo.toml'])); print(next(p['version'] for p in d['packages'] if p['name']=='stream-archive-server'))")"
           metadata="$(find dist -type f -path '*/unix-*/stream-archive/RELEASE_INFO.txt' -print -quit)"
-          grep -qx 'version=1.0.4' "$metadata"
+          grep -qx "version=$expected" "$metadata"
 
       - name: Reject corrupted Unix release archive
         if: ${{ matrix.platform != 'windows' }}
@@ -229,11 +233,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Enforce cross-platform core results
-        shell: powershell
+        shell: bash
         run: |
-          if ('${{ needs.core-check.result }}' -ne 'success') {
-            throw 'One or more Windows/Linux/macOS core checks failed.'
-          }
+          if [[ "${{ needs.core-check.result }}" != "success" ]]; then
+            echo 'One or more Windows/Linux/macOS core checks failed.' >&2
+            exit 1
+          fi
 
       - uses: actions/checkout@v4
         with:
@@ -251,268 +256,204 @@ jobs:
           cache-on-failure: true
 
       - name: Environment
-        shell: powershell
+        shell: bash
         run: |
-          Write-Host "runner_arch=${{ runner.arch }}"
+          echo "runner_arch=${{ runner.arch }}"
           rustc --version
-          rustc -vV | Select-String '^host:'
+          rustc -vV | grep '^host:'
           cargo --version
           git --version
 
       - name: Runtime contract guard
-        shell: powershell
-        run: ./maintenance/Test-RuntimeContracts.ps1
-
-      - name: Source archive metadata smoke
-        shell: powershell
-        run: |
-          $scratch = Join-Path $env:RUNNER_TEMP 'stream-archive-no-git'
-          if (Test-Path -LiteralPath $scratch) {
-            Remove-Item -LiteralPath $scratch -Recurse -Force
-          }
-          New-Item -ItemType Directory -Path $scratch | Out-Null
-          $output = Join-Path $scratch 'RELEASE_INFO.txt'
-
-          Push-Location $scratch
-          try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $output -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml"
-            if ($LASTEXITCODE -ne 0) {
-              throw "Write-ReleaseMetadata.ps1 child process failed with exit code $LASTEXITCODE"
-            }
-          }
-          finally {
-            Pop-Location
-          }
-
-          if (-not (Test-Path -LiteralPath $output -PathType Leaf)) {
-            throw 'source-archive metadata file was not created'
-          }
-          $commitLine = Get-Content -LiteralPath $output |
-            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-            Select-Object -First 1
-          if ($null -eq $commitLine -or $commitLine.TrimStart([char]0xFEFF).Trim() -ne 'commit=unknown') {
-            throw 'source-archive metadata should use commit=unknown outside a Git checkout'
-          }
-
-          $explicitRootOutput = Join-Path $scratch 'RELEASE_INFO_EXPLICIT_ROOT.txt'
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $explicitRootOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $scratch
-          if ($LASTEXITCODE -ne 0) {
-            throw "explicit non-Git RepositoryRoot probe failed with exit code $LASTEXITCODE"
-          }
-          $explicitRootCommit = Get-Content -LiteralPath $explicitRootOutput |
-            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-            Select-Object -First 1
-          if ($null -eq $explicitRootCommit -or $explicitRootCommit.TrimStart([char]0xFEFF).Trim() -ne 'commit=unknown') {
-            throw 'explicit non-Git RepositoryRoot must use commit=unknown even when GITHUB_SHA is present'
-          }
-
-          $checkoutOutput = Join-Path $scratch 'RELEASE_INFO_CHECKOUT.txt'
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $checkoutOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
-          if ($LASTEXITCODE -ne 0) {
-            throw "checkout release metadata probe failed with exit code $LASTEXITCODE"
-          }
-          $checkoutCommit = Get-Content -LiteralPath $checkoutOutput |
-            Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-            Select-Object -First 1
-          $expectedCommit = 'commit=' + $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
-          if ($null -eq $checkoutCommit -or $checkoutCommit.TrimStart([char]0xFEFF).Trim() -ne $expectedCommit) {
-            throw "checkout metadata must match GITHUB_SHA: expected $expectedCommit"
-          }
-
-          $workspaceDirtyProbe = Join-Path $env:GITHUB_WORKSPACE 'phase23-workspace-dirty-probe.tmp'
-          $workspaceDirtyOutput = Join-Path $scratch 'RELEASE_INFO_WORKSPACE_DIRTY.txt'
-          try {
-            Set-Content -LiteralPath $workspaceDirtyProbe -Value 'dirty GitHub workspace provenance probe' -Encoding ASCII
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $workspaceDirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot "$env:GITHUB_WORKSPACE"
-            if ($LASTEXITCODE -ne 0) {
-              throw "dirty GitHub workspace release metadata probe failed with exit code $LASTEXITCODE"
-            }
-            $workspaceDirtyCommit = Get-Content -LiteralPath $workspaceDirtyOutput |
-              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-              Select-Object -First 1
-            if ($null -eq $workspaceDirtyCommit -or $workspaceDirtyCommit.TrimStart([char]0xFEFF).Trim() -ne ($expectedCommit + '-dirty')) {
-              throw "trusted GitHub checkout dirty metadata must include the -dirty provenance marker"
-            }
-          }
-          finally {
-            Remove-Item -LiteralPath $workspaceDirtyProbe -Force -ErrorAction SilentlyContinue
-          }
-
-          $worktreeRoot = Join-Path $env:RUNNER_TEMP 'stream-archive-linked-worktree'
-          $worktreeBranch = 'phase23-ci-linked-worktree'
-          $worktreeOutput = Join-Path $scratch 'RELEASE_INFO_WORKTREE.txt'
-          $worktreeDirtyOutput = Join-Path $scratch 'RELEASE_INFO_WORKTREE_DIRTY.txt'
-          if (Test-Path -LiteralPath $worktreeRoot) {
-            Remove-Item -LiteralPath $worktreeRoot -Recurse -Force
-          }
-          if (git branch --list $worktreeBranch) {
-            git branch -D $worktreeBranch | Out-Null
-          }
-          try {
-            git worktree add -b $worktreeBranch $worktreeRoot HEAD
-            if ($LASTEXITCODE -ne 0) {
-              throw "linked worktree creation failed with exit code $LASTEXITCODE"
-            }
-
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $worktreeOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $worktreeRoot
-            if ($LASTEXITCODE -ne 0) {
-              throw "linked worktree release metadata probe failed with exit code $LASTEXITCODE"
-            }
-            $worktreeCommit = Get-Content -LiteralPath $worktreeOutput |
-              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-              Select-Object -First 1
-            $expectedWorktreeCommit = 'commit=' + ((git -C $worktreeRoot rev-parse --short=12 HEAD).Trim().ToLowerInvariant())
-            if ($null -eq $worktreeCommit -or $worktreeCommit.TrimStart([char]0xFEFF).Trim() -ne $expectedWorktreeCommit) {
-              throw "linked worktree metadata must resolve commondir refs: expected $expectedWorktreeCommit"
-            }
-
-            Set-Content -LiteralPath (Join-Path $worktreeRoot 'phase23-worktree-dirty-probe.tmp') -Value 'dirty linked worktree provenance probe' -Encoding ASCII
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\maintenance\Write-ReleaseMetadata.ps1" -OutputPath $worktreeDirtyOutput -ManifestPath "$env:GITHUB_WORKSPACE\rust-runtime\Cargo.toml" -RepositoryRoot $worktreeRoot
-            if ($LASTEXITCODE -ne 0) {
-              throw "dirty linked worktree release metadata probe failed with exit code $LASTEXITCODE"
-            }
-            $worktreeDirtyCommit = Get-Content -LiteralPath $worktreeDirtyOutput |
-              Where-Object { $_.TrimStart([char]0xFEFF).Trim().StartsWith('commit=') } |
-              Select-Object -First 1
-            if ($null -eq $worktreeDirtyCommit -or $worktreeDirtyCommit.TrimStart([char]0xFEFF).Trim() -ne ($expectedWorktreeCommit + '-dirty')) {
-              throw "linked worktree dirty metadata must include the -dirty provenance marker"
-            }
-          }
-          finally {
-            if (Test-Path -LiteralPath $worktreeRoot) {
-              git worktree remove --force $worktreeRoot | Out-Null
-            }
-            if (git branch --list $worktreeBranch) {
-              git branch -D $worktreeBranch | Out-Null
-            }
-          }
+        shell: bash
+        run: cargo test --locked --manifest-path ./rust-runtime/Cargo.toml --test runtime_contracts -- --nocapture
 
       - name: Windows portable package smoke
         shell: cmd
         run: BUILD_PORTABLE.bat
 
-      - name: Verify Windows portable package
-        shell: powershell
-        run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
-
-      - name: Verify Windows stable artifact version
-        shell: powershell
+      - name: Source archive metadata smoke
+        shell: bash
         run: |
-          $metadata = Get-Content -LiteralPath './dist/stream-archive/RELEASE_INFO.txt'
-          if ($metadata -notcontains 'version=1.0.4') { throw 'Expected stable artifact version=1.0.4' }
-          $version = (Get-Item './dist/stream-archive/StreamArchive.exe').VersionInfo.ProductVersion
-          if ($version -ne '1.0.4') { throw "Expected executable ProductVersion=1.0.4, got $version" }
+          set -euo pipefail
+          exe="$GITHUB_WORKSPACE/dist/stream-archive/StreamArchive.exe"
+          manifest="$GITHUB_WORKSPACE/rust-runtime/Cargo.toml"
+          scratch="$RUNNER_TEMP/stream-archive-no-git"
+          rm -rf "$scratch"
+          mkdir -p "$scratch"
+          output="$scratch/RELEASE_INFO.txt"
+
+          (
+            cd "$scratch"
+            "$exe" --write-release-metadata --output-path "$output" --manifest-path "$manifest"
+          )
+          if [[ ! -f "$output" ]]; then
+            echo 'source-archive metadata file was not created' >&2
+            exit 1
+          fi
+          if ! grep -qx 'commit=unknown' "$output"; then
+            echo 'source-archive metadata should use commit=unknown outside a Git checkout' >&2
+            exit 1
+          fi
+
+          explicit_root_output="$scratch/RELEASE_INFO_EXPLICIT_ROOT.txt"
+          "$exe" --write-release-metadata --output-path "$explicit_root_output" --manifest-path "$manifest" --repository-root "$scratch"
+          if ! grep -qx 'commit=unknown' "$explicit_root_output"; then
+            echo 'explicit non-Git RepositoryRoot must use commit=unknown even when GITHUB_SHA is present' >&2
+            exit 1
+          fi
+
+          checkout_output="$scratch/RELEASE_INFO_CHECKOUT.txt"
+          "$exe" --write-release-metadata --output-path "$checkout_output" --manifest-path "$manifest" --repository-root "$GITHUB_WORKSPACE"
+          expected_commit="commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-12 | tr '[:upper:]' '[:lower:]')"
+          if ! grep -qx "$expected_commit" "$checkout_output"; then
+            echo "checkout metadata must match GITHUB_SHA: expected $expected_commit" >&2
+            exit 1
+          fi
+
+          workspace_dirty_probe="$GITHUB_WORKSPACE/phase23-workspace-dirty-probe.tmp"
+          workspace_dirty_output="$scratch/RELEASE_INFO_WORKSPACE_DIRTY.txt"
+          trap 'rm -f "$workspace_dirty_probe"' EXIT
+          printf 'dirty GitHub workspace provenance probe\n' > "$workspace_dirty_probe"
+          "$exe" --write-release-metadata --output-path "$workspace_dirty_output" --manifest-path "$manifest" --repository-root "$GITHUB_WORKSPACE"
+          if ! grep -qx "${expected_commit}-dirty" "$workspace_dirty_output"; then
+            echo 'trusted GitHub checkout dirty metadata must include the -dirty provenance marker' >&2
+            exit 1
+          fi
+          rm -f "$workspace_dirty_probe"
+          trap - EXIT
+
+          worktree_root="$RUNNER_TEMP/stream-archive-linked-worktree"
+          worktree_branch='phase23-ci-linked-worktree'
+          worktree_output="$scratch/RELEASE_INFO_WORKTREE.txt"
+          worktree_dirty_output="$scratch/RELEASE_INFO_WORKTREE_DIRTY.txt"
+          rm -rf "$worktree_root"
+          if git show-ref --verify --quiet "refs/heads/$worktree_branch"; then
+            git branch -D "$worktree_branch" >/dev/null
+          fi
+          cleanup_worktree() {
+            if [[ -d "$worktree_root" ]]; then
+              git worktree remove --force "$worktree_root" >/dev/null 2>&1 || true
+            fi
+            if git show-ref --verify --quiet "refs/heads/$worktree_branch"; then
+              git branch -D "$worktree_branch" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_worktree EXIT
+          git worktree add -b "$worktree_branch" "$worktree_root" HEAD
+          "$exe" --write-release-metadata --output-path "$worktree_output" --manifest-path "$manifest" --repository-root "$worktree_root"
+          expected_worktree_commit="commit=$(git -C "$worktree_root" rev-parse --short=12 HEAD | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
+          if ! grep -qx "$expected_worktree_commit" "$worktree_output"; then
+            echo "linked worktree metadata must resolve commondir refs: expected $expected_worktree_commit" >&2
+            exit 1
+          fi
+          printf 'dirty linked worktree provenance probe\n' > "$worktree_root/phase23-worktree-dirty-probe.tmp"
+          "$exe" --write-release-metadata --output-path "$worktree_dirty_output" --manifest-path "$manifest" --repository-root "$worktree_root"
+          if ! grep -qx "${expected_worktree_commit}-dirty" "$worktree_dirty_output"; then
+            echo 'linked worktree dirty metadata must include the -dirty provenance marker' >&2
+            exit 1
+          fi
+
+      - name: Verify Windows portable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./dist/stream-archive/StreamArchive.exe --verify-windows-package --root ./dist/stream-archive --require-clean-data
+          expected="$(python3 -c "import json, subprocess; d=json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1', '--manifest-path', 'rust-runtime/Cargo.toml'])); print(next(p['version'] for p in d['packages'] if p['name']=='stream-archive-server'))")"
+          actual="$(./dist/stream-archive/StreamArchive.exe --version | tr -d '\r')"
+          [[ "$actual" == "Stream Archive $expected" ]] || { echo "Unexpected --version output: $actual (expected Stream Archive $expected)" >&2; exit 1; }
 
       - name: Windows offline backup restore smoke
-        shell: powershell
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          $scratch = Join-Path $env:RUNNER_TEMP 'Stream Archive RC backup 테스트'
-          $data = Join-Path $scratch 'data 한글'
-          $backups = Join-Path $scratch 'backups 한글'
-          $packageSafety = './dist/stream-archive-backups'
-          Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item -LiteralPath $packageSafety -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $data -Force | Out-Null
-          New-Item -ItemType Directory -Path $backups -Force | Out-Null
-          try {
-            $db = Join-Path $data 'stream-archive.db'
-            $header = [System.Text.Encoding]::ASCII.GetBytes('SQLite format 3' + [char]0)
-            $bytes = New-Object byte[] 4096
-            [Array]::Copy($header, 0, $bytes, 0, $header.Length)
-            [System.IO.File]::WriteAllBytes($db, $bytes)
-
-            & './dist/stream-archive/maintenance/Backup-StreamArchiveData.ps1' -DataDir $data -BackupDir $backups -Keep 5 -RetentionDays 30
-            $backup = Get-ChildItem -LiteralPath $backups -Filter 'stream_archive_*.db' -File | Select-Object -First 1
-            if ($null -eq $backup -or -not (Test-Path -LiteralPath "$($backup.FullName).json" -PathType Leaf)) {
-              throw 'Windows RC backup smoke did not create backup metadata.'
-            }
-            $backupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $backup.FullName).Hash
-
-            $bytes[32] = 1
-            [System.IO.File]::WriteAllBytes($db, $bytes)
-            & './dist/stream-archive/maintenance/Restore-StreamArchiveData.ps1' -BackupFile $backup.FullName -DataDir $data
-            $restoredHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $db).Hash
-            if ($restoredHash -ne $backupHash) {
-              throw 'Windows RC restore did not restore the backed-up database bytes.'
-            }
-
-            [System.IO.File]::AppendAllText($backup.FullName, 'corruption')
-            $rejected = $false
-            try {
-              & './dist/stream-archive/maintenance/Restore-StreamArchiveData.ps1' -BackupFile $backup.FullName -DataDir $data
-            }
-            catch {
-              $rejected = $true
-            }
-            if (-not $rejected) {
-              throw 'Windows restore accepted a backup whose SHA256 no longer matched metadata.'
-            }
+          set -euo pipefail
+          scratch="$RUNNER_TEMP/Stream Archive RC backup 테스트"
+          data="$scratch/data 한글"
+          backups="$scratch/backups 한글"
+          package_safety="./dist/stream-archive-backups"
+          cleanup() {
+            rm -rf "$scratch" "$package_safety"
           }
-          finally {
-            Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $packageSafety -Recurse -Force -ErrorAction SilentlyContinue
-          }
+          trap cleanup EXIT
+          cleanup
+          mkdir -p "$data" "$backups"
+          db="$data/stream-archive.db"
+          python3 - "$db" <<'PYDB'
+          import sys
+          buf = bytearray(4096)
+          buf[:16] = b'SQLite format 3\x00'
+          with open(sys.argv[1], 'wb') as f:
+              f.write(buf)
+          PYDB
+
+          ./dist/stream-archive/StreamArchive.exe --backup --data-dir "$data" --backup-dir "$backups" --keep 5 --retention-days 30
+          backup="$(find "$backups" -maxdepth 1 -type f -name 'stream_archive_*.db' -print -quit)"
+          if [[ -z "$backup" || ! -f "$backup.json" ]]; then
+            echo 'Windows RC backup smoke did not create backup metadata.' >&2
+            exit 1
+          fi
+          backup_hash="$(python3 -c "import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest())" "$backup")"
+
+          python3 - "$db" <<'PYMUT'
+          import sys
+          with open(sys.argv[1], 'r+b') as f:
+              f.seek(32)
+              f.write(b'\x01')
+          PYMUT
+          ./dist/stream-archive/StreamArchive.exe --restore --backup-file "$backup" --data-dir "$data"
+          restored_hash="$(python3 -c "import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest())" "$db")"
+          if [[ "$restored_hash" != "$backup_hash" ]]; then
+            echo 'Windows RC restore did not restore the backed-up database bytes.' >&2
+            exit 1
+          fi
+
+          printf 'corruption' >> "$backup"
+          if ./dist/stream-archive/StreamArchive.exe --restore --backup-file "$backup" --data-dir "$data"; then
+            echo 'Windows restore accepted a backup whose SHA256 no longer matched metadata.' >&2
+            exit 1
+          fi
 
       - name: Reject runtime data from Windows release archives
-        shell: powershell
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          $probe = './dist/stream-archive/data/release-leak-probe.db'
-          $rejected = $false
-          try {
-            Set-Content -LiteralPath $probe -Value 'runtime state must never be archived' -Encoding ASCII
-            try {
-              ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/reject-probe'
-            }
-            catch {
-              $rejected = $true
-            }
+          set -euo pipefail
+          probe='./dist/stream-archive/data/release-leak-probe.db'
+          cleanup() {
+            rm -f "$probe"
+            rm -rf './dist/reject-probe'
           }
-          finally {
-            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath './dist/reject-probe' -Recurse -Force -ErrorAction SilentlyContinue
-          }
-          if (-not $rejected) {
-            throw 'Windows release archiver accepted non-empty runtime data.'
-          }
+          trap cleanup EXIT
+          printf 'runtime state must never be archived\n' > "$probe"
+          if ./dist/stream-archive/StreamArchive.exe --new-windows-release-archive --package-root './dist/stream-archive' --output-dir './dist/reject-probe'; then
+            echo 'Windows release archiver accepted non-empty runtime data.' >&2
+            exit 1
+          fi
 
       - name: Build Windows release archive
-        shell: powershell
-        run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
+        shell: bash
+        run: ./dist/stream-archive/StreamArchive.exe --new-windows-release-archive --package-root './dist/stream-archive' --output-dir './dist/release'
 
       - name: Reject corrupted Windows release archive
-        shell: powershell
+        shell: bash
         run: |
-          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
-          $probe = Join-Path $env:RUNNER_TEMP $archive.Name
-          $probeChecksum = "$probe.sha256"
-          Copy-Item -LiteralPath $archive.FullName -Destination $probe -Force
-          Copy-Item -LiteralPath "$($archive.FullName).sha256" -Destination $probeChecksum -Force
-          [System.IO.File]::AppendAllText($probe, 'phase23.7 checksum corruption probe')
-          $rejected = $false
-          try {
-            ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $probe -ArchiveChecksumPath $probeChecksum
-          }
-          catch {
-            $rejected = $true
-          }
-          finally {
-            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $probeChecksum -Force -ErrorAction SilentlyContinue
-          }
-          if (-not $rejected) {
-            throw 'Corrupted Windows release archive was accepted.'
-          }
+          set -euo pipefail
+          archive="$(find ./dist/release -maxdepth 1 -type f -name 'stream-archive-windows-*.zip' -print -quit)"
+          [[ -n "$archive" ]] || { echo 'Windows release archive was not created.' >&2; exit 1; }
+          probe="$RUNNER_TEMP/$(basename "$archive")"
+          probe_checksum="$probe.sha256"
+          trap 'rm -f "$probe" "$probe_checksum"' EXIT
+          cp "$archive" "$probe"
+          cp "$archive.sha256" "$probe_checksum"
+          printf 'phase23.7 checksum corruption probe' >> "$probe"
+          if ./dist/stream-archive/StreamArchive.exe --verify-windows-package --root './dist/stream-archive' --require-clean-data --archive-path "$probe" --archive-checksum-path "$probe_checksum"; then
+            echo 'Corrupted Windows release archive was accepted.' >&2
+            exit 1
+          fi
 
       - name: Verify Windows release archive
-        shell: powershell
+        shell: bash
         run: |
-          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
-          ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $archive.FullName -ArchiveChecksumPath "$($archive.FullName).sha256"
+          set -euo pipefail
+          archive="$(find ./dist/release -maxdepth 1 -type f -name 'stream-archive-windows-*.zip' -print -quit)"
+          [[ -n "$archive" ]] || { echo 'Windows release archive was not created.' >&2; exit 1; }
+          ./dist/stream-archive/StreamArchive.exe --verify-windows-package --root './dist/stream-archive' --require-clean-data --archive-path "$archive" --archive-checksum-path "$archive.sha256"

@@ -29,6 +29,9 @@ fn main() -> ExitCode {
     if let Some(code) = stream_archive_server::security::kick_secret_worker_entry() {
         return ExitCode::from(code as u8);
     }
+    if stream_archive_server::release_tooling::handle_release_tooling_args() {
+        return ExitCode::SUCCESS;
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

@@ -155,7 +155,7 @@ KICK 구독 VOD의 `session_token`은 **설정 → 일반**에 입력하고 저�
 
 - **설정 → 백업 / 복원**에서 백업 정책, 백업 생성·무결성 확인·Restore를 관리합니다.
 - 기본 백업 폴더는 portable 패키지 밖의 형제 디렉터리 `stream-archive-backups`입니다. `STREAM_ARCHIVE_BACKUP_DIR`로 고정할 수 있습니다.
-- Windows 오프라인 백업은 앱을 종료한 뒤 `BACKUP_DATA.bat`를 사용합니다. 복구 명령과 안전 조건은 [운영 가이드](docs/OPERATIONS.md)를 따릅니다.
+- Windows 오프라인 백업·복구는 앱을 종료한 뒤 `BACKUP_DATA.bat` / `RESTORE_DATA.bat`(또는 `StreamArchive.exe --backup` / `--restore`)를 사용합니다. 별도 PowerShell 스크립트 없이 Rust 실행 파일이 직접 처리하며, 상세 명령과 안전 조건은 [운영 가이드](docs/OPERATIONS.md)를 따릅니다.
 - 업그레이드 전 정상 종료·백업·무결성 확인을 수행하고 이전 패키지를 보관합니다. 새 패키지는 별도 폴더에 풀고 기존 데이터 경로를 유지합니다.
 - 새 버전 실행 후 설정·Channels·Queue·History를 확인하고 재실행 후에도 유지되는지 확인합니다.
 - rollback 시 임의 schema downgrade 호환성을 가정하지 않습니다. 실제 DB 상태에서 필요한 경우에만 검증한 업그레이드 전 백업을 복구합니다.
@@ -187,7 +187,7 @@ Windows는 CurrentUser DPAPI, Linux는 `secret-tool`을 통한 Secret Service, m
 | [개발 이력 및 로드맵](docs/ROADMAP.md) | Phase별 작업 이력·공개 준비 상태 |
 | [기여 안내](CONTRIBUTING.md) | 개발 참여 및 PR 작성 |
 
-Windows Slint UI와 Unix CLI·headless는 공통 `StreamArchiveCore`를 사용합니다. 개발 과정에서 AI-assisted development를 활용하며 자동 테스트와 실제 환경 검증을 병행합니다. 상세 내부 구조와 완료한 Phase 이력은 위 개발 문서로 분리했습니다.
+Windows Slint UI와 Unix CLI·headless는 공통 `StreamArchiveCore`를 사용하며, Windows 오프라인 백업·복구·패키징 검증과 런타임 계약 테스트(`runtime_contracts`)까지 모두 PowerShell 스크립트 없이 Rust로 통합 관리합니다. 개발 과정에서 AI-assisted development를 활용하며 자동 테스트와 실제 환경 검증을 병행합니다. 상세 내부 구조와 완료한 Phase 이력은 위 개발 문서로 분리했습니다.
 
 ## 프로젝트 안내 및 라이선스
 
