@@ -199,6 +199,7 @@ pub struct NativeWatcherManager {
     trace: crate::resource_trace::ResourceTrace,
     backend_dir: PathBuf,
     logs: LogBuffer,
+    lifecycle: Mutex<()>,
     runtime: Mutex<Runtime>,
     snapshot: Arc<RwLock<WatcherStatus>>,
 }
@@ -216,6 +217,7 @@ impl NativeWatcherManager {
             trace,
             backend_dir,
             logs,
+            lifecycle: Mutex::new(()),
             runtime: Mutex::new(Runtime {
                 task: None,
                 stop_tx: None,
@@ -226,6 +228,7 @@ impl NativeWatcherManager {
     }
 
     pub async fn start(&self) -> Result<WatcherStatus> {
+        let _lifecycle = self.lifecycle.lock().await;
         let mut runtime = self.runtime.lock().await;
         if runtime
             .task
@@ -320,6 +323,7 @@ impl NativeWatcherManager {
     }
 
     pub async fn stop(&self) -> Result<WatcherStatus> {
+        let _lifecycle = self.lifecycle.lock().await;
         let (stop_tx, task) = {
             let mut runtime = self.runtime.lock().await;
             runtime.command_tx = None;
@@ -1598,7 +1602,13 @@ mod tests {
     #[test]
     fn watcher_initial_and_reload_snapshots_observe_external_secret_changes() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("streamlink.exe"), b"test fixture").unwrap();
+        let streamlink_fixture = dir.path().join("streamlink.exe");
+        fs::write(&streamlink_fixture, b"test fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&streamlink_fixture, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let path = dir.path().join("test.db");
         let owner = store::Store::open(path.clone()).unwrap();
         owner

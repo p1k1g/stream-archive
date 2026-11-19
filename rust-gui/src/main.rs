@@ -61,25 +61,31 @@ fn install_panic_log_hook() {
 
 #[cfg(windows)]
 fn run_windows_event_loop(ui: &MainWindow) -> Result<(), slint::PlatformError> {
+    use std::{cell::Cell, rc::Rc};
+
     const MAX_RECOVERY_ATTEMPTS: u32 = 5;
+    const DEFERRED_RESTORE_ATTEMPTS: u32 = 10;
     const RECOVERY_RESET_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
     let mut consecutive_errors = 0u32;
     let mut last_error_at: Option<std::time::Instant> = None;
-    let mut in_tray_standby = false;
+    let in_tray_standby = Rc::new(Cell::new(false));
     let mut saved_maximized = false;
+    let deferred_restore_timer = Rc::new(slint::Timer::default());
 
     loop {
         match slint::run_event_loop_until_quit() {
             Ok(()) => return Ok(()),
             Err(err) => {
+                deferred_restore_timer.stop();
                 if last_error_at.is_some_and(|t| t.elapsed() > RECOVERY_RESET_WINDOW) {
                     consecutive_errors = 0;
-                    in_tray_standby = false;
+                    in_tray_standby.set(false);
                 }
                 last_error_at = Some(std::time::Instant::now());
                 consecutive_errors += 1;
+                let standby_now = in_tray_standby.get();
                 append_gui_crash_log(&format!(
-                    "event loop PlatformError (attempt {consecutive_errors}, standby={in_tray_standby}): {err}"
+                    "event loop PlatformError (attempt {consecutive_errors}, standby={standby_now}): {err}"
                 ));
                 if ui.global::<AppState>().get_desktop_exit_pending() {
                     return Err(err);
@@ -99,7 +105,7 @@ fn run_windows_event_loop(ui: &MainWindow) -> Result<(), slint::PlatformError> {
                     }
                 };
 
-                if in_tray_standby {
+                if standby_now {
                     if consecutive_errors > MAX_RECOVERY_ATTEMPTS {
                         return Err(err);
                     }
@@ -110,21 +116,103 @@ fn run_windows_event_loop(ui: &MainWindow) -> Result<(), slint::PlatformError> {
                 }
 
                 if consecutive_errors <= MAX_RECOVERY_ATTEMPTS {
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        500 * u64::from(consecutive_errors),
-                    ));
                     if was_visible || !hide_ok {
-                        if let Err(show_err) = ui.show() {
-                            append_gui_crash_log(&format!("recovery ui.show failed: {show_err}"));
-                        } else {
-                            desktop::sync_recreated_window(ui, saved_maximized);
+                        let mut restored = false;
+                        for show_attempt in 1..=MAX_RECOVERY_ATTEMPTS {
+                            if ui.global::<AppState>().get_desktop_exit_pending() {
+                                return Err(err);
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                500 * u64::from(show_attempt),
+                            ));
+                            match ui.show() {
+                                Ok(()) => {
+                                    desktop::sync_recreated_window(ui, saved_maximized);
+                                    restored = true;
+                                    break;
+                                }
+                                Err(show_err) => {
+                                    append_gui_crash_log(&format!(
+                                        "recovery ui.show failed (attempt {show_attempt}/{MAX_RECOVERY_ATTEMPTS}): {show_err}"
+                                    ));
+                                    let _ = ui.hide();
+                                }
+                            }
                         }
+                        if !restored {
+                            // GPU driver may still be mid-reinstall; keep the event loop alive
+                            // in tray standby and keep retrying window recreation on a timer so
+                            // previously visible windows (even without a tray icon) still recover.
+                            in_tray_standby.set(true);
+                            consecutive_errors = 0;
+                            ui.global::<AppState>().set_desktop_recovery_message(
+                                "그래픽 장치 재설정으로 창 복구를 대기 중입니다. 드라이버 복구 후 자동으로 다시 열립니다."
+                                    .into(),
+                            );
+                            let weak = ui.as_weak();
+                            let standby_flag = in_tray_standby.clone();
+                            let timer_weak = Rc::downgrade(&deferred_restore_timer);
+                            let remaining = Rc::new(Cell::new(DEFERRED_RESTORE_ATTEMPTS));
+                            let restore_maximized = saved_maximized;
+                            deferred_restore_timer.start(
+                                slint::TimerMode::Repeated,
+                                std::time::Duration::from_secs(3),
+                                move || {
+                                    let stop_timer = || {
+                                        if let Some(timer) = timer_weak.upgrade() {
+                                            timer.stop();
+                                        }
+                                    };
+                                    let Some(ui) = weak.upgrade() else {
+                                        stop_timer();
+                                        return;
+                                    };
+                                    if ui.global::<AppState>().get_desktop_exit_pending()
+                                        || ui.window().is_visible()
+                                    {
+                                        standby_flag.set(false);
+                                        stop_timer();
+                                        return;
+                                    }
+                                    let left = remaining.get();
+                                    if left == 0 {
+                                        stop_timer();
+                                        return;
+                                    }
+                                    remaining.set(left - 1);
+                                    match ui.show() {
+                                        Ok(()) => {
+                                            standby_flag.set(false);
+                                            stop_timer();
+                                            desktop::sync_recreated_window(&ui, restore_maximized);
+                                        }
+                                        Err(show_err) => {
+                                            append_gui_crash_log(&format!(
+                                                "deferred recovery ui.show failed (remaining {left}): {show_err}"
+                                            ));
+                                            let _ = ui.hide();
+                                            if left == 1 {
+                                                ui.global::<AppState>().set_desktop_recovery_message(
+                                                    "그래픽 장치 재설정으로 창을 복구 대기 상태로 전환했습니다. 트레이 아이콘을 클릭해 다시 열어주세요."
+                                                        .into(),
+                                                );
+                                                stop_timer();
+                                            }
+                                        }
+                                    }
+                                },
+                            );
+                        }
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            500 * u64::from(consecutive_errors),
+                        ));
                     }
                 } else {
                     // Window creation/rendering kept failing (e.g. GPU driver mid-reinstall).
                     // Enter hidden tray standby so active recordings continue uninterrupted;
                     // if the hidden loop itself fails repeatedly, the in_tray_standby guard exits.
-                    in_tray_standby = true;
+                    in_tray_standby.set(true);
                     consecutive_errors = 0;
                     std::thread::sleep(std::time::Duration::from_millis(1_000));
                     ui.global::<AppState>().set_desktop_recovery_message(
