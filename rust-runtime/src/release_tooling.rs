@@ -559,7 +559,8 @@ fn offline_restore_inner(
         let raw = fs::read_to_string(&metadata_path).with_context(|| {
             format!("failed to read backup metadata {}", metadata_path.display())
         })?;
-        let metadata: serde_json::Value = serde_json::from_str(&raw).with_context(|| {
+        let trimmed = raw.trim_start_matches('\u{feff}');
+        let metadata: serde_json::Value = serde_json::from_str(trimmed).with_context(|| {
             format!(
                 "failed to parse backup metadata {}",
                 metadata_path.display()
@@ -1299,6 +1300,7 @@ pub fn verify_windows_package(
             .lines()
             .next()
             .unwrap_or_default()
+            .trim_start_matches('\u{feff}')
             .to_string();
         let caps = RE_SHA256_LINE
             .captures(&first_line)
@@ -1402,6 +1404,7 @@ fn verify_windows_package_tree(package_root: &Path, clean_data: bool) -> Result<
 
     let mut expected_sums = BTreeMap::new();
     for line in fs::read_to_string(resolved.join("SHA256SUMS.txt"))?.lines() {
+        let line = line.trim_start_matches('\u{feff}');
         if let Some(caps) = RE_SHA256_LINE.captures(line) {
             expected_sums.insert(caps[2].trim().to_string(), caps[1].to_ascii_lowercase());
         }
@@ -1871,6 +1874,47 @@ mod tests {
         let mut corrupted = fs::read(&backup_path).unwrap();
         corrupted.extend_from_slice(b"corruption");
         fs::write(&backup_path, &corrupted).unwrap();
+        let err = offline_restore_inner(&backup_path, &data_dir, Some(&backup_dir), false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("SHA256"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn offline_restore_accepts_bom_prefixed_legacy_powershell_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("data");
+        let backup_dir = dir.path().join("backups");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&backup_dir).unwrap();
+
+        let backup_path = backup_dir.join("stream_archive_manual_20261119_120000.db");
+        let mut original = vec![0u8; 4096];
+        original[..16].copy_from_slice(SQLITE_HEADER);
+        original[24] = 77;
+        fs::write(&backup_path, &original).unwrap();
+        let expected_hash = sha256_file_hex(&backup_path).unwrap();
+
+        // Simulate legacy Windows PowerShell `Set-Content -Encoding UTF8` (UTF-8 BOM + CRLF).
+        let legacy_json = format!(
+            "\u{feff}{{\r\n  \"created_at\": \"2026-11-19T12:00:00+09:00\",\r\n  \"source\": \"C:\\\\StreamArchive\\\\data\\\\stream-archive.db\",\r\n  \"sha256\": \"{}\",\r\n  \"size_bytes\": 4096,\r\n  \"kind\": \"manual\",\r\n  \"version\": 1\r\n}}\r\n",
+            expected_hash.to_ascii_uppercase()
+        );
+        let meta_path = PathBuf::from(format!("{}.json", backup_path.display()));
+        fs::write(&meta_path, legacy_json.as_bytes()).unwrap();
+
+        let target_db = data_dir.join("stream-archive.db");
+        let mut modified = original.clone();
+        modified[24] = 88;
+        fs::write(&target_db, &modified).unwrap();
+
+        offline_restore_inner(&backup_path, &data_dir, Some(&backup_dir), false).unwrap();
+        assert_eq!(sha256_file_hex(&target_db).unwrap(), expected_hash);
+
+        // Tampering with the backup must still fail SHA256 validation under BOM-prefixed metadata.
+        let mut tampered = original;
+        tampered[24] = 99;
+        fs::write(&backup_path, &tampered).unwrap();
         let err = offline_restore_inner(&backup_path, &data_dir, Some(&backup_dir), false)
             .unwrap_err()
             .to_string();
