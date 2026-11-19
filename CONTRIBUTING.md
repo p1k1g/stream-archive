@@ -37,10 +37,10 @@ Contributions must preserve these project-level rules unless the PR explicitly c
 
 ## Tests
 
-At minimum, run the checks relevant to your change. The current Windows validation includes:
+At minimum, run the checks relevant to your change. The current validation includes:
 
-```powershell
-./maintenance/Test-RuntimeContracts.ps1
+```bash
+cargo test --locked --manifest-path rust-runtime/Cargo.toml --test runtime_contracts
 cargo fmt --manifest-path rust-runtime/Cargo.toml -- --check
 cargo test --locked --manifest-path rust-runtime/Cargo.toml
 cargo check --locked --manifest-path rust-runtime/Cargo.toml

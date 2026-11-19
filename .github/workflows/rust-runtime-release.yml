@@ -19,20 +19,30 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies and targets
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust-runtime -> target
+          cache-on-failure: true
+
       - name: Stable release version contract
         shell: bash
         run: |
           python3 - <<'PYVERSION'
-          import json, subprocess
+          import json, re, subprocess
+          versions = {}
           for manifest, name in [('rust-runtime/Cargo.toml', 'stream-archive-server'), ('rust-gui/Cargo.toml', 'stream-archive-gui')]:
               data = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1', '--manifest-path', manifest]))
               package = next(p for p in data['packages'] if p['name'] == name)
-              assert package['version'] == '1.0.4', (name, package['version'])
+              assert re.fullmatch(r'\d+\.\d+\.\d+', package['version']), (name, package['version'])
+              versions[name] = package['version']
+          assert versions['stream-archive-server'] == versions['stream-archive-gui'], versions
           PYVERSION
 
       - name: Validate release/runtime contracts
-        shell: powershell
-        run: ./maintenance/Test-RuntimeContracts.ps1
+        shell: bash
+        run: cargo test --locked --manifest-path ./rust-runtime/Cargo.toml --test runtime_contracts -- --nocapture
 
   windows-package:
     name: windows-package
@@ -56,21 +66,21 @@ jobs:
           cache-on-failure: true
 
       - name: Environment
-        shell: powershell
+        shell: bash
         run: |
-          Write-Host "runner_os=${{ runner.os }}"
-          Write-Host "runner_arch=${{ runner.arch }}"
+          echo "runner_os=${{ runner.os }}"
+          echo "runner_arch=${{ runner.arch }}"
           rustc --version
-          rustc -vV | Select-String '^host:'
+          rustc -vV | grep '^host:'
           cargo --version
           git --version
 
       - name: Shared runtime unit tests
-        shell: powershell
+        shell: bash
         run: cargo test --locked --manifest-path ./rust-runtime/Cargo.toml -- --test-threads=1
 
       - name: Native GUI unit tests
-        shell: powershell
+        shell: bash
         run: cargo test --locked --manifest-path ./rust-gui/Cargo.toml
 
       - name: Build Windows portable package
@@ -78,30 +88,28 @@ jobs:
         run: BUILD_PORTABLE.bat
 
       - name: Verify Windows portable package
-        shell: powershell
-        run: ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData
-
-      - name: Verify Windows stable artifact version
-        shell: powershell
+        shell: bash
         run: |
-          $metadata = Get-Content -LiteralPath './dist/stream-archive/RELEASE_INFO.txt'
-          if ($metadata -notcontains 'version=1.0.4') { throw 'Expected stable artifact version=1.0.4' }
-          $version = (Get-Item './dist/stream-archive/StreamArchive.exe').VersionInfo.ProductVersion
-          if ($version -ne '1.0.4') { throw "Expected executable ProductVersion=1.0.4, got $version" }
+          set -euo pipefail
+          ./dist/stream-archive/StreamArchive.exe --verify-windows-package --root ./dist/stream-archive --require-clean-data
+          expected="$(python3 -c "import json, subprocess; d=json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1', '--manifest-path', 'rust-runtime/Cargo.toml'])); print(next(p['version'] for p in d['packages'] if p['name']=='stream-archive-server'))")"
+          actual="$(./dist/stream-archive/StreamArchive.exe --version | tr -d '\r')"
+          [[ "$actual" == "Stream Archive $expected" ]] || { echo "Unexpected --version output: $actual (expected Stream Archive $expected)" >&2; exit 1; }
 
       - name: Build Windows release archive
-        shell: powershell
-        run: ./maintenance/New-WindowsReleaseArchive.ps1 -PackageRoot './dist/stream-archive' -OutputDir './dist/release'
+        shell: bash
+        run: ./dist/stream-archive/StreamArchive.exe --new-windows-release-archive --package-root './dist/stream-archive' --output-dir './dist/release'
 
       - name: Verify Windows release archive
         id: package
-        shell: powershell
+        shell: bash
         run: |
-          $archive = Get-ChildItem -LiteralPath './dist/release' -Filter 'stream-archive-windows-*.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if ($null -eq $archive) { throw 'Windows release archive was not created.' }
-          ./maintenance/Verify-WindowsPackage.ps1 -Root './dist/stream-archive' -RequireCleanData -ArchivePath $archive.FullName -ArchiveChecksumPath "$($archive.FullName).sha256"
-          $artifact = [System.IO.Path]::GetFileNameWithoutExtension($archive.Name)
-          "artifact=$artifact" >> $env:GITHUB_OUTPUT
+          set -euo pipefail
+          archive="$(find ./dist/release -maxdepth 1 -type f -name 'stream-archive-windows-*.zip' -print -quit)"
+          [[ -n "$archive" ]] || { echo 'Windows release archive was not created.' >&2; exit 1; }
+          ./dist/stream-archive/StreamArchive.exe --verify-windows-package --root './dist/stream-archive' --require-clean-data --archive-path "$archive" --archive-checksum-path "$archive.sha256"
+          artifact="$(basename "$archive" .zip)"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -164,8 +172,9 @@ jobs:
       - name: Verify Unix stable artifact version
         shell: bash
         run: |
+          expected="$(python3 -c "import json, subprocess; d=json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1', '--manifest-path', 'rust-runtime/Cargo.toml'])); print(next(p['version'] for p in d['packages'] if p['name']=='stream-archive-server'))")"
           metadata="$(find dist -type f -path '*/unix-*/stream-archive/RELEASE_INFO.txt' -print -quit)"
-          grep -qx 'version=1.0.4' "$metadata"
+          grep -qx "version=$expected" "$metadata"
 
       - name: Resolve release artifact
         id: package

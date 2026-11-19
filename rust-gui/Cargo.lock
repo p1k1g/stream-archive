@@ -4408,6 +4408,8 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "crc32fast",
+ "flate2",
  "fs2",
  "image",
  "regex",
