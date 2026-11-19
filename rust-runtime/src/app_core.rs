@@ -1007,6 +1007,17 @@ impl StreamArchiveCore {
         let logs = self.logs.clone();
         self.background_tasks
             .start(Kind::VodHistory, move |mut stop| async move {
+                #[derive(PartialEq, Eq)]
+                struct VodSyncKey {
+                    job_id: Option<String>,
+                    state: String,
+                    running: bool,
+                    part_count: usize,
+                    output_file: Option<String>,
+                    message: String,
+                    finished_at: Option<String>,
+                }
+                let mut last_synced: Option<VodSyncKey> = None;
                 loop {
                     tokio::select! {
                         biased;
@@ -1014,9 +1025,23 @@ impl StreamArchiveCore {
                         _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                     }
                     let status = vod.status().await;
+                    let key = VodSyncKey {
+                        job_id: status.job_id.clone(),
+                        state: status.state.clone(),
+                        running: status.running,
+                        part_count: status.part_count,
+                        output_file: status.output_file.clone(),
+                        message: status.message.clone(),
+                        finished_at: status.finished_at.clone(),
+                    };
+                    if status.job_id.is_none() || last_synced.as_ref() == Some(&key) {
+                        continue;
+                    }
                     if let Err(err) = store.upsert_vod(&status) {
                         logs.push(format!("[DB:WARN] VOD history sync failed: {err:#}"))
                             .await;
+                    } else {
+                        last_synced = Some(key);
                     }
                 }
             });

@@ -2,7 +2,7 @@
 #[cfg(windows)]
 mod windows_tray;
 #[cfg(windows)]
-pub use windows_tray::bind;
+pub use windows_tray::{bind, sync_recreated_window};
 
 #[cfg(windows)]
 fn owner(ui: &crate::MainWindow) -> Option<windows::Win32::Foundation::HWND> {

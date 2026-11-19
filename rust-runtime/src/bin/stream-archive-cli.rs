@@ -363,8 +363,9 @@ fn load_tool_settings(db: &Path) -> Result<BTreeMap<String, String>> {
     if !db.is_file() {
         return Ok(BTreeMap::new());
     }
-    let conn = Connection::open(db)
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("failed to open SQLite database {}", db.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let table_exists: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings')",
         [],

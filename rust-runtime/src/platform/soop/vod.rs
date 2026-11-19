@@ -396,7 +396,7 @@ impl VodManager {
                 let mut s = status.write().await;
                 s.running = false;
                 s.finished_at = Some(Utc::now().to_rfc3339());
-                if cancel.load(Ordering::SeqCst) {
+                if cancel.load(Ordering::SeqCst) && s.state != "COMPLETED" {
                     s.state = "CANCELLED".into();
                     s.message = "VOD 작업이 취소되었습니다.".into();
                     logs.push("[VOD] job cancelled").await;
@@ -1410,7 +1410,7 @@ async fn download_part(
         "mp4".into(),
         "--newline".into(),
         "-o".into(),
-        output.display().to_string(),
+        output.display().to_string().replace('%', "%%"),
     ];
     if let Some(ffmpeg) = &tools.ffmpeg {
         args.push("--ffmpeg-location".into());
@@ -1499,6 +1499,7 @@ async fn run_progress(
     logs: &LogBuffer,
 ) -> Result<()> {
     let mut command = Command::new(program);
+    crate::platform_runtime::configure_utf8_cli(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -1521,7 +1522,7 @@ async fn run_progress(
     let log_copy = logs.clone();
     let mut stderr_task = tokio::spawn(async move {
         let mut lines = crate::bounded_lines::BoundedLines::new(stderr);
-        while let Ok(Some(line)) = lines.next_line().await {
+        while let Ok(Some(line)) = lines.next_line_lossy().await {
             let redacted = redact(&line);
             if !redacted.trim().is_empty() {
                 log_copy.push(format!("[VOD:yt-dlp] {redacted}")).await;
@@ -1534,7 +1535,9 @@ async fn run_progress(
         }
     });
     let mut lines = crate::bounded_lines::BoundedLines::new(stdout);
-    let re = Regex::new(r"(?P<p>\d+(?:\.\d+)?)%").unwrap();
+    static PROGRESS_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"(?P<p>\d+(?:\.\d+)?)%").unwrap());
+    let mut stdout_open = true;
     loop {
         if cancel.load(Ordering::SeqCst) {
             owned_tree.terminate(&mut child).await?;
@@ -1542,16 +1545,20 @@ async fn run_progress(
             return Ok(());
         }
         tokio::select! {
-            line = lines.next_line() => {
-                if let Ok(Some(line)) = line
-                    && let Some(captures) = re.captures(&line)
-                    && let Ok(percent) = captures["p"].parse::<f64>()
-                {
-                    let mut s = status.write().await;
-                    s.percent = percent;
-                    s.current_part = part;
-                    s.part_count = part_count;
-                    s.message = format!("PART {part}: {percent:.1}%");
+            line = lines.next_line_lossy(), if stdout_open => {
+                match line {
+                    Ok(Some(line)) => {
+                        if let Some(captures) = PROGRESS_RE.captures(&line)
+                            && let Ok(percent) = captures["p"].parse::<f64>()
+                        {
+                            let mut s = status.write().await;
+                            s.percent = percent;
+                            s.current_part = part;
+                            s.part_count = part_count;
+                            s.message = format!("PART {part}: {percent:.1}%");
+                        }
+                    }
+                    _ => stdout_open = false,
                 }
             }
             _ = tokio::time::sleep(Duration::from_millis(250)) => {}
@@ -2137,24 +2144,31 @@ fn sanitize_cookie_field(value: &str) -> String {
 }
 
 fn redact(text: &str) -> String {
-    let re = Regex::new(
-        r"(?i)(cookie|token|signature|policy|key-pair-id|authorization)(\s*[:=]\s*)[^\s;&]+",
-    )
-    .unwrap();
-    let safe = re.replace_all(text, "$1$2***");
-    Regex::new(r"(?i)(https?://[^?\s]+)\?[^\s]+")
+    static SECRET_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(cookie|token|signature|policy|key-pair-id|authorization)(\s*[:=]\s*)[^\s;&]+",
+        )
         .unwrap()
-        .replace_all(&safe, "$1?[REDACTED]")
-        .to_string()
+    });
+    static QUERY_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"(?i)(https?://[^?\s]+)\?[^\s]+").unwrap());
+    let safe = SECRET_RE.replace_all(text, "$1$2***");
+    QUERY_RE.replace_all(&safe, "$1?[REDACTED]").to_string()
 }
 
 fn http_client() -> Result<Client> {
-    Ok(Client::builder()
+    static SHARED_CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    if let Some(client) = SHARED_CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
         .no_proxy()
         .http1_only()
         .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(20))
-        .build()?)
+        .build()?;
+    let _ = SHARED_CLIENT.set(client.clone());
+    Ok(client)
 }
 
 async fn set_status(status: &Arc<RwLock<VodJobStatus>>, state: &str, message: &str) {

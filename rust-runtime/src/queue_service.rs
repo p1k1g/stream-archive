@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{
     sync::{
         Arc,
@@ -15,11 +15,14 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::Mutex;
+use tokio::{
+    sync::{Mutex, Notify},
+    task::JoinHandle,
+};
 use uuid::Uuid;
 
 pub const QUEUE_LIMIT: usize = 100;
-const WORKER_IDLE: Duration = Duration::from_millis(750);
+const WORKER_IDLE: Duration = Duration::from_secs(5);
 const STATUS_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
@@ -37,6 +40,8 @@ pub struct VodQueueManager {
     active_id: Arc<Mutex<Option<String>>>,
     worker_started: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
+    worker_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    wake: Arc<Notify>,
 }
 
 impl VodQueueManager {
@@ -73,6 +78,8 @@ impl VodQueueManager {
             active_id: Arc::new(Mutex::new(None)),
             worker_started: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
+            worker_task: Arc::new(Mutex::new(None)),
+            wake: Arc::new(Notify::new()),
         };
         if recover_interrupted {
             manager.mark_interrupted()?;
@@ -89,7 +96,12 @@ impl VodQueueManager {
         {
             return false;
         }
-        tokio::spawn(async move { self.worker_loop().await });
+        let task_slot = self.worker_task.clone();
+        let manager = self.clone();
+        let handle = tokio::spawn(async move { manager.worker_loop().await });
+        if let Ok(mut guard) = task_slot.try_lock() {
+            *guard = Some(handle);
+        }
         true
     }
 
@@ -97,6 +109,7 @@ impl VodQueueManager {
     /// Persisted QUEUED items intentionally remain QUEUED for the next launch.
     pub async fn shutdown(&self) {
         self.stopping.store(true, Ordering::Release);
+        self.wake.notify_waiters();
         let active = self.active_id.lock().await.clone();
         if let Some(id) = active
             && let Err(error) = self.cancel(&id).await
@@ -106,6 +119,9 @@ impl VodQueueManager {
                     "[VOD_QUEUE:WARN] shutdown cancel failed id={id}: {error:#}"
                 ))
                 .await;
+        }
+        if let Some(handle) = self.worker_task.lock().await.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
         }
     }
 
@@ -140,7 +156,7 @@ impl VodQueueManager {
         let request_json = serde_json::to_string(&req)?;
         {
             let mut conn = self.conn()?;
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let pending: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM vod_queue WHERE state IN ('QUEUED','STARTING','RUNNING','CANCELLING')",
                 [],
@@ -169,6 +185,7 @@ impl VodQueueManager {
                 req.vod_url
             ))
             .await;
+        self.wake.notify_one();
         self.item(&id)?.context("queued item disappeared")
     }
 
@@ -251,6 +268,7 @@ impl VodQueueManager {
         self.logs
             .push(format!("[VOD_QUEUE] retry queued id={id}"))
             .await;
+        self.wake.notify_one();
         Ok(())
     }
 
@@ -269,14 +287,21 @@ impl VodQueueManager {
         Ok(())
     }
 
+    async fn wait_for_work(&self, delay: Duration) {
+        tokio::select! {
+            _ = self.wake.notified() => {}
+            _ = tokio::time::sleep(delay) => {}
+        }
+    }
+
     async fn worker_loop(self: Arc<Self>) {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        self.wait_for_work(Duration::from_secs(1)).await;
         loop {
             if self.stopping.load(Ordering::Acquire) {
                 break;
             }
             if self.active_id.lock().await.is_some() || self.vod.status().await.running {
-                tokio::time::sleep(WORKER_IDLE).await;
+                self.wait_for_work(Duration::from_millis(750)).await;
                 continue;
             }
 
@@ -287,14 +312,14 @@ impl VodQueueManager {
             }
             if self.vod.status().await.running {
                 drop(lifecycle_guard);
-                tokio::time::sleep(WORKER_IDLE).await;
+                self.wait_for_work(Duration::from_millis(750)).await;
                 continue;
             }
             let claimed = match self.claim_next() {
                 Ok(Some(item)) => item,
                 Ok(None) => {
                     drop(lifecycle_guard);
-                    tokio::time::sleep(WORKER_IDLE).await;
+                    self.wait_for_work(WORKER_IDLE).await;
                     continue;
                 }
                 Err(err) => {
@@ -302,7 +327,7 @@ impl VodQueueManager {
                     self.logs
                         .push(format!("[VOD_QUEUE:WARN] claim failed: {err:#}"))
                         .await;
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    self.wait_for_work(Duration::from_secs(2)).await;
                     continue;
                 }
             };
@@ -393,7 +418,7 @@ impl VodQueueManager {
 
     fn claim_next(&self) -> Result<Option<ClaimedItem>> {
         let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row = tx
             .query_row(
                 "SELECT id,request_json FROM vod_queue WHERE state='QUEUED' ORDER BY created_at,id LIMIT 1",

@@ -1,6 +1,8 @@
 use crate::formatting::format_bytes;
 use stream_archive_server::{
-    history_service::{format_history_timestamp_local, history_timestamp_sort_key},
+    history_service::{
+        format_history_timestamp_local, history_timestamp_sort_key, today_local_ymd,
+    },
     model::{HistoryResponse, LiveHistoryItem, VodHistoryItem},
 };
 
@@ -35,7 +37,7 @@ pub struct CalendarMonthView {
 }
 
 pub fn calendar_initial(selected: &str) -> CalendarMonthView {
-    let (year, month, _) = parse_date(selected).unwrap_or_else(today_utc);
+    let (year, month, _) = parse_date(selected).unwrap_or_else(today_local_ymd);
     calendar_month(year, month, selected)
 }
 
@@ -83,14 +85,6 @@ fn parse_date(value: &str) -> Option<(i32, u32, u32)> {
         return None;
     }
     Some((year, month, day))
-}
-
-fn today_utc() -> (i32, u32, u32) {
-    let days = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| (duration.as_secs() / 86_400) as i64)
-        .unwrap_or(0);
-    civil_from_days(days)
 }
 
 fn month_name(month: u32) -> &'static str {

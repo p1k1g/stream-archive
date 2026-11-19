@@ -580,8 +580,11 @@ fn database_integrity_check(path: &Path) -> DiagnosticItem {
             "Restore or initialize the canonical database first.",
         );
     }
-    let result = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .and_then(|conn| conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0)));
+    let result =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).and_then(|conn| {
+            conn.busy_timeout(std::time::Duration::from_secs(5))?;
+            conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
+        });
     match result {
         Ok(value) if value.eq_ignore_ascii_case("ok") => check!(
             "database.integrity",

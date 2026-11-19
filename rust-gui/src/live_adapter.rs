@@ -61,6 +61,9 @@ fn status_presentation(status: &str) -> (&str, &str) {
         "DISABLED" => ("사용 안 함", "muted"),
         "WATCHER_STOPPED" => ("방송 감시 중지됨", "muted"),
         "PAUSED" => ("일시중지", "warn"),
+        "LOW_DISK" => ("공간 부족", "error"),
+        "STALLED" => ("녹화 정체", "error"),
+        "AUTH" => ("인증 필요", "error"),
         "ERROR" => ("오류", "error"),
         other => (other, "warn"),
     }
@@ -219,5 +222,24 @@ mod tests {
         assert_eq!(row.file, "C:/recordings/example.ts");
         assert_eq!(row.size, "5.0 MB");
         assert_eq!(row.started_at, "2026-09-16T10:00:00Z");
+    }
+
+    #[test]
+    fn localized_error_status_labels_map_to_error_tone() {
+        for (raw, label) in [
+            ("LOW_DISK", "공간 부족"),
+            ("STALLED", "녹화 정체"),
+            ("AUTH", "인증 필요"),
+        ] {
+            let status = NativeWatcherStatus {
+                running: true,
+                engine: "test",
+                channels: vec![channel(raw)],
+                ..Default::default()
+            };
+            let row = view(status).channels.remove(0);
+            assert_eq!(row.status_label, label);
+            assert_eq!(row.status_tone, "error");
+        }
     }
 }

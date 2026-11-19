@@ -100,13 +100,21 @@ async fn load_inner(platform: PlatformId, url: &str, vod: bool) -> Result<Thumbn
     } else {
         validate_image_url(platform, &url)?;
     }
-    let client = reqwest::Client::builder()
-        .user_agent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
-        )
-        .timeout(Duration::from_secs(8))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
+    static THUMBNAIL_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = match THUMBNAIL_CLIENT.get() {
+        Some(client) => client.clone(),
+        None => {
+            let built = reqwest::Client::builder()
+                .user_agent(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+                )
+                .timeout(Duration::from_secs(8))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?;
+            let _ = THUMBNAIL_CLIENT.set(built.clone());
+            built
+        }
+    };
     let mut request = client
         .get(url)
         .header(reqwest::header::CACHE_CONTROL, "no-cache");
@@ -169,16 +177,23 @@ pub(crate) async fn load_kick_vod_frame(
     struct FrameProcess {
         child: tokio::process::Child,
         tree: crate::platform_runtime::OwnedProcessTree,
+        terminated: bool,
     }
     impl Drop for FrameProcess {
         fn drop(&mut self) {
-            let _ = self.tree.terminate_now();
+            if !self.terminated {
+                let _ = self.tree.terminate_now();
+            }
         }
     }
     let (child, tree) = crate::platform_runtime::spawn_owned(&mut command)
         .await
         .map_err(|_| anyhow::anyhow!("KICK 썸네일 추출 시작 실패"))?;
-    let mut process = FrameProcess { child, tree };
+    let mut process = FrameProcess {
+        child,
+        tree,
+        terminated: false,
+    };
     let stdout = process
         .child
         .stdout
@@ -213,11 +228,11 @@ pub(crate) async fn load_kick_vod_frame(
         if !exit.success() {
             bail!("KICK 썸네일 추출 실패");
         }
-        decode(&bytes)
+        tokio::task::spawn_blocking(move || decode(&bytes)).await?
     };
     let result = tokio::time::timeout(Duration::from_secs(12), operation).await;
-    let FrameProcess { child, tree } = &mut process;
-    let _ = tree.terminate(child).await;
+    let _ = process.tree.terminate(&mut process.child).await;
+    process.terminated = true;
     result.map_err(|_| anyhow::anyhow!("KICK 썸네일 추출 시간 초과"))?
 }
 

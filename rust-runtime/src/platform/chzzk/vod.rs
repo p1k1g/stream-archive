@@ -835,7 +835,7 @@ where
 {
     tokio::spawn(async move {
         let mut lines = crate::bounded_lines::BoundedLines::new(reader);
-        while let Ok(Some(line)) = lines.next_line().await {
+        while let Ok(Some(line)) = lines.next_line_lossy().await {
             if tx.send(line).await.is_err() {
                 break;
             }
@@ -862,7 +862,8 @@ async fn drain_failed_reader_tasks(
     progress_rx: &mut mpsc::Receiver<String>,
     tail: &mut VecDeque<String>,
 ) {
-    while !tasks.iter().all(|task| task.is_finished()) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while !tasks.iter().all(|task| task.is_finished()) && tokio::time::Instant::now() < deadline {
         tokio::select! {
             line = log_rx.recv(), if !log_rx.is_closed() => {
                 if let Some(line) = line {
@@ -871,6 +872,11 @@ async fn drain_failed_reader_tasks(
             }
             _ = progress_rx.recv(), if !progress_rx.is_closed() => {}
             _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    for task in &tasks {
+        if !task.is_finished() {
+            task.abort();
         }
     }
     while let Ok(line) = log_rx.try_recv() {
@@ -1846,10 +1852,9 @@ fn push_tail(tail: &mut VecDeque<String>, line: &str) {
 }
 
 fn redact(value: &str) -> String {
-    Regex::new(r"(?i)(NID_(?:AUT|SES)=)[^;\s]+")
-        .unwrap()
-        .replace_all(value, "$1<redacted>")
-        .into_owned()
+    static COOKIE_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"(?i)(NID_(?:AUT|SES)=)[^;\s]+").unwrap());
+    COOKIE_RE.replace_all(value, "$1<redacted>").into_owned()
 }
 
 fn exit_code(status: ExitStatus) -> String {

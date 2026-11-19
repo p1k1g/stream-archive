@@ -6,7 +6,7 @@ use crate::{
     maintenance_adapter, native_picker, native_shell, queue_adapter,
     settings_adapter::SettingsDraft, storage_adapter, vod_adapter,
 };
-use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -114,7 +114,9 @@ enum Request {
         filter: HistoryFilter,
         view: String,
     },
-    MaintenanceLoad,
+    MaintenanceLoad {
+        active_tools: bool,
+    },
     BackupPickDirectory {
         initial: String,
     },
@@ -130,6 +132,7 @@ enum Request {
         poll: bool,
     },
     LogsClear,
+    OpenLiveFolder(String),
     OpenLogsFolder,
 }
 
@@ -150,6 +153,7 @@ enum Response {
         fields: Option<Vec<EnvironmentSetting>>,
         diagnostics: DiagnosticsSnapshot,
         first_run: bool,
+        startup_failed: bool,
         message: String,
     },
     Configuration {
@@ -157,6 +161,8 @@ enum Response {
         username: String,
         worker_url: String,
         secrets: BTreeMap<String, bool>,
+        reload_channels: bool,
+        reload_provider: bool,
         message: String,
     },
     ChannelPicked {
@@ -231,7 +237,8 @@ enum Response {
         poll: bool,
     },
     LogsCleared,
-    LogsFolderPath(Result<String, String>),
+    LiveFolderOpened(Result<(), String>),
+    LogsFolderOpened(Result<(), String>),
     MaintenanceError {
         message: String,
         poll: bool,
@@ -274,6 +281,7 @@ fn read_active_snapshot(
         fields,
         diagnostics: runtime.block_on(core.active_local_diagnostics()),
         first_run: core.is_first_run_unconfigured().unwrap_or(false),
+        startup_failed: false,
         message: message.into(),
     }
 }
@@ -291,11 +299,17 @@ fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str
         fields,
         diagnostics: core.diagnostics(),
         first_run: core.is_first_run_unconfigured().unwrap_or(false),
+        startup_failed: false,
         message: message.into(),
     }
 }
 
-fn configuration_snapshot(core: &StreamArchiveCore, message: &str) -> Response {
+fn configuration_snapshot(
+    core: &StreamArchiveCore,
+    reload_channels: bool,
+    reload_provider: bool,
+    message: &str,
+) -> Response {
     let settings = match core.settings() {
         Ok(settings) => settings,
         Err(error) => {
@@ -322,6 +336,8 @@ fn configuration_snapshot(core: &StreamArchiveCore, message: &str) -> Response {
             .cloned()
             .unwrap_or_default(),
         secrets,
+        reload_channels,
+        reload_provider,
         message: message.into(),
     }
 }
@@ -373,15 +389,22 @@ fn storage_status(core: &StreamArchiveCore, poll: bool, generation: u64) -> Resp
 }
 
 fn vod_status(core: &StreamArchiveCore, runtime: &tokio::runtime::Runtime, poll: bool) -> Response {
+    if poll {
+        return Response::Vod {
+            status: runtime.block_on(core.local_vod_status()),
+            message: None,
+            poll: true,
+        };
+    }
     match runtime.block_on(core.vod_status()) {
         Ok(status) => Response::Vod {
             status,
             message: None,
-            poll,
+            poll: false,
         },
         Err(error) => Response::VodError {
             message: format!("VOD 상태 새로고침 실패: {error:#}"),
-            poll,
+            poll: false,
         },
     }
 }
@@ -473,9 +496,26 @@ fn save_channels(
     match runtime.block_on(core.update_channels(&channels)) {
         Ok(_) => configuration_snapshot(
             core,
+            true,
+            false,
             "채널 목록을 저장했습니다. 실행 중인 Watcher는 기존 재로딩 정책에 따라 canonical 목록을 반영합니다.",
         ),
         Err(error) => Response::ConfigError(format!("채널 목록을 저장하지 못했습니다: {error:#}")),
+    }
+}
+
+fn spawn_detached_task(name: &str, f: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(f)
+        .map(|_| ())
+        .map_err(|error| format!("백그라운드 작업 스레드를 시작할 수 없습니다: {error}"))
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -511,6 +551,7 @@ fn worker(
                     &message,
                 ),
                 first_run: false,
+                startup_failed: true,
                 message,
             });
             return;
@@ -530,6 +571,26 @@ fn worker_loop(
 ) {
     let _ = responses.send(Response::ResourceTrace(core.resource_trace()));
     let mut download_events = core.subscribe_download_events();
+    let event_responses = responses.clone();
+    let _download_event_guard = AbortOnDrop(runtime.spawn(async move {
+        loop {
+            match download_events.recv().await {
+                Ok(first) => {
+                    let mut batch = vec![first];
+                    batch.extend(crate::notifications::drain_download_events(|| {
+                        download_events.try_recv()
+                    }));
+                    if event_responses.send(Response::Downloads(batch)).is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                    eprintln!("Windows download notifications skipped {count} older events");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }));
     // spawn_vod_history_sync uses tokio::spawn internally, so enter the runtime
     // while creating that long-lived task. The multi-thread runtime then keeps
     // driving it between GUI requests.
@@ -551,6 +612,8 @@ fn worker_loop(
     if responses
         .send(configuration_snapshot(
             core,
+            true,
+            true,
             "canonical SQLite에서 채널 및 서비스 연결 정보를 불러왔습니다.",
         ))
         .is_err()
@@ -703,12 +766,24 @@ fn worker_loop(
                     Err(error) => Response::Error(format!("저장 실패: {error:#}")),
                 }
             }
-            Request::Pick(index, kind, initial) => match native_picker::pick(kind, &initial) {
-                Ok(path) => Response::Picked(index, path),
-                Err(error) => Response::Error(format!("폴더 선택기 오류: {error}")),
-            },
+            Request::Pick(index, kind, initial) => {
+                let responses = responses.clone();
+                if let Err(error) = spawn_detached_task("native-picker", move || {
+                    let response = match native_picker::pick(kind, &initial) {
+                        Ok(path) => Response::Picked(index, path),
+                        Err(error) => Response::Error(format!("폴더 선택기 오류: {error}")),
+                    };
+                    let _ = responses.send(response);
+                }) {
+                    Response::Error(error)
+                } else {
+                    continue;
+                }
+            }
             Request::ConfigReload => configuration_snapshot(
                 core,
+                true,
+                true,
                 "저장된 채널 및 공급자 인증 정보를 다시 불러왔습니다. 편집 중이던 내용은 취소되었습니다.",
             ),
             Request::ChannelsSave(channels) => save_channels(core, runtime, channels),
@@ -716,14 +791,24 @@ fn worker_loop(
                 index,
                 expected,
                 initial,
-            } => match native_picker::pick_directory(&initial) {
-                Ok(path) => Response::ChannelPicked {
-                    index,
-                    expected,
-                    path,
-                },
-                Err(message) => Response::ConfigError(message),
-            },
+            } => {
+                let responses = responses.clone();
+                if let Err(error) = spawn_detached_task("native-picker", move || {
+                    let response = match native_picker::pick_directory(&initial) {
+                        Ok(path) => Response::ChannelPicked {
+                            index,
+                            expected,
+                            path,
+                        },
+                        Err(message) => Response::ConfigError(message),
+                    };
+                    let _ = responses.send(response);
+                }) {
+                    Response::ConfigError(error)
+                } else {
+                    continue;
+                }
+            }
             Request::ChannelResolve {
                 index,
                 platform,
@@ -758,6 +843,8 @@ fn worker_loop(
                 match runtime.block_on(core.update_provider_configuration(&settings, &secrets)) {
                     Ok(_) => configuration_snapshot(
                         core,
+                        false,
+                        true,
                         "서비스 연결 정보를 저장했습니다. 비밀 값은 암호화 상태로 유지되며 UI로 다시 읽어오지 않습니다.",
                     ),
                     Err(error) => Response::ConfigError(format!(
@@ -765,18 +852,23 @@ fn worker_loop(
                     )),
                 }
             }
-            Request::ClearProviderCredentials(provider) => match runtime
-                .block_on(core.clear_provider_credentials(&provider))
-            {
-                Ok(()) => {
-                    configuration_snapshot(core, &format!("{provider} 인증정보를 삭제했습니다."))
+            Request::ClearProviderCredentials(provider) => {
+                match runtime.block_on(core.clear_provider_credentials(&provider)) {
+                    Ok(()) => configuration_snapshot(
+                        core,
+                        false,
+                        true,
+                        &format!("{provider} 인증정보를 삭제했습니다."),
+                    ),
+                    Err(error) => Response::ConfigError(format!(
+                        "{provider} 인증정보 삭제가 완료되지 않았습니다. 삭제를 다시 시도하세요: {error:#}"
+                    )),
                 }
-                Err(error) => Response::ConfigError(format!(
-                    "{provider} 인증정보 삭제가 완료되지 않았습니다. 삭제를 다시 시도하세요: {error:#}"
-                )),
-            },
+            }
             Request::ClearKickToken => match runtime.block_on(core.clear_kick_token()) {
-                Ok(()) => configuration_snapshot(core, "KICK 인증정보를 삭제했습니다."),
+                Ok(()) => {
+                    configuration_snapshot(core, false, true, "KICK 인증정보를 삭제했습니다.")
+                }
                 Err(error) => Response::ConfigError(format!("KICK 인증정보 삭제 실패: {error:#}")),
             },
             Request::ProviderTestSoop => {
@@ -910,13 +1002,26 @@ fn worker_loop(
                     },
                 }
             }
-            Request::VodPickOutput { initial } => match native_picker::pick_directory(&initial) {
-                Ok(path) => Response::VodPicked(path),
-                Err(error) => Response::VodError {
-                    message: format!("VOD 출력 폴더 선택기 오류: {error}"),
-                    poll: false,
-                },
-            },
+            Request::VodPickOutput { initial } => {
+                let responses = responses.clone();
+                if let Err(error) = spawn_detached_task("native-picker", move || {
+                    let response = match native_picker::pick_directory(&initial) {
+                        Ok(path) => Response::VodPicked(path),
+                        Err(error) => Response::VodError {
+                            message: format!("VOD 출력 폴더 선택기 오류: {error}"),
+                            poll: false,
+                        },
+                    };
+                    let _ = responses.send(response);
+                }) {
+                    Response::VodError {
+                        message: error,
+                        poll: false,
+                    }
+                } else {
+                    continue;
+                }
+            }
             Request::VodDownload(req) => {
                 let selected_parts = selected_parts_label(&req.parts);
                 match runtime.block_on(core.download_vod(req)) {
@@ -1009,19 +1114,34 @@ fn worker_loop(
                 },
                 Err(error) => Response::HistoryError(format!("기록 새로고침 실패: {error:#}")),
             },
-            Request::MaintenanceLoad => maintenance_snapshot(
+            Request::MaintenanceLoad { active_tools } => maintenance_snapshot(
                 core,
                 runtime,
-                true,
-                "관리 상태를 다시 탐색하고 로컬 도구 버전을 확인했습니다",
+                active_tools,
+                if active_tools {
+                    "관리 상태를 다시 탐색하고 로컬 도구 버전을 확인했습니다"
+                } else {
+                    "백업 목록과 관리 상태를 새로고침했습니다"
+                },
             ),
             Request::BackupPickDirectory { initial } => {
-                match native_picker::pick_directory(&initial) {
-                    Ok(path) => Response::MaintenancePicked(path),
-                    Err(error) => Response::MaintenanceError {
-                        message: format!("백업 폴더 선택기 오류: {error}"),
+                let responses = responses.clone();
+                if let Err(error) = spawn_detached_task("native-picker", move || {
+                    let response = match native_picker::pick_directory(&initial) {
+                        Ok(path) => Response::MaintenancePicked(path),
+                        Err(error) => Response::MaintenanceError {
+                            message: format!("백업 폴더 선택기 오류: {error}"),
+                            poll: false,
+                        },
+                    };
+                    let _ = responses.send(response);
+                }) {
+                    Response::MaintenanceError {
+                        message: error,
                         poll: false,
-                    },
+                    }
+                } else {
+                    continue;
                 }
             }
             Request::BackupSave { policy, directory } => {
@@ -1061,6 +1181,8 @@ fn worker_loop(
                         ));
                         let _ = responses.send(configuration_snapshot(
                             core,
+                            true,
+                            true,
                             "DB를 복원하고 채널 및 서비스 연결 정보를 다시 불러왔습니다.",
                         ));
                         let _ = responses.send(queue_status(core, runtime, false));
@@ -1095,6 +1217,17 @@ fn worker_loop(
                 runtime.block_on(core.clear_runtime_logs());
                 Response::LogsCleared
             }
+            Request::OpenLiveFolder(file_path) => {
+                let responses = responses.clone();
+                if let Err(error) = spawn_detached_task("native-shell", move || {
+                    let result = native_shell::open_containing_directory(&file_path);
+                    let _ = responses.send(Response::LiveFolderOpened(result));
+                }) {
+                    Response::LiveFolderOpened(Err(error))
+                } else {
+                    continue;
+                }
+            }
             Request::OpenLogsFolder => {
                 let target = core.logs_dir().or_else(|| {
                     std::env::current_exe()
@@ -1108,14 +1241,23 @@ fn worker_loop(
                     },
                     None => Err("로그 폴더 경로를 확인할 수 없습니다.".to_string()),
                 };
-                Response::LogsFolderPath(result)
+                match result {
+                    Ok(dir) => {
+                        let responses = responses.clone();
+                        if let Err(error) = spawn_detached_task("native-shell", move || {
+                            let result = native_shell::open_containing_directory(&dir);
+                            let _ = responses.send(Response::LogsFolderOpened(result));
+                        }) {
+                            Response::LogsFolderOpened(Err(error))
+                        } else {
+                            continue;
+                        }
+                    }
+                    Err(err) => Response::LogsFolderOpened(Err(err)),
+                }
             }
         };
         if responses.send(response).is_err() {
-            break;
-        }
-        let events = crate::notifications::drain_download_events(|| download_events.try_recv());
-        if !events.is_empty() && responses.send(Response::Downloads(events)).is_err() {
             break;
         }
     }
@@ -1240,9 +1382,11 @@ fn render_live(
     model: &mut crate::live_model::LiveModel,
 ) {
     let view = live_adapter::view(status);
+    let active_filter = model.filter();
     let rows: Vec<_> = view
         .channels
         .into_iter()
+        .filter(|row| crate::live_model::LiveModel::matches_filter(active_filter, &row.status))
         .map(|row| LiveChannelRow {
             thumbnail_image: thumbnails.image(&row.target),
             target: row.target.into(),
@@ -1731,10 +1875,18 @@ pub fn bind(ui: &MainWindow) -> Controller {
             && index >= 0
             && !ui.global::<AppState>().get_settings_busy()
         {
+            let idx = index as usize;
             let mut draft = edit_draft.borrow_mut();
-            draft.edit(index as usize, value.to_string());
-            ui.global::<AppState>()
-                .set_settings_dirty(!draft.patch().is_empty());
+            draft.edit(idx, value.to_string());
+            let state = ui.global::<AppState>();
+            let rows = state.get_settings_rows();
+            if let Some(mut row) = rows.row_data(idx)
+                && row.value != value
+            {
+                row.value = value;
+                rows.set_row_data(idx, row);
+            }
+            state.set_settings_dirty(!draft.patch().is_empty());
         }
     });
 
@@ -2094,14 +2246,18 @@ pub fn bind(ui: &MainWindow) -> Controller {
     });
 
     let weak = ui.as_weak();
+    let folder_sender = sender.clone();
     state.on_live_open_folder(move |file_path| {
         if let Some(ui) = weak.upgrade() {
             let state = ui.global::<AppState>();
-            match native_shell::open_containing_directory(file_path.as_str()) {
-                Ok(()) => state.set_live_message("저장 폴더를 열었습니다.".into()),
-                Err(error) => {
-                    state.set_live_message(format!("저장 폴더를 열 수 없습니다: {error:#}").into())
-                }
+            if state.get_desktop_exit_pending() {
+                return;
+            }
+            if folder_sender
+                .send(Request::OpenLiveFolder(file_path.to_string()))
+                .is_err()
+            {
+                state.set_live_message("저장 폴더 열기 요청을 전달할 수 없습니다.".into());
             }
         }
     });
@@ -2133,12 +2289,24 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let edit_vod = vod_draft.clone();
     state.on_vod_url_edited(move |value| {
         if let Some(ui) = weak.upgrade() {
-            if ui.global::<AppState>().get_vod_busy() {
+            let state = ui.global::<AppState>();
+            if state.get_vod_busy() {
                 return;
             }
-            edit_vod.borrow_mut().edit_url(value.to_string());
-            render_vod_draft(&ui, &edit_vod.borrow());
-            ui.global::<AppState>().set_vod_message(
+            let mut draft = edit_vod.borrow_mut();
+            let had_analysis = !draft.qualities.is_empty()
+                || !draft.parts.is_empty()
+                || draft.analysis_matches_current_url();
+            draft.edit_url(value.to_string());
+            if had_analysis {
+                state.set_vod_quality_rows(ModelRc::default());
+                state.set_vod_part_rows(ModelRc::default());
+                state.set_vod_thumbnail_image(slint::Image::default());
+                state.set_vod_thumbnail_job_id("".into());
+            }
+            state.set_vod_can_analyze(draft.can_analyze());
+            state.set_vod_can_download(draft.can_download());
+            state.set_vod_message(
                 "URL이 변경되었습니다. 분석을 눌러 메타데이터와 형식을 불러오세요.".into(),
             );
         }
@@ -2148,13 +2316,13 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let edit_vod = vod_draft.clone();
     state.on_vod_output_edited(move |value| {
         if let Some(ui) = weak.upgrade() {
-            if ui.global::<AppState>().get_vod_busy() {
+            let state = ui.global::<AppState>();
+            if state.get_vod_busy() {
                 return;
             }
-            edit_vod
-                .borrow_mut()
-                .edit_output_directory(value.to_string());
-            render_vod_draft(&ui, &edit_vod.borrow());
+            let mut draft = edit_vod.borrow_mut();
+            draft.edit_output_directory(value.to_string());
+            state.set_vod_can_download(draft.can_download());
         }
     });
 
@@ -2395,8 +2563,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 None
             } else {
                 match limit_text.trim().parse::<usize>() {
-                    Ok(limit) => Some(limit),
-                    Err(_) => {
+                    Ok(limit) if limit >= 1 => Some(limit),
+                    _ => {
                         state.set_history_message(
                             "최대 조회 건수는 1 이상의 정수여야 합니다.".into(),
                         );
@@ -2427,7 +2595,13 @@ pub fn bind(ui: &MainWindow) -> Controller {
     let maintenance_sender = sender.clone();
     maintenance_state.on_refresh(move || {
         if let Some(ui) = weak.upgrade() {
-            send_maintenance(&ui, &maintenance_sender, Request::MaintenanceLoad);
+            let active_tools =
+                ui.global::<MaintenanceState>().get_section().as_str() == "Diagnostics";
+            send_maintenance(
+                &ui,
+                &maintenance_sender,
+                Request::MaintenanceLoad { active_tools },
+            );
         }
     });
 
@@ -2497,8 +2671,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 .trim()
                 .parse::<i64>()
             {
-                Ok(value) => value,
-                Err(_) => {
+                Ok(value) if value >= 0 => value,
+                _ => {
                     state.set_message("백업 보관 기간은 0일 이상의 정수여야 합니다.".into());
                     return;
                 }
@@ -2668,6 +2842,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         let app = ui.global::<AppState>();
         let visible = ui.window().is_visible() && !ui.window().is_minimized();
         let page = stream_archive_server::resource_trace::Page::from_name(app.get_active_page().as_str());
+        live_model.set_filter(app.get_live_filter().as_str());
         if live_model.set_visible(visible && page == stream_archive_server::resource_trace::Page::Live) {
             response_live_generation.set(live_model.generation());
             next_fresh_request = Instant::now();
@@ -2693,8 +2868,9 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     }
                 }
                 Response::Thumbnail { token, image } => {
-                    thumbnails.complete(token, image);
-                    live_model.invalidate_images();
+                    if thumbnails.complete(token, image) {
+                        live_model.invalidate_images();
+                    }
                     request_thumbnails(&ui, &mut thumbnails, &thumbnail_sender);
                     response_thumbnail_tracking.set(thumbnails.is_tracking());
                 }
@@ -2754,11 +2930,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     fields,
                     diagnostics,
                     first_run,
+                    startup_failed,
                     message,
                 } => {
                     state.set_settings_busy(false);
                     let has_settings_snapshot = fields.is_some();
-                    let startup_failed = !state.get_live_loaded() && fields.is_none();
                     if let Some(fields) = fields {
                         let default_output = fields.iter()
                             .find(|field| field.key == "OUTPUT_DIR")
@@ -2787,8 +2963,15 @@ pub fn bind(ui: &MainWindow) -> Controller {
                         state.set_config_message(message.clone().into());
                         state.set_live_busy(false);
                         state.set_live_message(message.clone().into());
+                        state.set_storage_busy(false);
+                        state.set_storage_message(message.clone().into());
                         state.set_vod_busy(false);
                         state.set_vod_message(message.clone().into());
+                        let queue_state = ui.global::<QueueHistoryState>();
+                        queue_state.set_queue_busy(false);
+                        queue_state.set_queue_message(message.clone().into());
+                        queue_state.set_history_busy(false);
+                        queue_state.set_history_message(message.clone().into());
                         let maintenance_state = ui.global::<MaintenanceState>();
                         maintenance_state.set_busy(false);
                         maintenance_state.set_message(message.into());
@@ -2799,31 +2982,39 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     username,
                     worker_url,
                     secrets,
+                    reload_channels,
+                    reload_provider,
                     message,
                 } => {
                     state.set_config_busy(false);
-                    response_channels.borrow_mut().load(channels);
-                    render_channels(&ui, &response_channels.borrow());
-                    state.set_soop_username(username.into());
-                    state.set_cloudflare_worker_url(worker_url.into());
-                    state.set_soop_password_configured(
-                        secrets.get("SOOP_PASSWORD").copied().unwrap_or(false),
-                    );
-                    state.set_cloudflare_key_configured(
-                        secrets.get("CLOUDFLARE_API_KEY").copied().unwrap_or(false),
-                    );
-                    state.set_chzzk_nid_aut_configured(
-                        secrets.get("CHZZK_NID_AUT").copied().unwrap_or(false),
-                    );
-                    state.set_chzzk_nid_ses_configured(
-                        secrets.get("CHZZK_NID_SES").copied().unwrap_or(false),
-                    );
-                    state.set_soop_password_draft("".into());
-                    state.set_cloudflare_key_draft("".into());
-                    state.set_chzzk_nid_aut_draft("".into());
-                    state.set_chzzk_nid_ses_draft("".into());
-                    state.set_kick_session_token_draft("".into());
-                    state.set_kick_session_token_configured(secrets.get("KICK_SESSION_TOKEN").copied().unwrap_or(false));
+                    if reload_channels {
+                        response_channels.borrow_mut().load(channels);
+                        render_channels(&ui, &response_channels.borrow());
+                    }
+                    if reload_provider {
+                        state.set_soop_username(username.into());
+                        state.set_cloudflare_worker_url(worker_url.into());
+                        state.set_soop_password_configured(
+                            secrets.get("SOOP_PASSWORD").copied().unwrap_or(false),
+                        );
+                        state.set_cloudflare_key_configured(
+                            secrets.get("CLOUDFLARE_API_KEY").copied().unwrap_or(false),
+                        );
+                        state.set_chzzk_nid_aut_configured(
+                            secrets.get("CHZZK_NID_AUT").copied().unwrap_or(false),
+                        );
+                        state.set_chzzk_nid_ses_configured(
+                            secrets.get("CHZZK_NID_SES").copied().unwrap_or(false),
+                        );
+                        state.set_soop_password_draft("".into());
+                        state.set_cloudflare_key_draft("".into());
+                        state.set_chzzk_nid_aut_draft("".into());
+                        state.set_chzzk_nid_ses_draft("".into());
+                        state.set_kick_session_token_draft("".into());
+                        state.set_kick_session_token_configured(
+                            secrets.get("KICK_SESSION_TOKEN").copied().unwrap_or(false),
+                        );
+                    }
                     state.set_config_loaded(true);
                     state.set_config_message(message.into());
                 }
@@ -3094,15 +3285,22 @@ pub fn bind(ui: &MainWindow) -> Controller {
                     maintenance_state.set_message("로그 내용을 삭제했습니다.".into());
                     render_logs(&ui, Vec::new());
                 }
-                Response::LogsFolderPath(result) => {
+                Response::LiveFolderOpened(result) => match result {
+                    Ok(()) => state.set_live_message("저장 폴더를 열었습니다.".into()),
+                    Err(err) => {
+                        state.set_live_message(format!("저장 폴더를 열 수 없습니다: {err}").into())
+                    }
+                },
+                Response::LogsFolderOpened(result) => {
                     let maintenance_state = ui.global::<MaintenanceState>();
                     maintenance_state.set_busy(false);
-                    match result.and_then(|dir| native_shell::open_containing_directory(&dir)) {
+                    match result {
                         Ok(()) => {
                             maintenance_state.set_message("로그 폴더를 열었습니다.".into());
                         }
                         Err(err) => {
-                            maintenance_state.set_message(format!("로그 폴더 열기 실패: {err}").into());
+                            maintenance_state
+                                .set_message(format!("로그 폴더 열기 실패: {err}").into());
                         }
                     }
                 }
@@ -3152,8 +3350,11 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 }
             }
         }
-        if live_model.needs_snapshot() && Instant::now() >= next_fresh_request
-            && !app.get_live_busy() && !response_live_poll_flag.get()
+        if !app.get_desktop_exit_pending()
+            && live_model.needs_snapshot()
+            && Instant::now() >= next_fresh_request
+            && !app.get_live_busy()
+            && !response_live_poll_flag.get()
             && thumbnail_sender.send(Request::LiveStatus { poll: true, generation: live_model.generation() }).is_ok() {
             response_live_poll_flag.set(true);
             next_fresh_request = Instant::now() + Duration::from_millis(1500);
@@ -3162,7 +3363,8 @@ pub fn bind(ui: &MainWindow) -> Controller {
             render_live(&ui, status, &thumbnails, &mut live_model);
         }
         if visible && page == stream_archive_server::resource_trace::Page::Live {
-            if storage_refresh.needs_request(app.get_storage_busy(), response_storage_poll_flag.get())
+            if !app.get_desktop_exit_pending()
+                && storage_refresh.needs_request(app.get_storage_busy(), response_storage_poll_flag.get())
                 && thumbnail_sender.send(Request::StorageLoad { poll: true, generation: live_model.generation() }).is_ok() {
                 storage_refresh.requested();
                 response_storage_poll_flag.set(true);
@@ -3207,13 +3409,15 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 return;
             };
             let state = ui.global::<AppState>();
-            if !live_poll_needed(
-                state.get_active_page().as_str(),
-                ui.window().is_visible() && !ui.window().is_minimized(),
-                state.get_live_busy(),
-                live_poll_flag.get(),
-                thumbnail_tracking.get(),
-            ) {
+            if state.get_desktop_exit_pending()
+                || !live_poll_needed(
+                    state.get_active_page().as_str(),
+                    ui.window().is_visible() && !ui.window().is_minimized(),
+                    state.get_live_busy(),
+                    live_poll_flag.get(),
+                    thumbnail_tracking.get(),
+                )
+            {
                 return;
             }
             if live_poll_sender
@@ -3240,6 +3444,7 @@ pub fn bind(ui: &MainWindow) -> Controller {
         let state = ui.global::<AppState>();
         if !ui.window().is_visible()
             || ui.window().is_minimized()
+            || state.get_desktop_exit_pending()
             || state.get_active_page().as_str() != "LIVE"
             || state.get_storage_busy()
             || storage_poll_flag.get()
@@ -3269,7 +3474,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
                 return;
             };
             let state = ui.global::<AppState>();
-            if state.get_active_page().as_str() != "VOD"
+            if !ui.window().is_visible()
+                || ui.window().is_minimized()
+                || state.get_desktop_exit_pending()
+                || state.get_active_page().as_str() != "VOD"
                 || state.get_vod_busy()
                 || vod_poll_flag.get()
             {
@@ -3297,7 +3505,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
             };
             let app_state = ui.global::<AppState>();
             let queue_state = ui.global::<QueueHistoryState>();
-            if app_state.get_active_page().as_str() != "Queue"
+            if !ui.window().is_visible()
+                || ui.window().is_minimized()
+                || app_state.get_desktop_exit_pending()
+                || app_state.get_active_page().as_str() != "Queue"
                 || queue_state.get_queue_busy()
                 || queue_poll_flag.get()
             {
@@ -3325,7 +3536,10 @@ pub fn bind(ui: &MainWindow) -> Controller {
             };
             let app_state = ui.global::<AppState>();
             let maintenance_state = ui.global::<MaintenanceState>();
-            if app_state.get_active_page().as_str() != "Diagnostics"
+            if !ui.window().is_visible()
+                || ui.window().is_minimized()
+                || app_state.get_desktop_exit_pending()
+                || app_state.get_active_page().as_str() != "Diagnostics"
                 || maintenance_state.get_section().as_str() != "Logs"
                 || !maintenance_state.get_log_auto_refresh()
                 || maintenance_state.get_busy()

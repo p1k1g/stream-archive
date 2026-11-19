@@ -274,24 +274,35 @@ impl BackupManager {
         let file_name = format!("{BACKUP_PREFIX}{kind}_{stamp}.db");
         let path = backup_dir.join(&file_name);
         self.store.backup_to(&path)?;
-        verify_sqlite(&path)?;
-        let sha256 = sha256_file(&path)?;
-        let size_bytes = fs::metadata(&path)?.len();
-        let metadata = BackupMetadata {
-            version: 1,
-            created_at: Utc::now().to_rfc3339(),
-            kind: kind.to_string(),
-            source: self.store.path().display().to_string(),
-            sha256: sha256.clone(),
-            size_bytes,
+        let finalize: Result<(String, u64, BackupMetadata)> = (|| {
+            verify_sqlite(&path)?;
+            let sha256 = sha256_file(&path)?;
+            let size_bytes = fs::metadata(&path)?.len();
+            let metadata = BackupMetadata {
+                version: 1,
+                created_at: Utc::now().to_rfc3339(),
+                kind: kind.to_string(),
+                source: self.store.path().display().to_string(),
+                sha256: sha256.clone(),
+                size_bytes,
+            };
+            fs::write(
+                path.with_extension("db.json"),
+                serde_json::to_vec_pretty(&metadata)?,
+            )?;
+            Ok((sha256, size_bytes, metadata))
+        })();
+        let (sha256, size_bytes, metadata) = match finalize {
+            Ok(values) => values,
+            Err(err) => {
+                let _ = fs::remove_file(&path);
+                let _ = fs::remove_file(path.with_extension("db.json"));
+                return Err(err);
+            }
         };
-        fs::write(
-            path.with_extension("db.json"),
-            serde_json::to_vec_pretty(&metadata)?,
-        )?;
         if cleanup {
             let policy = self.policy()?;
-            self.cleanup_locked(&policy)?;
+            let _ = self.cleanup_locked(&policy);
         }
         Ok(BackupInfo {
             file_name,
@@ -351,8 +362,7 @@ impl BackupManager {
             } else {
                 false
             };
-            if too_many || too_old {
-                fs::remove_file(&path)?;
+            if (too_many || too_old) && fs::remove_file(&path).is_ok() {
                 let _ = fs::remove_file(path.with_extension("db.json"));
                 removed += 1;
             }

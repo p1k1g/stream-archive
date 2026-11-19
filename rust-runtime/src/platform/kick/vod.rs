@@ -894,6 +894,7 @@ async fn expected_fragment_count(source: &Url, duration: u64, cancel: &AtomicBoo
 
 fn yt_dlp_command(tool: &Path, output: &Path) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(tool);
+    crate::platform_runtime::configure_utf8_cli(&mut command);
     command
         .args([
             "--ignore-config",
@@ -996,7 +997,7 @@ async fn download_ts(
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut lines = crate::bounded_lines::BoundedLines::new(stream);
-            while let Ok(Some(line)) = lines.next_line().await {
+            while let Ok(Some(line)) = lines.next_line_lossy().await {
                 let progress = if line.starts_with("KICK_DONE ") {
                     Some(2.0)
                 } else {
@@ -1016,14 +1017,18 @@ async fn download_ts(
     let mut completed = false;
     let mut cancel_deadline = None;
     let result = loop {
+        let mut saw_progress = false;
         while let Ok(time) = rx.try_recv() {
+            saw_progress = true;
             completed |= time == 2.0;
             if time != 2.0 {
                 seconds = time * duration as f64;
             }
+        }
+        if saw_progress {
+            let size = partial_size(output);
             let mut state = status.write().await;
             state.percent = (seconds / duration as f64 * 100.0).clamp(0.0, 99.0);
-            let size = partial_size(output);
             state.message = format!(
                 "KICK VOD 다운로드 중 · {:.1}% · {:.1} MB",
                 state.percent,
@@ -1036,7 +1041,7 @@ async fn download_ts(
         }
         match child.try_wait() {
             Ok(Some(exit)) => {
-                let _ = tree.terminate_now();
+                let _ = tree.terminate(&mut child).await;
                 if cancel.load(Ordering::Acquire) {
                     break Ok(());
                 }

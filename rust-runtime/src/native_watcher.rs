@@ -110,6 +110,11 @@ struct ChannelState {
     suppressed_broadcast_id: Option<String>,
     next_check: Instant,
     detail: Option<String>,
+    consecutive_auth_retries: u32,
+    consecutive_short_exits: u32,
+    pending_removal: bool,
+    cached_output_dir: Option<String>,
+    output_dir_checked_at: Option<Instant>,
 }
 
 impl ChannelState {
@@ -130,6 +135,11 @@ impl ChannelState {
             suppressed_broadcast_id: None,
             next_check: Instant::now(),
             detail: None,
+            consecutive_auth_retries: 0,
+            consecutive_short_exits: 0,
+            pending_removal: false,
+            cached_output_dir: None,
+            output_dir_checked_at: None,
         }
     }
 }
@@ -141,7 +151,29 @@ impl ChannelState {
         self.completion_revision = REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.completed_broadcast_id = Some(broadcast_id.to_owned());
         self.thumbnail_url = None;
+        self.output_dir_checked_at = None;
     }
+
+    fn resolve_cached_output_dir(&mut self, default_output_dir: &Path) -> Option<String> {
+        const OUTPUT_DIR_CACHE_TTL: Duration = Duration::from_secs(30);
+        let stale = self
+            .output_dir_checked_at
+            .is_none_or(|checked| checked.elapsed() >= OUTPUT_DIR_CACHE_TTL);
+        if stale {
+            self.cached_output_dir = existing_channel_output_dir(&self.channel, default_output_dir);
+            self.output_dir_checked_at = Some(Instant::now());
+        }
+        self.cached_output_dir.clone()
+    }
+}
+
+fn backoff_delay(base_secs: u64, consecutive: u32, max_secs: u64) -> Duration {
+    let shift = consecutive.saturating_sub(1).min(6);
+    let secs = base_secs
+        .max(1)
+        .saturating_mul(1u64 << shift)
+        .min(max_secs.max(base_secs.max(1)));
+    Duration::from_secs(secs)
 }
 
 #[derive(Debug)]
@@ -167,6 +199,7 @@ pub struct NativeWatcherManager {
     trace: crate::resource_trace::ResourceTrace,
     backend_dir: PathBuf,
     logs: LogBuffer,
+    lifecycle: Mutex<()>,
     runtime: Mutex<Runtime>,
     snapshot: Arc<RwLock<WatcherStatus>>,
 }
@@ -184,6 +217,7 @@ impl NativeWatcherManager {
             trace,
             backend_dir,
             logs,
+            lifecycle: Mutex::new(()),
             runtime: Mutex::new(Runtime {
                 task: None,
                 stop_tx: None,
@@ -194,6 +228,7 @@ impl NativeWatcherManager {
     }
 
     pub async fn start(&self) -> Result<WatcherStatus> {
+        let _lifecycle = self.lifecycle.lock().await;
         let mut runtime = self.runtime.lock().await;
         if runtime
             .task
@@ -288,12 +323,16 @@ impl NativeWatcherManager {
     }
 
     pub async fn stop(&self) -> Result<WatcherStatus> {
-        let mut runtime = self.runtime.lock().await;
-        if let Some(tx) = runtime.stop_tx.take() {
+        let _lifecycle = self.lifecycle.lock().await;
+        let (stop_tx, task) = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.command_tx = None;
+            (runtime.stop_tx.take(), runtime.task.take())
+        };
+        if let Some(tx) = stop_tx {
             let _ = tx.send(());
         }
-        runtime.command_tx = None;
-        if let Some(task) = runtime.task.take() {
+        if let Some(task) = task {
             finish_watcher_task(task, &self.logs, &self.snapshot, "stop").await;
         }
         self.snapshot.write().await.running = false;
@@ -463,6 +502,12 @@ async fn run_native_watcher(
     let mut last_channel_signature = channel_signature(&initial_channels);
     let mut states = HashMap::new();
     apply_channels(&mut states, initial_channels, &recorder, &logs).await;
+    // Stagger initial channel probes slightly so large channel lists do not hit upstream APIs all at once.
+    let stagger_cap_ms = config.check_interval.clamp(1, 10) * 1000;
+    for (idx, state) in states.values_mut().enumerate() {
+        let delay_ms = ((idx as u64).saturating_mul(200)).min(stagger_cap_ms);
+        state.next_check = Instant::now() + Duration::from_millis(delay_ms);
+    }
     let mut next_reload = Instant::now();
     let mut next_setting_check = Instant::now();
 
@@ -481,7 +526,7 @@ async fn run_native_watcher(
             _ = &mut control.stop_rx => break,
             Some(command) = control.command_rx.recv() => {
                 handle_command(command, &mut states, &recorder, &logs).await;
-                update_snapshot(&states, &snapshot, &config.output_dir).await;
+                update_snapshot(&mut states, &snapshot, &config.output_dir).await;
             }
             _ = tokio::time::sleep(Duration::from_millis(400)) => {
                 let now = Instant::now();
@@ -545,7 +590,7 @@ async fn run_native_watcher(
                 check_recording_broadcasts(&mut states, &config, &mut sessions, &recorder, &logs).await;
                 monitor_recordings(&mut states, &config, &recorder, &logs).await;
                 poll_channels(&mut states, &config, &mut sessions, &recorder, &logs).await;
-                update_snapshot(&states, &snapshot, &config.output_dir).await;
+                update_snapshot(&mut states, &snapshot, &config.output_dir).await;
                 if trace.enabled() && now >= next_trace {
                     next_trace = now + Duration::from_secs(60);
                     trace.record(crate::resource_trace::Event::WatcherSample,
@@ -563,7 +608,7 @@ async fn run_native_watcher(
     }
     mark_watcher_stopped(&mut states);
     clear_all_stream_passwords();
-    update_snapshot(&states, &snapshot, &config.output_dir).await;
+    update_snapshot(&mut states, &snapshot, &config.output_dir).await;
     trace.record(
         crate::resource_trace::Event::WatcherStopped,
         crate::resource_trace::Sample {
@@ -668,6 +713,7 @@ async fn apply_channels(
                 can_remove = state.recording.is_none();
                 if !can_remove {
                     state.channel.enabled = false;
+                    state.pending_removal = true;
                     state.status = "ERROR".into();
                     state.detail = Some(
                         "channel removed, but recorder ownership is retained until process-tree cleanup succeeds"
@@ -693,12 +739,22 @@ async fn apply_channels(
     for (key, channel) in incoming {
         if let Some(state) = states.get_mut(&key) {
             let was_enabled = state.channel.enabled;
+            let outdir_changed =
+                state.channel.outdir != channel.outdir || state.channel.name != channel.name;
             state.channel = channel;
+            state.pending_removal = false;
+            if outdir_changed {
+                state.output_dir_checked_at = None;
+            }
             if was_enabled && !state.channel.enabled {
                 stop_state_recording(state, "CHANNEL DISABLED", recorder, logs).await;
-                state.status = "DISABLED".into();
+                if state.recording.is_none() {
+                    state.status = "DISABLED".into();
+                }
             } else if !was_enabled && state.channel.enabled {
                 state.status = "UNKNOWN".into();
+                state.consecutive_auth_retries = 0;
+                state.consecutive_short_exits = 0;
                 state.next_check = Instant::now();
             }
         } else {
@@ -817,16 +873,39 @@ async fn poll_channels(
                 state.last_broadcast_id = None;
                 state.thumbnail_url = None;
                 state.detail = None;
+                state.consecutive_auth_retries = 0;
+                state.consecutive_short_exits = 0;
             }
             Ok(LiveProbe::AuthRequired) => {
                 state.thumbnail_url = None;
                 state.status = "AUTH".into();
+                state.consecutive_auth_retries = state.consecutive_auth_retries.saturating_add(1);
                 match recover_auth_required(session, config).await {
-                    Ok(_) => state.next_check = Instant::now(),
-                    Err(err) => state.detail = Some(err.to_string()),
+                    Ok(_) => {
+                        if state.consecutive_auth_retries == 1 {
+                            state.next_check = Instant::now() + Duration::from_secs(2);
+                        } else {
+                            state.next_check = Instant::now()
+                                + backoff_delay(
+                                    config.check_interval,
+                                    state.consecutive_auth_retries - 1,
+                                    300,
+                                );
+                        }
+                    }
+                    Err(err) => {
+                        state.detail = Some(err.to_string());
+                        state.next_check = Instant::now()
+                            + backoff_delay(
+                                config.check_interval,
+                                state.consecutive_auth_retries,
+                                300,
+                            );
+                    }
                 }
             }
             Ok(LiveProbe::Live(live)) => {
+                state.consecutive_auth_retries = 0;
                 state.thumbnail_url = live.thumbnail_url();
                 state.last_broadcast_id = Some(live.id.clone());
                 if state
@@ -1009,21 +1088,40 @@ async fn monitor_recordings(
             Ok(RecordingPoll::Running) => {}
             Ok(RecordingPoll::Exited(code)) => {
                 let (normal_exit, reason) = recording_exit_outcome(code);
+                let mut ran_secs = 0i64;
                 if let Some(rec) = state.recording.take() {
+                    ran_secs = (Utc::now() - rec.started_at).num_seconds().max(0);
                     recorder
                         .log_finished(&state.channel.name, &state.channel.account, &rec, &reason)
                         .await;
                     state.recording_finished(&rec.bno);
                 }
+                if state.pending_removal {
+                    states.remove(&key);
+                    continue;
+                }
                 if normal_exit {
                     state.status = "UNKNOWN".into();
                     state.detail = None;
-                    state.next_check = Instant::now();
+                    if ran_secs < 30 {
+                        state.consecutive_short_exits =
+                            state.consecutive_short_exits.saturating_add(1);
+                        state.next_check = Instant::now()
+                            + backoff_delay(
+                                config.retry_interval,
+                                state.consecutive_short_exits,
+                                300,
+                            );
+                    } else {
+                        state.consecutive_short_exits = 0;
+                        state.next_check = Instant::now() + Duration::from_secs(2);
+                    }
                 } else {
                     state.status = "ERROR".into();
                     state.detail = Some(reason.clone());
-                    state.next_check =
-                        Instant::now() + Duration::from_secs(config.retry_interval.max(1));
+                    state.consecutive_short_exits = state.consecutive_short_exits.saturating_add(1);
+                    state.next_check = Instant::now()
+                        + backoff_delay(config.retry_interval, state.consecutive_short_exits, 300);
                     logs.push(format!(
                         "[RUST:ERR] recorder exited unexpectedly {}/{}: {reason}",
                         state.channel.platform, state.channel.account
@@ -1044,7 +1142,9 @@ async fn monitor_recordings(
                 state.status = "STALLED".into();
                 state.detail = Some(format!("{}s no growth", config.recorder.stall_timeout));
                 stop_state_recording(state, "RECORD STALLED", recorder, logs).await;
-                state.next_check = Instant::now();
+                state.consecutive_short_exits = state.consecutive_short_exits.saturating_add(1);
+                state.next_check = Instant::now()
+                    + backoff_delay(config.retry_interval, state.consecutive_short_exits, 300);
             }
             Err(err) => {
                 state.status = "ERROR".into();
@@ -1136,34 +1236,50 @@ async fn stop_state_recording(
 }
 
 async fn update_snapshot(
-    states: &HashMap<String, ChannelState>,
+    states: &mut HashMap<String, ChannelState>,
     snapshot: &Arc<RwLock<WatcherStatus>>,
     default_output_dir: &Path,
 ) {
-    let mut ordered: Vec<&ChannelState> = states.values().collect();
-    ordered.sort_by(|a, b| {
-        a.channel
+    let mut keys: Vec<String> = states.keys().cloned().collect();
+    keys.sort_by(|a, b| {
+        let sa = &states[a];
+        let sb = &states[b];
+        sa.channel
             .platform
             .as_str()
-            .cmp(b.channel.platform.as_str())
-            .then_with(|| a.channel.name.cmp(&b.channel.name))
+            .cmp(sb.channel.platform.as_str())
+            .then_with(|| sa.channel.name.cmp(&sb.channel.name))
     });
 
     let mut recording_count = 0;
     let mut offline_count = 0;
     let mut error_count = 0;
-    let mut channels = Vec::with_capacity(ordered.len());
+    let mut channels = Vec::with_capacity(keys.len());
 
-    for state in ordered {
-        if state.status == "RECORDING" {
+    for key in keys {
+        let Some(state) = states.get_mut(&key) else {
+            continue;
+        };
+        let effective_status = if !state.channel.enabled {
+            "DISABLED"
+        } else {
+            state.status.as_str()
+        };
+        if effective_status == "RECORDING" {
             recording_count += 1;
         }
-        if state.status == "OFFLINE" {
+        if effective_status == "OFFLINE" {
             offline_count += 1;
         }
-        if matches!(state.status.as_str(), "ERROR" | "LOW_DISK" | "STALLED") {
+        if matches!(effective_status, "ERROR" | "LOW_DISK" | "STALLED" | "AUTH") {
             error_count += 1;
         }
+        let has_rec = state.recording.is_some();
+        let output_dir = if has_rec {
+            None
+        } else {
+            state.resolve_cached_output_dir(default_output_dir)
+        };
         let rec = state.recording.as_ref();
         channels.push(ChannelRuntimeStatus {
             thumbnail_url: if rec
@@ -1188,14 +1304,8 @@ async fn update_snapshot(
                 .or_else(|| state.last_broadcast_id.clone()),
             title: rec.map(|r| r.title.clone()),
             file: rec.map(|r| r.file.display().to_string()),
-            output_dir: if rec.is_some() {
-                None
-            } else {
-                existing_channel_output_dir(&state.channel, default_output_dir)
-            },
-            size_bytes: rec
-                .and_then(|r| fs::metadata(&r.file).ok().map(|m| m.len()))
-                .unwrap_or(0),
+            output_dir,
+            size_bytes: rec.map(|r| r.last_size()).unwrap_or(0),
             started_at: rec.map(|r| r.started_at.to_rfc3339()),
             suppressed: state.suppressed_broadcast_id.is_some(),
             detail: state.detail.clone(),
@@ -1295,33 +1405,22 @@ impl WatcherConfig {
 }
 
 fn resolve_streamlink(backend_dir: &Path, map: &BTreeMap<String, String>) -> Result<PathBuf> {
-    for key in ["STREAMLINK_PATH", "STREAMLINK_FALLBACK"] {
-        if let Some(value) = map.get(key)
-            && !value.trim().is_empty()
-            && !value.eq_ignore_ascii_case("AUTO")
-        {
-            let path = PathBuf::from(value);
-            if path.is_file() {
-                return Ok(path);
-            }
-        }
-    }
-
-    #[allow(unused_mut)]
-    let mut candidates = vec![backend_dir.join("streamlink.exe")];
-    #[cfg(windows)]
-    {
-        candidates.push(PathBuf::from(
-            r"C:\Program Files\Streamlink\bin\streamlink.exe",
-        ));
-        candidates.push(PathBuf::from(r"C:\Program Files\Streamlink\streamlink.exe"));
-    }
-    for path in candidates {
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-    bail!("streamlink executable not found; set STREAMLINK_PATH or STREAMLINK_FALLBACK")
+    let primary = map.get("STREAMLINK_PATH").map(String::as_str).unwrap_or("");
+    let fallback = map
+        .get("STREAMLINK_FALLBACK")
+        .map(String::as_str)
+        .unwrap_or("");
+    let resolution = crate::tool_discovery::resolve_tool(
+        crate::tool_discovery::ToolKind::Streamlink,
+        backend_dir,
+        &[
+            ("STREAMLINK_PATH", primary),
+            ("STREAMLINK_FALLBACK", fallback),
+        ],
+    );
+    resolution.path.ok_or_else(|| {
+        anyhow!("streamlink executable not found; set STREAMLINK_PATH or STREAMLINK_FALLBACK")
+    })
 }
 
 fn resolve_channel_output_dir(channel: &Channel, default: &Path) -> PathBuf {
@@ -1503,7 +1602,13 @@ mod tests {
     #[test]
     fn watcher_initial_and_reload_snapshots_observe_external_secret_changes() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("streamlink.exe"), b"test fixture").unwrap();
+        let streamlink_fixture = dir.path().join("streamlink.exe");
+        fs::write(&streamlink_fixture, b"test fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&streamlink_fixture, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let path = dir.path().join("test.db");
         let owner = store::Store::open(path.clone()).unwrap();
         owner
@@ -1797,12 +1902,8 @@ mod thumbnail_completion_tests {
         state.recording_finished("123");
         assert!(state.completion_revision > first);
         let snapshot = Arc::new(RwLock::new(WatcherStatus::default()));
-        update_snapshot(
-            &HashMap::from([("SOOP:test".into(), state)]),
-            &snapshot,
-            Path::new(""),
-        )
-        .await;
+        let mut states = HashMap::from([("SOOP:test".into(), state)]);
+        update_snapshot(&mut states, &snapshot, Path::new("")).await;
         let snapshot = snapshot.read().await;
         assert_eq!(
             snapshot.channels[0].completed_broadcast_id.as_deref(),

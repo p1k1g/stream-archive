@@ -25,12 +25,30 @@ pub fn containing_directory(file_path: &str) -> Result<PathBuf, String> {
 #[cfg(windows)]
 pub fn open_containing_directory(file_path: &str) -> Result<(), String> {
     use windows::{
-        Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+        Win32::{
+            System::Com::{
+                COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
+            },
+            UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+        },
         core::{HSTRING, PCWSTR, w},
     };
 
+    struct ComGuard(bool);
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                // SAFETY: paired only with a successful CoInitializeEx on this thread.
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+
     let directory = containing_directory(file_path)?;
     let directory = HSTRING::from(directory.as_os_str());
+    // SAFETY: ShellExecuteW recommends STA COM initialization on worker threads.
+    let com_hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+    let _com = ComGuard(com_hr.is_ok());
     // SAFETY: all strings live through the call, no ownership is transferred,
     // and ShellExecuteW is used only to ask Explorer to open this directory.
     let result = unsafe {

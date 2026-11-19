@@ -148,6 +148,7 @@ impl Store {
 
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .with_context(|| format!("failed to open SQLite database {}", path.display()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let table_exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings')",
             [],
@@ -568,10 +569,6 @@ impl Store {
         mut retire: impl FnMut(&str, &str) -> Result<Option<String>>,
     ) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut cache = self
-            .settings_cache
-            .write()
-            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let read = |key: &str| -> Result<String> {
             Ok(tx
@@ -618,6 +615,10 @@ impl Store {
         )?;
         }
         tx.commit()?;
+        let mut cache = self
+            .settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
         for (key, value) in values {
             cache.insert(key.clone(), value.clone());
         }
@@ -642,10 +643,6 @@ impl Store {
 
     pub(crate) fn retain_secret_cleanup(&self, key: &str, reference: &str) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut cache = self
-            .settings_cache
-            .write()
-            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value: Option<String> = tx
             .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
@@ -667,16 +664,15 @@ impl Store {
             params![key, value, Utc::now().to_rfc3339()],
         )?;
         tx.commit()?;
-        cache.insert(key.to_string(), value);
+        self.settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?
+            .insert(key.to_string(), value);
         Ok(())
     }
 
     pub(crate) fn finish_secret_cleanup(&self, key: &str, reference: &str) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut cache = self
-            .settings_cache
-            .write()
-            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value: Option<String> = tx
             .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
@@ -696,7 +692,10 @@ impl Store {
             params![key, value, Utc::now().to_rfc3339()],
         )?;
         tx.commit()?;
-        cache.insert(key.to_string(), value);
+        self.settings_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("settings cache lock poisoned"))?
+            .insert(key.to_string(), value);
         Ok(())
     }
 

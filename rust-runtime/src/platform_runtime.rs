@@ -4,8 +4,11 @@ use anyhow::{Context, Result};
 use std::path::Path;
 #[cfg(windows)]
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
+
+#[cfg(windows)]
+const JOB_TERMINATE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn configure_utf8_cli(command: &mut Command) {
     command.env("PYTHONUTF8", "1");
@@ -40,15 +43,22 @@ impl OwnedProcessTree {
     /// already exited. Root exit is not treated as descendant cleanup.
     pub(crate) fn terminate_now(&self) -> Result<()> {
         #[cfg(windows)]
-        loop {
-            match self.job.active_process_count() {
-                Ok(0) => break,
-                Ok(_) | Err(_) => {
-                    // The retained Job handle is the authoritative identity.
-                    // Retry a transient TerminateJobObject/query failure instead
-                    // of returning while any Job member may still be running.
-                    let _ = self.job.terminate();
-                    std::thread::sleep(Duration::from_millis(25));
+        {
+            let deadline = Instant::now() + JOB_TERMINATE_TIMEOUT;
+            loop {
+                match self.job.active_process_count() {
+                    Ok(0) => break,
+                    status => {
+                        // The retained Job handle is the authoritative identity.
+                        // Retry a transient TerminateJobObject/query failure up to the deadline.
+                        let _ = self.job.terminate();
+                        if Instant::now() >= deadline {
+                            anyhow::bail!(
+                                "timed out waiting for owned Job processes to exit: {status:?}"
+                            );
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
                 }
             }
         }
@@ -62,15 +72,23 @@ impl OwnedProcessTree {
     /// Terminates the retained owned tree/group and reaps the root child.
     pub(crate) async fn terminate(&mut self, child: &mut Child) -> Result<Option<i32>> {
         #[cfg(windows)]
-        loop {
-            match self.job.active_process_count() {
-                Ok(0) => break,
-                Ok(_) | Err(_) => {
-                    // Never fall back to a historical root PID here. The Job
-                    // captured from the exact spawned Child handle is the only
-                    // authoritative retained identity after spawn.
-                    let _ = self.job.terminate();
-                    tokio::time::sleep(Duration::from_millis(25)).await;
+        {
+            let deadline = Instant::now() + JOB_TERMINATE_TIMEOUT;
+            loop {
+                match self.job.active_process_count() {
+                    Ok(0) => break,
+                    status => {
+                        // Never fall back to a historical root PID here. The Job
+                        // captured from the exact spawned Child handle is the only
+                        // authoritative retained identity after spawn.
+                        let _ = self.job.terminate();
+                        if Instant::now() >= deadline {
+                            anyhow::bail!(
+                                "timed out waiting for owned Job processes to exit: {status:?}"
+                            );
+                        }
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
                 }
             }
         }
@@ -120,11 +138,15 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
             // The root is already inside the authoritative Job. Keep ownership
             // until every member is gone instead of dropping a kill-on-close
             // handle while the caller still believes spawn succeeded.
+            let deadline = Instant::now() + JOB_TERMINATE_TIMEOUT;
             loop {
                 match job.active_process_count() {
                     Ok(0) => break,
                     Ok(_) | Err(_) => {
                         let _ = job.terminate();
+                        if Instant::now() >= deadline {
+                            break;
+                        }
                         tokio::time::sleep(Duration::from_millis(25)).await;
                     }
                 }
@@ -167,8 +189,9 @@ pub(crate) async fn spawn_owned(command: &mut Command) -> Result<(Child, OwnedPr
 /// the child is verified as that group's leader; otherwise cleanup is limited to
 /// the direct child. New lifetimes should prefer `spawn_owned`.
 pub async fn terminate_owned(child: &mut Child) {
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if terminate_owned_checked(child).await.is_ok() {
+        if terminate_owned_checked(child).await.is_ok() || Instant::now() >= deadline {
             return;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -197,6 +220,7 @@ pub(crate) async fn terminate_owned_checked(child: &mut Child) -> Result<Option<
 
 #[cfg(windows)]
 async fn terminate_windows_tree(child: &Child) -> Result<()> {
+    let deadline = Instant::now() + JOB_TERMINATE_TIMEOUT;
     loop {
         let Some(root_pid) = child.id() else {
             return Ok(());
@@ -210,8 +234,13 @@ async fn terminate_windows_tree(child: &Child) -> Result<()> {
                 loop {
                     match job.active_process_count() {
                         Ok(0) => return Ok(()),
-                        Ok(_) | Err(_) => {
+                        status => {
                             let _ = job.terminate();
+                            if Instant::now() >= deadline {
+                                anyhow::bail!(
+                                    "timed out terminating Windows process tree: {status:?}"
+                                );
+                            }
                             tokio::time::sleep(Duration::from_millis(25)).await;
                         }
                     }
@@ -236,6 +265,9 @@ async fn terminate_windows_tree(child: &Child) -> Result<()> {
                     .stderr(Stdio::null());
                 windows_tree::configure_no_window(&mut taskkill);
                 let _ = taskkill.status().await;
+                if Instant::now() >= deadline {
+                    anyhow::bail!("timed out terminating Windows process pid={root_pid}");
+                }
             }
         }
 

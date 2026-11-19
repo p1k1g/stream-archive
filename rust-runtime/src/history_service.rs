@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::{Result, bail};
 use chrono::{DateTime, Local, NaiveDate};
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 use std::path::Path;
 
 pub const HISTORY_DEFAULT_LIMIT: usize = 100;
@@ -57,10 +57,46 @@ pub struct NormalizedHistoryFilter {
 
 pub fn load_history(path: &Path, filter: &HistoryFilter) -> Result<HistoryResponse> {
     let normalized = filter.normalized()?;
-    let mut history = load_history_compat(path, HISTORY_MAX_LIMIT)?;
+    Ok(load_history_filtered(path, &normalized)?)
+}
 
-    history.live.retain(|item| {
-        text_matches_live(item, normalized.needle.as_deref())
+fn stored_platform(value: String) -> PlatformId {
+    value.parse().unwrap_or_default()
+}
+
+fn load_history_filtered(
+    path: &Path,
+    normalized: &NormalizedHistoryFilter,
+) -> rusqlite::Result<HistoryResponse> {
+    let limit = normalized.limit.clamp(1, HISTORY_MAX_LIMIT);
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    let has_date_filter = normalized.from.is_some() || normalized.to.is_some();
+
+    let mut live_stmt = conn.prepare(
+        "SELECT COALESCE(platform,'SOOP'),id,account,channel_name,bno,title,file_path,started_at,ended_at,duration_seconds,size_bytes,reason,status FROM live_recordings ORDER BY started_at DESC",
+    )?;
+    let mut live = Vec::with_capacity(limit.min(128));
+    let mut live_rows = live_stmt.query([])?;
+    while let Some(row) = live_rows.next()? {
+        let item = LiveHistoryItem {
+            platform: stored_platform(row.get(0)?),
+            id: row.get(1)?,
+            account: row.get(2)?,
+            channel_name: row.get(3)?,
+            bno: row.get(4)?,
+            title: row.get(5)?,
+            file_path: row.get(6)?,
+            started_at: row.get(7)?,
+            ended_at: row.get(8)?,
+            duration_seconds: row.get::<_, Option<i64>>(9)?.unwrap_or(0),
+            size_bytes: row.get::<_, Option<i64>>(10)?.unwrap_or(0).max(0) as u64,
+            reason: row.get(11)?,
+            status: row
+                .get::<_, Option<String>>(12)?
+                .unwrap_or_else(|| "UNKNOWN".to_string()),
+        };
+        if text_matches_live(&item, normalized.needle.as_deref())
             && normalized
                 .statuses
                 .as_deref()
@@ -70,80 +106,55 @@ pub fn load_history(path: &Path, filter: &HistoryFilter) -> Result<HistoryRespon
                 normalized.from.as_deref(),
                 normalized.to.as_deref(),
             )
-    });
-    history.vod.retain(|item| {
-        text_matches_vod(item, normalized.needle.as_deref())
+        {
+            live.push(item);
+            if live.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    let mut vod_stmt = conn.prepare(
+        "SELECT COALESCE(platform,'SOOP'),id,COALESCE(kind,'JOB'),COALESCE(vod_url,''),COALESCE(title,''),COALESCE(streamer,''),COALESCE(part_count,0),COALESCE(state,'UNKNOWN'),output_file,COALESCE(message,''),started_at,finished_at FROM vod_jobs ORDER BY COALESCE(started_at,updated_at) DESC",
+    )?;
+    let mut vod = Vec::with_capacity(limit.min(128));
+    let mut vod_rows = vod_stmt.query([])?;
+    while let Some(row) = vod_rows.next()? {
+        let item = VodHistoryItem {
+            platform: stored_platform(row.get(0)?),
+            id: row.get(1)?,
+            kind: row.get(2)?,
+            vod_url: row.get(3)?,
+            title: row.get(4)?,
+            streamer: row.get(5)?,
+            part_count: row.get::<_, i64>(6)?.max(0) as usize,
+            state: row.get(7)?,
+            output_file: row.get(8)?,
+            message: row.get(9)?,
+            started_at: row.get(10)?,
+            finished_at: row.get(11)?,
+        };
+        let date_ok = match item.started_at.as_deref() {
+            Some(started) => date_matches(
+                started,
+                normalized.from.as_deref(),
+                normalized.to.as_deref(),
+            ),
+            None => !has_date_filter,
+        };
+        if text_matches_vod(&item, normalized.needle.as_deref())
             && normalized
                 .statuses
                 .as_deref()
                 .is_none_or(|wanted| status_matches(&item.state, wanted))
-            && item.started_at.as_deref().is_none_or(|started| {
-                date_matches(
-                    started,
-                    normalized.from.as_deref(),
-                    normalized.to.as_deref(),
-                )
-            })
-    });
-    history.live.truncate(normalized.limit);
-    history.vod.truncate(normalized.limit);
-    Ok(history)
-}
-
-fn stored_platform(value: String) -> PlatformId {
-    value.parse().unwrap_or_default()
-}
-
-fn load_history_compat(path: &Path, limit: usize) -> rusqlite::Result<HistoryResponse> {
-    let limit = limit.clamp(1, HISTORY_MAX_LIMIT) as i64;
-    let conn = Connection::open(path)?;
-
-    let mut live_stmt = conn.prepare(
-        "SELECT COALESCE(platform,'SOOP'),id,account,channel_name,bno,title,file_path,started_at,ended_at,duration_seconds,size_bytes,reason,status FROM live_recordings ORDER BY started_at DESC LIMIT ?1",
-    )?;
-    let live = live_stmt
-        .query_map(params![limit], |row| {
-            Ok(LiveHistoryItem {
-                platform: stored_platform(row.get(0)?),
-                id: row.get(1)?,
-                account: row.get(2)?,
-                channel_name: row.get(3)?,
-                bno: row.get(4)?,
-                title: row.get(5)?,
-                file_path: row.get(6)?,
-                started_at: row.get(7)?,
-                ended_at: row.get(8)?,
-                duration_seconds: row.get::<_, Option<i64>>(9)?.unwrap_or(0),
-                size_bytes: row.get::<_, Option<i64>>(10)?.unwrap_or(0).max(0) as u64,
-                reason: row.get(11)?,
-                status: row
-                    .get::<_, Option<String>>(12)?
-                    .unwrap_or_else(|| "UNKNOWN".to_string()),
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    let mut vod_stmt = conn.prepare(
-        "SELECT COALESCE(platform,'SOOP'),id,COALESCE(kind,'JOB'),COALESCE(vod_url,''),COALESCE(title,''),COALESCE(streamer,''),COALESCE(part_count,0),COALESCE(state,'UNKNOWN'),output_file,COALESCE(message,''),started_at,finished_at FROM vod_jobs ORDER BY COALESCE(started_at,updated_at) DESC LIMIT ?1",
-    )?;
-    let vod = vod_stmt
-        .query_map(params![limit], |row| {
-            Ok(VodHistoryItem {
-                platform: stored_platform(row.get(0)?),
-                id: row.get(1)?,
-                kind: row.get(2)?,
-                vod_url: row.get(3)?,
-                title: row.get(4)?,
-                streamer: row.get(5)?,
-                part_count: row.get::<_, i64>(6)?.max(0) as usize,
-                state: row.get(7)?,
-                output_file: row.get(8)?,
-                message: row.get(9)?,
-                started_at: row.get(10)?,
-                finished_at: row.get(11)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+            && date_ok
+        {
+            vod.push(item);
+            if vod.len() >= limit {
+                break;
+            }
+        }
+    }
 
     Ok(HistoryResponse { live, vod })
 }
@@ -276,6 +287,12 @@ fn normalize_date_input(value: Option<&str>) -> Result<Option<String>> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .map_err(|_| anyhow::anyhow!("history date must use a valid YYYY-MM-DD date"))?;
     Ok(Some(value.to_string()))
+}
+
+pub fn today_local_ymd() -> (i32, u32, u32) {
+    use chrono::Datelike;
+    let today = Local::now().date_naive();
+    (today.year(), today.month(), today.day())
 }
 
 pub fn format_history_timestamp_local(timestamp: &str) -> String {

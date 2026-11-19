@@ -690,7 +690,7 @@ async fn await_vod_foreground(
 
 fn ensure_vod_success(status: &VodJobStatus) -> Result<()> {
     match status.state.as_str() {
-        "COMPLETED" | "ANALYZED" => Ok(()),
+        "COMPLETED" | "READY" | "ANALYZED" => Ok(()),
         "CANCELLED" => bail!("VOD operation cancelled"),
         "FAILED" | "ERROR" => bail!("VOD operation failed: {}", status.message),
         other if !status.running => {
