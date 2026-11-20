@@ -1,399 +1,294 @@
-//! Exercise the compiled presentation with a headless software window. No core,
-//! provider credentials, database, or native desktop session is required.
-use crate::{AppState, MainWindow, MaintenanceState, QueueDisplayRow, QueueHistoryState};
-use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
-use slint::platform::{Platform, PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, Model, ModelRc, PhysicalSize, Rgb8Pixel, VecModel};
-use std::{cell::Cell, rc::Rc};
+//! Presentation state & controller smoke tests for the GPUI desktop shell.
+//! No database, provider credentials, or live desktop session is required.
 
-#[path = "../tests/support/ui_snapshot.rs"]
-mod ui_snapshot;
-
-struct UiTestPlatform(Rc<MinimalSoftwareWindow>);
-
-impl Platform for UiTestPlatform {
-    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-        Ok(self.0.clone())
-    }
-}
-
-fn click(ui: &MainWindow, x: f32, y: f32) {
-    let position = LogicalPosition::new(x, y);
-    ui.window().dispatch_event(WindowEvent::PointerPressed {
-        position,
-        button: PointerEventButton::Left,
-    });
-    ui.window().dispatch_event(WindowEvent::PointerReleased {
-        position,
-        button: PointerEventButton::Left,
-    });
-}
-
-fn render(window: &MinimalSoftwareWindow, width: usize, height: usize) {
-    let _ = render_pixels(window, width, height);
-}
-
-fn render_pixels(window: &MinimalSoftwareWindow, width: usize, height: usize) -> Vec<Rgb8Pixel> {
-    window.request_redraw();
-    let mut pixels = vec![Rgb8Pixel::default(); width * height];
-    assert!(window.draw_if_needed(|renderer| {
-        renderer.render(&mut pixels, width);
-    }));
-    ui_snapshot::save(&pixels, width, height);
-    pixels
-}
+use crate::{
+    controller::{AppController, DesktopSignal, bind_core_snapshot},
+    core_worker::Request,
+    state::{MaintenanceSection, Page, QueueDisplayRow, SettingsView},
+};
+use stream_archive_server::{
+    diagnostics::{
+        DiagnosticCategory, DiagnosticItem, DiagnosticRequirement, DiagnosticStatus,
+        DiagnosticsSnapshot, DiagnosticsSummary,
+    },
+    model::{VodQueueItem, VodQueueSnapshot},
+    support::platform::PlatformId,
+};
 
 #[test]
 fn native_navigation_and_watcher_toggle_preserve_input_guards() {
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(UiTestPlatform(window.clone()))).unwrap();
-    let ui = MainWindow::new().unwrap();
-    ui.window().set_size(PhysicalSize::new(1120, 720));
-    ui.show().unwrap();
-    let state = ui.global::<AppState>();
-    state.set_runtime_ready(true);
-    state.set_live_loaded(true);
-    state.set_live_busy(false);
-    state.set_desktop_recovery_message(
-        "Windows 트레이를 복구하지 못해 창을 다시 표시했습니다.".into(),
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    ctrl.state.runtime_ready = true;
+    ctrl.state.live_loaded = true;
+    ctrl.state.live_busy = false;
+    ctrl.state.desktop_recovery_message =
+        "Windows 트레이를 복구하지 못해 창을 다시 표시했습니다.".into();
+
+    // Recovery banner must not block navigation, and remains dismissible.
+    ctrl.select_page(Page::Channels);
+    assert_eq!(ctrl.state.active_page, Page::Channels);
+    assert!(!ctrl.state.desktop_recovery_message.is_empty());
+    ctrl.dismiss_recovery_message();
+    assert!(ctrl.state.desktop_recovery_message.is_empty());
+
+    // LIVE watcher start/stop honor busy and runtime_ready guards.
+    ctrl.select_page(Page::Live);
+    let _ = rx.try_iter().count();
+    ctrl.live_start();
+    assert!(ctrl.state.live_busy);
+    assert!(matches!(rx.try_recv(), Ok(Request::LiveStart)));
+    // Busy guard suppresses duplicate dispatches.
+    ctrl.live_start();
+    assert!(rx.try_recv().is_err());
+
+    ctrl.state.live_busy = false;
+    ctrl.state.live_running = true;
+    ctrl.live_stop();
+    assert!(ctrl.state.live_busy);
+    assert!(matches!(rx.try_recv(), Ok(Request::LiveStop)));
+
+    // Diagnostics & Settings internal section boundaries.
+    ctrl.state.maintenance_busy = false;
+    ctrl.state.maintenance_loaded = true;
+    ctrl.select_page(Page::Diagnostics);
+    assert_eq!(ctrl.state.active_page, Page::Diagnostics);
+    assert_eq!(
+        ctrl.state.maintenance_section,
+        MaintenanceSection::Diagnostics
     );
-    render(&window, 1120, 720);
-    // Recovery is an in-window banner; it must not capture navigation or require
-    // a native modal message loop before Slint can paint the restored window.
-    click(&ui, 70.0, 137.0);
-    assert_eq!(state.get_active_page(), "Channels");
-    let mut dismissed = false;
-    for y in (25..105).step_by(5) {
-        for x in (990..1095).step_by(5) {
-            click(&ui, x as f32, y as f32);
-            if state.get_desktop_recovery_message().is_empty() {
-                dismissed = true;
-                break;
-            }
-        }
-        if dismissed {
-            break;
-        }
+    ctrl.set_maintenance_section(MaintenanceSection::Logs);
+    assert_eq!(ctrl.state.maintenance_section, MaintenanceSection::Logs);
+
+    ctrl.select_page(Page::Settings);
+    assert_eq!(ctrl.state.active_page, Page::Settings);
+    assert_eq!(ctrl.state.settings_view, SettingsView::General);
+    ctrl.set_settings_view(SettingsView::Manage);
+    assert_eq!(ctrl.state.settings_view, SettingsView::Manage);
+    assert_eq!(ctrl.state.maintenance_section, MaintenanceSection::Backup);
+
+    // Every page is selectable cleanly.
+    for page in Page::ALL {
+        ctrl.select_page(page);
+        assert_eq!(ctrl.state.active_page, page);
     }
-    assert!(
-        dismissed,
-        "recovery banner confirmation must remain accessible"
-    );
-    state.set_active_page("LIVE".into());
-    let starts = Rc::new(Cell::new(0));
-    let stops = Rc::new(Cell::new(0));
-    let counter = starts.clone();
-    let weak = ui.as_weak();
-    state.on_live_start(move || {
-        counter.set(counter.get() + 1);
-        weak.upgrade()
-            .unwrap()
-            .global::<AppState>()
-            .set_live_running(true);
-    });
-    let counter = stops.clone();
-    let weak = ui.as_weak();
-    state.on_live_stop(move || {
-        counter.set(counter.get() + 1);
-        weak.upgrade()
-            .unwrap()
-            .global::<AppState>()
-            .set_live_running(false);
-    });
-    render(&window, 1120, 720);
-    // The single header action dispatches the correct existing callback.
-    click(&ui, 970.0, 107.0);
-    assert_eq!(starts.get(), 1);
-    assert!(state.get_live_running());
-    render(&window, 1120, 720);
-    click(&ui, 970.0, 107.0);
-    assert_eq!(stops.get(), 1);
-    assert!(!state.get_live_running());
-    state.set_live_busy(true);
-    render(&window, 1120, 720);
-    click(&ui, 970.0, 107.0);
-    assert_eq!(starts.get(), 1);
-    state.set_live_busy(false);
-    render(&window, 1120, 720);
-    click(&ui, 970.0, 107.0); // Focus follows a real pointer activation.
-    ui.window()
-        .dispatch_event(WindowEvent::KeyPressed { text: " ".into() });
-    ui.window()
-        .dispatch_event(WindowEvent::KeyReleased { text: " ".into() });
-    assert_eq!(starts.get(), 2);
-    assert_eq!(stops.get(), 2);
+}
 
-    let maintenance = ui.global::<MaintenanceState>();
-    maintenance.set_busy(false);
-    maintenance.set_loaded(true);
-    render(&window, 1120, 720);
-    click(&ui, 100.0, 405.0);
-    assert_eq!(state.get_active_page(), "Diagnostics");
-    assert_eq!(maintenance.get_section(), "Diagnostics");
-    render(&window, 1120, 720);
-    click(&ui, 1000.0, 107.0);
-    assert_eq!(maintenance.get_section(), "Logs");
-    click(&ui, 100.0, 358.0);
-    assert_eq!(state.get_active_page(), "Settings");
-    render(&window, 1120, 720);
-    click(&ui, 1040.0, 107.0);
-    assert_eq!(state.get_settings_view(), "Manage");
-    assert_eq!(maintenance.get_section(), "Backup");
-
-    let queue = ui.global::<QueueHistoryState>();
-    queue.set_queue_busy(false);
-    queue.set_queue_loaded(true);
-    let task = QueueDisplayRow {
+#[test]
+fn queue_expanded_row_survives_polling_replacement_by_id() {
+    let (mut ctrl, _rx) = AppController::new_disconnected_for_test();
+    ctrl.state.queue_busy = false;
+    ctrl.state.queue_loaded = true;
+    ctrl.state.queue_rows = vec![QueueDisplayRow {
         id: "polling-task".into(),
         title: "Queue task".into(),
         platform: "SOOP".into(),
         ..Default::default()
-    };
-    state.set_active_page("Queue".into());
-    queue.set_queue_rows(ModelRc::new(VecModel::from(vec![task.clone()])));
-    render(&window, 1120, 720);
-    click(&ui, 1060.0, 240.0);
-    assert_eq!(queue.get_expanded_queue_id(), "polling-task");
-    // Polling replaces the whole display model. A repeated row must recover its
-    // expanded state by ID, so the next click closes it rather than reopens it.
-    queue.set_queue_rows(ModelRc::new(VecModel::from(vec![task])));
-    render(&window, 1120, 720);
-    click(&ui, 1060.0, 240.0);
-    assert!(queue.get_expanded_queue_id().is_empty());
+    }];
 
-    // Every page must still construct and render at the existing minimum size.
-    ui.window().set_size(PhysicalSize::new(1000, 650));
-    for page in [
-        "LIVE",
-        "Channels",
-        "VOD",
-        "Queue",
-        "History",
-        "Settings",
-        "Diagnostics",
-    ] {
-        state.set_active_page(page.into());
-        render(&window, 1000, 650);
-    }
-    ui.hide().unwrap();
+    ctrl.queue_toggle_expand("polling-task");
+    assert_eq!(ctrl.state.expanded_queue_id, "polling-task");
+
+    // Simulate a polling snapshot replacing the entire queue row vector with the same task ID.
+    let snapshot = VodQueueSnapshot {
+        items: vec![VodQueueItem {
+            id: "polling-task".into(),
+            title: "Queue task".into(),
+            platform: PlatformId::Soop,
+            state: "QUEUED".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let (mut ctrl2, _rx2) = AppController::new_disconnected_for_test();
+    ctrl2.state.expanded_queue_id = "polling-task".into();
+    ctrl2.apply_queue_snapshot_for_test(snapshot);
+    assert_eq!(ctrl2.state.expanded_queue_id, "polling-task");
+
+    // Toggling again collapses it rather than re-opening.
+    ctrl2.queue_toggle_expand("polling-task");
+    assert!(ctrl2.state.expanded_queue_id.is_empty());
+
+    // When the expanded task disappears from the snapshot, expanded_queue_id clears.
+    ctrl2.queue_toggle_expand("polling-task");
+    ctrl2.apply_queue_snapshot_for_test(VodQueueSnapshot::default());
+    assert!(ctrl2.state.expanded_queue_id.is_empty());
 }
 
 #[test]
-fn live_actions_and_close_dialog_remain_accessible_at_minimum_and_default_size() {
-    use crate::{ChannelConfigRow, LiveChannelRow, StorageDisplayRow};
-    use std::{
-        cell::RefCell,
-        collections::{BTreeMap, BTreeSet},
+fn close_action_and_dialog_enforce_guards_and_signals() {
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+
+    // Blocked while initial settings load is still in progress.
+    ctrl.state.settings_loaded = false;
+    ctrl.state.settings_busy = true;
+    assert!(!ctrl.handle_window_close_requested());
+    assert!(ctrl.take_desktop_signals().is_empty());
+    assert!(!ctrl.state.close_dialog_visible);
+
+    // Loaded with TRAY action emits HideToTray signal cleanly.
+    ctrl.state.settings_loaded = true;
+    ctrl.state.settings_busy = false;
+    ctrl.state.close_action = "TRAY".into();
+    assert!(!ctrl.handle_window_close_requested());
+    assert_eq!(ctrl.take_desktop_signals(), vec![DesktopSignal::HideToTray]);
+
+    // ASK opens in-window dialog; cancel dismisses; remember dispatches RememberClose.
+    ctrl.state.close_action = "ASK".into();
+    assert!(!ctrl.handle_window_close_requested());
+    assert!(ctrl.state.close_dialog_visible);
+    ctrl.cancel_close_dialog();
+    assert!(!ctrl.state.close_dialog_visible);
+
+    assert!(!ctrl.handle_window_close_requested());
+    ctrl.submit_close_choice("TRAY", true);
+    assert!(ctrl.state.close_choice_busy);
+    assert!(matches!(rx.try_recv(), Ok(Request::RememberClose(ref a)) if a == "TRAY"));
+
+    // EXIT dispatches PrepareExit without quitting prematurely.
+    ctrl.state.close_choice_busy = false;
+    ctrl.state.close_dialog_visible = false;
+    ctrl.state.close_action = "EXIT".into();
+    assert!(!ctrl.handle_window_close_requested());
+    assert!(ctrl.state.desktop_exit_pending);
+    assert!(matches!(rx.try_recv(), Ok(Request::PrepareExit)));
+}
+
+#[test]
+fn password_prompt_and_core_snapshot_binding_work_cleanly() {
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    ctrl.state.live_busy = false;
+
+    ctrl.open_password_prompt("SOOP:secret".into(), "비방 채널".into());
+    assert_eq!(
+        ctrl.state.password_prompt_target.as_deref(),
+        Some("SOOP:secret")
+    );
+    ctrl.submit_live_password("1234".into());
+    assert!(ctrl.state.password_prompt_target.is_none());
+    assert!(ctrl.state.live_busy);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::LivePassword { ref target, ref password }) if target == "SOOP:secret" && password == "1234"
+    ));
+
+    let diagnostics = DiagnosticsSnapshot {
+        status: DiagnosticStatus::Ok,
+        runtime_ready: true,
+        attention_required: false,
+        summary: DiagnosticsSummary {
+            ok: 1,
+            ..Default::default()
+        },
+        items: vec![DiagnosticItem {
+            id: "database.integrity".into(),
+            category: DiagnosticCategory::Database,
+            requirement: DiagnosticRequirement::Required,
+            name: "SQLite".into(),
+            status: DiagnosticStatus::Ok,
+            summary: "정상".into(),
+            detail: "WAL mode".into(),
+            remediation: String::new(),
+        }],
     };
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(UiTestPlatform(window.clone()))).unwrap();
-    let ui = MainWindow::new().unwrap();
-    ui.show().unwrap();
-    let state = ui.global::<AppState>();
-    state.set_runtime_ready(true);
-    state.set_live_loaded(true);
-    state.set_live_busy(false);
-    state.set_settings_busy(false);
-    state.set_storage_rows(ModelRc::new(VecModel::from(vec![
-        StorageDisplayRow {
-            volume: "C:\\".into(),
-            capacity: "여유 120 GB / 전체 500 GB".into(),
-            used: "76%".into(),
-            status: "정상".into(),
-            status_tone: "ok".into(),
-            ..Default::default()
-        },
-        StorageDisplayRow {
-            volume: "G:\\".into(),
-            capacity: "여유 1.2 TB / 전체 4 TB".into(),
-            used: "70%".into(),
-            status: "정상".into(),
-            status_tone: "ok".into(),
-            ..Default::default()
-        },
-    ])));
-    state.set_live_rows(ModelRc::new(VecModel::from(vec![
-        LiveChannelRow {
-            target: "CHZZK:paused".into(),
-            platform: "CHZZK".into(),
-            name: "일시중지 채널".into(),
-            account: "0123456789abcdef0123456789abcdef".into(),
-            status_label: "일시중지".into(),
-            status_tone: "warn".into(),
-            suppressed: true,
-            can_resume: true,
-            can_recheck: true,
-            ..Default::default()
-        },
-        LiveChannelRow {
-            thumbnail_image: slint::Image::from_rgba8(
-                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &vec![128u8; 320 * 180 * 4],
-                    320,
-                    180,
-                ),
-            ),
-            target: "SOOP:recording".into(),
-            platform: "SOOP".into(),
-            name: "녹화 중 채널".into(),
-            account: "recording".into(),
-            status_label: "녹화 중".into(),
-            status_tone: "ok".into(),
-            title: "긴 방송 제목을 표시해도 동작 버튼이 다음 행에 가려지면 안 됩니다".into(),
-            file: "G:/archive/recording.ts".into(),
-            size: "1.2 GB".into(),
-            can_stop_once: true,
-            can_recheck: true,
-            ..Default::default()
-        },
-    ])));
-    let actions = Rc::new(RefCell::new(BTreeSet::new()));
-    let observed = actions.clone();
-    state.on_live_action(move |target, action| {
-        observed
-            .borrow_mut()
-            .insert((target.to_string(), action.to_string()));
+    bind_core_snapshot(&mut ctrl.state, diagnostics);
+    assert_eq!(ctrl.state.diagnostics_rows.len(), 1);
+    assert_eq!(ctrl.state.diagnostics_rows[0].name, "SQLite");
+}
+
+#[test]
+fn backup_directory_pick_preserves_policy_revision_and_history_queues_busy_filter_changes() {
+    use crate::core_worker::Response;
+    use stream_archive_server::model::HistoryResponse;
+
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    let initial_policy_rev = ctrl.state.backup_revision;
+    let initial_dir_rev = ctrl.state.backup_dir_revision;
+
+    // Picking a backup folder updates only backup_dir_revision so edited policy inputs stay intact.
+    ctrl.apply_response_for_test(Response::MaintenancePicked(Some(
+        "D:/custom-backups".into(),
+    )));
+    assert_eq!(ctrl.state.backup_directory, "D:/custom-backups");
+    assert_eq!(ctrl.state.backup_revision, initial_policy_rev);
+    assert_ne!(ctrl.state.backup_dir_revision, initial_dir_rev);
+
+    // Changing history filters while an older query is in flight queues a follow-up query with the latest filters.
+    ctrl.state.history_busy = false;
+    ctrl.history_set_view("LIVE");
+    assert!(ctrl.state.history_busy);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::HistoryLoad { ref view, .. }) if view == "LIVE"
+    ));
+
+    // User changes status + view while busy.
+    ctrl.history_set_status("FAILED");
+    ctrl.history_set_view("VOD");
+    assert!(rx.try_recv().is_err());
+
+    // When the stale LIVE response arrives, controller immediately dispatches the queued VOD/FAILED query.
+    ctrl.apply_response_for_test(Response::History {
+        history: HistoryResponse::default(),
+        view: "LIVE".into(),
+        message: None,
     });
-    let folders = Rc::new(Cell::new(0));
-    let observed = folders.clone();
-    state.on_live_open_folder(move |_| observed.set(observed.get() + 1));
-    let picked_channels = Rc::new(RefCell::new(BTreeSet::new()));
-    let observed = picked_channels.clone();
-    let pick_widths = Rc::new(RefCell::new(BTreeMap::<i32, BTreeSet<u32>>::new()));
-    let observed_widths = pick_widths.clone();
-    let pointer_x = Rc::new(Cell::new(0u32));
-    let observed_x = pointer_x.clone();
-    state.on_channel_pick_output(move |index| {
-        observed.borrow_mut().insert(index);
-        observed_widths
-            .borrow_mut()
-            .entry(index)
-            .or_default()
-            .insert(observed_x.get());
+    assert!(ctrl.state.history_busy);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::HistoryLoad { ref view, ref filter })
+            if view == "VOD" && filter.status.as_deref() == Some("FAILED")
+    ));
+}
+
+#[test]
+fn disconnected_worker_exit_emits_exit_now_and_busy_config_blocks_channel_edits() {
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    // Drop receiver to simulate a terminated/disconnected core worker after startup failure.
+    drop(rx);
+    ctrl.begin_exit_check();
+    assert_eq!(ctrl.take_desktop_signals(), vec![DesktopSignal::ExitNow]);
+
+    // Channel mutations must be ignored while a save/reload is in flight.
+    let (mut ctrl2, _rx2) = AppController::new_disconnected_for_test();
+    ctrl2.state.config_busy = false;
+    ctrl2.channels_add();
+    assert_eq!(ctrl2.state.channels_rows.len(), 1);
+    ctrl2.state.config_busy = true;
+    ctrl2.channels_add();
+    ctrl2.channels_edit(0, "account", "mutated".into());
+    ctrl2.channels_select_platform(0, "CHZZK");
+    ctrl2.channels_set_enabled(0, false);
+    ctrl2.channels_remove(0);
+    assert_eq!(ctrl2.state.channels_rows.len(), 1);
+    assert!(ctrl2.state.channels_rows[0].account.is_empty());
+    assert_eq!(ctrl2.state.channels_rows[0].platform, "SOOP");
+    assert!(ctrl2.state.channels_rows[0].enabled);
+
+    // General setting mutations must also be ignored while settings_busy is true.
+    use crate::core_worker::Response;
+    use stream_archive_server::environment_settings::{EnvironmentSetting, SettingKind};
+    ctrl2.apply_response_for_test(Response::Snapshot {
+        fields: Some(vec![EnvironmentSetting {
+            key: "OUTPUT_DIR".into(),
+            value: "C:/archive".into(),
+            description: "output".into(),
+            kind: SettingKind::Directory,
+        }]),
+        diagnostics: DiagnosticsSnapshot {
+            status: DiagnosticStatus::Ok,
+            runtime_ready: true,
+            attention_required: false,
+            summary: DiagnosticsSummary::default(),
+            items: Vec::new(),
+        },
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
     });
-    for (width, height) in [(1000, 650), (1120, 720), (1440, 900)] {
-        ui.window().set_size(PhysicalSize::new(width, height));
-        let pixels = render_pixels(&window, width as usize, height as usize);
-        // The entire CHZZK glyph must fit inside its 40px tile. A naturally sized
-        // 512px child clipped by the tile renders a solid mint square instead.
-        let mint_pixels = (200..400)
-            .flat_map(|y| (224..264).map(move |x| (x, y)))
-            .filter(|(x, y)| {
-                let p = pixels[*y * width as usize + *x];
-                p.g > 200 && p.r < 30 && p.b < 200
-            })
-            .count();
-        assert!(
-            (100..1100).contains(&mint_pixels),
-            "{width}x{height}: clipped platform logo ({mint_pixels} mint pixels)"
-        );
-        actions.borrow_mut().clear();
-        folders.set(0);
-        // Exercise the visible hit regions rather than invoking callbacks directly.
-        for y in (185..height.min(550)).step_by(6) {
-            for x in (220..width - 20).step_by(6) {
-                click(&ui, x as f32, y as f32);
-            }
-        }
-        // Multiple storage volumes reduce the LIVE viewport; the remaining
-        // actions must still be reachable by scrolling inside the channel list.
-        ui.window().dispatch_event(WindowEvent::PointerScrolled {
-            position: LogicalPosition::new(500.0, 350.0),
-            delta_x: 0.0,
-            delta_y: -250.0,
-        });
-        render(&window, width as usize, height as usize);
-        for y in (215..height.min(440)).step_by(6) {
-            for x in (220..width - 20).step_by(6) {
-                click(&ui, x as f32, y as f32);
-            }
-        }
-        for (target, action) in [
-            ("CHZZK:paused", "resume"),
-            ("CHZZK:paused", "recheck"),
-            ("SOOP:recording", "stop"),
-            ("SOOP:recording", "recheck"),
-        ] {
-            assert!(
-                actions.borrow().contains(&(target.into(), action.into())),
-                "{width}x{height}: missing {target}/{action}"
-            );
-        }
-        assert!(folders.get() > 0);
-        state.set_active_page("Channels".into());
-        state.set_config_busy(false);
-        state.set_channel_config_rows(ModelRc::new(VecModel::from(vec![
-            ChannelConfigRow {
-                platform: "CHZZK".into(),
-                enabled: true,
-                name: "길이가 긴 채널 이름도 모두 온전히 보존합니다".into(),
-                account: "0123456789abcdef0123456789abcdef".into(),
-                outdir: "G:/archive/a/long/path/that/remains/editable".into(),
-            },
-            ChannelConfigRow {
-                platform: "SOOP".into(),
-                enabled: true,
-                name: "명아츄".into(),
-                account: "1004ysus".into(),
-                outdir: "G:/archive".into(),
-            },
-        ])));
-        render(&window, width as usize, height as usize);
-        if width == 1120 {
-            assert_eq!(ui.get_channel_name_column_width(), 180.0);
-        } else if width == 1440 {
-            assert!(ui.get_channel_name_column_width() > 180.0);
-            assert!(ui.get_channel_name_column_width() <= 320.0);
-        }
-        assert_eq!(
-            state
-                .get_channel_config_rows()
-                .row_data(0)
-                .unwrap()
-                .account
-                .len(),
-            32
-        );
-        picked_channels.borrow_mut().clear();
-        pick_widths.borrow_mut().clear();
-        for y in (175..410).step_by(5) {
-            for x in (width - 300..width - 15).step_by(5) {
-                pointer_x.set(x);
-                click(&ui, x as f32, y as f32);
-            }
-        }
-        assert_eq!(
-            *picked_channels.borrow(),
-            BTreeSet::from([0, 1]),
-            "{width}x{height}: both folder buttons must remain accessible"
-        );
-        for index in [0, 1] {
-            assert!(
-                pick_widths
-                    .borrow()
-                    .get(&index)
-                    .is_some_and(|xs| xs.len() >= 12),
-                "{width}x{height}: folder button {index} must expose at least 60px of its width without overlapping another action"
-            );
-        }
-        state.set_config_busy(true);
-        picked_channels.borrow_mut().clear();
-        render(&window, width as usize, height as usize);
-        for y in (175..410).step_by(5) {
-            for x in (width - 300..width - 15).step_by(5) {
-                click(&ui, x as f32, y as f32);
-            }
-        }
-        assert!(picked_channels.borrow().is_empty());
-        state.set_config_busy(false);
-        state.set_active_page("LIVE".into());
-    }
-    state.set_close_dialog_visible(true);
-    render(&window, 1440, 900);
-    ui.window().dispatch_event(WindowEvent::KeyPressed {
-        text: "\u{1b}".into(),
-    });
-    assert!(!state.get_close_dialog_visible());
-    assert_eq!(state.get_close_action(), "EXIT");
-    ui.hide().unwrap();
+    assert!(!ctrl2.state.settings_busy);
+    ctrl2.state.settings_busy = true;
+    ctrl2.settings_edit(0, "D:/ignored".into());
+    ctrl2.settings_set_key("OUTPUT_DIR", "E:/ignored".into());
+    assert_eq!(ctrl2.state.settings_rows[0].value, "C:/archive");
+    assert!(!ctrl2.state.settings_dirty);
 }

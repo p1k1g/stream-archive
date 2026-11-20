@@ -1,29 +1,75 @@
 //! Windows presentation only; runtime state and shutdown stay in the core.
 #[cfg(windows)]
-mod windows_tray;
-#[cfg(windows)]
-pub use windows_tray::{bind, sync_recreated_window};
+pub mod windows_tray;
 
 #[cfg(windows)]
-fn owner(ui: &crate::MainWindow) -> Option<windows::Win32::Foundation::HWND> {
-    use slint::ComponentHandle;
-    use slint::winit_030::{
-        WinitWindowAccessor,
-        winit::raw_window_handle::{HasWindowHandle, RawWindowHandle},
-    };
-    let mut result = None;
-    ui.window().with_winit_window(|window| {
-        if let Ok(handle) = window.window_handle()
-            && let RawWindowHandle::Win32(handle) = handle.as_raw()
-        {
-            result = Some(windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut _));
-        }
-    });
-    result
+pub fn extract_hwnd(window: &gpui_kit::Window) -> Option<windows::Win32::Foundation::HWND> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+        Some(windows::Win32::Foundation::HWND(win32.hwnd.get() as *mut _))
+    } else {
+        None
+    }
 }
 
 #[cfg(windows)]
-pub fn confirm_exit(ui: &crate::MainWindow) -> bool {
+pub fn apply_native_window_icon(window: &gpui_kit::Window) {
+    use windows::{
+        Win32::{
+            Foundation::{LPARAM, WPARAM},
+            System::LibraryLoader::GetModuleHandleW,
+            UI::WindowsAndMessaging::{
+                ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_SHARED, LoadImageW, SendMessageW, WM_SETICON,
+            },
+        },
+        core::PCWSTR,
+    };
+    let Some(hwnd) = extract_hwnd(window) else {
+        return;
+    };
+    unsafe {
+        let Ok(module) = GetModuleHandleW(None) else {
+            return;
+        };
+        if let Ok(small) = LoadImageW(
+            Some(module.into()),
+            PCWSTR(std::ptr::without_provenance(1)),
+            IMAGE_ICON,
+            16,
+            16,
+            LR_SHARED,
+        ) {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(small.0 as isize)),
+            );
+        }
+        if let Ok(big) = LoadImageW(
+            Some(module.into()),
+            PCWSTR(std::ptr::without_provenance(1)),
+            IMAGE_ICON,
+            32,
+            32,
+            LR_SHARED,
+        ) {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(big.0 as isize)),
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn apply_native_window_icon(_window: &gpui_kit::Window) {}
+
+#[cfg(windows)]
+pub fn confirm_exit(owner: Option<windows::Win32::Foundation::HWND>) -> bool {
     use windows::{
         Win32::UI::WindowsAndMessaging::{
             IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MessageBoxW,
@@ -33,7 +79,7 @@ pub fn confirm_exit(ui: &crate::MainWindow) -> bool {
     // The core thread continues working while this owned UI dialog is open.
     unsafe {
         MessageBoxW(
-            owner(ui),
+            owner,
             w!(
                 "녹화·다운로드·채널 감시 또는 대기 중인 Queue가 있습니다.\n이 앱의 작업을 정리하고 종료할까요?"
             ),
@@ -43,8 +89,14 @@ pub fn confirm_exit(ui: &crate::MainWindow) -> bool {
     }
 }
 
+#[cfg(not(windows))]
+pub fn confirm_exit(_owner: Option<()>) -> bool {
+    true
+}
+
 #[cfg(windows)]
-pub fn notify(ui: &crate::MainWindow, message: &str) {
+#[allow(dead_code)]
+pub fn notify(owner: Option<windows::Win32::Foundation::HWND>, message: &str) {
     use windows::{
         Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_OK, MessageBoxW},
         core::{HSTRING, w},
@@ -52,7 +104,7 @@ pub fn notify(ui: &crate::MainWindow, message: &str) {
     let message = HSTRING::from(message);
     unsafe {
         MessageBoxW(
-            owner(ui),
+            owner,
             &message,
             w!("Stream Archive"),
             MB_OK | MB_ICONINFORMATION,
@@ -60,18 +112,8 @@ pub fn notify(ui: &crate::MainWindow, message: &str) {
     }
 }
 
-#[cfg(not(windows))]
-pub fn confirm_exit(_ui: &crate::MainWindow) -> bool {
-    false
-}
-#[cfg(not(windows))]
-pub fn notify(_ui: &crate::MainWindow, message: &str) {
-    eprintln!("{message}");
-}
-
 // Loaded settings work must not make X/Alt+F4 silently stop responding.
-#[cfg(any(windows, test))]
-fn close_request_blocked(
+pub fn close_request_blocked(
     settings_loaded: bool,
     settings_busy: bool,
     close_choice_busy: bool,
@@ -85,13 +127,13 @@ fn close_request_blocked(
 // a hidden window after repeated failures; a visible window needs no fallback.
 #[cfg(any(windows, test))]
 #[derive(Default)]
-struct TrayRecovery {
+pub struct TrayRecovery {
     failures: u8,
 }
 
 #[cfg(any(windows, test))]
 impl TrayRecovery {
-    fn should_restore(&mut self, registered: bool, visible: bool) -> bool {
+    pub fn should_restore(&mut self, registered: bool, visible: bool) -> bool {
         if registered || visible {
             self.failures = 0;
             return false;

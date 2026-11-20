@@ -124,8 +124,10 @@ fn architecture_contracts() {
     let gui_manifest = read_repo_file("rust-gui/Cargo.toml");
     let gui_build = read_repo_file("rust-gui/build.rs");
     let gui_native_shell = read_repo_file("rust-gui/src/native_shell.rs");
-    let gui_ui = read_repo_file("rust-gui/ui/app-window.slint");
-    let maintenance_ui = read_repo_file("rust-gui/ui/maintenance.slint");
+    let gui_state = read_repo_file("rust-gui/src/state.rs");
+    let gui_ui = read_dir_files_joined("rust-gui/src/ui", "rs");
+    let gui_settings_ui = read_repo_file("rust-gui/src/ui/settings_view.rs");
+    let gui_diagnostics_ui = read_repo_file("rust-gui/src/ui/diagnostics_view.rs");
     let gui_sources = read_dir_files_joined("rust-gui/src", "rs");
     let main_and_headless = format!("{main}\n{headless}");
 
@@ -393,27 +395,32 @@ fn architecture_contracts() {
     assert_match(
         &gui_manifest,
         r#"name\s*=\s*"stream-archive-gui""#,
-        "Slint desktop crate is missing.",
+        "GPUI desktop crate is missing.",
     );
     assert_match(
         &gui_manifest,
-        r"slint\s*=\s*\{",
-        "Slint runtime dependency is missing.",
+        r"gpui-kit\s*=\s*\{",
+        "GPUI runtime dependency is missing.",
+    );
+    assert_not_match(
+        &gui_manifest,
+        r"(?m)^\s*slint(?:-build)?\s*=",
+        "Retired Slint dependencies must not return to rust-gui.",
     );
     assert_match(
         &gui_manifest,
         r#"stream-archive-server\s*=\s*\{\s*path\s*=\s*"\.\./rust-runtime""#,
-        "Slint desktop must depend on the shared Rust library directly.",
+        "GPUI desktop must depend on the shared Rust library directly.",
     );
     assert_match(
         &gui_sources,
         r"StreamArchiveCore",
-        "Slint bootstrap must use the shared application core.",
+        "GPUI bootstrap must use the shared application core.",
     );
     assert_match(
         &gui_sources,
         r"resolve_backend_dir",
-        "Slint bootstrap must reuse canonical backend resolution.",
+        "GPUI bootstrap must reuse canonical backend resolution.",
     );
     assert_match(
         &backend,
@@ -423,74 +430,77 @@ fn architecture_contracts() {
     assert_match(
         &gui_sources,
         r"bind_core_snapshot",
-        "Slint shell must bind runtime state from the shared core.",
+        "GPUI shell must bind runtime state from the shared core.",
     );
     assert_not_match(
         &gui_sources,
         r"\breqwest::|\baxum::|https?://127\.0\.0\.1|https?://localhost|rusqlite::|Command::new|taskkill|pkill|killall",
-        "Slint shell must not bypass shared core through HTTP, SQLite, or direct process control.",
+        "GPUI shell must not bypass shared core through HTTP, SQLite, or direct process control.",
     );
     assert_match(
-        &gui_ui,
-        r"export\s+global\s+AppState",
-        "Slint shell state boundary is missing.",
+        &gui_state,
+        r"pub\s+struct\s+UiState",
+        "GPUI shell state boundary is missing.",
     );
     assert_match(
-        &gui_ui,
-        r"callback\s+refresh-requested",
-        "Slint runtime refresh callback is missing.",
+        &gui_sources,
+        r"pub\s+fn\s+refresh_requested\s*\(",
+        "GPUI runtime refresh action is missing.",
     );
-    for page in ["LIVE", "VOD", "Queue", "History", "Settings"] {
+    for page in [
+        "LIVE",
+        "Channels",
+        "VOD",
+        "Queue",
+        "History",
+        "Settings",
+        "Diagnostics",
+    ] {
         assert_match(
-            &gui_ui,
-            &regex::escape(&format!(r#"page: "{page}""#)),
-            &format!("Slint navigation page missing: {page}"),
+            &gui_state,
+            &regex::escape(&format!(r#""{page}""#)),
+            &format!("GPUI navigation page missing: {page}"),
         );
     }
     assert_not_match(
-        &gui_ui,
-        r#"page:\s*"Maintenance""#,
+        &gui_state,
+        r#"Self::Maintenance\b|"Maintenance""#,
         "Maintenance must stay nested under Settings.",
     );
     assert_not_match(
-        &gui_ui,
-        r#"page:\s*"Dashboard""#,
+        &gui_state,
+        r#"Self::Dashboard\b|"Dashboard""#,
         "Dashboard must stay removed.",
     );
     assert_match(
-        &gui_ui,
-        r#"settings-view:\s*"General""#,
+        &gui_state,
+        r"pub\s+enum\s+SettingsView\s*\{[^}]*General[^}]*Manage",
         "Settings must own an internal General/Manage view boundary.",
     );
     assert_match(
-        &gui_ui,
-        r#"settings-view\s*==\s*"Manage""#,
+        &gui_settings_ui,
+        r"SettingsView::Manage",
         "Settings must expose the nested management view.",
     );
     assert_match(
-        &gui_ui,
-        r"MaintenancePage\s*\{",
-        "Backup/restore/diagnostics/logs must remain reachable inside Settings.",
+        &gui_settings_ui,
+        r"render_backup_manage_section\(",
+        "Backup/restore must remain reachable inside Settings > Manage.",
     );
     assert_match(
-        &gui_ui,
-        r#"active-page:\s*"LIVE""#,
+        &gui_state,
+        r"active_page:\s*Page::Live",
         "Configured native startup must default to the LIVE page.",
     );
     assert_match(
-        &gui_manifest,
-        r"renderer-femtovg",
-        "Windows Slint build must keep the FemtoVG renderer enabled.",
+        &gui_ui,
+        r#"include_bytes!\("\.\./\.\./assets/stream-archive-icon\.png"\)"#,
+        "GPUI branding image must be embedded into the executable.",
     );
-    assert_match(
-        &gui_manifest,
-        r"renderer-software",
-        "Windows Slint build must keep the software renderer fallback enabled.",
-    );
-    assert_match(
+    assert_not_match(
         &gui_build,
-        r"EmbedResourcesKind::EmbedFiles",
-        "Slint branding image must be embedded into the executable.",
+        r"slint_build",
+        "Retired Slint build step must not return.",
     );
     assert_not_match(
         &gui_ui,
@@ -499,13 +509,8 @@ fn architecture_contracts() {
     );
     assert_match(
         &gui_ui,
-        r"component LiveActions inherits HorizontalLayout",
-        "LIVE actions must share the measured presentation layout.",
-    );
-    assert_match(
-        &gui_ui,
-        r"AppState\.live-open-folder\(root\.channel\.file",
-        "LIVE recording cards must expose the save-folder action through the Native callback.",
+        r"live_open_folder\(",
+        "LIVE recording cards must expose the save-folder action through the Native controller.",
     );
     assert_match(
         &gui_native_shell,
@@ -716,19 +721,19 @@ fn architecture_contracts() {
         "GUI must not write runtime files or own child processes.",
     );
     assert_match(
-        &maintenance_ui,
-        r"Phase 23\.2: Native Diagnostics renders the shared read-only runtime preflight\.",
-        "Shared read-only preflight must live in the nested Settings management view.",
+        &gui_diagnostics_ui,
+        r"MaintenanceSection::Diagnostics",
+        "Diagnostics view must retain the read-only Diagnostics section.",
     );
     assert_match(
-        &maintenance_ui,
-        r#"section\s*==\s*"Diagnostics""#,
-        "Nested Settings management must retain the Diagnostics section.",
+        &gui_diagnostics_ui,
+        r"MaintenanceSection::Logs",
+        "Diagnostics view must retain the Runtime Logs section.",
     );
     assert_match(
-        &maintenance_ui,
-        r"MaintenanceState\.diagnostic-rows",
-        "Nested Settings management diagnostics must render shared diagnostic rows.",
+        &gui_diagnostics_ui,
+        r"maintenance_diagnostic_rows",
+        "Diagnostics view must render shared diagnostic rows.",
     );
     assert_match(
         &gui_sources,
@@ -750,45 +755,43 @@ fn architecture_contracts() {
         r"core\.storage_snapshot\(",
         "Native storage diagnostics must use StreamArchiveCore.",
     );
+    let (general_settings_ui, manage_settings_ui) = gui_settings_ui
+        .split_once("fn render_backup_manage_section")
+        .expect("Settings view must keep General and Manage backup sections separated.");
     assert_not_match(
-        &gui_ui,
-        r"MaintenanceState\.save-backup-policy\(",
-        "General settings must not duplicate backup policy actions.",
-    );
-    assert_not_match(
-        &gui_ui,
-        r"MaintenanceState\.backup-directory",
-        "General settings must not duplicate backup policy fields.",
+        general_settings_ui,
+        r"save_backup_policy_inputs|backup_dir_input",
+        "General settings must not duplicate backup policy actions or fields.",
     );
     assert_match(
-        &maintenance_ui,
+        &gui_settings_ui,
         r"Phase 21\.9: Settings > Manage owns backup policy and operations\.",
         "Nested Settings management must own backup policy presentation.",
     );
     assert_match(
-        &maintenance_ui,
-        r"MaintenanceState\.save-backup-policy\(",
-        "Nested Settings management must save backup policy through MaintenanceState.",
+        manage_settings_ui,
+        r"save_backup_policy_inputs\(",
+        "Nested Settings management must save backup policy through AppController.",
     );
     assert_match(
-        &maintenance_ui,
-        r"MaintenanceState\.backup-directory",
+        manage_settings_ui,
+        r"backup_dir_input",
         "Nested Settings management must bind the shared backup directory policy.",
     );
     assert_match(
-        &maintenance_ui,
-        r"MaintenanceState\.create-backup\(",
+        manage_settings_ui,
+        r"backup_create\(",
         "Nested Settings management must retain operational backup creation.",
     );
     assert_match(
-        &maintenance_ui,
-        r"MaintenanceState\.request-restore\(",
+        manage_settings_ui,
+        r"request_restore\(",
         "Nested Settings management must retain operational restore actions.",
     );
     assert_not_match(
         &gui_sources,
         r"\bSha256::new\b|\bsha2::Digest\b|\bread_to_end\s*\(|\bstd::io::copy\s*\(",
-        "Slint presentation must not implement backup hashing/copying.",
+        "GPUI presentation must not implement backup hashing/copying.",
     );
 }
 
@@ -809,7 +812,7 @@ fn provider_contracts() {
     let kick_live = read_repo_file("rust-runtime/src/platform/kick/live.rs");
     let kick_vod = read_repo_file("rust-runtime/src/platform/kick/vod.rs");
     let gui_sources = read_dir_files_joined("rust-gui/src", "rs");
-    let gui_ui = read_dir_files_joined("rust-gui/ui", "slint");
+    let gui_ui = read_dir_files_joined("rust-gui/src/ui", "rs");
 
     assert_match(
         &platform,
@@ -1247,23 +1250,23 @@ fn provider_contracts() {
     );
     assert_match(
         &gui_sources,
-        r"on_channel_select_platform\(move \|index, value\|",
-        "Native platform dropdown callback is missing.",
+        r"pub\s+fn\s+channels_select_platform\(",
+        "Native platform selector controller action is missing.",
     );
     assert_match(
         &gui_sources,
-        r"\.select_platform\(index as usize, value\.as_str\(\)\)",
+        r"\.select_platform\(index,\s*platform\)",
         "Native platform choice must reach the channel draft.",
     );
     assert_match(
         &gui_ui,
-        r#"ComboBox\s*\{\s*model:\s*\["SOOP", "CHZZK", "KICK"\]"#,
-        "Native platform dropdown must expose only supported platforms.",
+        r#"\["SOOP",\s*"CHZZK",\s*"KICK"\]"#,
+        "Native platform selector must expose only supported platforms.",
     );
     assert_match(
         &gui_ui,
-        r"selected\(value\)\s*=>\s*\{\s*AppState\.channel-select-platform\(index, value\)",
-        "Native platform dropdown must submit the selected platform.",
+        r"channels_select_platform\(idx,",
+        "Native platform selector must submit the selected platform.",
     );
     assert_match(
         &gui_sources,
@@ -1272,12 +1275,12 @@ fn provider_contracts() {
     );
     assert_match(
         &gui_sources,
-        r"get_chzzk_nid_aut_draft",
+        r"prov_chzzk_aut",
         "Native Settings must retain CHZZK NID_AUT input.",
     );
     assert_match(
         &gui_sources,
-        r"get_chzzk_nid_ses_draft",
+        r"prov_chzzk_ses",
         "Native Settings must retain CHZZK NID_SES input.",
     );
     assert_match(

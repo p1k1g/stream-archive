@@ -18,7 +18,7 @@ INI/TXT 설정 mirror는 폐기했습니다. `SOOP_LIVE_SETTING.ini`, `SOOP_LIVE
 
 ## 실행 중 백업
 
-Slint Native UI의 관리는 **설정** 화면에 모여 있습니다. **설정 → 일반**에서 서비스·런타임 설정을 관리하고, **설정 → 관리**에서 자동 백업 정책, 관리형 백업 생성·목록·무결성·복구, Diagnostics 및 Runtime Logs를 사용합니다. 공유 `BackupManager` / `StreamArchiveCore` 서비스와 SQLite의 기준 정책을 사용합니다.
+GPUI Native UI의 관리는 **설정** 화면에 모여 있습니다. **설정 → 일반 · 인증**에서 서비스·런타임 설정을 관리하고, **설정 → 백업 · 복원**에서 자동 백업 정책과 관리형 백업 생성·목록·무결성·복구를, **진단 · 로그**에서 Diagnostics 및 Runtime Logs를 사용합니다. 공유 `BackupManager` / `StreamArchiveCore` 서비스와 SQLite의 기준 정책을 사용합니다.
 
 기본 정책은 다음과 같습니다.
 
@@ -36,7 +36,7 @@ Slint Native UI의 관리는 **설정** 화면에 모여 있습니다. **설정 
 
 ## Native 저장공간 상태
 
-LIVE 화면은 `StreamArchiveCore`와 공유 `storage_service`에서 저장공간 진단을 읽습니다. Slint가 localhost HTTP를 사용하거나 직접 filesystem을 조회하지 않습니다. 설정된 `OUTPUT_DIR`, 채널별 출력 경로와 기준 SQLite 데이터 경로가 포함되며, 같은 Windows volume의 경로는 한 행으로 묶습니다.
+LIVE 화면은 `StreamArchiveCore`와 공유 `storage_service`에서 저장공간 진단을 읽습니다. GPUI가 localhost HTTP를 사용하거나 직접 filesystem을 조회하지 않습니다. 설정된 `OUTPUT_DIR`, 채널별 출력 경로와 기준 SQLite 데이터 경로가 포함되며, 같은 Windows volume의 경로는 한 행으로 묶습니다.
 
 | 상태 | 남은 공간 |
 |---|---|

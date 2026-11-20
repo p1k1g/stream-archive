@@ -1,6 +1,6 @@
 # Unix / headless CLI
 
-Linux and macOS use the CLI/headless product surface. Windows keeps the Slint
+Linux and macOS use the CLI/headless product surface. Windows keeps the GPUI
 Native UI as the default surface. Both paths use the same StreamArchiveCore,
 SQLite store, provider services, Queue, History, Backup and process ownership.
 

@@ -62,13 +62,6 @@ fn generate_windows_icon(
 fn main() {
     println!("cargo:rerun-if-changed=assets/stream-archive-icon.png");
 
-    slint_build::compile_with_config(
-        "ui/app-window.slint",
-        slint_build::CompilerConfiguration::new()
-            .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles),
-    )
-    .expect("failed to compile Slint application shell");
-
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let manifest_dir = PathBuf::from(
             std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"),

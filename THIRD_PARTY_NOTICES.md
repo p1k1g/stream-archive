@@ -29,6 +29,12 @@ The yt-dlp source repository is licensed under the Unlicense. Some official rele
 
 yt-dlp is executed as an external program and is not bundled with Stream Archive.
 
+## GPUI & GPUI Kit (Windows Native UI)
+
+- Projects: https://github.com/zed-industries/zed (GPUI) · https://crates.io/crates/gpui-kit (GPUI Kit / GPUI Component)
+- License: Apache License 2.0
+- Role in Stream Archive: GPU-accelerated Windows native desktop UI framework compiled into `StreamArchive.exe`
+
 ## Independence
 
 Stream Archive is an independent project and is not affiliated with, endorsed by, sponsored by, or officially associated with SOOP, NAVER, CHZZK, Streamlink, FFmpeg, or yt-dlp.
