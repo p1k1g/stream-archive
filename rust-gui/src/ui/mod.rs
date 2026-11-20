@@ -109,6 +109,7 @@ impl MainView {
         let prov_soop_pass = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("새 비밀번호 입력 (비워두면 기존 값 유지)")
+                .default_value(initial.provider_soop_password.clone())
                 .masked(true)
         });
         let prov_worker_url = cx.new(|cx| {
@@ -119,21 +120,25 @@ impl MainView {
         let prov_worker_key = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("새 API_SECRET 입력 (비워두면 기존 값 유지)")
+                .default_value(initial.provider_worker_api_key.clone())
                 .masked(true)
         });
         let prov_chzzk_aut = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("NID_AUT 쿠키 (비워두면 기존 값 유지)")
+                .default_value(initial.provider_chzzk_nid_aut.clone())
                 .masked(true)
         });
         let prov_chzzk_ses = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("NID_SES 쿠키 (비워두면 기존 값 유지)")
+                .default_value(initial.provider_chzzk_nid_ses.clone())
                 .masked(true)
         });
         let prov_kick_token = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("session_token (비워두면 기존 값 유지)")
+                .default_value(initial.provider_kick_token.clone())
                 .masked(true)
         });
 
@@ -223,6 +228,34 @@ impl MainView {
                 }
             },
         ));
+        for (entity, apply) in [
+            (
+                &prov_soop_user,
+                (|s: &mut crate::state::UiState, v| s.provider_soop_username = v)
+                    as fn(&mut crate::state::UiState, String),
+            ),
+            (&prov_soop_pass, |s, v| s.provider_soop_password = v),
+            (&prov_worker_url, |s, v| s.provider_worker_url = v),
+            (&prov_worker_key, |s, v| s.provider_worker_api_key = v),
+            (&prov_chzzk_aut, |s, v| s.provider_chzzk_nid_aut = v),
+            (&prov_chzzk_ses, |s, v| s.provider_chzzk_nid_ses = v),
+            (&prov_kick_token, |s, v| s.provider_kick_token = v),
+            (&backup_interval_input, |s, v| s.backup_interval_hours = v),
+            (&backup_keep_input, |s, v| s.backup_keep_count = v),
+            (&backup_retention_input, |s, v| s.backup_retention_days = v),
+            (&backup_dir_input, |s, v| s.backup_directory = v),
+        ] {
+            subscriptions.push(cx.subscribe_in(
+                entity,
+                window,
+                move |this, state, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let val = state.read(cx).value().to_string();
+                        this.controller.update(cx, |c, _| apply(&mut c.state, val));
+                    }
+                },
+            ));
+        }
 
         let mut view = Self {
             controller,
@@ -371,19 +404,24 @@ impl MainView {
             self.prov_soop_user.update(cx, |s, cx| {
                 s.set_value(state.provider_soop_username.clone(), window, cx)
             });
-            self.prov_soop_pass
-                .update(cx, |s, cx| s.set_value("", window, cx));
+            self.prov_soop_pass.update(cx, |s, cx| {
+                s.set_value(state.provider_soop_password.clone(), window, cx)
+            });
             self.prov_worker_url.update(cx, |s, cx| {
                 s.set_value(state.provider_worker_url.clone(), window, cx)
             });
-            self.prov_worker_key
-                .update(cx, |s, cx| s.set_value("", window, cx));
-            self.prov_chzzk_aut
-                .update(cx, |s, cx| s.set_value("", window, cx));
-            self.prov_chzzk_ses
-                .update(cx, |s, cx| s.set_value("", window, cx));
-            self.prov_kick_token
-                .update(cx, |s, cx| s.set_value("", window, cx));
+            self.prov_worker_key.update(cx, |s, cx| {
+                s.set_value(state.provider_worker_api_key.clone(), window, cx)
+            });
+            self.prov_chzzk_aut.update(cx, |s, cx| {
+                s.set_value(state.provider_chzzk_nid_aut.clone(), window, cx)
+            });
+            self.prov_chzzk_ses.update(cx, |s, cx| {
+                s.set_value(state.provider_chzzk_nid_ses.clone(), window, cx)
+            });
+            self.prov_kick_token.update(cx, |s, cx| {
+                s.set_value(state.provider_kick_token.clone(), window, cx)
+            });
         }
 
         if self.synced_backup_rev != Some(state.backup_revision) {

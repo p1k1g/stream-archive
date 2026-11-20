@@ -338,26 +338,41 @@ impl AppController {
     // ---- Channels actions ----
 
     pub fn channels_add(&mut self) {
+        if self.state.config_busy {
+            return;
+        }
         self.channels_draft.add();
         self.sync_channels_view(true);
     }
 
     pub fn channels_remove(&mut self, index: usize) {
+        if self.state.config_busy {
+            return;
+        }
         self.channels_draft.remove(index);
         self.sync_channels_view(true);
     }
 
     pub fn channels_edit(&mut self, index: usize, field: &str, value: String) {
+        if self.state.config_busy {
+            return;
+        }
         self.channels_draft.edit(index, field, value);
         self.sync_channels_view(false);
     }
 
     pub fn channels_set_enabled(&mut self, index: usize, enabled: bool) {
+        if self.state.config_busy {
+            return;
+        }
         self.channels_draft.set_enabled(index, enabled);
         self.sync_channels_view(false);
     }
 
     pub fn channels_select_platform(&mut self, index: usize, platform: &str) {
+        if self.state.config_busy {
+            return;
+        }
         self.channels_draft.select_platform(index, platform);
         self.sync_channels_view(false);
     }
@@ -917,13 +932,17 @@ impl AppController {
             return;
         }
         self.state.desktop_exit_pending = true;
-        let _ = self.sender.send(Request::PrepareExit);
+        if self.sender.send(Request::PrepareExit).is_err() {
+            self.pending_signals.push(DesktopSignal::ExitNow);
+        }
     }
 
     pub fn complete_exit_confirmation(&mut self, confirmed: bool) {
         if confirmed {
             self.stopping.store(true, Ordering::Release);
-            let _ = self.sender.send(Request::Shutdown);
+            if self.sender.send(Request::Shutdown).is_err() {
+                self.pending_signals.push(DesktopSignal::ExitNow);
+            }
         } else {
             self.state.desktop_exit_pending = false;
         }

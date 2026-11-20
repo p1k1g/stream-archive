@@ -168,6 +168,7 @@ pub fn render_channels_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
             let active = row.platform == plat;
             let (bg, fg, border) = platform_segment_colors(plat, active);
             let p_owned = plat.to_string();
+            let disabled = state.config_busy;
             plat_bar = plat_bar.child(
                 div()
                     .id(("ch-plat", idx * 4 + p_idx))
@@ -184,20 +185,22 @@ pub fn render_channels_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                     } else {
                         FontWeight::NORMAL
                     })
-                    .cursor_pointer()
-                    .hover(|s| {
-                        if active {
-                            s
-                        } else {
-                            s.bg(rgb(BG_RAISED)).text_color(rgb(TEXT_PRIMARY))
-                        }
+                    .when(!disabled, |el| {
+                        el.cursor_pointer()
+                            .hover(|s| {
+                                if active {
+                                    s
+                                } else {
+                                    s.bg(rgb(BG_RAISED)).text_color(rgb(TEXT_PRIMARY))
+                                }
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let p = p_owned.clone();
+                                this.controller
+                                    .update(cx, |c, _| c.channels_select_platform(idx, &p));
+                                cx.notify();
+                            }))
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let p = p_owned.clone();
-                        this.controller
-                            .update(cx, |c, _| c.channels_select_platform(idx, &p));
-                        cx.notify();
-                    }))
                     .child(plat),
             );
         }
@@ -221,6 +224,7 @@ pub fn render_channels_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                     .child(
                         Switch::new(("ch-enabled", idx))
                             .small()
+                            .disabled(state.config_busy)
                             .checked(row.enabled)
                             .on_click(cx.listener(move |this, checked, _, cx| {
                                 this.controller
@@ -231,22 +235,25 @@ pub fn render_channels_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
             )
             .child(plat_bar)
             .child(
-                div()
-                    .flex_1()
-                    .min_w(px(140.0))
-                    .child(Input::new(&inputs.account).xsmall()),
+                div().flex_1().min_w(px(140.0)).child(
+                    Input::new(&inputs.account)
+                        .xsmall()
+                        .disabled(state.config_busy),
+                ),
             )
             .child(
-                div()
-                    .w(px(132.0))
-                    .flex_shrink_0()
-                    .child(Input::new(&inputs.name).xsmall()),
+                div().w(px(132.0)).flex_shrink_0().child(
+                    Input::new(&inputs.name)
+                        .xsmall()
+                        .disabled(state.config_busy),
+                ),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_w(px(120.0))
-                    .child(Input::new(&inputs.outdir).xsmall()),
+                div().flex_1().min_w(px(120.0)).child(
+                    Input::new(&inputs.outdir)
+                        .xsmall()
+                        .disabled(state.config_busy),
+                ),
             )
             .child(
                 div()

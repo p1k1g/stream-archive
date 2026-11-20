@@ -239,3 +239,28 @@ fn backup_directory_pick_preserves_policy_revision_and_history_queues_busy_filte
             if view == "VOD" && filter.status.as_deref() == Some("FAILED")
     ));
 }
+
+#[test]
+fn disconnected_worker_exit_emits_exit_now_and_busy_config_blocks_channel_edits() {
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    // Drop receiver to simulate a terminated/disconnected core worker after startup failure.
+    drop(rx);
+    ctrl.begin_exit_check();
+    assert_eq!(ctrl.take_desktop_signals(), vec![DesktopSignal::ExitNow]);
+
+    // Channel mutations must be ignored while a save/reload is in flight.
+    let (mut ctrl2, _rx2) = AppController::new_disconnected_for_test();
+    ctrl2.state.config_busy = false;
+    ctrl2.channels_add();
+    assert_eq!(ctrl2.state.channels_rows.len(), 1);
+    ctrl2.state.config_busy = true;
+    ctrl2.channels_add();
+    ctrl2.channels_edit(0, "account", "mutated".into());
+    ctrl2.channels_select_platform(0, "CHZZK");
+    ctrl2.channels_set_enabled(0, false);
+    ctrl2.channels_remove(0);
+    assert_eq!(ctrl2.state.channels_rows.len(), 1);
+    assert!(ctrl2.state.channels_rows[0].account.is_empty());
+    assert_eq!(ctrl2.state.channels_rows[0].platform, "SOOP");
+    assert!(ctrl2.state.channels_rows[0].enabled);
+}
