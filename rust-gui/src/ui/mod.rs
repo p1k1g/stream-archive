@@ -66,6 +66,7 @@ pub struct MainView {
     synced_channels_rev: Option<u64>,
     synced_provider_rev: Option<u64>,
     synced_backup_rev: Option<u64>,
+    synced_backup_dir_rev: Option<u64>,
     synced_vod_output_rev: Option<u64>,
 
     _subscriptions: Vec<Subscription>,
@@ -249,6 +250,7 @@ impl MainView {
             synced_channels_rev: None,
             synced_provider_rev: None,
             synced_backup_rev: None,
+            synced_backup_dir_rev: None,
             synced_vod_output_rev: None,
             _subscriptions: subscriptions,
             channel_subscriptions: Vec::new(),
@@ -395,6 +397,10 @@ impl MainView {
             self.backup_retention_input.update(cx, |s, cx| {
                 s.set_value(state.backup_retention_days.clone(), window, cx)
             });
+        }
+
+        if self.synced_backup_dir_rev != Some(state.backup_dir_revision) {
+            self.synced_backup_dir_rev = Some(state.backup_dir_revision);
             self.backup_dir_input.update(cx, |s, cx| {
                 s.set_value(state.backup_directory.clone(), window, cx)
             });

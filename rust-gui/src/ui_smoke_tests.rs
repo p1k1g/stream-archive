@@ -194,3 +194,48 @@ fn password_prompt_and_core_snapshot_binding_work_cleanly() {
     assert_eq!(ctrl.state.diagnostics_rows.len(), 1);
     assert_eq!(ctrl.state.diagnostics_rows[0].name, "SQLite");
 }
+
+#[test]
+fn backup_directory_pick_preserves_policy_revision_and_history_queues_busy_filter_changes() {
+    use crate::core_worker::Response;
+    use stream_archive_server::model::HistoryResponse;
+
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    let initial_policy_rev = ctrl.state.backup_revision;
+    let initial_dir_rev = ctrl.state.backup_dir_revision;
+
+    // Picking a backup folder updates only backup_dir_revision so edited policy inputs stay intact.
+    ctrl.apply_response_for_test(Response::MaintenancePicked(Some(
+        "D:/custom-backups".into(),
+    )));
+    assert_eq!(ctrl.state.backup_directory, "D:/custom-backups");
+    assert_eq!(ctrl.state.backup_revision, initial_policy_rev);
+    assert_ne!(ctrl.state.backup_dir_revision, initial_dir_rev);
+
+    // Changing history filters while an older query is in flight queues a follow-up query with the latest filters.
+    ctrl.state.history_busy = false;
+    ctrl.history_set_view("LIVE");
+    assert!(ctrl.state.history_busy);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::HistoryLoad { ref view, .. }) if view == "LIVE"
+    ));
+
+    // User changes status + view while busy.
+    ctrl.history_set_status("FAILED");
+    ctrl.history_set_view("VOD");
+    assert!(rx.try_recv().is_err());
+
+    // When the stale LIVE response arrives, controller immediately dispatches the queued VOD/FAILED query.
+    ctrl.apply_response_for_test(Response::History {
+        history: HistoryResponse::default(),
+        view: "LIVE".into(),
+        message: None,
+    });
+    assert!(ctrl.state.history_busy);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::HistoryLoad { ref view, ref filter })
+            if view == "VOD" && filter.status.as_deref() == Some("FAILED")
+    ));
+}

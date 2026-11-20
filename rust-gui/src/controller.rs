@@ -78,6 +78,7 @@ pub struct AppController {
     vod_poll_in_flight: bool,
     queue_poll_in_flight: bool,
     maintenance_log_poll_in_flight: bool,
+    history_refresh_queued: bool,
     last_live_poll: Instant,
     last_storage_poll: Instant,
     last_vod_poll: Instant,
@@ -139,6 +140,7 @@ impl AppController {
             vod_poll_in_flight: false,
             queue_poll_in_flight: false,
             maintenance_log_poll_in_flight: false,
+            history_refresh_queued: false,
             last_live_poll: now,
             last_storage_poll: now,
             last_vod_poll: now,
@@ -655,8 +657,10 @@ impl AppController {
 
     pub fn refresh_history(&mut self) {
         if self.state.history_busy {
+            self.history_refresh_queued = true;
             return;
         }
+        self.history_refresh_queued = false;
         let limit = self.state.history_limit.trim().parse::<usize>().ok();
         let filter = HistoryFilter {
             q: (!self.state.history_search.trim().is_empty())
@@ -1366,14 +1370,22 @@ impl AppController {
             } => {
                 self.state.history_busy = false;
                 self.state.history_loaded = true;
-                if let Some(message) = message {
-                    self.state.history_message = message;
+                if self.history_refresh_queued {
+                    self.refresh_history();
+                } else {
+                    if let Some(message) = message {
+                        self.state.history_message = message;
+                    }
+                    self.render_history(history, &view);
                 }
-                self.render_history(history, &view);
             }
             Response::HistoryError(message) => {
                 self.state.history_busy = false;
-                self.state.history_message = message;
+                if self.history_refresh_queued {
+                    self.refresh_history();
+                } else {
+                    self.state.history_message = message;
+                }
             }
             Response::Maintenance {
                 snapshot,
@@ -1389,7 +1401,7 @@ impl AppController {
             Response::MaintenancePicked(selection) => {
                 if let Some(path) = selection {
                     self.state.backup_directory = path;
-                    self.state.backup_revision = self.state.backup_revision.wrapping_add(1);
+                    self.state.backup_dir_revision = self.state.backup_dir_revision.wrapping_add(1);
                 }
             }
             Response::Logs { lines, poll } => {
@@ -1678,6 +1690,11 @@ impl AppController {
     }
 
     #[cfg(test)]
+    pub fn apply_response_for_test(&mut self, response: Response) {
+        self.apply_response(response);
+    }
+
+    #[cfg(test)]
     pub fn apply_queue_snapshot_for_test(&mut self, snapshot: VodQueueSnapshot) {
         self.render_queue(snapshot);
     }
@@ -1780,6 +1797,7 @@ impl AppController {
         self.state.backup_directory = snapshot.directory.clone();
         self.state.backup_directory_locked = !snapshot.directory_editable;
         self.state.backup_revision = self.state.backup_revision.wrapping_add(1);
+        self.state.backup_dir_revision = self.state.backup_dir_revision.wrapping_add(1);
         self.state.backup_rows = maintenance_adapter::backup_rows(&snapshot)
             .into_iter()
             .map(|row| MaintenanceBackupRow {
