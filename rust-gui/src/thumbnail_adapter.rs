@@ -1,12 +1,49 @@
 //! UI-thread LIVE snapshot cache. No disk cache, network or provider logic here.
-use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
-use std::collections::{BTreeMap, HashSet};
+use gpui_kit::RenderImage;
+use image::{Frame, RgbaImage};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 use stream_archive_server::{
     model::NativeWatcherStatus, support::platform::PlatformId, thumbnail_service::ThumbnailImage,
 };
 
 pub const MAX_THUMBNAILS: usize = 128;
 const MAX_PENDING: usize = 2;
+
+/// Convert decoded RGBA pixels into GPUI's native BGRA `RenderImage`.
+pub fn rgba_to_render_image(image: &ThumbnailImage) -> Option<Arc<RenderImage>> {
+    if image.width == 0 || image.height == 0 {
+        return None;
+    }
+    let expected_len = (image.width as usize)
+        .checked_mul(image.height as usize)?
+        .checked_mul(4)?;
+    if image.rgba.len() != expected_len {
+        return None;
+    }
+    let mut bgra = image.rgba.clone();
+    for px in bgra.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    let buffer = RgbaImage::from_raw(image.width, image.height, bgra)?;
+    Some(Arc::new(RenderImage::new(vec![Frame::new(buffer)])))
+}
+
+/// Decode an embedded PNG asset into GPUI's native BGRA `RenderImage`.
+pub fn png_bytes_to_render_image(bytes: &[u8]) -> Option<Arc<RenderImage>> {
+    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+        .ok()?
+        .into_rgba8();
+    let (width, height) = decoded.dimensions();
+    rgba_to_render_image(&ThumbnailImage {
+        width,
+        height,
+        rgba: decoded.into_raw(),
+    })
+}
+
 struct Entry {
     platform: PlatformId,
     account: String,
@@ -16,19 +53,22 @@ struct Entry {
     available: bool,
     attempted: bool,
     blocked: bool,
-    image: Image,
+    image: Option<Arc<RenderImage>>,
 }
+
 #[derive(Default)]
 pub struct Thumbnails {
     entries: BTreeMap<String, Entry>,
     pending: BTreeMap<u64, String>,
     sequence: u64,
 }
+
 impl Thumbnails {
     fn next_generation(&mut self) -> u64 {
         self.sequence += 1;
         self.sequence
     }
+
     pub fn is_tracking(&self) -> bool {
         !self.entries.is_empty() || !self.pending.is_empty()
     }
@@ -38,19 +78,23 @@ impl Thumbnails {
             .entries
             .values()
             .map(|entry| {
-                let size = entry.image.size();
-                u64::from(size.width) * u64::from(size.height) * 4
+                entry.image.as_ref().map_or(0, |img| {
+                    let size = img.size(0);
+                    let w = u64::try_from(size.width.0).unwrap_or(0);
+                    let h = u64::try_from(size.height.0).unwrap_or(0);
+                    w * h * 4
+                })
             })
             .sum();
         (self.entries.len(), self.pending.len(), bytes)
     }
 
-    pub fn image(&self, target: &str) -> Image {
+    pub fn image(&self, target: &str) -> Option<Arc<RenderImage>> {
         self.entries
             .get(target)
-            .map(|entry| entry.image.clone())
-            .unwrap_or_default()
+            .and_then(|entry| entry.image.clone())
     }
+
     pub fn sync(&mut self, status: &NativeWatcherStatus, manual_refresh: bool) {
         let active: Vec<_> = status
             .channels
@@ -86,7 +130,7 @@ impl Thumbnails {
                         available: row.thumbnail_url.is_some(),
                         attempted: false,
                         blocked: row.completed_broadcast_id.as_deref() == Some(broadcast),
-                        image: Image::default(),
+                        image: None,
                     },
                 );
             }
@@ -101,6 +145,7 @@ impl Thumbnails {
             }
         }
     }
+
     pub fn requests(&mut self) -> Vec<(u64, PlatformId, String, String, u64)> {
         let mut requests = Vec::new();
         for (target, entry) in &mut self.entries {
@@ -122,6 +167,7 @@ impl Thumbnails {
         }
         requests
     }
+
     pub fn complete(&mut self, token: u64, image: Option<ThumbnailImage>) -> bool {
         let Some(target) = self.pending.remove(&token) else {
             return false;
@@ -133,13 +179,10 @@ impl Thumbnails {
         else {
             return false;
         };
-        if let Some(image) = image {
-            let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                &image.rgba,
-                image.width,
-                image.height,
-            );
-            entry.image = Image::from_rgba8(pixels);
+        if let Some(image) = image
+            && let Some(rendered) = rgba_to_render_image(&image)
+        {
+            entry.image = Some(rendered);
             return true;
         }
         false
@@ -150,6 +193,7 @@ impl Thumbnails {
 mod tests {
     use super::*;
     use stream_archive_server::model::ChannelRuntimeStatus;
+
     fn status(id: &str) -> NativeWatcherStatus {
         NativeWatcherStatus {
             running: true,
@@ -164,6 +208,7 @@ mod tests {
             ..Default::default()
         }
     }
+
     fn image() -> ThumbnailImage {
         ThumbnailImage {
             width: 2,
@@ -171,9 +216,15 @@ mod tests {
             rgba: vec![255; 8],
         }
     }
+
     fn token(cache: &mut Thumbnails) -> u64 {
         cache.requests().remove(0).0
     }
+
+    fn image_width(cache: &Thumbnails, target: &str) -> i32 {
+        cache.image(target).map_or(0, |img| img.size(0).width.0)
+    }
+
     #[test]
     fn polls_keep_first_image_and_manual_refresh_retains_good_image_on_failure() {
         let mut cache = Thumbnails::default();
@@ -183,13 +234,14 @@ mod tests {
         cache.complete(t, Some(image()));
         cache.sync(&state, false);
         assert!(cache.requests().is_empty());
-        assert_eq!(cache.image("SOOP:test").size().width, 2);
+        assert_eq!(image_width(&cache, "SOOP:test"), 2);
         cache.sync(&state, true);
         let t = token(&mut cache);
         cache.complete(t, None);
-        assert_eq!(cache.image("SOOP:test").size().width, 2);
+        assert_eq!(image_width(&cache, "SOOP:test"), 2);
         assert!(cache.requests().is_empty());
     }
+
     #[test]
     fn completion_purges_image_and_late_reply_and_blocks_same_broadcast_until_manual_refresh() {
         let mut cache = Thumbnails::default();
@@ -200,7 +252,7 @@ mod tests {
         state.channels[0].completed_broadcast_id = Some("1".into());
         cache.sync(&state, false);
         cache.complete(old, Some(image()));
-        assert_eq!(cache.image("SOOP:test").size().width, 0);
+        assert_eq!(image_width(&cache, "SOOP:test"), 0);
         assert!(cache.requests().is_empty());
         cache.sync(&state, true);
         let t = token(&mut cache);
@@ -208,12 +260,13 @@ mod tests {
         // A second completion of the same broadcast must purge again.
         state.channels[0].completion_revision = 2;
         cache.sync(&state, false);
-        assert_eq!(cache.image("SOOP:test").size().width, 0);
+        assert_eq!(image_width(&cache, "SOOP:test"), 0);
         assert!(cache.requests().is_empty());
         state.channels[0].bno = Some("2".into());
         cache.sync(&state, false);
         assert_eq!(cache.requests().len(), 1);
     }
+
     #[test]
     fn refresh_and_broadcast_change_reject_previous_generations() {
         let mut cache = Thumbnails::default();
@@ -223,15 +276,16 @@ mod tests {
         cache.sync(&state, true);
         let current = token(&mut cache);
         cache.complete(old, Some(image()));
-        assert_eq!(cache.image("SOOP:test").size().width, 0);
+        assert_eq!(image_width(&cache, "SOOP:test"), 0);
         state.channels[0].bno = Some("2".into());
         cache.sync(&state, false);
         cache.complete(current, Some(image()));
-        assert_eq!(cache.image("SOOP:test").size().width, 0);
+        assert_eq!(image_width(&cache, "SOOP:test"), 0);
         let current = token(&mut cache);
         cache.complete(current, Some(image()));
-        assert_eq!(cache.image("SOOP:test").size().width, 2);
+        assert_eq!(image_width(&cache, "SOOP:test"), 2);
     }
+
     #[test]
     fn offline_removed_and_stopped_rows_release_cache_and_reject_replies() {
         for stop in 0..3 {
@@ -252,6 +306,7 @@ mod tests {
             assert!(cache.pending.is_empty());
         }
     }
+
     #[test]
     fn null_metadata_falls_back_without_requests_then_fetches_once_if_available() {
         let mut cache = Thumbnails::default();
@@ -265,6 +320,7 @@ mod tests {
         cache.complete(t, None);
         assert!(cache.requests().is_empty());
     }
+
     #[test]
     fn failed_probe_after_completion_cannot_reload_preview_even_on_manual_refresh() {
         let mut cache = Thumbnails::default();
@@ -274,10 +330,9 @@ mod tests {
         state.channels[0].status = "ERROR".into();
         state.channels[0].completion_revision = 1;
         state.channels[0].completed_broadcast_id = Some("1".into());
-        // Even a stale snapshot retaining URL/id must not authorize a preview.
         cache.sync(&state, true);
         cache.complete(old, Some(image()));
-        assert_eq!(cache.image("SOOP:test").size().width, 0);
+        assert_eq!(image_width(&cache, "SOOP:test"), 0);
         assert!(cache.requests().is_empty());
         assert_eq!(cache.metrics(), (0, 0, 0));
         state.channels[0].status = "RECORDING".into();
@@ -288,6 +343,7 @@ mod tests {
         cache.complete(current, Some(image()));
         assert_eq!(cache.metrics(), (1, 0, 8));
     }
+
     #[test]
     fn recording_probe_error_keeps_image_but_lost_metadata_rejects_late_reply() {
         let mut cache = Thumbnails::default();
@@ -298,7 +354,7 @@ mod tests {
         cache.complete(current, Some(image()));
         state.channels[0].status = "ERROR".into();
         cache.sync(&state, false);
-        assert_eq!(cache.image("SOOP:test").size().width, 2);
+        assert_eq!(image_width(&cache, "SOOP:test"), 2);
         cache.sync(&state, true);
         let late = token(&mut cache);
         state.channels[0].thumbnail_url = None;
@@ -306,6 +362,7 @@ mod tests {
         cache.complete(late, Some(image()));
         assert_eq!(cache.metrics(), (0, 0, 0));
     }
+
     #[test]
     fn cache_and_inflight_requests_are_bounded_even_during_refresh() {
         let mut cache = Thumbnails::default();
@@ -327,5 +384,16 @@ mod tests {
             cache.complete(token, Some(image()));
         }
         assert_eq!(cache.requests().len(), MAX_PENDING);
+    }
+
+    #[test]
+    fn rgba_conversion_swaps_red_and_blue_channels_to_bgra() {
+        let img = ThumbnailImage {
+            width: 1,
+            height: 1,
+            rgba: vec![10, 20, 30, 255],
+        };
+        let rendered = rgba_to_render_image(&img).unwrap();
+        assert_eq!(rendered.as_bytes(0).unwrap(), &[30, 20, 10, 255]);
     }
 }

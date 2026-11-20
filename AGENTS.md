@@ -8,10 +8,10 @@
 - `rust-runtime/src/lib.rs`: shared Rust library boundary. source directory는 `rust-runtime`이고 Cargo package / Rust crate compatibility identity는 `stream-archive-server` / `stream_archive_server`로 유지한다.
 - `rust-runtime/src/app_core.rs`: `StreamArchiveCore` service facade. SQLite/settings/secrets/channels/LIVE watcher/VOD/Queue/History/Backup/Storage/process lifecycle의 canonical application boundary.
 - `rust-runtime/src/backup_service.rs`: reusable BackupManager/service boundary. managed backup policy/list/create/restore/integrity/retention을 presentation과 분리한다.
-- `rust-gui/Cargo.toml`: Windows Slint desktop frontend crate.
-- `rust-gui/src/main.rs`: Slint bootstrap/state binding. 반드시 `StreamArchiveCore`를 직접 호출하고 localhost HTTP, 직접 SQLite, 직접 child-process 제어를 추가하지 않는다.
-- `rust-gui/ui/*.slint`: Windows native presentation/navigation. provider/storage/process 구현 로직을 넣지 않는다.
-- Native `설정` 내부는 `일반`과 `백업 / 복원`으로 나뉜다. `일반`은 provider/runtime 설정, 내부 `Manage` view는 backup policy + Backup/Restore를 담당한다. `Diagnostics` navigation은 읽기 전용 진단과 런타임 로그를 제공한다. 모두 기존 `MaintenanceState` / shared services를 사용한다.
+- `rust-gui/Cargo.toml`: Windows GPUI (`gpui-kit`) desktop frontend crate (100% pure Rust).
+- `rust-gui/src/main.rs`: GPUI bootstrap/window/tray lifecycle. 반드시 `StreamArchiveCore`를 직접 호출하고 localhost HTTP, 직접 SQLite, 직접 child-process 제어를 추가하지 않는다.
+- `rust-gui/src/ui/*.rs`: Windows native GPUI presentation/navigation. provider/storage/process 구현 로직을 넣지 않는다.
+- Native `설정` 내부는 `일반 · 인증`과 `백업 · 복원`으로 나뉜다. `일반 · 인증`은 provider/runtime 설정, 내부 `Manage` view는 backup policy + Backup/Restore를 담당한다. `진단 · 로그` (`Diagnostics`) navigation은 읽기 전용 진단과 런타임 로그를 제공한다. 모두 `AppController` / shared services를 사용한다.
 - `rust-runtime/src/tool_discovery.rs`: cross-platform Streamlink/yt-dlp/FFmpeg discovery.
 - `rust-runtime/src/bin/stream-archive-cli.rs`: Linux/macOS-oriented headless CLI entry. bootstrap(`init`/`tools`/`doctor`)과 Phase 23.5 daily-use management를 제공하며, management는 `rust-runtime/src/unix_cli.rs`를 통해 `StreamArchiveCore`를 사용한다. `serve`는 shared headless runner를 직접 사용하고 Web server를 시작하지 않는다.
 - `rust-runtime/src/native_watcher.rs`: provider-neutral LIVE 상태 감시 orchestration.
@@ -39,7 +39,7 @@ Do not reintroduce runtime INI/TXT mirrors or one-off config-file readers. Produ
 
 Unix CLI의 bootstrap `init`/`tools configure`는 기존 bounded SQLite bootstrap 경계를 유지한다. Phase 23.5 daily-use management는 `StreamArchiveCore`/shared services를 사용해야 하며 두 번째 configuration authority가 되어서는 안 된다. Tool discovery는 `STREAMLINK_PATH`, `YT_DLP_PATH`, `FFMPEG_PATH` 같은 기존 runtime key만 저장한다.
 
-Slint code must use `StreamArchiveCore`/shared library services rather than opening a second SQLite connection or reproducing settings/secret validation in UI callbacks.
+GPUI code must use `StreamArchiveCore`/shared library services rather than opening a second SQLite connection or reproducing settings/secret validation in UI callbacks.
 
 The only retained transition bridge is the bounded `soop.db` -> `stream-archive.db` database filename migration.
 
@@ -60,9 +60,9 @@ Windows product/package flow:
 
 `RUN_DEV.bat` starts the compatible headless runtime. The Native GUI can be run directly through Cargo.
 
-`BUILD_PORTABLE.bat` is the single Windows release/package entry point. It builds the Slint frontend with the shared Rust core dependency and assembles a Native-only `dist\stream-archive` package with `StreamArchive.exe` as the entry point. Windows release packages do not contain `stream-archive-server.exe` or `RUN_HEADLESS.bat`; Unix CLI/headless packaging remains separate. Browser/Web fallback artifacts are not packaged.
+`BUILD_PORTABLE.bat` is the single Windows release/package entry point. It builds the GPUI frontend with the shared Rust core dependency and assembles a Native-only `dist\stream-archive` package with `StreamArchive.exe` as the entry point. Windows release packages do not contain `stream-archive-server.exe` or `RUN_HEADLESS.bat`; Unix CLI/headless packaging remains separate. Browser/Web fallback artifacts are not packaged.
 
-Windows Slint compile check:
+Windows GPUI compile check:
 
 ```powershell
 cargo check --locked --manifest-path rust-gui/Cargo.toml
@@ -105,10 +105,10 @@ Linux/macOS keep CLI/headless interfaces rather than receiving a second GUI impl
 The intended dependency direction is:
 
 ```text
-Slint UI --------┐
+GPUI UI ---------┐
 Unix CLI --------┼--> StreamArchiveCore / shared Rust library
 Headless runtime ┘             |
                                +--> SQLite / Watcher / VOD / Queue / Security / Process ownership
 ```
 
-Presentation layers must not call each other. Slint must not use localhost HTTP as its application API and must not duplicate provider, storage, process, security, queue, backup or persistence logic.
+Presentation layers must not call each other. GPUI must not use localhost HTTP as its application API and must not duplicate provider, storage, process, security, queue, backup or persistence logic.

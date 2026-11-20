@@ -5,7 +5,7 @@
 ## 런타임 구조
 
 ```text
-Windows Slint Native GUI ─┐
+Windows GPUI Native GUI ──┐
 Unix CLI/headless ─────────┼──> StreamArchiveCore / shared Rust runtime
 Headless runtime binary ───┘             │
                                          ├─ SQLite: data/stream-archive.db
@@ -14,7 +14,7 @@ Headless runtime binary ───┘             │
                                          └─ Streamlink / yt-dlp / FFmpeg
 ```
 
-Windows portable의 기본 진입점은 Slint Native GUI이며 localhost HTTP를 애플리케이션 API로 사용하지 않습니다. Windows Native UI와 Unix CLI/headless runtime은 모두 `StreamArchiveCore`와 같은 SQLite/runtime 서비스를 직접 사용합니다.
+Windows portable의 기본 진입점은 순수 Rust GPUI Native GUI이며 localhost HTTP를 애플리케이션 API로 사용하지 않습니다. Windows Native UI와 Unix CLI/headless runtime은 모두 `StreamArchiveCore`와 같은 SQLite/runtime 서비스를 직접 사용합니다.
 
 Phase 22.3에서 기존 Axum/browser presentation, browser launcher와 Web fallback package 경로를 제거했습니다. 이전 WinUI/PowerShell 런타임과 INI/TXT 설정 mirror도 제거된 상태를 유지합니다.
 
@@ -36,7 +36,7 @@ Windows에서 실제 실행·테스트·배포에 사용하는 단일 빌드 진
 BUILD_PORTABLE.bat
 ```
 
-`BUILD_PORTABLE.bat`은 Slint Native GUI를 tracked `Cargo.lock`으로 release build합니다. GUI build가 shared Rust core를 dependency로 함께 컴파일하며, Windows 공식 package에는 별도의 headless server binary나 PowerShell 스크립트를 넣지 않습니다.
+`BUILD_PORTABLE.bat`은 GPUI Native GUI를 tracked `Cargo.lock`으로 release build합니다. GUI build가 shared Rust core를 dependency로 함께 컴파일하며, Windows 공식 package에는 별도의 headless server binary나 PowerShell 스크립트를 넣지 않습니다.
 
 ```text
 rust-gui release build + shared Rust core dependency
