@@ -146,13 +146,16 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
             {
                 let active = row.value.eq_ignore_ascii_case(val);
                 let v = val.to_string();
-                pills = pills.child(filter_pill(("close-act", p_idx), label, active).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        let val_copy = v.clone();
-                        this.controller
-                            .update(cx, |c, _| c.settings_edit(idx, val_copy));
-                        cx.notify();
-                    }),
+                pills = pills.child(filter_pill(("close-act", p_idx), label, active).when(
+                    !state.settings_busy,
+                    |el| {
+                        el.on_click(cx.listener(move |this, _, _, cx| {
+                            let val_copy = v.clone();
+                            this.controller
+                                .update(cx, |c, _| c.settings_edit(idx, val_copy));
+                            cx.notify();
+                        }))
+                    },
                 ));
             }
             env_card = env_card.child(
@@ -216,6 +219,7 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                     )
                     .child(
                         Switch::new("notif-switch")
+                            .disabled(state.settings_busy)
                             .checked(checked)
                             .on_click(cx.listener(move |this, next, _, cx| {
                                 let v = if *next { "true" } else { "false" }.to_string();
@@ -260,7 +264,13 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .child(div().flex_1().child(Input::new(input_entity).small()))
+                        .child(
+                            div().flex_1().child(
+                                Input::new(input_entity)
+                                    .small()
+                                    .disabled(state.settings_busy),
+                            ),
+                        )
                         .when(row.pickable, |el| {
                             el.child(
                                 Button::new(("setting-pick", idx))
@@ -340,37 +350,56 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                 .child(labeled_input(
                     "SOOP 사용자명",
                     None,
-                    Input::new(&view.prov_soop_user).small(),
+                    Input::new(&view.prov_soop_user)
+                        .small()
+                        .disabled(state.config_busy),
                 ))
                 .child(labeled_input(
                     "SOOP 비밀번호",
                     Some(state.provider_soop_password_set),
-                    Input::new(&view.prov_soop_pass).small().mask_toggle(),
+                    Input::new(&view.prov_soop_pass)
+                        .small()
+                        .disabled(state.config_busy)
+                        .mask_toggle(),
                 ))
                 .child(labeled_input(
                     "Cloudflare Worker URL (/soop/url 포함)",
                     None,
-                    Input::new(&view.prov_worker_url).small(),
+                    Input::new(&view.prov_worker_url)
+                        .small()
+                        .disabled(state.config_busy),
                 ))
                 .child(labeled_input(
                     "Cloudflare Worker API Key (API_SECRET)",
                     Some(state.provider_worker_api_key_set),
-                    Input::new(&view.prov_worker_key).small().mask_toggle(),
+                    Input::new(&view.prov_worker_key)
+                        .small()
+                        .disabled(state.config_busy)
+                        .mask_toggle(),
                 ))
                 .child(labeled_input(
                     "CHZZK NID_AUT",
                     Some(state.provider_chzzk_nid_aut_set),
-                    Input::new(&view.prov_chzzk_aut).small().mask_toggle(),
+                    Input::new(&view.prov_chzzk_aut)
+                        .small()
+                        .disabled(state.config_busy)
+                        .mask_toggle(),
                 ))
                 .child(labeled_input(
                     "CHZZK NID_SES",
                     Some(state.provider_chzzk_nid_ses_set),
-                    Input::new(&view.prov_chzzk_ses).small().mask_toggle(),
+                    Input::new(&view.prov_chzzk_ses)
+                        .small()
+                        .disabled(state.config_busy)
+                        .mask_toggle(),
                 ))
                 .child(labeled_input(
                     "KICK session_token (구독 VOD)",
                     Some(state.provider_kick_token_set),
-                    Input::new(&view.prov_kick_token).small().mask_toggle(),
+                    Input::new(&view.prov_kick_token)
+                        .small()
+                        .disabled(state.config_busy)
+                        .mask_toggle(),
                 )),
         )
         .child(
@@ -455,11 +484,14 @@ fn render_backup_manage_section(view: &MainView, cx: &mut Context<MainView>) -> 
                         )
                         .child(
                             Switch::new("backup-enabled-sw")
+                                .disabled(state.maintenance_busy)
                                 .checked(state.backup_enabled)
                                 .label("자동 백업 사용")
                                 .on_click(cx.listener(|this, checked, _, cx| {
                                     this.controller.update(cx, |c, _| {
-                                        c.state.backup_enabled = *checked;
+                                        if !c.state.maintenance_busy {
+                                            c.state.backup_enabled = *checked;
+                                        }
                                     });
                                     cx.notify();
                                 })),
@@ -513,17 +545,23 @@ fn render_backup_manage_section(view: &MainView, cx: &mut Context<MainView>) -> 
                 .child(labeled_input(
                     "백업 간격 (시간)",
                     None,
-                    Input::new(&view.backup_interval_input).small(),
+                    Input::new(&view.backup_interval_input)
+                        .small()
+                        .disabled(state.maintenance_busy),
                 ))
                 .child(labeled_input(
                     "최대 보관 개수",
                     None,
-                    Input::new(&view.backup_keep_input).small(),
+                    Input::new(&view.backup_keep_input)
+                        .small()
+                        .disabled(state.maintenance_busy),
                 ))
                 .child(labeled_input(
                     "보관 기간 (일)",
                     None,
-                    Input::new(&view.backup_retention_input).small(),
+                    Input::new(&view.backup_retention_input)
+                        .small()
+                        .disabled(state.maintenance_busy),
                 )),
         )
         .child(
@@ -541,7 +579,7 @@ fn render_backup_manage_section(view: &MainView, cx: &mut Context<MainView>) -> 
                         None,
                         Input::new(&view.backup_dir_input)
                             .small()
-                            .disabled(state.backup_directory_locked),
+                            .disabled(state.backup_directory_locked || state.maintenance_busy),
                     )),
                 )
                 .when(!state.backup_directory_locked, |el| {

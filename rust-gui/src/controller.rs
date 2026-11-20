@@ -699,11 +699,17 @@ impl AppController {
     // ---- General Settings actions ----
 
     pub fn settings_edit(&mut self, index: usize, value: String) {
+        if self.state.settings_busy {
+            return;
+        }
         self.settings_draft.edit(index, value);
         self.sync_settings_view(false);
     }
 
     pub fn settings_set_key(&mut self, key: &str, value: String) {
+        if self.state.settings_busy {
+            return;
+        }
         if let Some(index) = self
             .settings_draft
             .fields

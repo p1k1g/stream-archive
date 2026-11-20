@@ -263,4 +263,32 @@ fn disconnected_worker_exit_emits_exit_now_and_busy_config_blocks_channel_edits(
     assert!(ctrl2.state.channels_rows[0].account.is_empty());
     assert_eq!(ctrl2.state.channels_rows[0].platform, "SOOP");
     assert!(ctrl2.state.channels_rows[0].enabled);
+
+    // General setting mutations must also be ignored while settings_busy is true.
+    use crate::core_worker::Response;
+    use stream_archive_server::environment_settings::{EnvironmentSetting, SettingKind};
+    ctrl2.apply_response_for_test(Response::Snapshot {
+        fields: Some(vec![EnvironmentSetting {
+            key: "OUTPUT_DIR".into(),
+            value: "C:/archive".into(),
+            description: "output".into(),
+            kind: SettingKind::Directory,
+        }]),
+        diagnostics: DiagnosticsSnapshot {
+            status: DiagnosticStatus::Ok,
+            runtime_ready: true,
+            attention_required: false,
+            summary: DiagnosticsSummary::default(),
+            items: Vec::new(),
+        },
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
+    });
+    assert!(!ctrl2.state.settings_busy);
+    ctrl2.state.settings_busy = true;
+    ctrl2.settings_edit(0, "D:/ignored".into());
+    ctrl2.settings_set_key("OUTPUT_DIR", "E:/ignored".into());
+    assert_eq!(ctrl2.state.settings_rows[0].value, "C:/archive");
+    assert!(!ctrl2.state.settings_dirty);
 }
