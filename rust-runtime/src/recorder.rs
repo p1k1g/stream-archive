@@ -62,6 +62,12 @@ impl Recording {
     pub(crate) fn last_size(&self) -> u64 {
         self.last_size
     }
+
+    pub(crate) fn output_size(&self) -> u64 {
+        fs::metadata(&self.file)
+            .map(|m| m.len())
+            .unwrap_or(self.last_size)
+    }
 }
 
 pub enum RecordingPoll {
@@ -145,8 +151,10 @@ pub(crate) fn timestamp_rebase_player_args(output_file: &Path) -> Result<String>
     // literal braces from user-controlled output paths before handing the string
     // to Streamlink's player argument tokenizer.
     let output = output.replace('{', "{{").replace('}', "}}");
+    // Rely on FFmpeg's mpegts muxer auto_bsf instead of hardcoding h264_mp4toannexb
+    // so both H.264 (h264_mp4toannexb) and HEVC (hevc_mp4toannexb) stream-copy cleanly.
     Ok(format!(
-        "-hide_banner -loglevel warning -fflags +genpts+discardcorrupt -i {{playerinput}} -map 0:v:0? -map 0:a:0? -c copy -bsf:v h264_mp4toannexb -f mpegts -mpegts_flags resend_headers -mpegts_copyts 0 -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -avioflags direct -y \"{output}\""
+        "-hide_banner -loglevel warning -fflags +genpts+discardcorrupt -i {{playerinput}} -map 0:v:0? -map 0:a:0? -c copy -f mpegts -mpegts_flags resend_headers -mpegts_copyts 0 -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -avioflags direct -y \"{output}\""
     ))
 }
 
@@ -407,14 +415,18 @@ impl RecorderManager {
                 ..Default::default()
             },
         );
-        let size = fs::metadata(&rec.file)
-            .map(|m| m.len())
-            .unwrap_or(rec.last_size);
+        let size = rec.output_size();
+        if size == 0 && rec.file.is_file() {
+            let _ = fs::remove_file(&rec.file);
+        }
         let ended_at = Utc::now();
         let secs = (ended_at - rec.started_at).num_seconds().max(0);
         let status = if reason == "NORMAL" {
             "COMPLETED"
-        } else if reason.contains("STALLED") || reason.contains("EXIT CODE") {
+        } else if reason.contains("STALLED")
+            || reason.contains("EXIT CODE")
+            || reason.contains("EMPTY OUTPUT")
+        {
             "FAILED"
         } else {
             "STOPPED"
@@ -689,7 +701,7 @@ mod tests {
         assert!(args.contains("-fflags +genpts+discardcorrupt"));
         assert!(args.contains("-i {playerinput}"));
         assert!(args.contains("-c copy"));
-        assert!(args.contains("-bsf:v h264_mp4toannexb"));
+        assert!(!args.contains("h264_mp4toannexb"));
         assert!(args.contains("-f mpegts"));
         assert!(args.contains("-mpegts_flags resend_headers"));
         assert!(args.contains("-mpegts_copyts 0"));
