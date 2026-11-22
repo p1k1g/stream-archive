@@ -11,7 +11,7 @@ CHZZK LIVE/VOD와 SOOP VOD 다운로드 경로에는 이 Worker를 사용하지 
 - Worker와 앱에 함께 설정할 비밀값(아래 `API_SECRET`)
 - SOOP LIVE를 사용하는 데 필요한 계정·설정
 
-Worker는 LIVE URL 조회용이며 녹화 파일을 저장하는 서버가 아닙니다. 실제 미디어 처리는 로컬 Streamlink/FFmpeg가 수행합니다. URL 조회 과정에 필요한 SOOP cookie·방송 비밀번호가 Worker에 전달될 수 있으므로 본인이 관리하고 신뢰하는 Worker를 사용합니다.
+Worker는 LIVE URL 조회용이며 녹화 파일을 저장하는 서버가 아닙니다. 실제 미디어 처리는 로컬 Streamlink/FFmpeg가 수행합니다. URL 조회 과정에 필요한 SOOP cookie·방송 비밀번호가 Worker에 전달될 수 있으므로 본인이 관리하고 신뢰하는 Worker를 사용합니다. 구독/구독플러스 전용 방송의 서명 쿠키(`private_auth.php`) 발급·갱신은 로컬 앱이 직접 처리하므로 기존에 배포한 `backend/worker.js`에서도 하위 호환으로 동작하며, 최신 `backend/worker.js`로 업데이트하면 구독 전용 글로벌 CDN 반환도 직접 지원합니다.
 
 ## 1. Worker 생성 및 코드 배포
 

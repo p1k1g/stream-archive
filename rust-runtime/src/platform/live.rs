@@ -32,7 +32,7 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
 
 #[derive(Debug, Clone)]
 pub(crate) enum BroadcastPayload {
-    Soop(soop::live::SoopBroadcast),
+    Soop(Box<soop::live::SoopBroadcast>),
     Chzzk(chzzk::live::ChzzkBroadcast),
     Kick(kick::live::KickBroadcast),
 }
@@ -48,6 +48,7 @@ pub struct HttpCookie {
 #[derive(Debug, Clone)]
 pub enum StreamInput {
     DirectHls(String),
+    SignedHls(soop::signed_proxy::SoopSignedAuth),
     PluginUrl {
         url: String,
         cookies: Vec<HttpCookie>,
@@ -117,7 +118,7 @@ impl LiveSession {
                     channel_name: value.bj_nick.clone(),
                     title: value.title.clone(),
                     password_required: soop::live::is_password_protected(&value.bpwd),
-                    payload: BroadcastPayload::Soop(value),
+                    payload: BroadcastPayload::Soop(Box::new(value)),
                 })),
             },
             Self::Chzzk(session) => match session.probe(account).await? {
@@ -163,11 +164,15 @@ impl LiveSession {
                         password,
                     )
                     .await?;
+                let input = match stream.signed_auth {
+                    Some(signed) => StreamInput::SignedHls(signed),
+                    None => StreamInput::DirectHls(stream.playlist_url),
+                };
                 Ok(ResolvedStream {
                     quality: stream.quality,
                     cdn: stream.cdn,
                     host: stream.host,
-                    input: StreamInput::DirectHls(stream.playlist_url),
+                    input,
                 })
             }
             (Self::Chzzk(session), BroadcastPayload::Chzzk(value)) => {
