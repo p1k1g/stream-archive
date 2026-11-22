@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use std::path::Path;
 
 pub const HISTORY_DEFAULT_LIMIT: usize = 100;
-pub const HISTORY_MAX_LIMIT: usize = 500;
+pub const HISTORY_MAX_LIMIT: usize = 1000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HistoryFilter {
@@ -493,5 +493,32 @@ mod tests {
         .unwrap();
         assert_eq!(history.vod.len(), 1);
         assert_eq!(history.vod[0].state, "COMPLETED");
+    }
+
+    #[test]
+    fn history_limit_supports_up_to_1000_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("stream-archive.db")).unwrap();
+        for idx in 0..550 {
+            let status = VodJobStatus {
+                job_id: Some(format!("job-{idx:04}")),
+                state: "COMPLETED".into(),
+                message: "bulk".into(),
+                started_at: Some(format!("2026-09-08T03:{:02}:{:02}Z", idx / 60, idx % 60)),
+                finished_at: Some(format!("2026-09-08T04:{:02}:{:02}Z", idx / 60, idx % 60)),
+                ..Default::default()
+            };
+            store.upsert_vod(&status).unwrap();
+        }
+
+        let history = load_history(
+            store.path(),
+            &HistoryFilter {
+                limit: Some(1000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(history.vod.len(), 550);
     }
 }

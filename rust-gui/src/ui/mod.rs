@@ -44,6 +44,8 @@ pub struct MainView {
     pub vod_url_input: Entity<InputState>,
     pub vod_output_input: Entity<InputState>,
     pub history_search_input: Entity<InputState>,
+    pub live_search_input: Entity<InputState>,
+    pub channels_search_input: Entity<InputState>,
     pub channel_inputs: Vec<ChannelInputSet>,
     pub setting_inputs: BTreeMap<String, Entity<InputState>>,
 
@@ -99,6 +101,16 @@ impl MainView {
             InputState::new(window, cx)
                 .placeholder("채널명 · 방송 제목 · 파일명 검색 (Enter로 조회)")
                 .default_value(initial.history_search.clone())
+        });
+        let live_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("채널명 · 계정 · 방송 제목 검색")
+                .default_value(initial.live_search.clone())
+        });
+        let channels_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("채널 ID · 표시 이름 · 폴더 검색")
+                .default_value(initial.channels_search.clone())
         });
 
         let prov_soop_user = cx.new(|cx| {
@@ -217,6 +229,29 @@ impl MainView {
             },
         ));
         subscriptions.push(cx.subscribe_in(
+            &live_search_input,
+            window,
+            |this, state, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let val = state.read(cx).value().to_string();
+                    this.controller.update(cx, |c, _| c.set_live_search(val));
+                    cx.notify();
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &channels_search_input,
+            window,
+            |this, state, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let val = state.read(cx).value().to_string();
+                    this.controller
+                        .update(cx, |c, _| c.set_channels_search(val));
+                    cx.notify();
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
             &live_password_input,
             window,
             |this, state, event: &InputEvent, _, cx| {
@@ -265,6 +300,8 @@ impl MainView {
             vod_url_input,
             vod_output_input,
             history_search_input,
+            live_search_input,
+            channels_search_input,
             channel_inputs: Vec::new(),
             setting_inputs: BTreeMap::new(),
             prov_soop_user,
@@ -309,9 +346,13 @@ impl MainView {
             self.setting_inputs.clear();
             self.setting_subscriptions.clear();
             for row in &state.settings_rows {
-                if row.key == "STREAM_ARCHIVE_CLOSE_ACTION"
-                    || row.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"
-                {
+                if matches!(
+                    row.key.as_str(),
+                    "STREAM_ARCHIVE_CLOSE_ACTION"
+                        | "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"
+                        | "GUI_NOTIFY_RECORD_START"
+                        | "GUI_NOTIFY_WARNING"
+                ) {
                     continue;
                 }
                 let key = row.key.clone();
@@ -922,6 +963,79 @@ impl MainView {
         )
     }
 
+    fn render_exit_confirm_modal(&self, cx: &mut Context<Self>) -> Div {
+        let state = self.controller.read(cx).state.clone();
+        let busy = state.exit_shutting_down;
+        modal_backdrop(
+            "exit-confirm-backdrop",
+            surface_card()
+                .w(px(450.0))
+                .p(px(18.0))
+                .bg(rgb(BG_SURFACE))
+                .border_color(rgb(WARN_BORDER))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .text_size(px(15.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(TEXT_PRIMARY))
+                        .child("Stream Archive 종료"),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb(TEXT_SECONDARY))
+                        .child(if busy {
+                            "진행 중인 녹화·다운로드·감시 작업을 안전하게 정리하고 종료하는 중입니다..."
+                        } else {
+                            "녹화·다운로드·채널 감시 또는 대기 중인 Queue가 진행 중입니다. 현재 앱의 작업을 안전하게 정리하고 종료할까요?"
+                        }),
+                )
+                .when(!state.exit_confirm_error.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(rgb(WARN_FG))
+                            .child(state.exit_confirm_error.clone()),
+                    )
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .pt(px(6.0))
+                        .child(
+                            Button::new("exit-confirm-cancel-btn")
+                                .ghost()
+                                .small()
+                                .disabled(busy)
+                                .label("계속 실행")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.controller
+                                        .update(cx, |c, _| c.complete_exit_confirmation(false));
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("exit-confirm-ok-btn")
+                                .danger()
+                                .small()
+                                .disabled(busy)
+                                .label(if busy { "종료 정리 중..." } else { "정리 후 종료" })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.controller
+                                        .update(cx, |c, _| c.complete_exit_confirmation(true));
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+        )
+    }
+
     fn render_restore_modal(&self, file_name: &str, cx: &mut Context<Self>) -> Div {
         modal_backdrop(
             "restore-modal-backdrop",
@@ -1031,7 +1145,11 @@ impl Render for MainView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     let s = this.controller.read(cx).state.clone();
-                    if s.close_dialog_visible {
+                    if s.exit_confirm_visible {
+                        this.controller
+                            .update(cx, |c, _| c.complete_exit_confirmation(false));
+                        cx.notify();
+                    } else if s.close_dialog_visible {
                         this.controller.update(cx, |c, _| c.cancel_close_dialog());
                         cx.notify();
                     } else if s.password_prompt_target.is_some() {
@@ -1055,7 +1173,9 @@ impl Render for MainView {
             )
             .child(self.render_status_bar(cx));
 
-        if state.close_dialog_visible {
+        if state.exit_confirm_visible || state.exit_shutting_down {
+            root = root.child(self.render_exit_confirm_modal(cx));
+        } else if state.close_dialog_visible {
             root = root.child(self.render_close_dialog(cx));
         } else if state.password_prompt_target.is_some() {
             root = root.child(self.render_password_modal(cx));

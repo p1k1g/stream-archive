@@ -231,6 +231,63 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
             continue;
         }
 
+        if row.key == "GUI_NOTIFY_RECORD_START" || row.key == "GUI_NOTIFY_WARNING" {
+            let is_start = row.key == "GUI_NOTIFY_RECORD_START";
+            let checked = if is_start {
+                row.value.trim().eq_ignore_ascii_case("Y")
+            } else {
+                !row.value.trim().eq_ignore_ascii_case("N")
+            };
+            let title = if is_start {
+                "LIVE 녹화 시작 트레이 알림"
+            } else {
+                "저장 공간 부족·채널 오류 경고 알림"
+            };
+            let switch_id = if is_start {
+                "notif-live-start-switch"
+            } else {
+                "notif-warning-switch"
+            };
+            env_card = env_card.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.0))
+                    .py(px(4.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(TEXT_PRIMARY))
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(TEXT_MUTED))
+                                    .child(row.description.clone()),
+                            ),
+                    )
+                    .child(
+                        Switch::new(switch_id)
+                            .disabled(state.settings_busy)
+                            .checked(checked)
+                            .on_click(cx.listener(move |this, next, _, cx| {
+                                let v = if *next { "Y" } else { "N" }.to_string();
+                                this.controller.update(cx, |c, _| c.settings_edit(idx, v));
+                                cx.notify();
+                            })),
+                    ),
+            );
+            continue;
+        }
+
         let Some(input_entity) = view.setting_inputs.get(&row.key) else {
             continue;
         };

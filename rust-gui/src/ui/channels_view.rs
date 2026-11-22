@@ -53,6 +53,8 @@ pub fn render_channels_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                             .disabled(state.config_busy)
                             .label("+ 채널 추가")
                             .on_click(cx.listener(|this, _, window, cx| {
+                                this.channels_search_input
+                                    .update(cx, |s, cx| s.set_value("", window, cx));
                                 this.controller.update(cx, |c, _| c.channels_add());
                                 this.sync_inputs_from_controller(window, cx);
                                 cx.notify();
@@ -112,6 +114,93 @@ pub fn render_channels_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
         return page;
     }
 
+    // Platform filter pills & search input
+    let total_count = state.channels_rows.len();
+    let soop_count = state
+        .channels_rows
+        .iter()
+        .filter(|r| r.platform == "SOOP")
+        .count();
+    let chzzk_count = state
+        .channels_rows
+        .iter()
+        .filter(|r| r.platform == "CHZZK")
+        .count();
+    let kick_count = state
+        .channels_rows
+        .iter()
+        .filter(|r| r.platform == "KICK")
+        .count();
+
+    let needle = state.channels_search.trim().to_ascii_lowercase();
+    let matching_indices: Vec<usize> = state
+        .channels_rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            let platform_ok = state.channels_platform_filter == "ALL"
+                || row.platform == state.channels_platform_filter;
+            let search_ok = needle.is_empty()
+                || row.account.to_ascii_lowercase().contains(&needle)
+                || row.name.to_ascii_lowercase().contains(&needle)
+                || row.outdir.to_ascii_lowercase().contains(&needle)
+                || row.platform.to_ascii_lowercase().contains(&needle);
+            platform_ok && search_ok
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+
+    let mut plat_filters = div().flex().items_center().flex_wrap().gap(px(6.0));
+    for (f_idx, (key, label)) in [
+        ("ALL", format!("전체 ({total_count})")),
+        ("SOOP", format!("SOOP ({soop_count})")),
+        ("CHZZK", format!("CHZZK ({chzzk_count})")),
+        ("KICK", format!("KICK ({kick_count})")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let active = state.channels_platform_filter == key;
+        let key_owned = key.to_string();
+        plat_filters = plat_filters.child(
+            filter_pill(("ch-plat-filter", f_idx), &label, active).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    let k = key_owned.clone();
+                    this.controller
+                        .update(cx, |c, _| c.set_channels_platform_filter(&k));
+                    cx.notify();
+                },
+            )),
+        );
+    }
+
+    page =
+        page.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .flex_wrap()
+                .gap(px(8.0))
+                .child(plat_filters)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .when(matching_indices.len() != total_count, |el| {
+                            el.child(div().text_size(px(11.0)).text_color(rgb(TEXT_MUTED)).child(
+                                format!("표시 {} / {}", matching_indices.len(), total_count),
+                            ))
+                        })
+                        .child(
+                            div()
+                                .w(px(240.0))
+                                .child(Input::new(&view.channels_search_input).xsmall()),
+                        ),
+                ),
+        );
+
     let mut table = surface_card().overflow_hidden().flex().flex_col();
 
     // Compact 1-line table header
@@ -149,11 +238,27 @@ pub fn render_channels_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                     .w(px(138.0))
                     .flex_shrink_0()
                     .text_right()
-                    .child(format!("작업 ({}개)", state.channels_rows.len())),
+                    .child(format!("작업 ({}개)", matching_indices.len())),
             ),
     );
 
-    for (idx, row) in state.channels_rows.iter().enumerate() {
+    if matching_indices.is_empty() {
+        table = table.child(
+            div()
+                .p(px(22.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(12.0))
+                .text_color(rgb(TEXT_MUTED))
+                .child("검색어 또는 플랫폼 필터와 일치하는 채널이 없습니다."),
+        );
+    }
+
+    for idx in matching_indices {
+        let Some(row) = state.channels_rows.get(idx) else {
+            continue;
+        };
         let Some(inputs) = view.channel_inputs.get(idx) else {
             continue;
         };

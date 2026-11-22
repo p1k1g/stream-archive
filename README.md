@@ -4,11 +4,11 @@
 
 Windows에서는 순수 Rust GPUI Native GUI를, Linux/macOS에서는 CLI·headless 실행을 제공합니다. Queue, History, 백업·복구, Diagnostics를 한곳에서 관리할 수 있습니다.
 
-[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.0.6 릴리스 노트](docs/RELEASE_NOTES_1_0_6.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
+[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.0.7 릴리스 노트](docs/RELEASE_NOTES_1_0_7.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
 
-> **Stream Archive 1.0.6 공개 — 2026-11-20**
+> **Stream Archive 1.0.7 공개 — 2026-11-22**
 >
-> [1.0.6 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.6)는 Windows 데스크톱 GUI를 Slint에서 순수 Rust **GPUI (`gpui-kit`, DirectX 11)** 로 전면 전환해 통합 다크 타이틀바, Zed 스타일 고밀도 UI, 1라인 채널 관리 테이블, 트레이 숨김 시 GPU 리소스 완전 해제를 제공합니다. 기존 [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5), [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)는 보존합니다.
+> [1.0.7 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.7)는 오류 채널 지수 백오프·중복 경고 로그 억제, 제한 병렬 채널 폴링(최대 6개) 및 즉시 취소, History `1000건` 상한 일치, 창 위치·크기·최대화 SQLite 영속화, GPUI 다크 종료 확인 모달, LIVE/채널 검색·상태순 정렬·녹화 경과/속도·`방송 보기`, 트레이 `LIVE 감시 시작/중지` 및 LIVE 시작·경고 알림 스위치를 추가했습니다. 기존 [1.0.6 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.6), [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5), [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)는 보존합니다.
 
 ## 화면 미리보기
 
@@ -45,17 +45,17 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
 ## 다운로드 및 지원 환경
 
-[1.0.6 Release 페이지](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.6)와 아래 정식 Release asset 링크에서 패키지를 다운로드할 수 있습니다.
+[1.0.7 Release 페이지](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.7)와 아래 정식 Release asset 링크에서 패키지를 다운로드할 수 있습니다.
 
 | 운영체제 | 다운로드 | 패키지 | 실행 방식 |
 |---|---|---|---|
-| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.6/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
-| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.6/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
-| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.6/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
+| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.7/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
+| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.7/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
+| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.0.7/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
 
-체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.6/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.6/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.6/stream-archive-macos-arm64.tar.gz.sha256)
+체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.7/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.7/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.0.7/stream-archive-macos-arm64.tar.gz.sha256)
 
-이전 버전은 [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5), [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 받을 수 있으며 [1.0.2 체크섬](docs/releases/v1.0.2/), [1.0.1 체크섬](docs/releases/v1.0.1/), [1.0.0 체크섬](docs/releases/v1.0.0/)도 유지합니다.
+이전 버전은 [1.0.6 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.6), [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5), [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 받을 수 있으며 [1.0.2 체크섬](docs/releases/v1.0.2/), [1.0.1 체크섬](docs/releases/v1.0.1/), [1.0.0 체크섬](docs/releases/v1.0.0/)도 유지합니다.
 
 패키지 build와 smoke는 각 플랫폼의 CI에서 검증합니다. 실제 서비스 세션, GUI 조작 및 OS별 비밀정보 저장의 최종 수동 검증은 별도로 관리합니다. Linux/macOS에는 GUI를 제공하지 않으며, 검증하지 않은 아키텍처의 지원을 주장하지 않습니다.
 
@@ -178,8 +178,8 @@ Windows는 CurrentUser DPAPI, Linux는 `secret-tool`을 통한 Secret Service, m
 
 | 문서 | 내용 |
 |---|---|
-| [1.0.6 릴리스 노트](docs/RELEASE_NOTES_1_0_6.md) | 지원 범위·변경사항·안내 |
-| [1.0.5 릴리스 노트](docs/RELEASE_NOTES_1_0_5.md) | 이전 버전 릴리스 노트 |
+| [1.0.7 릴리스 노트](docs/RELEASE_NOTES_1_0_7.md) | 지원 범위·변경사항·안내 |
+| [1.0.6 릴리스 노트](docs/RELEASE_NOTES_1_0_6.md) | 이전 버전 릴리스 노트 |
 | [운영 가이드](docs/OPERATIONS.md) | 백업·복구·업그레이드·rollback |
 | [Cloudflare Worker 설정](docs/CLOUDFLARE_WORKER.md) | SOOP LIVE용 Worker 생성·secret·앱 연결 |
 | [Unix CLI 가이드](docs/UNIX_CLI.md) | Linux/macOS 명령 및 운영 조건 |

@@ -8,6 +8,8 @@ pub struct LiveModel {
     pub resets: u64,
     pub row_updates: u64,
     filter: String,
+    search: String,
+    sort_mode: String,
     visible: bool,
     dirty: bool,
     awaiting_snapshot: bool,
@@ -22,6 +24,8 @@ impl Default for LiveModel {
             resets: 0,
             row_updates: 0,
             filter: "ALL".into(),
+            search: String::new(),
+            sort_mode: "STATUS".into(),
             visible: false,
             dirty: false,
             awaiting_snapshot: false,
@@ -44,12 +48,69 @@ impl LiveModel {
         &self.filter
     }
 
+    pub fn set_search(&mut self, search: String) -> bool {
+        if self.search == search {
+            return false;
+        }
+        self.search = search;
+        self.dirty = true;
+        true
+    }
+
+    pub fn search(&self) -> &str {
+        &self.search
+    }
+
+    pub fn set_sort_mode(&mut self, mode: &str) -> bool {
+        let normalized = if mode == "ORDER" { "ORDER" } else { "STATUS" };
+        if self.sort_mode == normalized {
+            return false;
+        }
+        self.sort_mode = normalized.to_string();
+        self.dirty = true;
+        true
+    }
+
+    pub fn sort_mode(&self) -> &str {
+        &self.sort_mode
+    }
+
     pub fn matches_filter(filter: &str, status: &str) -> bool {
         match filter {
             "RECORDING" => status == "RECORDING",
             "OFFLINE" => status == "OFFLINE",
             "ERROR" => matches!(status, "ERROR" | "LOW_DISK" | "STALLED" | "AUTH"),
             _ => true,
+        }
+    }
+
+    pub fn matches_search(
+        query: &str,
+        name: &str,
+        account: &str,
+        title: &str,
+        platform: &str,
+    ) -> bool {
+        let needle = query.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return true;
+        }
+        [name, account, title, platform]
+            .into_iter()
+            .any(|field| field.to_ascii_lowercase().contains(&needle))
+    }
+
+    pub fn status_sort_rank(status: &str) -> u8 {
+        match status {
+            "RECORDING" => 0,
+            "PASSWORD_REQUIRED" => 1,
+            "LOW_DISK" | "STALLED" | "AUTH" | "ERROR" => 2,
+            "PAUSED" => 3,
+            "OFFLINE" => 4,
+            "UNKNOWN" => 5,
+            "WATCHER_STOPPED" => 6,
+            "DISABLED" => 7,
+            _ => 8,
         }
     }
 
@@ -162,6 +223,8 @@ fn same_row(a: &LiveChannelRow, b: &LiveChannelRow) -> bool {
         && a.output_dir == b.output_dir
         && a.size == b.size
         && a.started_at == b.started_at
+        && a.elapsed == b.elapsed
+        && a.speed == b.speed
         && a.suppressed == b.suppressed
         && a.detail == b.detail
         && a.can_stop_once == b.can_stop_once

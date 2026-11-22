@@ -281,14 +281,306 @@ fn disconnected_worker_exit_emits_exit_now_and_busy_config_blocks_channel_edits(
             summary: DiagnosticsSummary::default(),
             items: Vec::new(),
         },
+        window_bounds: Some("100,80,1280,800,0".into()),
         first_run: false,
         startup_failed: false,
         message: String::new(),
     });
     assert!(!ctrl2.state.settings_busy);
+    assert_eq!(
+        ctrl2.state.window_bounds_spec.as_deref(),
+        Some("100,80,1280,800,0")
+    );
     ctrl2.state.settings_busy = true;
     ctrl2.settings_edit(0, "D:/ignored".into());
     ctrl2.settings_set_key("OUTPUT_DIR", "E:/ignored".into());
     assert_eq!(ctrl2.state.settings_rows[0].value, "C:/archive");
     assert!(!ctrl2.state.settings_dirty);
+}
+
+#[test]
+fn live_search_status_sort_and_open_stream_work_cleanly() {
+    use crate::core_worker::Response;
+    use stream_archive_server::model::{ChannelRuntimeStatus, NativeWatcherStatus};
+
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    ctrl.set_window_visible(true);
+    let generation = ctrl.live_model.generation();
+    let _ = rx.try_iter().count();
+
+    let status = NativeWatcherStatus {
+        running: true,
+        engine: "test",
+        channel_count: 4,
+        recording_count: 1,
+        offline_count: 1,
+        error_count: 1,
+        channels: vec![
+            ChannelRuntimeStatus {
+                platform: PlatformId::Soop,
+                account: "alpha".into(),
+                name: "알파".into(),
+                status: "OFFLINE".into(),
+                ..Default::default()
+            },
+            ChannelRuntimeStatus {
+                platform: PlatformId::Chzzk,
+                account: "beta".into(),
+                name: "베타".into(),
+                status: "ERROR".into(),
+                detail: Some("HTTP 500".into()),
+                ..Default::default()
+            },
+            ChannelRuntimeStatus {
+                platform: PlatformId::Soop,
+                account: "gamma".into(),
+                name: "감마".into(),
+                status: "PASSWORD_REQUIRED".into(),
+                ..Default::default()
+            },
+            ChannelRuntimeStatus {
+                platform: PlatformId::Kick,
+                account: "delta".into(),
+                name: "델타".into(),
+                status: "RECORDING".into(),
+                title: Some("라이브 방송 중".into()),
+                bno: Some("999".into()),
+                started_at: Some("2026-11-22T01:00:00Z".into()),
+                size_bytes: 2 * 1024 * 1024,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    ctrl.apply_response_for_test(Response::Live {
+        generation: Some(generation),
+        status,
+        refresh_thumbnails: false,
+        message: None,
+        poll: false,
+    });
+
+    // Default sort mode is STATUS: RECORDING > PASSWORD_REQUIRED > ERROR > OFFLINE.
+    let order: Vec<&str> = ctrl
+        .live_model
+        .rows
+        .iter()
+        .map(|r| r.status.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        vec!["RECORDING", "PASSWORD_REQUIRED", "ERROR", "OFFLINE"]
+    );
+    assert!(!ctrl.live_model.rows[0].elapsed.is_empty());
+
+    // Switching to ORDER restores upstream order.
+    ctrl.set_live_sort_mode("ORDER");
+    let order2: Vec<&str> = ctrl
+        .live_model
+        .rows
+        .iter()
+        .map(|r| r.account.as_str())
+        .collect();
+    assert_eq!(order2, vec!["alpha", "beta", "gamma", "delta"]);
+
+    // Search filters by name, account, title, or platform.
+    ctrl.set_live_search("라이브".into());
+    assert_eq!(ctrl.live_model.rows.len(), 1);
+    assert_eq!(ctrl.live_model.rows[0].account, "delta");
+
+    // Open stream dispatches Request::OpenLiveStream.
+    ctrl.live_open_stream("KICK".into(), "delta".into());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::OpenLiveStream { ref platform, ref account })
+            if platform == "KICK" && account == "delta"
+    ));
+}
+
+#[test]
+fn gpui_exit_modal_window_bounds_and_tray_alerts_deduplicate() {
+    use crate::core_worker::Response;
+    use stream_archive_server::{
+        model::{ChannelRuntimeStatus, NativeWatcherStatus},
+        storage_service::{StorageSnapshot, StorageVolume},
+    };
+
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    ctrl.state.notify_record_start = true;
+    ctrl.state.notify_warning = true;
+
+    // Before the initial Snapshot arrives, periodic bounds capture must NOT overwrite saved bounds.
+    ctrl.mark_initial_window_opened();
+    ctrl.save_window_bounds("0,0,1180,740,0".into());
+    assert!(rx.try_recv().is_err());
+
+    // When a late initial Snapshot arrives with saved bounds, emit ApplyWindowBounds and unlock saving.
+    ctrl.apply_response_for_test(Response::Snapshot {
+        fields: None,
+        diagnostics: DiagnosticsSnapshot {
+            status: DiagnosticStatus::Ok,
+            runtime_ready: true,
+            attention_required: false,
+            summary: DiagnosticsSummary::default(),
+            items: Vec::new(),
+        },
+        window_bounds: Some("200,150,1400,900,1".into()),
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
+    });
+    assert_eq!(
+        ctrl.take_desktop_signals(),
+        vec![DesktopSignal::ApplyWindowBounds(
+            "200,150,1400,900,1".into()
+        )]
+    );
+
+    // Saving identical window bounds only dispatches once after initialization.
+    ctrl.save_window_bounds("120,90,1280,820,0".into());
+    ctrl.save_window_bounds("120,90,1280,820,0".into());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::SaveWindowBounds(ref s)) if s == "120,90,1280,820,0"
+    ));
+    assert!(rx.try_recv().is_err());
+
+    // ExitCheck(Ok(true)) opens GPUI exit modal and requests window visibility.
+    ctrl.state.desktop_exit_pending = true;
+    ctrl.apply_response_for_test(Response::ExitCheck(Ok(true)));
+    assert!(ctrl.state.exit_confirm_visible);
+    assert!(
+        ctrl.take_desktop_signals()
+            .contains(&DesktopSignal::EnsureWindowVisible)
+    );
+
+    // Cancelling closes the modal and clears desktop_exit_pending.
+    ctrl.complete_exit_confirmation(false);
+    assert!(!ctrl.state.exit_confirm_visible);
+    assert!(!ctrl.state.desktop_exit_pending);
+
+    // ExitCheck(Ok(false)) shuts down immediately without modal.
+    ctrl.state.desktop_exit_pending = true;
+    ctrl.apply_response_for_test(Response::ExitCheck(Ok(false)));
+    assert!(!ctrl.state.exit_confirm_visible);
+    assert!(matches!(rx.try_recv(), Ok(Request::Shutdown)));
+
+    // Initial LIVE snapshot seeds alert baseline without firing stale alerts,
+    // but emits WatcherStateChanged(true).
+    let base_live = NativeWatcherStatus {
+        running: true,
+        channels: vec![ChannelRuntimeStatus {
+            platform: PlatformId::Chzzk,
+            account: "ch1".into(),
+            name: "채널1".into(),
+            status: "OFFLINE".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: base_live,
+        refresh_thumbnails: false,
+        message: None,
+        poll: true,
+    });
+    let signals = ctrl.take_desktop_signals();
+    assert_eq!(signals, vec![DesktopSignal::WatcherStateChanged(true)]);
+
+    // Transition to RECORDING and ERROR fires exactly one alert each; repeat does not spam.
+    let active_live = NativeWatcherStatus {
+        running: true,
+        channels: vec![
+            ChannelRuntimeStatus {
+                platform: PlatformId::Chzzk,
+                account: "ch1".into(),
+                name: "채널1".into(),
+                status: "RECORDING".into(),
+                bno: Some("555".into()),
+                ..Default::default()
+            },
+            ChannelRuntimeStatus {
+                platform: PlatformId::Soop,
+                account: "ch2".into(),
+                name: "채널2".into(),
+                status: "ERROR".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: active_live.clone(),
+        refresh_thumbnails: false,
+        message: None,
+        poll: true,
+    });
+    let signals = ctrl.take_desktop_signals();
+    assert_eq!(
+        signals
+            .iter()
+            .filter(|s| matches!(s, DesktopSignal::TrayAlert { .. }))
+            .count(),
+        2
+    );
+
+    // Polling the exact same state emits zero duplicate alerts.
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: active_live,
+        refresh_thumbnails: false,
+        message: None,
+        poll: true,
+    });
+    assert!(ctrl.take_desktop_signals().is_empty());
+
+    // CRITICAL storage volume alerts once and does not repeat while still critical.
+    let crit_storage = StorageSnapshot {
+        threshold_gb: 20.0,
+        database_size_bytes: 0,
+        volumes: vec![StorageVolume {
+            probe_path: "G:\\".into(),
+            paths: vec!["G:\\chzzk".into()],
+            roles: vec!["채널 저장".into()],
+            total_bytes: 1_000_000_000,
+            free_bytes: 1_000_000,
+            used_percent: 99.9,
+            threshold_gb: 20.0,
+            status: "CRITICAL".into(),
+            error: None,
+        }],
+    };
+    ctrl.apply_response_for_test(Response::Storage {
+        generation: 0,
+        snapshot: crit_storage.clone(),
+        message: None,
+        poll: false,
+    });
+    assert!(
+        ctrl.take_desktop_signals()
+            .iter()
+            .any(|s| matches!(s, DesktopSignal::TrayAlert { warning: true, .. }))
+    );
+    ctrl.apply_response_for_test(Response::Storage {
+        generation: 0,
+        snapshot: crit_storage,
+        message: None,
+        poll: false,
+    });
+    assert!(ctrl.take_desktop_signals().is_empty());
+
+    // Channels search & platform filter state, plus adding while filtered.
+    ctrl.state.config_busy = false;
+    ctrl.set_channels_platform_filter("CHZZK");
+    ctrl.set_channels_search("테스트".into());
+    assert_eq!(ctrl.state.channels_platform_filter, "CHZZK");
+    assert_eq!(ctrl.state.channels_search, "테스트");
+    ctrl.channels_add();
+    assert!(ctrl.state.channels_search.is_empty());
+    assert_eq!(ctrl.state.channels_rows.last().unwrap().platform, "CHZZK");
+    ctrl.set_channels_platform_filter("INVALID");
+    assert_eq!(ctrl.state.channels_platform_filter, "ALL");
 }

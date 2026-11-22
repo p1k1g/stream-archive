@@ -28,13 +28,22 @@ use windows::{
 const CALLBACK: u32 = WM_APP + 24;
 const OPEN: usize = 1;
 const EXIT: usize = 2;
+const TOGGLE_WATCHER: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BalloonTarget {
+    History,
+    Live,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
     Open,
     Exit,
+    ToggleWatcher,
     ShellRestart,
     History,
+    Live,
     NoticeClosed,
 }
 
@@ -44,8 +53,10 @@ struct State {
     taskbar_created: u32,
     events: mpsc::Sender<TrayEvent>,
     status: RefCell<String>,
+    watcher_running: Cell<bool>,
     notices: RefCell<NoticeQueue>,
     notice_visible: Cell<bool>,
+    balloon_target: Cell<BalloonTarget>,
 }
 
 impl State {
@@ -65,23 +76,11 @@ impl State {
         data
     }
 
-    fn show_notice(&self, summary: Summary) -> bool {
+    fn show_balloon(&self, title: &str, body: &str, warning: bool, target: BalloonTarget) -> bool {
         let mut data = self.data("");
         data.uFlags = NIF_INFO;
-        data.dwInfoFlags = (if summary.failed > 0 {
-            NIIF_WARNING
-        } else {
-            NIIF_INFO
-        }) | NIIF_RESPECT_QUIET_TIME;
-        let title = if summary.failed > 0 {
-            "Stream Archive 다운로드 결과"
-        } else {
-            "Stream Archive 다운로드 완료"
-        };
-        let body = format!(
-            "VOD 완료 {}건 · 실패 {}건\n클릭하면 History에서 결과를 확인합니다.",
-            summary.completed, summary.failed
-        );
+        data.dwInfoFlags =
+            (if warning { NIIF_WARNING } else { NIIF_INFO }) | NIIF_RESPECT_QUIET_TIME;
         for (dest, src) in data
             .szInfoTitle
             .iter_mut()
@@ -93,9 +92,23 @@ impl State {
         for (dest, src) in data.szInfo.iter_mut().take(255).zip(body.encode_utf16()) {
             *dest = src;
         }
+        self.balloon_target.set(target);
         let shown = unsafe { Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() };
         self.notice_visible.set(shown);
         shown
+    }
+
+    fn show_notice(&self, summary: Summary) -> bool {
+        let title = if summary.failed > 0 {
+            "Stream Archive 다운로드 결과"
+        } else {
+            "Stream Archive 다운로드 완료"
+        };
+        let body = format!(
+            "VOD 완료 {}건 · 실패 {}건\n클릭하면 History에서 결과를 확인합니다.",
+            summary.completed, summary.failed
+        );
+        self.show_balloon(title, &body, summary.failed > 0, BalloonTarget::History)
     }
 
     fn clear_notice(&self) {
@@ -183,8 +196,10 @@ impl TrayHost {
                 icon,
                 taskbar_created,
                 status: RefCell::new("상태 확인 중".into()),
+                watcher_running: Cell::new(false),
                 notices: RefCell::new(NoticeQueue::default()),
                 notice_visible: Cell::new(false),
+                balloon_target: Cell::new(BalloonTarget::History),
                 events,
             }));
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, state as isize);
@@ -205,6 +220,16 @@ impl TrayHost {
         *self.state().status.borrow_mut() = summary.to_string();
         let tooltip = format!("Stream Archive — {summary}");
         let _ = self.state().ensure(&tooltip);
+    }
+
+    pub fn set_watcher_running(&self, running: bool) {
+        self.state().watcher_running.set(running);
+    }
+
+    pub fn show_alert(&self, title: &str, body: &str, warning: bool) {
+        let _ = self
+            .state()
+            .show_balloon(title, body, warning, BalloonTarget::Live);
     }
 
     pub fn enqueue_notice(&self, completed: usize, failed: usize) {
@@ -297,7 +322,11 @@ unsafe extern "system" fn wndproc(
         if message == CALLBACK {
             match lparam.0 as u32 {
                 NIN_BALLOONUSERCLICK => {
-                    let _ = state.events.send(TrayEvent::History);
+                    let event = match state.balloon_target.get() {
+                        BalloonTarget::History => TrayEvent::History,
+                        BalloonTarget::Live => TrayEvent::Live,
+                    };
+                    let _ = state.events.send(event);
                     let _ = state.events.send(TrayEvent::NoticeClosed);
                 }
                 NIN_BALLOONHIDE | NIN_BALLOONTIMEOUT => {
@@ -321,6 +350,12 @@ unsafe fn popup(state: &State) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let _ = AppendMenuW(menu, MF_STRING, OPEN, w!("Stream Archive 열기"));
+        let watcher_label = if state.watcher_running.get() {
+            w!("LIVE 감시 중지")
+        } else {
+            w!("LIVE 감시 시작")
+        };
+        let _ = AppendMenuW(menu, MF_STRING, TOGGLE_WATCHER, watcher_label);
         let label = HSTRING::from(state.status.borrow().as_str());
         let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 3, &label);
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -342,6 +377,9 @@ unsafe fn popup(state: &State) {
             match command {
                 OPEN => {
                     let _ = state.events.send(TrayEvent::Open);
+                }
+                TOGGLE_WATCHER => {
+                    let _ = state.events.send(TrayEvent::ToggleWatcher);
                 }
                 EXIT => {
                     let _ = state.events.send(TrayEvent::Exit);
