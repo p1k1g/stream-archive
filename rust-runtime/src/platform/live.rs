@@ -46,9 +46,49 @@ pub struct HttpCookie {
 }
 
 #[derive(Debug, Clone)]
+pub struct AuthenticatedHlsSource {
+    inner: AuthenticatedHlsSourceInner,
+}
+
+#[derive(Debug, Clone)]
+enum AuthenticatedHlsSourceInner {
+    Soop(soop::signed_proxy::SoopSignedAuth),
+}
+
+pub struct StreamTransportGuard {
+    _inner: StreamTransportGuardInner,
+}
+
+enum StreamTransportGuardInner {
+    SoopSignedProxy {
+        _guard: soop::signed_proxy::SoopSignedHlsProxyGuard,
+    },
+}
+
+impl AuthenticatedHlsSource {
+    pub async fn prepare(
+        &self,
+        logs: crate::backend::LogBuffer,
+    ) -> Result<(String, StreamTransportGuard)> {
+        match &self.inner {
+            AuthenticatedHlsSourceInner::Soop(auth) => {
+                let (local_url, guard) =
+                    soop::signed_proxy::start_soop_signed_hls_proxy(auth.clone(), logs).await?;
+                Ok((
+                    local_url,
+                    StreamTransportGuard {
+                        _inner: StreamTransportGuardInner::SoopSignedProxy { _guard: guard },
+                    },
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum StreamInput {
     DirectHls(String),
-    SignedHls(soop::signed_proxy::SoopSignedAuth),
+    AuthenticatedHls(AuthenticatedHlsSource),
     PluginUrl {
         url: String,
         cookies: Vec<HttpCookie>,
@@ -165,7 +205,9 @@ impl LiveSession {
                     )
                     .await?;
                 let input = match stream.signed_auth {
-                    Some(signed) => StreamInput::SignedHls(signed),
+                    Some(signed) => StreamInput::AuthenticatedHls(AuthenticatedHlsSource {
+                        inner: AuthenticatedHlsSourceInner::Soop(signed),
+                    }),
                     None => StreamInput::DirectHls(stream.playlist_url),
                 };
                 Ok(ResolvedStream {
