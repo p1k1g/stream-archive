@@ -70,6 +70,54 @@ fn install_panic_log_hook() {
     }));
 }
 
+fn persist_current_window_bounds(
+    controller: &Entity<AppController>,
+    active_window: &Rc<RefCell<Option<AnyWindowHandle>>>,
+    cx: &mut App,
+) {
+    let spec = active_window
+        .borrow()
+        .and_then(|handle| {
+            handle
+                .update(cx, |_, window, _| {
+                    desktop::capture_window_bounds_spec(window)
+                })
+                .ok()
+        })
+        .flatten();
+    if let Some(spec) = spec {
+        controller.update(cx, |c, _| c.save_window_bounds(spec));
+    }
+}
+
+fn restored_window_bounds(controller: &Entity<AppController>, cx: &App) -> WindowBounds {
+    let saved_spec = controller.read(cx).state.window_bounds_spec.clone();
+    let displays: Vec<desktop::DisplayRect> = cx
+        .displays()
+        .into_iter()
+        .map(|display| {
+            let b = display.bounds();
+            desktop::DisplayRect {
+                x: f32::from(b.origin.x).round() as i32,
+                y: f32::from(b.origin.y).round() as i32,
+                width: f32::from(b.size.width).round() as i32,
+                height: f32::from(b.size.height).round() as i32,
+            }
+        })
+        .collect();
+    if let Some(saved) = desktop::resolve_restored_bounds(saved_spec.as_deref(), &displays) {
+        let rect = Bounds::new(
+            point(px(saved.x as f32), px(saved.y as f32)),
+            size(px(saved.width as f32), px(saved.height as f32)),
+        );
+        if saved.maximized {
+            return WindowBounds::Maximized(rect);
+        }
+        return WindowBounds::Windowed(rect);
+    }
+    WindowBounds::Windowed(Bounds::centered(None, size(px(1180.0), px(740.0)), cx))
+}
+
 fn open_or_activate_main_window(
     controller: &Entity<AppController>,
     active_window: &Rc<RefCell<Option<AnyWindowHandle>>>,
@@ -91,7 +139,7 @@ fn open_or_activate_main_window(
         *active_window.borrow_mut() = None;
     }
 
-    let bounds = WindowBounds::Windowed(Bounds::centered(None, size(px(1180.0), px(740.0)), cx));
+    let bounds = restored_window_bounds(controller, cx);
     let mut options = gpui_kit::component::TitleBar::window_options();
     options.window_bounds = Some(bounds);
     options.window_min_size = Some(size(px(1000.0), px(650.0)));
@@ -104,8 +152,12 @@ fn open_or_activate_main_window(
     let controller_for_close = controller.clone();
     match gpui_kit::open_window(options, cx, move |window, cx| {
         desktop::apply_native_window_icon(window);
-        window.on_window_should_close(cx, move |_window, cx| {
+        window.on_window_should_close(cx, move |window, cx| {
+            let spec = desktop::capture_window_bounds_spec(window);
             controller_for_close.update(cx, |c, cx| {
+                if let Some(spec) = spec {
+                    c.save_window_bounds(spec);
+                }
                 let allow = c.handle_window_close_requested();
                 cx.notify();
                 allow
@@ -140,6 +192,9 @@ fn main() {
             theme::configure_theme(cx);
 
             let controller = cx.new(|_| AppController::start());
+            controller.update(cx, |c, _| {
+                c.wait_initial_snapshot(Duration::from_millis(250));
+            });
             let active_window: Rc<RefCell<Option<AnyWindowHandle>>> = Rc::new(RefCell::new(None));
 
             #[cfg(windows)]
@@ -166,6 +221,7 @@ fn main() {
 
             cx.spawn(async move |cx: &mut AsyncApp| {
                 let mut last_status_poll = Instant::now();
+                let mut last_bounds_poll = Instant::now();
                 loop {
                     cx.background_executor()
                         .timer(Duration::from_millis(100))
@@ -173,55 +229,19 @@ fn main() {
 
                     let mut should_break = false;
                     cx.update(|cx| {
-                        let (exit_check, signals, visible, exit_pending) =
+                        let (signals, visible, exit_pending) =
                             controller_loop.update(cx, |c, cx| {
-                                let (changed, exit_check) = c.poll_tick();
+                                let changed = c.poll_tick();
                                 let signals = c.take_desktop_signals();
                                 if changed || !signals.is_empty() {
                                     cx.notify();
                                 }
                                 (
-                                    exit_check,
                                     signals,
                                     c.is_window_visible(),
                                     c.state.desktop_exit_pending,
                                 )
                             });
-
-                        if let Some(check_result) = exit_check {
-                            let confirmed = match check_result {
-                                Ok(false) => true,
-                                Ok(true) => {
-                                    #[cfg(windows)]
-                                    let owner = window_loop
-                                        .borrow()
-                                        .and_then(|h| {
-                                            h.update(cx, |_, w, _| desktop::extract_hwnd(w)).ok()
-                                        })
-                                        .flatten();
-                                    #[cfg(not(windows))]
-                                    let owner = None;
-                                    desktop::confirm_exit(owner)
-                                }
-                                Err(err) => {
-                                    append_gui_crash_log(&format!("ExitCheck error: {err}"));
-                                    #[cfg(windows)]
-                                    let owner = window_loop
-                                        .borrow()
-                                        .and_then(|h| {
-                                            h.update(cx, |_, w, _| desktop::extract_hwnd(w)).ok()
-                                        })
-                                        .flatten();
-                                    #[cfg(not(windows))]
-                                    let owner = None;
-                                    desktop::confirm_exit(owner)
-                                }
-                            };
-                            controller_loop.update(cx, |c, cx| {
-                                c.complete_exit_confirmation(confirmed);
-                                cx.notify();
-                            });
-                        }
 
                         for signal in signals {
                             match signal {
@@ -232,6 +252,11 @@ fn main() {
                                     let has_tray = false;
 
                                     if has_tray {
+                                        persist_current_window_bounds(
+                                            &controller_loop,
+                                            &window_loop,
+                                            cx,
+                                        );
                                         if let Some(handle) = window_loop.borrow_mut().take() {
                                             let _ = handle.update(cx, |_, w, _| w.remove_window());
                                         }
@@ -244,6 +269,13 @@ fn main() {
                                             cx.notify();
                                         });
                                     }
+                                }
+                                DesktopSignal::EnsureWindowVisible => {
+                                    open_or_activate_main_window(
+                                        &controller_loop,
+                                        &window_loop,
+                                        cx,
+                                    );
                                 }
                                 DesktopSignal::ExitNow => {
                                     #[cfg(windows)]
@@ -263,6 +295,12 @@ fn main() {
                                         t.update_status(&_summary);
                                     }
                                 }
+                                DesktopSignal::WatcherStateChanged(_running) => {
+                                    #[cfg(windows)]
+                                    if let Some(t) = tray_loop.borrow().as_ref() {
+                                        t.set_watcher_running(_running);
+                                    }
+                                }
                                 DesktopSignal::DownloadNotice {
                                     completed: _c,
                                     failed: _f,
@@ -270,6 +308,16 @@ fn main() {
                                     #[cfg(windows)]
                                     if let Some(t) = tray_loop.borrow().as_ref() {
                                         t.enqueue_notice(_c, _f);
+                                    }
+                                }
+                                DesktopSignal::TrayAlert {
+                                    title: _title,
+                                    body: _body,
+                                    warning: _warning,
+                                } => {
+                                    #[cfg(windows)]
+                                    if let Some(t) = tray_loop.borrow().as_ref() {
+                                        t.show_alert(&_title, &_body, _warning);
                                     }
                                 }
                                 DesktopSignal::ClearNotices => {
@@ -293,6 +341,16 @@ fn main() {
                                     desktop::windows_tray::TrayEvent::Open => {
                                         open_or_activate_main_window(&controller_loop, &window_loop, cx);
                                     }
+                                    desktop::windows_tray::TrayEvent::ToggleWatcher => {
+                                        controller_loop.update(cx, |c, cx| {
+                                            if c.state.live_running {
+                                                c.live_stop();
+                                            } else {
+                                                c.live_start();
+                                            }
+                                            cx.notify();
+                                        });
+                                    }
                                     desktop::windows_tray::TrayEvent::History => {
                                         open_or_activate_main_window(&controller_loop, &window_loop, cx);
                                         controller_loop.update(cx, |c, cx| {
@@ -301,7 +359,19 @@ fn main() {
                                             cx.notify();
                                         });
                                     }
+                                    desktop::windows_tray::TrayEvent::Live => {
+                                        open_or_activate_main_window(&controller_loop, &window_loop, cx);
+                                        controller_loop.update(cx, |c, cx| {
+                                            c.select_page(Page::Live);
+                                            cx.notify();
+                                        });
+                                    }
                                     desktop::windows_tray::TrayEvent::Exit => {
+                                        persist_current_window_bounds(
+                                            &controller_loop,
+                                            &window_loop,
+                                            cx,
+                                        );
                                         controller_loop.update(cx, |c, cx| {
                                             c.begin_exit_check();
                                             cx.notify();
@@ -323,6 +393,11 @@ fn main() {
                         }
                         #[cfg(not(windows))]
                         let _ = visible;
+
+                        if visible && !exit_pending && last_bounds_poll.elapsed() >= Duration::from_secs(2) {
+                            last_bounds_poll = Instant::now();
+                            persist_current_window_bounds(&controller_loop, &window_loop, cx);
+                        }
 
                         if !exit_pending && last_status_poll.elapsed() >= Duration::from_secs(3) {
                             last_status_poll = Instant::now();

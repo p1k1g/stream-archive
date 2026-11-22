@@ -112,6 +112,9 @@ struct ChannelState {
     detail: Option<String>,
     consecutive_auth_retries: u32,
     consecutive_short_exits: u32,
+    consecutive_probe_errors: u32,
+    last_probe_error: Option<String>,
+    suppressed_error_logs: u32,
     pending_removal: bool,
     cached_output_dir: Option<String>,
     output_dir_checked_at: Option<Instant>,
@@ -137,10 +140,19 @@ impl ChannelState {
             detail: None,
             consecutive_auth_retries: 0,
             consecutive_short_exits: 0,
+            consecutive_probe_errors: 0,
+            last_probe_error: None,
+            suppressed_error_logs: 0,
             pending_removal: false,
             cached_output_dir: None,
             output_dir_checked_at: None,
         }
+    }
+
+    fn reset_probe_errors(&mut self) {
+        self.consecutive_probe_errors = 0;
+        self.last_probe_error = None;
+        self.suppressed_error_logs = 0;
     }
 }
 
@@ -167,6 +179,9 @@ impl ChannelState {
     }
 }
 
+const MAX_CONCURRENT_PROBES: usize = 6;
+const PROBE_ERROR_MAX_BACKOFF_SECS: u64 = 900;
+
 fn backoff_delay(base_secs: u64, consecutive: u32, max_secs: u64) -> Duration {
     let shift = consecutive.saturating_sub(1).min(6);
     let secs = base_secs
@@ -174,6 +189,87 @@ fn backoff_delay(base_secs: u64, consecutive: u32, max_secs: u64) -> Duration {
         .saturating_mul(1u64 << shift)
         .min(max_secs.max(base_secs.max(1)));
     Duration::from_secs(secs)
+}
+
+fn should_log_probe_error(consecutive: u32, same_error: bool) -> bool {
+    consecutive <= 1 || !same_error || consecutive.is_multiple_of(10)
+}
+
+fn stop_requested(stop_rx: &mut oneshot::Receiver<()>) -> bool {
+    !matches!(stop_rx.try_recv(), Err(oneshot::error::TryRecvError::Empty))
+}
+
+async fn run_bounded_concurrent<'a, I, Fut, F, T>(
+    items: Vec<I>,
+    max_concurrent: usize,
+    mut make_future: F,
+) -> Vec<T>
+where
+    Fut: std::future::Future<Output = T> + 'a,
+    F: FnMut(I) -> Fut,
+{
+    let limit = max_concurrent.max(1);
+    let mut pending = items.into_iter();
+    let mut active: Vec<std::pin::Pin<Box<Fut>>> = Vec::with_capacity(limit);
+    let mut results = Vec::new();
+
+    for item in pending.by_ref().take(limit) {
+        active.push(Box::pin(make_future(item)));
+    }
+
+    std::future::poll_fn(|cx| {
+        let mut idx = 0;
+        while idx < active.len() {
+            match active[idx].as_mut().poll(cx) {
+                std::task::Poll::Ready(output) => {
+                    results.push(output);
+                    active.swap_remove(idx);
+                    if let Some(next_item) = pending.next() {
+                        active.push(Box::pin(make_future(next_item)));
+                    }
+                }
+                std::task::Poll::Pending => {
+                    idx += 1;
+                }
+            }
+        }
+        if active.is_empty() {
+            std::task::Poll::Ready(())
+        } else {
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+
+    results
+}
+
+async fn probe_due_channels(
+    due: Vec<(String, PlatformId, String)>,
+    sessions: &HashMap<PlatformId, LiveSession>,
+    stop_rx: &mut oneshot::Receiver<()>,
+) -> Option<Vec<(String, Result<LiveProbe>)>> {
+    if due.is_empty() {
+        return Some(Vec::new());
+    }
+    tokio::select! {
+        biased;
+        _ = &mut *stop_rx => None,
+        mut results = run_bounded_concurrent(
+            due,
+            MAX_CONCURRENT_PROBES,
+            |(key, platform, account)| async move {
+                let result = match sessions.get(&platform) {
+                    Some(session) => session.probe(&account).await,
+                    None => Err(anyhow!("LIVE session is not initialized for platform {platform}")),
+                };
+                (key, result)
+            },
+        ) => {
+            results.sort_by(|a, b| a.0.cmp(&b.0));
+            Some(results)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -587,9 +683,31 @@ async fn run_native_watcher(
                     }
                 }
 
-                check_recording_broadcasts(&mut states, &config, &mut sessions, &recorder, &logs).await;
+                if check_recording_broadcasts(
+                    &mut states,
+                    &config,
+                    &sessions,
+                    &recorder,
+                    &logs,
+                    &mut control.stop_rx,
+                )
+                .await
+                {
+                    break;
+                }
                 monitor_recordings(&mut states, &config, &recorder, &logs).await;
-                poll_channels(&mut states, &config, &mut sessions, &recorder, &logs).await;
+                if poll_channels(
+                    &mut states,
+                    &config,
+                    &mut sessions,
+                    &recorder,
+                    &logs,
+                    &mut control.stop_rx,
+                )
+                .await
+                {
+                    break;
+                }
                 update_snapshot(&mut states, &snapshot, &config.output_dir).await;
                 if trace.enabled() && now >= next_trace {
                     next_trace = now + Duration::from_secs(60);
@@ -755,6 +873,7 @@ async fn apply_channels(
                 state.status = "UNKNOWN".into();
                 state.consecutive_auth_retries = 0;
                 state.consecutive_short_exits = 0;
+                state.reset_probe_errors();
                 state.next_check = Instant::now();
             }
         } else {
@@ -818,9 +937,13 @@ async fn handle_command(
         WatcherCommand::Resume(_) => {
             state.suppressed_broadcast_id = None;
             state.status = "UNKNOWN".into();
+            state.reset_probe_errors();
             state.next_check = Instant::now();
         }
-        WatcherCommand::Recheck(_) => state.next_check = Instant::now(),
+        WatcherCommand::Recheck(_) => {
+            state.reset_probe_errors();
+            state.next_check = Instant::now();
+        }
     }
     logs.push(format!(
         "[RUST] channel {action}: {}/{}",
@@ -844,29 +967,52 @@ async fn poll_channels(
     sessions: &mut HashMap<PlatformId, LiveSession>,
     recorder: &RecorderManager,
     logs: &LogBuffer,
-) {
+    stop_rx: &mut oneshot::Receiver<()>,
+) -> bool {
+    let now = Instant::now();
     let keys: Vec<String> = states.keys().cloned().collect();
+    let mut due = Vec::new();
+
     for key in keys {
         let Some(state) = states.get_mut(&key) else {
             continue;
         };
-        if !state.channel.enabled || state.recording.is_some() || Instant::now() < state.next_check
-        {
+        if !state.channel.enabled || state.recording.is_some() || now < state.next_check {
+            continue;
+        }
+        let platform = state.channel.platform;
+        if !sessions.contains_key(&platform) {
+            state.next_check = now + Duration::from_secs(config.check_interval.max(1));
+            state.thumbnail_url = None;
+            state.status = "ERROR".into();
+            state.detail = Some(format!(
+                "LIVE session is not initialized for platform {platform}"
+            ));
+            continue;
+        }
+        due.push((key, platform, state.channel.account.clone()));
+    }
+
+    let Some(results) = probe_due_channels(due, sessions, stop_rx).await else {
+        return true;
+    };
+
+    let mut auth_recovery: HashMap<PlatformId, Result<(), String>> = HashMap::new();
+
+    for (key, probe_result) in results {
+        if stop_requested(stop_rx) {
+            return true;
+        }
+        let Some(state) = states.get_mut(&key) else {
+            continue;
+        };
+        if !state.channel.enabled || state.recording.is_some() {
             continue;
         }
         state.next_check = Instant::now() + Duration::from_secs(config.check_interval.max(1));
-
         let platform = state.channel.platform;
-        let session = match session_for(sessions, platform) {
-            Ok(session) => session,
-            Err(err) => {
-                state.thumbnail_url = None;
-                state.status = "ERROR".into();
-                state.detail = Some(err.to_string());
-                continue;
-            }
-        };
-        match session.probe(&state.channel.account).await {
+
+        match probe_result {
             Ok(LiveProbe::Offline) => {
                 clear_stream_password(platform, &state.channel.account);
                 state.status = "OFFLINE".into();
@@ -875,13 +1021,28 @@ async fn poll_channels(
                 state.detail = None;
                 state.consecutive_auth_retries = 0;
                 state.consecutive_short_exits = 0;
+                state.reset_probe_errors();
             }
             Ok(LiveProbe::AuthRequired) => {
+                state.reset_probe_errors();
                 state.thumbnail_url = None;
                 state.status = "AUTH".into();
                 state.consecutive_auth_retries = state.consecutive_auth_retries.saturating_add(1);
-                match recover_auth_required(session, config).await {
-                    Ok(_) => {
+                let outcome = if let Some(cached) = auth_recovery.get(&platform) {
+                    cached.clone()
+                } else {
+                    let result = match session_for(sessions, platform) {
+                        Ok(session) => recover_auth_required(session, config)
+                            .await
+                            .map(|_| ())
+                            .map_err(|err| err.to_string()),
+                        Err(err) => Err(err.to_string()),
+                    };
+                    auth_recovery.insert(platform, result.clone());
+                    result
+                };
+                match outcome {
+                    Ok(()) => {
                         if state.consecutive_auth_retries == 1 {
                             state.next_check = Instant::now() + Duration::from_secs(2);
                         } else {
@@ -894,7 +1055,7 @@ async fn poll_channels(
                         }
                     }
                     Err(err) => {
-                        state.detail = Some(err.to_string());
+                        state.detail = Some(err);
                         state.next_check = Instant::now()
                             + backoff_delay(
                                 config.check_interval,
@@ -906,6 +1067,7 @@ async fn poll_channels(
             }
             Ok(LiveProbe::Live(live)) => {
                 state.consecutive_auth_retries = 0;
+                state.reset_probe_errors();
                 state.thumbnail_url = live.thumbnail_url();
                 state.last_broadcast_id = Some(live.id.clone());
                 if state
@@ -935,6 +1097,15 @@ async fn poll_channels(
                     state.suppressed_broadcast_id = None;
                 }
 
+                let session = match session_for(sessions, platform) {
+                    Ok(session) => session,
+                    Err(err) => {
+                        state.thumbnail_url = None;
+                        state.status = "ERROR".into();
+                        state.detail = Some(err.to_string());
+                        continue;
+                    }
+                };
                 match start_recording(&state.channel, &live, config, session, recorder, logs).await
                 {
                     Ok(recording) => {
@@ -966,27 +1137,61 @@ async fn poll_channels(
                 }
             }
             Err(err) => {
+                let err_summary = format!("{err:#}");
+                let same_error = state.last_probe_error.as_deref() == Some(err_summary.as_str());
+                state.consecutive_probe_errors = state.consecutive_probe_errors.saturating_add(1);
+                let backoff = backoff_delay(
+                    config.check_interval,
+                    state.consecutive_probe_errors,
+                    PROBE_ERROR_MAX_BACKOFF_SECS,
+                );
+                state.next_check = Instant::now() + backoff;
                 state.thumbnail_url = None;
                 state.status = "ERROR".into();
                 state.detail = Some(err.to_string());
-                logs.push(format!(
-                    "[RUST:WARN] live check failed {}/{}: {err:#}",
-                    platform, state.channel.account
-                ))
-                .await;
+                if should_log_probe_error(state.consecutive_probe_errors, same_error) {
+                    let suppressed = std::mem::take(&mut state.suppressed_error_logs);
+                    let suffix = if suppressed > 0 {
+                        format!(
+                            " (consecutive={}, suppressed={suppressed}, next_retry={}s)",
+                            state.consecutive_probe_errors,
+                            backoff.as_secs()
+                        )
+                    } else {
+                        format!(
+                            " (consecutive={}, next_retry={}s)",
+                            state.consecutive_probe_errors,
+                            backoff.as_secs()
+                        )
+                    };
+                    logs.push(format!(
+                        "[RUST:WARN] live check failed {}/{}: {err_summary}{suffix}",
+                        platform, state.channel.account
+                    ))
+                    .await;
+                } else {
+                    state.suppressed_error_logs = state.suppressed_error_logs.saturating_add(1);
+                }
+                state.last_probe_error = Some(err_summary);
             }
         }
     }
+    false
 }
 
 async fn check_recording_broadcasts(
     states: &mut HashMap<String, ChannelState>,
     config: &WatcherConfig,
-    sessions: &mut HashMap<PlatformId, LiveSession>,
+    sessions: &HashMap<PlatformId, LiveSession>,
     recorder: &RecorderManager,
     logs: &LogBuffer,
-) {
+    stop_rx: &mut oneshot::Receiver<()>,
+) -> bool {
+    let now = Instant::now();
     let keys: Vec<String> = states.keys().cloned().collect();
+    let mut due = Vec::new();
+    let mut recording_ids = HashMap::new();
+
     for key in keys {
         let Some(state) = states.get_mut(&key) else {
             continue;
@@ -994,25 +1199,43 @@ async fn check_recording_broadcasts(
         let Some(recording_id) = state.recording.as_ref().map(|rec| rec.bno.clone()) else {
             continue;
         };
-        if Instant::now() < state.next_check {
+        if now < state.next_check {
+            continue;
+        }
+        let platform = state.channel.platform;
+        if !sessions.contains_key(&platform) {
+            state.next_check = now + Duration::from_secs(config.check_interval.max(1));
+            logs.push(format!(
+                "[RUST:WARN] LIVE session missing while recording {}/{}: LIVE session is not initialized for platform {platform}",
+                platform, state.channel.account
+            ))
+            .await;
+            continue;
+        }
+        recording_ids.insert(key.clone(), recording_id);
+        due.push((key, platform, state.channel.account.clone()));
+    }
+
+    let Some(results) = probe_due_channels(due, sessions, stop_rx).await else {
+        return true;
+    };
+
+    for (key, probe_result) in results {
+        let Some(state) = states.get_mut(&key) else {
+            continue;
+        };
+        let Some(expected_id) = recording_ids.get(&key) else {
+            continue;
+        };
+        if state.recording.as_ref().map(|rec| rec.bno.as_str()) != Some(expected_id.as_str()) {
             continue;
         }
         state.next_check = Instant::now() + Duration::from_secs(config.check_interval.max(1));
-
         let platform = state.channel.platform;
-        let session = match session_for(sessions, platform) {
-            Ok(session) => session,
-            Err(err) => {
-                logs.push(format!(
-                    "[RUST:WARN] LIVE session missing while recording {}/{}: {err:#}",
-                    platform, state.channel.account
-                ))
-                .await;
-                continue;
-            }
-        };
-        match session.probe(&state.channel.account).await {
+
+        match probe_result {
             Ok(LiveProbe::Offline) => {
+                state.reset_probe_errors();
                 clear_stream_password(platform, &state.channel.account);
                 stop_state_recording(state, "BROADCAST ENDED", recorder, logs).await;
                 state.status = "OFFLINE".into();
@@ -1025,7 +1248,8 @@ async fn check_recording_broadcasts(
                 ))
                 .await;
             }
-            Ok(LiveProbe::Live(live)) if live.id != recording_id => {
+            Ok(LiveProbe::Live(live)) if live.id != *expected_id => {
+                state.reset_probe_errors();
                 clear_stream_password(platform, &state.channel.account);
                 stop_state_recording(state, "BROADCAST CHANGED", recorder, logs).await;
                 state.status = "UNKNOWN".into();
@@ -1040,9 +1264,11 @@ async fn check_recording_broadcasts(
                 .await;
             }
             Ok(LiveProbe::Live(live)) => {
+                state.reset_probe_errors();
                 state.thumbnail_url = live.thumbnail_url();
             }
             Ok(LiveProbe::AuthRequired) => {
+                state.reset_probe_errors();
                 logs.push(format!(
                     "[RUST:WARN] live recheck requires {platform} auth while recording {}; keeping recorder running",
                     state.channel.account
@@ -1050,14 +1276,29 @@ async fn check_recording_broadcasts(
                 .await;
             }
             Err(err) => {
-                logs.push(format!(
-                    "[RUST:WARN] live recheck failed while recording {}/{}; keeping recorder running: {err:#}",
-                    platform, state.channel.account
-                ))
-                .await;
+                let err_summary = format!("{err:#}");
+                let same_error = state.last_probe_error.as_deref() == Some(err_summary.as_str());
+                state.consecutive_probe_errors = state.consecutive_probe_errors.saturating_add(1);
+                if should_log_probe_error(state.consecutive_probe_errors, same_error) {
+                    let suppressed = std::mem::take(&mut state.suppressed_error_logs);
+                    let extra = if suppressed > 0 {
+                        format!(" (suppressed={suppressed})")
+                    } else {
+                        String::new()
+                    };
+                    logs.push(format!(
+                        "[RUST:WARN] live recheck failed while recording {}/{}; keeping recorder running: {err_summary}{extra}",
+                        platform, state.channel.account
+                    ))
+                    .await;
+                } else {
+                    state.suppressed_error_logs = state.suppressed_error_logs.saturating_add(1);
+                }
+                state.last_probe_error = Some(err_summary);
             }
         }
     }
+    false
 }
 
 fn recording_exit_outcome(code: Option<i32>) -> (bool, String) {
@@ -1857,6 +2098,66 @@ mod tests {
             channel_key(PlatformId::Chzzk, account)
         );
         assert!(command_state_key(&states, account).is_err());
+    }
+
+    #[test]
+    fn probe_error_backoff_and_duplicate_log_suppression() {
+        assert_eq!(
+            backoff_delay(30, 1, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
+            30
+        );
+        assert_eq!(
+            backoff_delay(30, 2, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
+            60
+        );
+        assert_eq!(
+            backoff_delay(30, 3, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
+            120
+        );
+        assert_eq!(
+            backoff_delay(30, 6, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
+            900
+        );
+        assert_eq!(
+            backoff_delay(30, 12, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
+            900
+        );
+
+        assert!(should_log_probe_error(1, false));
+        assert!(!should_log_probe_error(2, true));
+        assert!(should_log_probe_error(2, false));
+        assert!(!should_log_probe_error(9, true));
+        assert!(should_log_probe_error(10, true));
+        assert!(!should_log_probe_error(11, true));
+        assert!(should_log_probe_error(20, true));
+    }
+
+    #[tokio::test]
+    async fn bounded_concurrent_runner_caps_parallelism_and_collects_all_results() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let items: Vec<usize> = (0..18).collect();
+
+        let mut results = run_bounded_concurrent(items, 4, |item| {
+            let in_flight = in_flight.clone();
+            let peak = peak.clone();
+            async move {
+                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                item * 2
+            }
+        })
+        .await;
+
+        results.sort_unstable();
+        let expected: Vec<usize> = (0..18).map(|i| i * 2).collect();
+        assert_eq!(results, expected);
+        assert!(peak.load(Ordering::SeqCst) <= 4);
+        assert!(peak.load(Ordering::SeqCst) >= 2);
     }
 }
 

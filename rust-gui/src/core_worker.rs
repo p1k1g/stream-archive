@@ -127,7 +127,12 @@ pub enum Request {
     },
     LogsClear,
     OpenLiveFolder(String),
+    OpenLiveStream {
+        platform: String,
+        account: String,
+    },
     OpenLogsFolder,
+    SaveWindowBounds(String),
 }
 
 pub enum Response {
@@ -145,6 +150,7 @@ pub enum Response {
     Snapshot {
         fields: Option<Vec<EnvironmentSetting>>,
         diagnostics: DiagnosticsSnapshot,
+        window_bounds: Option<String>,
         first_run: bool,
         startup_failed: bool,
         message: String,
@@ -231,6 +237,7 @@ pub enum Response {
     },
     LogsCleared,
     LiveFolderOpened(Result<(), String>),
+    LiveStreamOpened(Result<(), String>),
     LogsFolderOpened(Result<(), String>),
     MaintenanceError {
         message: String,
@@ -261,6 +268,7 @@ fn read_active_snapshot(
     Response::Snapshot {
         fields,
         diagnostics: runtime.block_on(core.active_local_diagnostics()),
+        window_bounds: core.window_bounds().ok().flatten(),
         first_run: core.is_first_run_unconfigured().unwrap_or(false),
         startup_failed: false,
         message: message.into(),
@@ -279,6 +287,7 @@ fn read_snapshot(core: &StreamArchiveCore, include_settings: bool, message: &str
     Response::Snapshot {
         fields,
         diagnostics: core.diagnostics(),
+        window_bounds: core.window_bounds().ok().flatten(),
         first_run: core.is_first_run_unconfigured().unwrap_or(false),
         startup_failed: false,
         message: message.into(),
@@ -538,6 +547,7 @@ fn worker(
                     backend_path.as_deref(),
                     &message,
                 ),
+                window_bounds: None,
                 first_run: false,
                 startup_failed: true,
                 message,
@@ -1213,6 +1223,21 @@ pub fn worker_loop(
                     continue;
                 }
             }
+            Request::OpenLiveStream { platform, account } => {
+                let responses = responses.clone();
+                if let Err(error) = spawn_detached_task("native-shell", move || {
+                    let result = native_shell::open_provider_url(&platform, &account);
+                    let _ = responses.send(Response::LiveStreamOpened(result));
+                }) {
+                    Response::LiveStreamOpened(Err(error))
+                } else {
+                    continue;
+                }
+            }
+            Request::SaveWindowBounds(spec) => {
+                let _ = core.save_window_bounds(&spec);
+                continue;
+            }
             Request::OpenLogsFolder => {
                 let target = core.logs_dir().or_else(|| {
                     std::env::current_exe()
@@ -1285,6 +1310,12 @@ pub fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a st
         "QUALITY" => "LIVE 화질입니다. 예: best",
         "STREAM_ARCHIVE_CLOSE_ACTION" => {
             "Windows 닫기 버튼 동작입니다. 트레이에서는 녹화·다운로드·감시가 계속됩니다. 변경사항을 저장하면 적용됩니다."
+        }
+        "GUI_NOTIFY_RECORD_START" => {
+            "새 LIVE 방송 녹화가 시작될 때 Windows 트레이 알림을 표시합니다. 변경사항 저장 후 적용됩니다."
+        }
+        "GUI_NOTIFY_WARNING" => {
+            "저장 공간 부족(CRITICAL) 또는 채널 오류·인증 필요 상태 전환 시 Windows 트레이 경고 알림을 표시합니다."
         }
         _ => fallback,
     }

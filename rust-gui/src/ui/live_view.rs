@@ -9,6 +9,7 @@ use gpui_kit::{
     component::{
         Disableable as _, Sizable as _,
         button::{Button, ButtonVariants as _},
+        input::Input,
     },
     *,
 };
@@ -150,8 +151,8 @@ pub fn render_live_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
         );
     }
 
-    // Filter bar & status message
-    let mut filter_row = div().flex().items_center().gap(px(6.0));
+    // Filter, sort & search bar
+    let mut filter_row = div().flex().items_center().flex_wrap().gap(px(6.0));
     for (idx, (key, label)) in filters.into_iter().enumerate() {
         let active = state.live_filter == key;
         let key_owned = key.to_string();
@@ -164,13 +165,48 @@ pub fn render_live_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
         ));
     }
 
+    let mut sort_row = div().flex().items_center().gap(px(4.0));
+    for (s_idx, (mode, label)) in [("STATUS", "상태순"), ("ORDER", "이름순")]
+        .into_iter()
+        .enumerate()
+    {
+        let active = state.live_sort_mode == mode;
+        let mode_owned = mode.to_string();
+        sort_row = sort_row.child(filter_pill(("live-sort", s_idx), label, active).on_click(
+            cx.listener(move |this, _, _, cx| {
+                let m = mode_owned.clone();
+                this.controller.update(cx, |c, _| c.set_live_sort_mode(&m));
+                cx.notify();
+            }),
+        ));
+    }
+
     page = page.child(
         div()
             .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(10.0))
-            .child(filter_row)
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .flex_wrap()
+                    .gap(px(8.0))
+                    .child(filter_row)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .w(px(220.0))
+                                    .child(Input::new(&view.live_search_input).xsmall()),
+                            )
+                            .child(sort_row),
+                    ),
+            )
             .child(
                 div()
                     .text_size(px(11.5))
@@ -244,6 +280,8 @@ fn render_live_row(
     let target_recheck = row.target.clone();
     let target_pw = row.target.clone();
     let name_pw = row.name.clone();
+    let stream_platform = row.platform.clone();
+    let stream_account = row.account.clone();
     let folder_file = if !row.file.is_empty() {
         row.file.clone()
     } else {
@@ -307,6 +345,20 @@ fn render_live_row(
     }
 
     let mut actions = div().flex().items_center().gap(px(6.0)).flex_shrink_0();
+    if !stream_account.is_empty() {
+        actions = actions.child(
+            Button::new(("live-watch", idx))
+                .ghost()
+                .xsmall()
+                .label("방송 보기")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let plat = stream_platform.clone();
+                    let acc = stream_account.clone();
+                    this.controller
+                        .update(cx, |c, _| c.live_open_stream(plat, acc));
+                })),
+        );
+    }
     if !folder_file.is_empty() {
         actions = actions.child(
             Button::new(("live-folder", idx))
@@ -379,36 +431,68 @@ fn render_live_row(
         );
     }
 
+    let mut header_line = div()
+        .flex()
+        .items_center()
+        .flex_wrap()
+        .gap(px(6.0))
+        .child(platform_badge(&row.platform))
+        .child(
+            div()
+                .text_size(px(13.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(TEXT_PRIMARY))
+                .child(if row.name.is_empty() {
+                    row.account.clone()
+                } else {
+                    row.name.clone()
+                }),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(rgb(TEXT_MUTED))
+                .child(row.account.clone()),
+        )
+        .child(theme::status_pill(
+            &row.status_label,
+            &row.status_tone,
+            row.status == "RECORDING",
+        ));
+
+    if !row.elapsed.is_empty() {
+        header_line = header_line.child(
+            div()
+                .px(px(6.0))
+                .py(px(1.5))
+                .rounded(px(4.0))
+                .bg(rgb(BG_RAISED))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .text_size(px(10.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(TEXT_PRIMARY))
+                .child(row.elapsed.clone()),
+        );
+    }
+    if !row.speed.is_empty() {
+        header_line = header_line.child(
+            div()
+                .px(px(6.0))
+                .py(px(1.5))
+                .rounded(px(4.0))
+                .bg(rgb(OK_BG))
+                .border_1()
+                .border_color(rgb(OK_BORDER))
+                .text_size(px(10.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(OK_FG))
+                .child(row.speed.clone()),
+        );
+    }
+
     let mut info = div().flex().flex_col().gap(px(3.0)).flex_1().min_w_0();
-    info = info.child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .child(platform_badge(&row.platform))
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(TEXT_PRIMARY))
-                    .child(if row.name.is_empty() {
-                        row.account.clone()
-                    } else {
-                        row.name.clone()
-                    }),
-            )
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child(row.account.clone()),
-            )
-            .child(theme::status_pill(
-                &row.status_label,
-                &row.status_tone,
-                row.status == "RECORDING",
-            )),
-    );
+    info = info.child(header_line);
 
     if !row.title.is_empty() {
         info = info.child(

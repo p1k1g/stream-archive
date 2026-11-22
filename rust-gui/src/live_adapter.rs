@@ -18,6 +18,7 @@ pub struct LiveChannelView {
     pub output_dir: String,
     pub size: String,
     pub started_at: String,
+    pub elapsed: String,
     pub suppressed: bool,
     pub detail: String,
     pub can_stop_once: bool,
@@ -41,6 +42,26 @@ pub struct LiveView {
 
 pub fn scoped_target(platform: PlatformId, account: &str) -> String {
     format!("{}:{}", platform.as_str(), account.trim())
+}
+
+pub fn provider_live_url(platform: &str, account: &str) -> Result<String, String> {
+    let account = account.trim();
+    if account.is_empty()
+        || account.len() > 200
+        || account.chars().any(|ch| {
+            ch.is_whitespace()
+                || ch.is_control()
+                || matches!(ch, '/' | '\\' | '?' | '#' | '@' | ':')
+        })
+    {
+        return Err("올바른 채널 계정이 아니어서 방송 페이지를 열 수 없습니다.".into());
+    }
+    match platform.trim().to_ascii_uppercase().as_str() {
+        "SOOP" => Ok(format!("https://play.sooplive.com/{account}")),
+        "CHZZK" => Ok(format!("https://chzzk.naver.com/live/{account}")),
+        "KICK" => Ok(format!("https://kick.com/{account}")),
+        other => Err(format!("지원하지 않는 플랫폼입니다: {other}")),
+    }
 }
 
 pub fn validated_action(action: &str) -> Option<&'static str> {
@@ -89,6 +110,12 @@ fn channel_view(channel: ChannelRuntimeStatus, watcher_running: bool) -> LiveCha
     let target = scoped_target(channel.platform, &channel.account);
     let (status_label, status_tone) = status_presentation(&channel.status);
     let suppressed = channel.suppressed;
+    let started_at = channel.started_at.unwrap_or_default();
+    let elapsed = if channel.status == "RECORDING" {
+        crate::formatting::format_elapsed_since(&started_at)
+    } else {
+        String::new()
+    };
     LiveChannelView {
         target,
         platform: channel.platform.to_string(),
@@ -106,7 +133,8 @@ fn channel_view(channel: ChannelRuntimeStatus, watcher_running: bool) -> LiveCha
         } else {
             format_bytes(channel.size_bytes)
         },
-        started_at: channel.started_at.unwrap_or_default(),
+        started_at,
+        elapsed,
         detail: channel.detail.unwrap_or_default(),
         can_stop_once: watcher_running && channel.status == "RECORDING" && !suppressed,
         can_resume: watcher_running && suppressed,
@@ -241,5 +269,34 @@ mod tests {
             assert_eq!(row.status_label, label);
             assert_eq!(row.status_tone, "error");
         }
+    }
+
+    #[test]
+    fn provider_live_url_builds_allowlisted_https_urls_and_rejects_injection() {
+        assert_eq!(
+            provider_live_url("SOOP", "streamer01").unwrap(),
+            "https://play.sooplive.com/streamer01"
+        );
+        assert_eq!(
+            provider_live_url("CHZZK", "0123456789abcdef0123456789abcdef").unwrap(),
+            "https://chzzk.naver.com/live/0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(
+            provider_live_url("KICK", "example_slug").unwrap(),
+            "https://kick.com/example_slug"
+        );
+        for bad in [
+            "",
+            "   ",
+            "foo/bar",
+            "foo?x=1",
+            "foo#frag",
+            "foo\\bar",
+            "foo bar",
+            "javascript:alert(1)",
+        ] {
+            assert!(provider_live_url("SOOP", bad).is_err());
+        }
+        assert!(provider_live_url("UNKNOWN", "abc").is_err());
     }
 }

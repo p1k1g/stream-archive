@@ -6157,7 +6157,7 @@ checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
 
 [[package]]
 name = "stream-archive-gui"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "gpui-kit",
  "image",
@@ -6170,7 +6170,7 @@ dependencies = [
 
 [[package]]
 name = "stream-archive-server"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

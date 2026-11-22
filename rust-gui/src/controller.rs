@@ -4,6 +4,7 @@
 use crate::{
     channels_adapter::ChannelsDraft,
     core_worker::{self, Request, Response, localized_setting_description},
+    formatting::format_transfer_rate,
     history_adapter, live_adapter,
     live_model::{LiveModel, StorageRefresh},
     maintenance_adapter, notifications, queue_adapter,
@@ -19,7 +20,7 @@ use crate::{
     vod_adapter::{self, AnalysisSync, VodDraft},
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -51,7 +52,17 @@ pub struct ProviderSaveInput {
 pub enum DesktopSignal {
     HideToTray,
     ExitNow,
-    DownloadNotice { completed: usize, failed: usize },
+    EnsureWindowVisible,
+    WatcherStateChanged(bool),
+    DownloadNotice {
+        completed: usize,
+        failed: usize,
+    },
+    TrayAlert {
+        title: String,
+        body: String,
+        warning: bool,
+    },
     ClearNotices,
     StatusUpdated(String),
 }
@@ -85,6 +96,16 @@ pub struct AppController {
     last_queue_poll: Instant,
     last_log_poll: Instant,
     last_trace_emit: Instant,
+    last_tray_alert_poll: Instant,
+    last_tray_storage_poll: Instant,
+
+    recording_speed_samples: HashMap<String, (u64, Instant, f64)>,
+    last_saved_window_bounds: Option<String>,
+    seen_initial_live: bool,
+    last_watcher_running: Option<bool>,
+    notified_recordings: HashSet<(String, String)>,
+    notified_error_targets: HashSet<String>,
+    notified_critical_volumes: HashSet<String>,
 
     pending_signals: Vec<DesktopSignal>,
 }
@@ -147,8 +168,39 @@ impl AppController {
             last_queue_poll: now,
             last_log_poll: now,
             last_trace_emit: now,
+            last_tray_alert_poll: now,
+            last_tray_storage_poll: now,
+            recording_speed_samples: HashMap::new(),
+            last_saved_window_bounds: None,
+            seen_initial_live: false,
+            last_watcher_running: None,
+            notified_recordings: HashSet::new(),
+            notified_error_targets: HashSet::new(),
+            notified_critical_volumes: HashSet::new(),
             pending_signals: Vec::new(),
         }
+    }
+
+    pub fn wait_initial_snapshot(&mut self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while !self.state.settings_loaded && !self.state.startup_failed {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            match self.responses.recv_timeout(remaining) {
+                Ok(response) => self.apply_response(response),
+                Err(_) => break,
+            }
+        }
+    }
+
+    pub fn save_window_bounds(&mut self, spec: String) {
+        self.state.window_bounds_spec = Some(spec.clone());
+        if self.last_saved_window_bounds.as_deref() == Some(spec.as_str()) {
+            return;
+        }
+        self.last_saved_window_bounds = Some(spec.clone());
+        let _ = self.sender.send(Request::SaveWindowBounds(spec));
     }
 
     pub fn take_desktop_signals(&mut self) -> Vec<DesktopSignal> {
@@ -257,7 +309,7 @@ impl AppController {
     // ---- LIVE actions ----
 
     pub fn live_start(&mut self) {
-        if self.state.live_busy || !self.state.runtime_ready {
+        if self.state.live_busy || !self.state.runtime_ready || self.state.desktop_exit_pending {
             return;
         }
         self.state.live_busy = true;
@@ -266,7 +318,7 @@ impl AppController {
     }
 
     pub fn live_stop(&mut self) {
-        if self.state.live_busy || !self.state.runtime_ready {
+        if self.state.live_busy || !self.state.runtime_ready || self.state.desktop_exit_pending {
             return;
         }
         self.state.live_busy = true;
@@ -304,6 +356,24 @@ impl AppController {
         }
     }
 
+    pub fn set_live_search(&mut self, query: String) {
+        if self.live_model.set_search(query.clone()) {
+            self.state.live_search = query;
+            if let Some(status) = self.live_model.latest.clone() {
+                self.render_live(status);
+            }
+        }
+    }
+
+    pub fn set_live_sort_mode(&mut self, mode: &str) {
+        if self.live_model.set_sort_mode(mode) {
+            self.state.live_sort_mode = self.live_model.sort_mode().to_string();
+            if let Some(status) = self.live_model.latest.clone() {
+                self.render_live(status);
+            }
+        }
+    }
+
     pub fn live_action(&mut self, target: String, action: String) {
         if self.state.live_busy {
             return;
@@ -314,6 +384,12 @@ impl AppController {
 
     pub fn live_open_folder(&mut self, file_path: String) {
         let _ = self.sender.send(Request::OpenLiveFolder(file_path));
+    }
+
+    pub fn live_open_stream(&mut self, platform: String, account: String) {
+        let _ = self
+            .sender
+            .send(Request::OpenLiveStream { platform, account });
     }
 
     pub fn open_password_prompt(&mut self, target: String, name: String) {
@@ -337,11 +413,31 @@ impl AppController {
 
     // ---- Channels actions ----
 
+    pub fn set_channels_search(&mut self, query: String) {
+        self.state.channels_search = query;
+    }
+
+    pub fn set_channels_platform_filter(&mut self, platform: &str) {
+        self.state.channels_platform_filter = match platform {
+            "SOOP" | "CHZZK" | "KICK" => platform.to_string(),
+            _ => "ALL".to_string(),
+        };
+    }
+
     pub fn channels_add(&mut self) {
         if self.state.config_busy {
             return;
         }
         self.channels_draft.add();
+        if matches!(
+            self.state.channels_platform_filter.as_str(),
+            "SOOP" | "CHZZK" | "KICK"
+        ) {
+            let new_idx = self.channels_draft.rows.len().saturating_sub(1);
+            let plat = self.state.channels_platform_filter.clone();
+            self.channels_draft.select_platform(new_idx, &plat);
+        }
+        self.state.channels_search.clear();
         self.sync_channels_view(true);
     }
 
@@ -944,12 +1040,16 @@ impl AppController {
     }
 
     pub fn complete_exit_confirmation(&mut self, confirmed: bool) {
+        self.state.exit_confirm_visible = false;
+        self.state.exit_confirm_error.clear();
         if confirmed {
+            self.state.exit_shutting_down = true;
             self.stopping.store(true, Ordering::Release);
             if self.sender.send(Request::Shutdown).is_err() {
                 self.pending_signals.push(DesktopSignal::ExitNow);
             }
         } else {
+            self.state.exit_shutting_down = false;
             self.state.desktop_exit_pending = false;
         }
     }
@@ -964,16 +1064,11 @@ impl AppController {
 
     // ---- Periodic Polling & Response Draining ----
 
-    pub fn poll_tick(&mut self) -> (bool, Option<Result<bool, String>>) {
+    pub fn poll_tick(&mut self) -> bool {
         let mut changed = false;
-        let mut exit_check = None;
 
         while let Ok(response) = self.responses.try_recv() {
             changed = true;
-            if let Response::ExitCheck(res) = response {
-                exit_check = Some(res);
-                continue;
-            }
             self.apply_response(response);
         }
 
@@ -998,6 +1093,49 @@ impl AppController {
                         .is_ok()
                     {
                         self.live_poll_in_flight = true;
+                    }
+                }
+            }
+
+            // While hidden in tray (or on another tab), still watch LIVE/storage transitions
+            // at a low cadence when LIVE/warning tray alerts are enabled.
+            let tray_alert_enabled = self.state.notify_record_start || self.state.notify_warning;
+            if tray_alert_enabled
+                && self.state.live_running
+                && now.duration_since(self.last_tray_alert_poll) >= Duration::from_secs(5)
+            {
+                self.last_tray_alert_poll = now;
+                if !self.state.live_busy && !self.live_poll_in_flight {
+                    let generation = self.live_model.generation();
+                    if self
+                        .sender
+                        .send(Request::LiveStatus {
+                            poll: true,
+                            generation,
+                        })
+                        .is_ok()
+                    {
+                        self.live_poll_in_flight = true;
+                    }
+                }
+            }
+
+            if self.state.notify_warning
+                && !self.window_visible
+                && now.duration_since(self.last_tray_storage_poll) >= Duration::from_secs(60)
+            {
+                self.last_tray_storage_poll = now;
+                if !self.state.storage_busy && !self.storage_poll_in_flight {
+                    let generation = self.live_model.generation();
+                    if self
+                        .sender
+                        .send(Request::StorageLoad {
+                            poll: true,
+                            generation,
+                        })
+                        .is_ok()
+                    {
+                        self.storage_poll_in_flight = true;
                     }
                 }
             }
@@ -1092,7 +1230,7 @@ impl AppController {
             }
         }
 
-        (changed, exit_check)
+        changed
     }
 
     fn apply_response(&mut self, response: Response) {
@@ -1139,6 +1277,7 @@ impl AppController {
             Response::Snapshot {
                 fields,
                 diagnostics,
+                window_bounds,
                 first_run,
                 startup_failed,
                 message,
@@ -1148,6 +1287,10 @@ impl AppController {
                 self.state.first_run = first_run;
                 self.state.runtime_ready = !startup_failed;
                 self.state.settings_message = message;
+                if let Some(bounds) = window_bounds {
+                    self.state.window_bounds_spec = Some(bounds.clone());
+                    self.last_saved_window_bounds = Some(bounds);
+                }
                 bind_core_snapshot(&mut self.state, diagnostics);
                 if let Some(fields) = fields {
                     self.state.settings_loaded = true;
@@ -1164,6 +1307,17 @@ impl AppController {
                     {
                         let enabled = !notif.value.eq_ignore_ascii_case("false");
                         self.state.download_notifications_enabled = enabled;
+                    }
+                    if let Some(notify_start) =
+                        fields.iter().find(|f| f.key == "GUI_NOTIFY_RECORD_START")
+                    {
+                        self.state.notify_record_start =
+                            notify_start.value.trim().eq_ignore_ascii_case("Y");
+                    }
+                    if let Some(notify_warn) = fields.iter().find(|f| f.key == "GUI_NOTIFY_WARNING")
+                    {
+                        self.state.notify_warning =
+                            !notify_warn.value.trim().eq_ignore_ascii_case("N");
                     }
                     if let Some(out) = fields.iter().find(|f| f.key == "OUTPUT_DIR") {
                         self.vod_draft.sync_default_output(&out.value);
@@ -1270,6 +1424,8 @@ impl AppController {
                 if let Some(message) = message {
                     self.state.live_message = message;
                 }
+                self.update_recording_speeds(&status);
+                self.observe_live_alerts(&status);
                 self.thumbnails.sync(&status, refresh_thumbnails);
                 self.request_thumbnails();
                 self.live_model.receive(status, generation);
@@ -1302,6 +1458,7 @@ impl AppController {
                 } else {
                     self.state.storage_busy = false;
                 }
+                self.observe_storage_alerts(&snapshot);
                 if !poll || self.storage_refresh.accepts(generation) {
                     self.render_storage(snapshot);
                     if let Some(message) = message {
@@ -1444,6 +1601,11 @@ impl AppController {
                     self.state.live_message = format!("폴더 열기 실패: {err}");
                 }
             }
+            Response::LiveStreamOpened(result) => {
+                if let Err(err) = result {
+                    self.state.live_message = format!("방송 페이지 열기 실패: {err}");
+                }
+            }
             Response::LogsFolderOpened(result) => {
                 if let Err(err) = result {
                     self.state.maintenance_message = format!("로그 폴더 열기 실패: {err}");
@@ -1467,7 +1629,21 @@ impl AppController {
                 self.pending_signals
                     .push(DesktopSignal::StatusUpdated(summary));
             }
-            Response::ExitCheck(_) => {}
+            Response::ExitCheck(result) => match result {
+                Ok(false) => self.complete_exit_confirmation(true),
+                Ok(true) => {
+                    self.state.exit_confirm_visible = true;
+                    self.state.exit_confirm_error.clear();
+                    self.pending_signals
+                        .push(DesktopSignal::EnsureWindowVisible);
+                }
+                Err(err) => {
+                    self.state.exit_confirm_visible = true;
+                    self.state.exit_confirm_error = format!("활성 작업 확인 중 오류: {err}");
+                    self.pending_signals
+                        .push(DesktopSignal::EnsureWindowVisible);
+                }
+            },
             Response::ExitComplete => {
                 self.pending_signals.push(DesktopSignal::ExitNow);
             }
@@ -1584,6 +1760,160 @@ impl AppController {
         self.state.live_error_count = status.error_count.to_string();
     }
 
+    fn update_recording_speeds(&mut self, status: &NativeWatcherStatus) {
+        let now = Instant::now();
+        let mut active_targets = HashSet::new();
+        for ch in &status.channels {
+            if ch.status != "RECORDING" {
+                continue;
+            }
+            let target = live_adapter::scoped_target(ch.platform, &ch.account);
+            active_targets.insert(target.clone());
+            match self.recording_speed_samples.get_mut(&target) {
+                Some((prev_bytes, prev_time, prev_bps)) => {
+                    if ch.size_bytes > *prev_bytes {
+                        let dt = now.duration_since(*prev_time).as_secs_f64();
+                        if dt >= 0.4 {
+                            let inst_bps = (ch.size_bytes - *prev_bytes) as f64 / dt;
+                            *prev_bps = if *prev_bps > 0.0 {
+                                *prev_bps * 0.6 + inst_bps * 0.4
+                            } else {
+                                inst_bps
+                            };
+                            *prev_bytes = ch.size_bytes;
+                            *prev_time = now;
+                        }
+                    } else if ch.size_bytes < *prev_bytes {
+                        *prev_bytes = ch.size_bytes;
+                        *prev_time = now;
+                        *prev_bps = 0.0;
+                    } else if now.duration_since(*prev_time) >= Duration::from_secs(12) {
+                        *prev_bps = 0.0;
+                    }
+                }
+                None => {
+                    self.recording_speed_samples
+                        .insert(target, (ch.size_bytes, now, 0.0));
+                }
+            }
+        }
+        self.recording_speed_samples
+            .retain(|target, _| active_targets.contains(target));
+    }
+
+    fn observe_live_alerts(&mut self, status: &NativeWatcherStatus) {
+        if self.last_watcher_running != Some(status.running) {
+            self.last_watcher_running = Some(status.running);
+            self.pending_signals
+                .push(DesktopSignal::WatcherStateChanged(status.running));
+        }
+
+        let mut current_recordings = HashSet::new();
+        let mut current_errors = HashSet::new();
+        let mut new_recordings = Vec::new();
+        let mut new_errors = Vec::new();
+
+        for ch in &status.channels {
+            let target = live_adapter::scoped_target(ch.platform, &ch.account);
+            let display_name = if ch.name.trim().is_empty() {
+                ch.account.clone()
+            } else {
+                ch.name.clone()
+            };
+            if ch.status == "RECORDING" {
+                let session_key = ch
+                    .bno
+                    .clone()
+                    .filter(|v| !v.is_empty())
+                    .or_else(|| ch.started_at.clone())
+                    .unwrap_or_default();
+                let key = (target.clone(), session_key);
+                if self.seen_initial_live && !self.notified_recordings.contains(&key) {
+                    new_recordings.push((ch.platform.as_str().to_string(), display_name.clone()));
+                }
+                current_recordings.insert(key);
+            } else if matches!(
+                ch.status.as_str(),
+                "ERROR" | "AUTH" | "LOW_DISK" | "STALLED"
+            ) {
+                if self.seen_initial_live && !self.notified_error_targets.contains(&target) {
+                    new_errors.push((display_name, ch.status.clone()));
+                }
+                current_errors.insert(target);
+            }
+        }
+
+        if self.seen_initial_live {
+            if self.state.notify_record_start && !new_recordings.is_empty() {
+                let body = if new_recordings.len() == 1 {
+                    let (plat, name) = &new_recordings[0];
+                    format!("[{plat}] {name} 방송 녹화를 시작했습니다.")
+                } else {
+                    let names = new_recordings
+                        .iter()
+                        .take(3)
+                        .map(|(_, name)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}개 채널 녹화 시작: {names}", new_recordings.len())
+                };
+                self.pending_signals.push(DesktopSignal::TrayAlert {
+                    title: "Stream Archive LIVE 녹화 시작".into(),
+                    body,
+                    warning: false,
+                });
+            }
+            if self.state.notify_warning && !new_errors.is_empty() {
+                let body = if new_errors.len() == 1 {
+                    let (name, st) = &new_errors[0];
+                    format!("{name} 채널 상태 경고 ({st}). LIVE 탭에서 확인하세요.")
+                } else {
+                    let names = new_errors
+                        .iter()
+                        .take(3)
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}개 채널 경고 발생: {names}", new_errors.len())
+                };
+                self.pending_signals.push(DesktopSignal::TrayAlert {
+                    title: "Stream Archive 채널 경고".into(),
+                    body,
+                    warning: true,
+                });
+            }
+        } else {
+            self.seen_initial_live = true;
+        }
+
+        self.notified_recordings = current_recordings;
+        self.notified_error_targets = current_errors;
+    }
+
+    fn observe_storage_alerts(&mut self, snapshot: &StorageSnapshot) {
+        let mut current_critical = HashSet::new();
+        let mut newly_critical = Vec::new();
+        for row in storage_adapter::rows(snapshot) {
+            if row.status == "공간 부족" {
+                if !self.notified_critical_volumes.contains(&row.volume) {
+                    newly_critical.push(format!("{} ({})", row.volume, row.used));
+                }
+                current_critical.insert(row.volume);
+            }
+        }
+        if self.state.notify_warning && !newly_critical.is_empty() {
+            self.pending_signals.push(DesktopSignal::TrayAlert {
+                title: "Stream Archive 저장 공간 부족".into(),
+                body: format!(
+                    "여유 공간이 임계값 미만입니다: {}",
+                    newly_critical.join(", ")
+                ),
+                warning: true,
+            });
+        }
+        self.notified_critical_volumes = current_critical;
+    }
+
     fn render_live(&mut self, status: NativeWatcherStatus) {
         let view = live_adapter::view(status);
         self.state.live_running = view.running;
@@ -1596,12 +1926,31 @@ impl AppController {
         self.state.live_error_count = view.error_count;
 
         let filter = self.live_model.filter().to_string();
-        let rows: Vec<LiveChannelRow> = view
+        let search = self.live_model.search().to_string();
+        let sort_mode = self.live_model.sort_mode().to_string();
+        let mut rows: Vec<LiveChannelRow> = view
             .channels
             .into_iter()
-            .filter(|ch| LiveModel::matches_filter(&filter, &ch.status))
+            .filter(|ch| {
+                LiveModel::matches_filter(&filter, &ch.status)
+                    && LiveModel::matches_search(
+                        &search,
+                        &ch.name,
+                        &ch.account,
+                        &ch.title,
+                        &ch.platform,
+                    )
+            })
             .map(|ch| {
                 let thumbnail_image = self.thumbnails.image(&ch.target);
+                let speed = if ch.status == "RECORDING" {
+                    self.recording_speed_samples
+                        .get(&ch.target)
+                        .map(|(_, _, bps)| format_transfer_rate(*bps))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 LiveChannelRow {
                     target: ch.target,
                     platform: ch.platform,
@@ -1616,6 +1965,8 @@ impl AppController {
                     output_dir: ch.output_dir,
                     size: ch.size,
                     started_at: ch.started_at,
+                    elapsed: ch.elapsed,
+                    speed,
                     suppressed: ch.suppressed,
                     detail: ch.detail,
                     can_stop_once: ch.can_stop_once,
@@ -1626,6 +1977,9 @@ impl AppController {
                 }
             })
             .collect();
+        if sort_mode == "STATUS" {
+            rows.sort_by_key(|row| LiveModel::status_sort_rank(&row.status));
+        }
         self.live_model.reconcile(rows);
     }
 

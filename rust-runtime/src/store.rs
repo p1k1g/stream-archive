@@ -476,7 +476,7 @@ impl Store {
         let conn = self.conn()?;
         let has_user_state: i64 = conn.query_row(
             r#"SELECT
-                EXISTS(SELECT 1 FROM settings WHERE source <> 'runtime-default')
+                EXISTS(SELECT 1 FROM settings WHERE source NOT IN ('runtime-default', 'native-window'))
                 OR EXISTS(SELECT 1 FROM channels)
                 OR EXISTS(SELECT 1 FROM live_recordings)
                 OR EXISTS(SELECT 1 FROM vod_jobs)

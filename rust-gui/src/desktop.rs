@@ -68,48 +68,111 @@ pub fn apply_native_window_icon(window: &gpui_kit::Window) {
 #[cfg(not(windows))]
 pub fn apply_native_window_icon(_window: &gpui_kit::Window) {}
 
-#[cfg(windows)]
-pub fn confirm_exit(owner: Option<windows::Win32::Foundation::HWND>) -> bool {
-    use windows::{
-        Win32::UI::WindowsAndMessaging::{
-            IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MessageBoxW,
-        },
-        core::w,
-    };
-    // The core thread continues working while this owned UI dialog is open.
-    unsafe {
-        MessageBoxW(
-            owner,
-            w!(
-                "녹화·다운로드·채널 감시 또는 대기 중인 Queue가 있습니다.\n이 앱의 작업을 정리하고 종료할까요?"
-            ),
-            w!("Stream Archive 종료"),
-            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
-        ) == IDYES
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SavedWindowBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub maximized: bool,
 }
 
-#[cfg(not(windows))]
-pub fn confirm_exit(_owner: Option<()>) -> bool {
-    true
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
-#[cfg(windows)]
-#[allow(dead_code)]
-pub fn notify(owner: Option<windows::Win32::Foundation::HWND>, message: &str) {
-    use windows::{
-        Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_OK, MessageBoxW},
-        core::{HSTRING, w},
-    };
-    let message = HSTRING::from(message);
-    unsafe {
-        MessageBoxW(
-            owner,
-            &message,
-            w!("Stream Archive"),
-            MB_OK | MB_ICONINFORMATION,
-        );
+pub fn parse_window_bounds(spec: &str) -> Option<SavedWindowBounds> {
+    let parts: Vec<&str> = spec.trim().split(',').collect();
+    if parts.len() != 5 {
+        return None;
     }
+    let x: i32 = parts[0].parse().ok()?;
+    let y: i32 = parts[1].parse().ok()?;
+    let width: u32 = parts[2].parse().ok()?;
+    let height: u32 = parts[3].parse().ok()?;
+    if !(1000..=7680).contains(&width) || !(650..=4320).contains(&height) {
+        return None;
+    }
+    let maximized = match parts[4] {
+        "1" => true,
+        "0" => false,
+        _ => return None,
+    };
+    Some(SavedWindowBounds {
+        x,
+        y,
+        width,
+        height,
+        maximized,
+    })
+}
+
+pub fn format_window_bounds(bounds: SavedWindowBounds) -> String {
+    format!(
+        "{},{},{},{},{}",
+        bounds.x,
+        bounds.y,
+        bounds.width.clamp(1000, 7680),
+        bounds.height.clamp(650, 4320),
+        u8::from(bounds.maximized)
+    )
+}
+
+pub fn capture_window_bounds_spec(window: &gpui_kit::Window) -> Option<String> {
+    let (bounds, maximized) = match window.window_bounds() {
+        gpui_kit::WindowBounds::Windowed(bounds) => (bounds, false),
+        gpui_kit::WindowBounds::Maximized(bounds) => (bounds, true),
+        gpui_kit::WindowBounds::Fullscreen(bounds) => (bounds, true),
+    };
+    let x = f32::from(bounds.origin.x).round() as i32;
+    let y = f32::from(bounds.origin.y).round() as i32;
+    let width = f32::from(bounds.size.width).round();
+    let height = f32::from(bounds.size.height).round();
+    if !width.is_finite() || !height.is_finite() || width < 1000.0 || height < 650.0 {
+        return None;
+    }
+    Some(format_window_bounds(SavedWindowBounds {
+        x,
+        y,
+        width: (width as u32).clamp(1000, 7680),
+        height: (height as u32).clamp(650, 4320),
+        maximized,
+    }))
+}
+
+pub fn resolve_restored_bounds(
+    spec: Option<&str>,
+    displays: &[DisplayRect],
+) -> Option<SavedWindowBounds> {
+    let mut saved = parse_window_bounds(spec?)?;
+    if displays.is_empty() {
+        return Some(saved);
+    }
+    let right = saved.x.saturating_add(saved.width as i32);
+    let bottom = saved.y.saturating_add(saved.height as i32);
+    let visible_on_display = displays.iter().any(|d| {
+        let d_right = d.x.saturating_add(d.width);
+        let d_bottom = d.y.saturating_add(d.height);
+        let overlap_w = right.min(d_right) - saved.x.max(d.x);
+        let overlap_h = bottom.min(d_bottom) - saved.y.max(d.y);
+        let top_reachable = saved.y >= d.y - 40 && saved.y <= d_bottom - 80;
+        overlap_w >= 160 && overlap_h >= 80 && top_reachable
+    });
+    if visible_on_display {
+        return Some(saved);
+    }
+    let primary = displays[0];
+    let max_w = (primary.width - 40).max(1000) as u32;
+    let max_h = (primary.height - 60).max(650) as u32;
+    saved.width = saved.width.min(max_w);
+    saved.height = saved.height.min(max_h);
+    saved.x = primary.x + ((primary.width - saved.width as i32) / 2).max(0);
+    saved.y = primary.y + ((primary.height - saved.height as i32) / 2).max(0);
+    Some(saved)
 }
 
 // Loaded settings work must not make X/Alt+F4 silently stop responding.
@@ -145,7 +208,10 @@ impl TrayRecovery {
 
 #[cfg(test)]
 mod tests {
-    use super::{TrayRecovery, close_request_blocked};
+    use super::{
+        DisplayRect, SavedWindowBounds, TrayRecovery, close_request_blocked, format_window_bounds,
+        parse_window_bounds, resolve_restored_bounds,
+    };
 
     #[test]
     fn transient_tray_failure_does_not_restore_hidden_window() {
@@ -180,5 +246,47 @@ mod tests {
         assert!(close_request_blocked(true, false, true, false, false));
         assert!(close_request_blocked(true, false, false, true, false));
         assert!(close_request_blocked(true, false, false, false, true));
+    }
+
+    #[test]
+    fn window_bounds_parse_format_and_clamp_offscreen_monitors() {
+        let saved = SavedWindowBounds {
+            x: 120,
+            y: 90,
+            width: 1320,
+            height: 820,
+            maximized: true,
+        };
+        let encoded = format_window_bounds(saved);
+        assert_eq!(encoded, "120,90,1320,820,1");
+        assert_eq!(parse_window_bounds(&encoded), Some(saved));
+        assert_eq!(parse_window_bounds("0,0,800,600,0"), None);
+        assert_eq!(parse_window_bounds("bad"), None);
+
+        let primary = DisplayRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let secondary = DisplayRect {
+            x: -1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+
+        // Visible on secondary monitor stays on secondary monitor.
+        let on_second =
+            resolve_restored_bounds(Some("-1600,100,1280,800,0"), &[primary, secondary]).unwrap();
+        assert_eq!(on_second.x, -1600);
+        assert_eq!(on_second.width, 1280);
+
+        // When secondary monitor is detached, bounds are clamped onto primary monitor.
+        let clamped = resolve_restored_bounds(Some("-1600,100,1280,800,0"), &[primary]).unwrap();
+        assert!(clamped.x >= 0 && clamped.x < primary.width);
+        assert!(clamped.y >= 0 && clamped.y < primary.height);
+        assert_eq!(clamped.width, 1280);
+        assert_eq!(clamped.height, 800);
     }
 }

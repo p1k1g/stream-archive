@@ -38,6 +38,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+const WINDOW_BOUNDS_SETTING_KEY: &str = "STREAM_ARCHIVE_WINDOW_BOUNDS";
+
 const NATIVE_PROVIDER_SETTING_KEYS: &[&str] = &["SOOP_USERNAME", "CLOUDFLARE_WORKER_URL"];
 const NATIVE_PROVIDER_SECRET_KEYS: &[&str] = &[
     "SOOP_PASSWORD",
@@ -66,6 +68,27 @@ pub struct StreamArchiveCore {
 pub struct CoreOpenResult {
     pub core: StreamArchiveCore,
     pub migrated_legacy_db: bool,
+}
+
+fn validate_window_bounds_spec(value: &str) -> Result<()> {
+    if value.is_empty() || value.len() > 128 || value.contains(['\0', '\r', '\n']) {
+        bail!("window bounds must be a single line of at most 128 bytes");
+    }
+    let parts: Vec<&str> = value.split(',').collect();
+    if parts.len() != 5 {
+        bail!("window bounds must contain x,y,width,height,maximized");
+    }
+    let _x: i32 = parts[0].parse().context("invalid window x coordinate")?;
+    let _y: i32 = parts[1].parse().context("invalid window y coordinate")?;
+    let width: u32 = parts[2].parse().context("invalid window width")?;
+    let height: u32 = parts[3].parse().context("invalid window height")?;
+    if !(1000..=7680).contains(&width) || !(650..=4320).contains(&height) {
+        bail!("window dimensions out of bounds");
+    }
+    if !matches!(parts[4], "0" | "1") {
+        bail!("window maximized flag must be 0 or 1");
+    }
+    Ok(())
 }
 
 const KICK_CLEANUP_KEY: &str = "STREAM_ARCHIVE_KICK_SECRET_CLEANUP_REFS";
@@ -400,6 +423,26 @@ impl StreamArchiveCore {
 
     pub fn settings(&self) -> Result<BTreeMap<String, String>> {
         self.store.safe_settings()
+    }
+
+    pub fn window_bounds(&self) -> Result<Option<String>> {
+        let Some(raw) = self.store.setting_value(WINDOW_BOUNDS_SETTING_KEY)? else {
+            return Ok(None);
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || validate_window_bounds_spec(trimmed).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(trimmed.to_string()))
+    }
+
+    pub fn save_window_bounds(&self, value: &str) -> Result<()> {
+        let trimmed = value.trim();
+        validate_window_bounds_spec(trimmed)?;
+        self.store.sync_settings(
+            &BTreeMap::from([(WINDOW_BOUNDS_SETTING_KEY.to_string(), trimmed.to_string())]),
+            "native-window",
+        )
     }
 
     pub fn environment_settings(
@@ -1797,5 +1840,35 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn window_bounds_round_trip_validates_and_preserves_first_run_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("stream-archive.db");
+        let core = StreamArchiveCore::assemble(dir.path().to_path_buf(), Store::open(db).unwrap())
+            .unwrap();
+
+        assert_eq!(core.window_bounds().unwrap(), None);
+        assert!(core.is_first_run_unconfigured().unwrap());
+
+        core.save_window_bounds("120,80,1280,820,0").unwrap();
+        assert_eq!(
+            core.window_bounds().unwrap().as_deref(),
+            Some("120,80,1280,820,0")
+        );
+        // Saving window geometry alone must not suppress first-run onboarding.
+        assert!(core.is_first_run_unconfigured().unwrap());
+
+        for bad in [
+            "",
+            "120,80,500,820,0",
+            "120,80,1280,400,0",
+            "120,80,1280,820,2",
+            "120,80,1280,820,0\n1",
+            "not,valid,bounds,at,all",
+        ] {
+            assert!(core.save_window_bounds(bad).is_err());
+        }
     }
 }
