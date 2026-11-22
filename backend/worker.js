@@ -167,9 +167,14 @@ async function getSoopUrl(request) {
   }
 
   const aid = String(channel.AID);
+  const isSubscribe =
+    Boolean(input.subscribe) ||
+    Number(input.permittable_subscription_tier || 0) > 0;
 
-  // Prefer global CDN return types.
-  const cdns = ["gcp_cdn", "azure_cdn", "aws_cf"];
+  // Prefer global CDN return types (and subscribe variants for subscriber-only streams).
+  const cdns = isSubscribe
+    ? ["gcp_cdn_subscribe", "azure_cdn_subscribe", "aws_cf_subscribe"]
+    : ["gcp_cdn", "azure_cdn", "aws_cf"];
   const assignBase = `${rmd.replace(/\/$/, "")}/broad_stream_assign.html`;
 
   // Master playlist is intentional.
@@ -224,8 +229,12 @@ async function getSoopUrl(request) {
       }
 
       const view = new URL(String(obj.view_url));
+      const allowedHost = isSubscribe
+        ? view.hostname.includes("live-sub-global-cdn") ||
+          view.hostname.includes("live-global-cdn")
+        : view.hostname.includes("live-global-cdn");
 
-      if (!view.hostname.includes("live-global-cdn")) {
+      if (!allowedHost) {
         errors.push(`${cdn}: non-global host ${view.hostname}`);
         continue;
       }

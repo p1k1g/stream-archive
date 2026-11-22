@@ -3,7 +3,10 @@ use crate::{
     backend::LogBuffer,
     model::LiveHistoryItem,
     store,
-    support::platform::{PlatformId, live::StreamInput},
+    support::platform::{
+        PlatformId,
+        live::{StreamInput, StreamTransportGuard},
+    },
 };
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -53,6 +56,7 @@ pub struct Recording {
     owned_tree: OwnedProcessTree,
     output_dir: PathBuf,
     _cookie_file: Option<CookieFile>,
+    _transport_guard: Option<StreamTransportGuard>,
     last_size: u64,
     last_growth: Instant,
     last_monitor: Instant,
@@ -202,14 +206,18 @@ impl RecorderManager {
             );
         }
 
-        let (stream_url, cookies, start_at_zero) = match input {
+        let (stream_url, cookies, start_at_zero, transport_guard) = match input {
             StreamInput::DirectHls(url) => {
                 let url = if url.to_ascii_lowercase().starts_with("hls://") {
                     url.clone()
                 } else {
                     format!("hls://{url}")
                 };
-                (url, None, false)
+                (url, None, false, None)
+            }
+            StreamInput::AuthenticatedHls(source) => {
+                let (local_url, guard) = source.prepare(self.logs.clone()).await?;
+                (format!("hls://{local_url}"), None, false, Some(guard))
             }
             StreamInput::PluginUrl {
                 url,
@@ -217,7 +225,7 @@ impl RecorderManager {
                 start_at_zero,
             } => {
                 preflight_plugin_input(config, url, !cookies.is_empty()).await?;
-                (url.clone(), Some(cookies.as_slice()), *start_at_zero)
+                (url.clone(), Some(cookies.as_slice()), *start_at_zero, None)
             }
         };
 
@@ -355,6 +363,7 @@ impl RecorderManager {
             owned_tree,
             output_dir,
             _cookie_file: cookie_file,
+            _transport_guard: transport_guard,
             last_size: 0,
             last_growth: Instant::now(),
             last_monitor: Instant::now(),

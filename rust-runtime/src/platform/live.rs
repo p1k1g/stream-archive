@@ -32,7 +32,7 @@ pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bo
 
 #[derive(Debug, Clone)]
 pub(crate) enum BroadcastPayload {
-    Soop(soop::live::SoopBroadcast),
+    Soop(Box<soop::live::SoopBroadcast>),
     Chzzk(chzzk::live::ChzzkBroadcast),
     Kick(kick::live::KickBroadcast),
 }
@@ -46,8 +46,49 @@ pub struct HttpCookie {
 }
 
 #[derive(Debug, Clone)]
+pub struct AuthenticatedHlsSource {
+    inner: AuthenticatedHlsSourceInner,
+}
+
+#[derive(Debug, Clone)]
+enum AuthenticatedHlsSourceInner {
+    Soop(soop::signed_proxy::SoopSignedAuth),
+}
+
+pub struct StreamTransportGuard {
+    _inner: StreamTransportGuardInner,
+}
+
+enum StreamTransportGuardInner {
+    SoopSignedProxy {
+        _guard: soop::signed_proxy::SoopSignedHlsProxyGuard,
+    },
+}
+
+impl AuthenticatedHlsSource {
+    pub async fn prepare(
+        &self,
+        logs: crate::backend::LogBuffer,
+    ) -> Result<(String, StreamTransportGuard)> {
+        match &self.inner {
+            AuthenticatedHlsSourceInner::Soop(auth) => {
+                let (local_url, guard) =
+                    soop::signed_proxy::start_soop_signed_hls_proxy(auth.clone(), logs).await?;
+                Ok((
+                    local_url,
+                    StreamTransportGuard {
+                        _inner: StreamTransportGuardInner::SoopSignedProxy { _guard: guard },
+                    },
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum StreamInput {
     DirectHls(String),
+    AuthenticatedHls(AuthenticatedHlsSource),
     PluginUrl {
         url: String,
         cookies: Vec<HttpCookie>,
@@ -117,7 +158,7 @@ impl LiveSession {
                     channel_name: value.bj_nick.clone(),
                     title: value.title.clone(),
                     password_required: soop::live::is_password_protected(&value.bpwd),
-                    payload: BroadcastPayload::Soop(value),
+                    payload: BroadcastPayload::Soop(Box::new(value)),
                 })),
             },
             Self::Chzzk(session) => match session.probe(account).await? {
@@ -163,11 +204,17 @@ impl LiveSession {
                         password,
                     )
                     .await?;
+                let input = match stream.signed_auth {
+                    Some(signed) => StreamInput::AuthenticatedHls(AuthenticatedHlsSource {
+                        inner: AuthenticatedHlsSourceInner::Soop(signed),
+                    }),
+                    None => StreamInput::DirectHls(stream.playlist_url),
+                };
                 Ok(ResolvedStream {
                     quality: stream.quality,
                     cdn: stream.cdn,
                     host: stream.host,
-                    input: StreamInput::DirectHls(stream.playlist_url),
+                    input,
                 })
             }
             (Self::Chzzk(session), BroadcastPayload::Chzzk(value)) => {
