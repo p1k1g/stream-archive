@@ -144,6 +144,39 @@ pub fn capture_window_bounds_spec(window: &gpui_kit::Window) -> Option<String> {
     }))
 }
 
+#[cfg(windows)]
+pub fn apply_window_bounds(window: &gpui_kit::Window, saved: SavedWindowBounds) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SW_MAXIMIZE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow,
+    };
+    let Some(hwnd) = extract_hwnd(window) else {
+        return;
+    };
+    let scale = window.scale_factor().max(0.5);
+    let x = (saved.x as f32 * scale).round() as i32;
+    let y = (saved.y as f32 * scale).round() as i32;
+    let width = (saved.width as f32 * scale).round() as i32;
+    let height = (saved.height as f32 * scale).round() as i32;
+    // SAFETY: `hwnd` is a live top-level GPUI window handle on the UI thread.
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        if saved.maximized {
+            let _ = ShowWindow(hwnd, SW_MAXIMIZE);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn apply_window_bounds(_window: &gpui_kit::Window, _saved: SavedWindowBounds) {}
+
 pub fn resolve_restored_bounds(
     spec: Option<&str>,
     displays: &[DisplayRect],

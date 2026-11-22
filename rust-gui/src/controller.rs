@@ -53,6 +53,7 @@ pub enum DesktopSignal {
     HideToTray,
     ExitNow,
     EnsureWindowVisible,
+    ApplyWindowBounds(String),
     WatcherStateChanged(bool),
     DownloadNotice {
         completed: usize,
@@ -101,6 +102,8 @@ pub struct AppController {
 
     recording_speed_samples: HashMap<String, (u64, Instant, f64)>,
     last_saved_window_bounds: Option<String>,
+    window_bounds_initialized: bool,
+    window_opened_before_bounds: bool,
     seen_initial_live: bool,
     last_watcher_running: Option<bool>,
     notified_recordings: HashSet<(String, String)>,
@@ -172,6 +175,8 @@ impl AppController {
             last_tray_storage_poll: now,
             recording_speed_samples: HashMap::new(),
             last_saved_window_bounds: None,
+            window_bounds_initialized: false,
+            window_opened_before_bounds: false,
             seen_initial_live: false,
             last_watcher_running: None,
             notified_recordings: HashSet::new(),
@@ -194,7 +199,16 @@ impl AppController {
         }
     }
 
+    pub fn mark_initial_window_opened(&mut self) {
+        if !self.window_bounds_initialized {
+            self.window_opened_before_bounds = true;
+        }
+    }
+
     pub fn save_window_bounds(&mut self, spec: String) {
+        if !self.window_bounds_initialized {
+            return;
+        }
         self.state.window_bounds_spec = Some(spec.clone());
         if self.last_saved_window_bounds.as_deref() == Some(spec.as_str()) {
             return;
@@ -1288,9 +1302,17 @@ impl AppController {
                 self.state.runtime_ready = !startup_failed;
                 self.state.settings_message = message;
                 if let Some(bounds) = window_bounds {
+                    let apply_late =
+                        !self.window_bounds_initialized && self.window_opened_before_bounds;
                     self.state.window_bounds_spec = Some(bounds.clone());
-                    self.last_saved_window_bounds = Some(bounds);
+                    self.last_saved_window_bounds = Some(bounds.clone());
+                    if apply_late {
+                        self.pending_signals
+                            .push(DesktopSignal::ApplyWindowBounds(bounds));
+                    }
                 }
+                self.window_bounds_initialized = true;
+                self.window_opened_before_bounds = false;
                 bind_core_snapshot(&mut self.state, diagnostics);
                 if let Some(fields) = fields {
                     self.state.settings_loaded = true;

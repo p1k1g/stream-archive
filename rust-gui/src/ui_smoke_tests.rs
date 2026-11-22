@@ -410,7 +410,34 @@ fn gpui_exit_modal_window_bounds_and_tray_alerts_deduplicate() {
     ctrl.state.notify_record_start = true;
     ctrl.state.notify_warning = true;
 
-    // Saving identical window bounds only dispatches once.
+    // Before the initial Snapshot arrives, periodic bounds capture must NOT overwrite saved bounds.
+    ctrl.mark_initial_window_opened();
+    ctrl.save_window_bounds("0,0,1180,740,0".into());
+    assert!(rx.try_recv().is_err());
+
+    // When a late initial Snapshot arrives with saved bounds, emit ApplyWindowBounds and unlock saving.
+    ctrl.apply_response_for_test(Response::Snapshot {
+        fields: None,
+        diagnostics: DiagnosticsSnapshot {
+            status: DiagnosticStatus::Ok,
+            runtime_ready: true,
+            attention_required: false,
+            summary: DiagnosticsSummary::default(),
+            items: Vec::new(),
+        },
+        window_bounds: Some("200,150,1400,900,1".into()),
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
+    });
+    assert_eq!(
+        ctrl.take_desktop_signals(),
+        vec![DesktopSignal::ApplyWindowBounds(
+            "200,150,1400,900,1".into()
+        )]
+    );
+
+    // Saving identical window bounds only dispatches once after initialization.
     ctrl.save_window_bounds("120,90,1280,820,0".into());
     ctrl.save_window_bounds("120,90,1280,820,0".into());
     assert!(matches!(

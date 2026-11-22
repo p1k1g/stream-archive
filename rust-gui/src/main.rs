@@ -90,10 +90,8 @@ fn persist_current_window_bounds(
     }
 }
 
-fn restored_window_bounds(controller: &Entity<AppController>, cx: &App) -> WindowBounds {
-    let saved_spec = controller.read(cx).state.window_bounds_spec.clone();
-    let displays: Vec<desktop::DisplayRect> = cx
-        .displays()
+fn attached_display_rects(cx: &App) -> Vec<desktop::DisplayRect> {
+    cx.displays()
         .into_iter()
         .map(|display| {
             let b = display.bounds();
@@ -104,7 +102,12 @@ fn restored_window_bounds(controller: &Entity<AppController>, cx: &App) -> Windo
                 height: f32::from(b.size.height).round() as i32,
             }
         })
-        .collect();
+        .collect()
+}
+
+fn restored_window_bounds(controller: &Entity<AppController>, cx: &App) -> WindowBounds {
+    let saved_spec = controller.read(cx).state.window_bounds_spec.clone();
+    let displays = attached_display_rects(cx);
     if let Some(saved) = desktop::resolve_restored_bounds(saved_spec.as_deref(), &displays) {
         let rect = Bounds::new(
             point(px(saved.x as f32), px(saved.y as f32)),
@@ -168,6 +171,7 @@ fn open_or_activate_main_window(
         Ok((handle, _view)) => {
             *active_window.borrow_mut() = Some(handle);
             controller.update(cx, |c, cx| {
+                c.mark_initial_window_opened();
                 c.set_window_visible(true);
                 cx.notify();
             });
@@ -276,6 +280,18 @@ fn main() {
                                         &window_loop,
                                         cx,
                                     );
+                                }
+                                DesktopSignal::ApplyWindowBounds(spec) => {
+                                    let displays = attached_display_rects(cx);
+                                    if let Some(saved) =
+                                        desktop::resolve_restored_bounds(Some(&spec), &displays)
+                                        && let Some(handle) = *window_loop.borrow()
+                                    {
+                                        let _ = handle.update(cx, |_, window, _| {
+                                            desktop::apply_window_bounds(window, saved);
+                                        });
+                                        last_bounds_poll = Instant::now();
+                                    }
                                 }
                                 DesktopSignal::ExitNow => {
                                     #[cfg(windows)]
