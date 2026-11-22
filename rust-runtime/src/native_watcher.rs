@@ -1309,6 +1309,14 @@ fn recording_exit_outcome(code: Option<i32>) -> (bool, String) {
     }
 }
 
+fn recording_exit_outcome_with_size(code: Option<i32>, output_size: u64) -> (bool, String) {
+    let (normal, reason) = recording_exit_outcome(code);
+    if normal && output_size == 0 {
+        return (false, "EMPTY OUTPUT (0 bytes)".to_string());
+    }
+    (normal, reason)
+}
+
 async fn monitor_recordings(
     states: &mut HashMap<String, ChannelState>,
     config: &WatcherConfig,
@@ -1328,15 +1336,24 @@ async fn monitor_recordings(
         match poll {
             Ok(RecordingPoll::Running) => {}
             Ok(RecordingPoll::Exited(code)) => {
-                let (normal_exit, reason) = recording_exit_outcome(code);
                 let mut ran_secs = 0i64;
-                if let Some(rec) = state.recording.take() {
+                let (normal_exit, reason) = if let Some(rec) = state.recording.take() {
+                    let output_size = rec.output_size();
+                    let outcome = recording_exit_outcome_with_size(code, output_size);
                     ran_secs = (Utc::now() - rec.started_at).num_seconds().max(0);
                     recorder
-                        .log_finished(&state.channel.name, &state.channel.account, &rec, &reason)
+                        .log_finished(
+                            &state.channel.name,
+                            &state.channel.account,
+                            &rec,
+                            &outcome.1,
+                        )
                         .await;
                     state.recording_finished(&rec.bno);
-                }
+                    outcome
+                } else {
+                    recording_exit_outcome(code)
+                };
                 if state.pending_removal {
                     states.remove(&key);
                     continue;
@@ -2024,6 +2041,14 @@ mod tests {
         assert_eq!(
             recording_exit_outcome(Some(0)),
             (true, "NORMAL".to_string())
+        );
+        assert_eq!(
+            recording_exit_outcome_with_size(Some(0), 1024),
+            (true, "NORMAL".to_string())
+        );
+        assert_eq!(
+            recording_exit_outcome_with_size(Some(0), 0),
+            (false, "EMPTY OUTPUT (0 bytes)".to_string())
         );
         assert_eq!(
             recording_exit_outcome(Some(23)),

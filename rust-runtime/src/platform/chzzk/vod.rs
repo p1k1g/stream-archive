@@ -934,8 +934,6 @@ async fn run_streamlink_download(
         .arg("0:a:0?")
         .arg("-c")
         .arg("copy")
-        .arg("-bsf:v")
-        .arg("h264_mp4toannexb")
         .arg("-f")
         .arg("mpegts")
         .arg("-mpegts_flags")

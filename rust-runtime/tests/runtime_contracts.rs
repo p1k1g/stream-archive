@@ -1039,10 +1039,10 @@ fn provider_contracts() {
         r"-fflags \+genpts\+discardcorrupt",
         "CHZZK FFmpeg input does not regenerate timestamps.",
     );
-    assert_match(
+    assert_not_match(
         &recorder,
         r"-bsf:v h264_mp4toannexb",
-        "CHZZK H.264 is not converted to Annex-B for MPEG-TS.",
+        "CHZZK MPEG-TS must rely on FFmpeg mpegts auto_bsf so both H.264 and HEVC streams copy cleanly.",
     );
     assert_match(
         &recorder,
