@@ -1,5 +1,5 @@
 use super::{
-    super::live::StreamInput,
+    super::{DEFAULT_API_BODY_LIMIT, live::StreamInput, read_bounded_json},
     auth::{ChzzkAuth, ChzzkAuthState},
 };
 use anyhow::{Context, Result, bail};
@@ -57,11 +57,14 @@ impl ChzzkLiveSession {
         ) {
             return auth_failure(&auth);
         }
-        let value: Value = response
-            .error_for_status()
-            .context("CHZZK live-detail HTTP 오류")?
-            .json()
-            .await?;
+        let value: Value = read_bounded_json(
+            response
+                .error_for_status()
+                .context("CHZZK live-detail HTTP 오류")?,
+            DEFAULT_API_BODY_LIMIT,
+            "CHZZK live-detail",
+        )
+        .await?;
         parse_probe_content(channel_id, &value, &auth)
     }
 

@@ -128,12 +128,22 @@ pub(crate) fn valid_preview_url(url: &Url) -> bool {
             .is_some_and(|host| host.ends_with(".playback.live-video.net"))
 }
 
-pub(crate) async fn preview_source(account: &str, broadcast_id: &str) -> Result<String> {
+fn preview_client() -> Result<Client> {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
     let client = Client::builder()
         .user_agent(crate::support::PROVIDER_USER_AGENT)
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
+    let _ = CLIENT.set(client.clone());
+    Ok(client)
+}
+
+pub(crate) async fn preview_source(account: &str, broadcast_id: &str) -> Result<String> {
+    let client = preview_client()?;
     match KickLiveSession::new(client).probe(account).await? {
         KickProbe::Live(live) if live.live_id == broadcast_id => live
             .preview_url

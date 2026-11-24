@@ -1,6 +1,11 @@
-use super::signed_proxy::{
-    PrivateAuthError, SOOP_PRIVATE_AUTH_URL, SoopSignedAuth, request_subscription_signed_cookies,
-    validate_soop_cdn_url,
+use super::{
+    super::{
+        DEFAULT_API_BODY_LIMIT, DEFAULT_HTML_BODY_LIMIT, read_bounded_json, read_bounded_text,
+    },
+    signed_proxy::{
+        PrivateAuthError, SOOP_PRIVATE_AUTH_URL, SoopSignedAuth,
+        request_subscription_signed_cookies, validate_soop_cdn_url,
+    },
 };
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
@@ -9,8 +14,11 @@ use reqwest::{
     header::{COOKIE, SET_COOKIE},
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
 use url::Url;
+
+static BNO_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"window\.nBroadNo\s*=\s*(\d+);").unwrap());
 
 #[derive(Debug, Clone)]
 pub struct SoopBroadcast {
@@ -43,7 +51,6 @@ pub struct SoopResolvedStream {
 pub struct SoopLiveSession {
     client: Client,
     cookies: BTreeMap<String, String>,
-    bno_regex: Regex,
 }
 
 impl SoopLiveSession {
@@ -51,7 +58,6 @@ impl SoopLiveSession {
         Self {
             client,
             cookies: BTreeMap::new(),
-            bno_regex: Regex::new(r"window\.nBroadNo\s*=\s*(\d+);").unwrap(),
         }
     }
 
@@ -105,7 +111,12 @@ impl SoopLiveSession {
             .send()
             .await?;
         collect_cookies(&mut self.cookies, &response);
-        let value: Value = response.error_for_status()?.json().await?;
+        let value: Value = read_bounded_json(
+            response.error_for_status()?,
+            DEFAULT_API_BODY_LIMIT,
+            "SOOP login",
+        )
+        .await?;
         if value.get("RESULT").and_then(Value::as_i64) != Some(1) {
             bail!("SOOP login failed RESULT={:?}", value.get("RESULT"));
         }
@@ -118,7 +129,12 @@ impl SoopLiveSession {
             .send()
             .await?;
         collect_cookies(&mut self.cookies, &response);
-        let auth: Value = response.error_for_status()?.json().await?;
+        let auth: Value = read_bounded_json(
+            response.error_for_status()?,
+            DEFAULT_API_BODY_LIMIT,
+            "SOOP get_private_info",
+        )
+        .await?;
         let login_id = auth
             .pointer("/CHANNEL/LOGIN_ID")
             .and_then(Value::as_str)
@@ -140,8 +156,13 @@ impl SoopLiveSession {
         if !cookie.is_empty() {
             request = request.header(COOKIE, cookie.clone());
         }
-        let html = request.send().await?.error_for_status()?.text().await?;
-        let Some(captures) = self.bno_regex.captures(&html) else {
+        let html = read_bounded_text(
+            request.send().await?.error_for_status()?,
+            DEFAULT_HTML_BODY_LIMIT,
+            "SOOP channel page",
+        )
+        .await?;
+        let Some(captures) = BNO_REGEX.captures(&html) else {
             return Ok(SoopProbe::Offline);
         };
         let bno = captures.get(1).unwrap().as_str().to_string();
@@ -163,7 +184,12 @@ impl SoopLiveSession {
         if !cookie.is_empty() {
             request = request.header(COOKIE, cookie);
         }
-        let value: Value = request.send().await?.error_for_status()?.json().await?;
+        let value: Value = read_bounded_json(
+            request.send().await?.error_for_status()?,
+            DEFAULT_API_BODY_LIMIT,
+            "SOOP player_live_api",
+        )
+        .await?;
         let Some(channel) = value.get("CHANNEL") else {
             return Ok(SoopProbe::Offline);
         };
@@ -242,7 +268,9 @@ impl SoopLiveSession {
             {
                 Ok(response) => {
                     let status = response.status();
-                    let text = response.text().await.unwrap_or_default();
+                    let text = read_bounded_text(response, DEFAULT_API_BODY_LIMIT, "SOOP Worker")
+                        .await
+                        .unwrap_or_default();
                     if status.is_success()
                         && let Ok(value) = serde_json::from_str::<Value>(&text)
                         && value.get("success").and_then(Value::as_bool) == Some(true)
@@ -384,7 +412,13 @@ impl SoopLiveSession {
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_success() {
-                        let body = resp.text().await.unwrap_or_default();
+                        let body = read_bounded_text(
+                            resp,
+                            DEFAULT_API_BODY_LIMIT,
+                            "SOOP subscribe playlist",
+                        )
+                        .await
+                        .unwrap_or_default();
                         if body.contains("#EXTM3U") {
                             return Ok(SoopResolvedStream {
                                 quality: quality.to_string(),
@@ -450,7 +484,8 @@ impl SoopLiveSession {
             .send()
             .await?
             .error_for_status()?;
-        let value: Value = resp.json().await?;
+        let value: Value =
+            read_bounded_json(resp, DEFAULT_API_BODY_LIMIT, "SOOP broad_stream_assign").await?;
         let view_url = value
             .get("view_url")
             .and_then(Value::as_str)

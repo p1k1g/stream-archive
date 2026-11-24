@@ -1,9 +1,58 @@
-use anyhow::{Result, bail};
-use reqwest::{Client, RequestBuilder};
-use serde::{Deserialize, Serialize};
+use anyhow::{Context, Result, bail};
+use reqwest::{Client, RequestBuilder, Response};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::{fmt, str::FromStr};
 use url::Url;
+
+pub(crate) const DEFAULT_API_BODY_LIMIT: usize = 2 * 1024 * 1024;
+pub(crate) const DEFAULT_HTML_BODY_LIMIT: usize = 4 * 1024 * 1024;
+
+pub(crate) async fn read_bounded_bytes(
+    mut response: Response,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|len| len > max_bytes as u64)
+    {
+        bail!("{label} 응답 크기 제한({max_bytes} bytes)을 초과했습니다.");
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .with_context(|| format!("{label} 응답 본문 수신 실패"))?
+    {
+        if chunk.len() > max_bytes.saturating_sub(body.len()) {
+            bail!("{label} 응답 크기 제한({max_bytes} bytes)을 초과했습니다.");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+pub(crate) async fn read_bounded_text(
+    response: Response,
+    max_bytes: usize,
+    label: &str,
+) -> Result<String> {
+    let bytes = read_bounded_bytes(response, max_bytes, label).await?;
+    Ok(match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),
+    })
+}
+
+pub(crate) async fn read_bounded_json<T: DeserializeOwned>(
+    response: Response,
+    max_bytes: usize,
+    label: &str,
+) -> Result<T> {
+    let bytes = read_bounded_bytes(response, max_bytes, label).await?;
+    serde_json::from_slice(&bytes).with_context(|| format!("{label} JSON 파싱 실패"))
+}
 
 pub mod chzzk;
 pub mod kick;
@@ -136,5 +185,54 @@ mod tests {
         assert!(detect_vod_platform("https://kick.com/example").is_err());
         assert!(detect_vod_platform("https://chzzk.naver.com/live/123456").is_err());
         assert!(detect_vod_platform("https://example.com/player/123456789").is_err());
+    }
+
+    #[tokio::test]
+    async fn bounded_http_readers_enforce_body_size_limits() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        async fn serve_once(raw_response: String) -> String {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let _ = socket.write_all(raw_response.as_bytes()).await;
+            });
+            format!("http://{addr}")
+        }
+
+        let client = Client::builder().no_proxy().http1_only().build().unwrap();
+
+        let ok_url = serve_once(
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}"
+                .into(),
+        )
+        .await;
+        let resp = client.get(&ok_url).send().await.unwrap();
+        let parsed: Value = read_bounded_json(resp, 64, "test").await.unwrap();
+        assert_eq!(parsed["ok"], Value::Bool(true));
+
+        // Rejects oversized Content-Length fast.
+        let big_cl_url = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}",
+            "a".repeat(100)
+        ))
+        .await;
+        let resp = client.get(&big_cl_url).send().await.unwrap();
+        assert!(read_bounded_text(resp, 32, "test").await.is_err());
+
+        // Rejects oversized streamed body even without Content-Length.
+        let big_stream_url = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{}",
+            "b".repeat(80)
+        ))
+        .await;
+        let resp = client.get(&big_stream_url).send().await.unwrap();
+        assert!(read_bounded_bytes(resp, 32, "test").await.is_err());
     }
 }

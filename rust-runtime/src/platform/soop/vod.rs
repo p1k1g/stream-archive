@@ -519,11 +519,11 @@ async fn run_analysis(
 pub(crate) fn validate_download_request(req: &VodDownloadRequest) -> Result<()> {
     validate_url(&req.vod_url)?;
     validate_retries(req.max_retries)?;
-    if !req.quality.is_empty()
-        && !Regex::new(r"^best(?:\[height<=\d+\])?$")
-            .unwrap()
-            .is_match(&req.quality)
-    {
+    if !req.quality.is_empty() && {
+        static QUALITY_RE: std::sync::LazyLock<Regex> =
+            std::sync::LazyLock::new(|| Regex::new(r"^best(?:\[height<=\d+\])?$").unwrap());
+        !QUALITY_RE.is_match(&req.quality)
+    } {
         bail!("지원하지 않는 VOD 화질 선택입니다.");
     }
     if req.output_directory.trim().is_empty() {
@@ -780,9 +780,13 @@ async fn run_download(
 }
 
 fn download_authorization_expired(error: &str) -> bool {
-    Regex::new(r"(?i)(?:HTTP(?: Error| status)?[:\s]+(?:401|403)\b|\bForbidden\b|\bUnauthorized\b)")
+    static AUTH_EXPIRED_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:HTTP(?: Error| status)?[:\s]+(?:401|403)\b|\bForbidden\b|\bUnauthorized\b)",
+        )
         .unwrap()
-        .is_match(error)
+    });
+    AUTH_EXPIRED_RE.is_match(error)
 }
 
 async fn init_cookie(
@@ -851,7 +855,12 @@ async fn login_cookie(_backend: &Path, vod_url: &str, logs: &LogBuffer) -> Resul
         .await?;
     let mut jar = CookieJar::default();
     collect_set_cookies(&mut jar, &response, "login.sooplive.com");
-    let value: Value = response.error_for_status()?.json().await?;
+    let value: Value = super::super::read_bounded_json(
+        response.error_for_status()?,
+        super::super::DEFAULT_API_BODY_LIMIT,
+        "SOOP VOD login",
+    )
+    .await?;
     if value.get("RESULT").and_then(Value::as_i64) != Some(1) {
         bail!("SOOP 로그인 실패 RESULT={:?}", value.get("RESULT"));
     }
@@ -863,7 +872,12 @@ async fn login_cookie(_backend: &Path, vod_url: &str, logs: &LogBuffer) -> Resul
         .send()
         .await?;
     collect_set_cookies(&mut jar, &verify, "afevent2.sooplive.com");
-    let auth: Value = verify.error_for_status()?.json().await?;
+    let auth: Value = super::super::read_bounded_json(
+        verify.error_for_status()?,
+        super::super::DEFAULT_API_BODY_LIMIT,
+        "SOOP VOD get_private_info",
+    )
+    .await?;
     if auth
         .pointer("/CHANNEL/LOGIN_ID")
         .and_then(Value::as_str)
@@ -918,7 +932,12 @@ async fn refresh_authorization(
         .send()
         .await?;
     collect_cloudfront_headers(jar, &response, manifest_url)?;
-    let text = response.error_for_status()?.text().await?;
+    let text = super::super::read_bounded_text(
+        response.error_for_status()?,
+        super::super::DEFAULT_API_BODY_LIMIT,
+        "SOOP VOD private_auth",
+    )
+    .await?;
     let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     let success = value.get("result").and_then(Value::as_i64) == Some(1)
         || value.get("result").and_then(Value::as_str) == Some("1");
@@ -969,6 +988,13 @@ async fn probe_manifest(
         .await?
         .error_for_status()
         .map_err(|error| error.without_url())?;
+    if !direct_mp4
+        && response
+            .content_length()
+            .is_some_and(|len| len > 1024 * 1024)
+    {
+        bail!("VOD manifest가 최대 크기(1 MiB)를 초과했습니다.");
+    }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if body.len().saturating_add(chunk.len()) > 1024 * 1024 {
@@ -993,8 +1019,9 @@ async fn probe_manifest(
     {
         bail!("영상 주소가 정상 HLS manifest를 반환하지 않았습니다.");
     }
-    let mut heights = Regex::new(r"RESOLUTION=\d+x(?P<h>\d+)")
-        .unwrap()
+    static RESOLUTION_HEIGHT_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"RESOLUTION=\d+x(?P<h>\d+)").unwrap());
+    let mut heights = RESOLUTION_HEIGHT_RE
         .captures_iter(&text)
         .filter_map(|c| c.name("h")?.as_str().parse::<u32>().ok())
         .collect::<Vec<_>>();
@@ -1296,7 +1323,12 @@ async fn fetch_metadata_api(vod_url: &str, jar: &CookieJar) -> Result<Value> {
         .send()
         .await?
         .error_for_status()?;
-    Ok(response.json().await?)
+    super::super::read_bounded_json(
+        response,
+        super::super::DEFAULT_API_BODY_LIMIT,
+        "SOOP VOD view API",
+    )
+    .await
 }
 
 fn parse_api_metadata(value: &Value) -> Result<VodMetadata> {
@@ -1837,10 +1869,12 @@ fn resolve_parts(requested: &[usize], count: usize) -> Result<Vec<usize>> {
 }
 
 fn validate_url(value: &str) -> Result<()> {
+    static PLAYER_PATH_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"/player/\d+").unwrap());
     let url = Url::parse(value).context("올바른 SOOP VOD URL이 아닙니다.")?;
     if url.scheme() != "https"
         || !url.host_str().unwrap_or("").ends_with("sooplive.com")
-        || !Regex::new(r"/player/\d+").unwrap().is_match(url.path())
+        || !PLAYER_PATH_RE.is_match(url.path())
     {
         bail!("올바른 SOOP VOD HTTPS URL이 아닙니다.");
     }
@@ -1855,8 +1889,9 @@ fn validate_retries(value: u32) -> Result<()> {
 }
 
 fn title_no(url: &str) -> Result<String> {
-    Regex::new(r"/player/(\d+)")
-        .unwrap()
+    static TITLE_NO_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"/player/(\d+)").unwrap());
+    TITLE_NO_RE
         .captures(url)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())

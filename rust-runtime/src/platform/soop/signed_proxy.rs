@@ -334,10 +334,11 @@ fn merge_cookie_pairs_from_str(target: &mut BTreeMap<String, String>, raw: &str)
     }
 }
 
-pub async fn start_soop_signed_hls_proxy(
-    auth: SoopSignedAuth,
-    logs: LogBuffer,
-) -> Result<(String, SoopSignedHlsProxyGuard)> {
+fn proxy_http_client() -> Result<Client> {
+    static SHARED_CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    if let Some(client) = SHARED_CLIENT.get() {
+        return Ok(client.clone());
+    }
     let client = Client::builder()
         .no_proxy()
         .http1_only()
@@ -346,6 +347,15 @@ pub async fn start_soop_signed_hls_proxy(
         .read_timeout(Duration::from_secs(20))
         .build()
         .context("failed to build SOOP signed-proxy HTTP client")?;
+    let _ = SHARED_CLIENT.set(client.clone());
+    Ok(client)
+}
+
+pub async fn start_soop_signed_hls_proxy(
+    auth: SoopSignedAuth,
+    logs: LogBuffer,
+) -> Result<(String, SoopSignedHlsProxyGuard)> {
+    let client = proxy_http_client()?;
     start_proxy_internal(client, auth, SOOP_PRIVATE_AUTH_URL.to_string(), logs, true).await
 }
 

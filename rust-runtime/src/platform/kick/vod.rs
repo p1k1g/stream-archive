@@ -430,6 +430,18 @@ fn playback_client_builder() -> reqwest::ClientBuilder {
         .redirect(reqwest::redirect::Policy::none())
 }
 
+fn playback_client() -> Result<reqwest::Client> {
+    static SHARED_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(client) = SHARED_CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = playback_client_builder()
+        .build()
+        .map_err(|_| anyhow::anyhow!("KICK 요청 초기화 실패"))?;
+    let _ = SHARED_CLIENT.set(client.clone());
+    Ok(client)
+}
+
 fn playback_request(
     client: &reqwest::Client,
     channel: &str,
@@ -459,9 +471,7 @@ async fn load_metadata(raw: &str, cancel: &AtomicBool) -> Result<Metadata> {
     let (channel, id) = parse_url(raw)?;
     let store = crate::store::global()?;
     let token = crate::security::read_kick_token_cancellable(&store, cancel).await?;
-    let client = playback_client_builder()
-        .build()
-        .map_err(|_| anyhow::anyhow!("KICK 요청 초기화 실패"))?;
+    let client = playback_client()?;
     let operation = async {
         let request = playback_request(&client, &channel, &id, &token)?;
         let bytes = body(
@@ -877,7 +887,7 @@ fn validate_media_playlist(playlist: &str, duration: u64) -> Result<u64> {
 
 async fn expected_fragment_count(source: &Url, duration: u64, cancel: &AtomicBool) -> Result<u64> {
     let operation = async {
-        let client = playback_client_builder().build()?;
+        let client = playback_client()?;
         let bytes = body(
             media_request(&client, source.clone())
                 .send()
