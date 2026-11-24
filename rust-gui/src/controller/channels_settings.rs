@@ -359,6 +359,32 @@ impl AppController {
         let _ = self.sender.send(Request::LogsClear);
     }
 
+    pub fn set_windows_startup(&mut self, enabled: bool) {
+        if self.state.windows_startup_busy {
+            return;
+        }
+        self.state.windows_startup_busy = true;
+        let _ = self.sender.send(Request::SetWindowsStartup(enabled));
+    }
+
+    pub fn check_updates_manual(&mut self) {
+        if self.state.update_checking {
+            return;
+        }
+        self.state.update_checking = true;
+        self.state.update_status_message = "GitHub 최신 릴리스를 확인하는 중...".into();
+        let _ = self.sender.send(Request::CheckUpdates { manual: true });
+    }
+
+    pub fn open_release_url(&mut self) {
+        let url = if self.state.update_release_url.trim().is_empty() {
+            stream_archive_server::update_check::RELEASES_PAGE_URL.to_string()
+        } else {
+            self.state.update_release_url.clone()
+        };
+        let _ = self.sender.send(Request::OpenReleaseUrl(url));
+    }
+
     // ---- View synchronization helpers ----
 
     pub(super) fn sync_settings_view(&mut self, bump_revision: bool) {

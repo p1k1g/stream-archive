@@ -22,6 +22,7 @@ pub mod store;
 pub mod support;
 pub mod thumbnail_service;
 pub mod tool_discovery;
+pub mod update_check;
 pub mod vod;
 
 #[cfg(test)]

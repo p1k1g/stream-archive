@@ -197,7 +197,7 @@ fn main() {
 
             let controller = cx.new(|_| AppController::start());
             controller.update(cx, |c, _| {
-                c.wait_initial_snapshot(Duration::from_millis(250));
+                c.wait_initial_snapshot(Duration::from_millis(500));
             });
             let active_window: Rc<RefCell<Option<AnyWindowHandle>>> = Rc::new(RefCell::new(None));
 
@@ -216,7 +216,18 @@ fn main() {
                 }
             }));
 
-            open_or_activate_main_window(&controller, &active_window, cx);
+            #[cfg(windows)]
+            let has_tray = tray.borrow().is_some();
+            #[cfg(not(windows))]
+            let has_tray = false;
+
+            if has_tray && controller.read(cx).should_start_minimized_to_tray() {
+                controller.update(cx, |c, _| {
+                    c.set_window_visible(false);
+                });
+            } else {
+                open_or_activate_main_window(&controller, &active_window, cx);
+            }
 
             let controller_loop = controller.clone();
             let window_loop = active_window.clone();

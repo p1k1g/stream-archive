@@ -100,9 +100,91 @@ pub fn open_provider_url(platform: &str, account: &str) -> Result<(), String> {
     Err("opening a LIVE stream URL is supported only by the Windows Native UI".into())
 }
 
+const ALLOWED_MEDIA_EXTENSIONS: &[&str] = &["ts", "mp4", "mkv", "m4v", "webm", "flv", "mov"];
+
+pub fn validated_media_file(file_path: &str) -> Result<PathBuf, String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err("재생할 미디어 파일 경로가 비어 있습니다.".into());
+    }
+    let path = Path::new(trimmed);
+    if !path.is_file() {
+        return Err(format!("파일을 찾을 수 없습니다: {}", path.display()));
+    }
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if !ALLOWED_MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!("지원하지 않는 미디어 파일 형식입니다 (.{ext})."));
+    }
+    Ok(path.to_path_buf())
+}
+
+#[cfg(windows)]
+pub fn open_media_file(file_path: &str) -> Result<(), String> {
+    let file = validated_media_file(file_path)?;
+    let target = windows::core::HSTRING::from(file.as_os_str());
+    shell_execute_open(&target, "Windows Shell failed to open the media file")
+}
+
+#[cfg(not(windows))]
+pub fn open_media_file(file_path: &str) -> Result<(), String> {
+    let _ = validated_media_file(file_path)?;
+    Err("opening a media file is supported only by the Windows Native UI".into())
+}
+
+#[cfg(windows)]
+pub fn open_release_url(url: &str) -> Result<(), String> {
+    if !stream_archive_server::update_check::is_allowed_release_url(url) {
+        return Err("허용되지 않은 릴리스 페이지 URL입니다.".into());
+    }
+    let target = windows::core::HSTRING::from(url.trim());
+    shell_execute_open(&target, "Windows Shell failed to open the release page URL")
+}
+
+#[cfg(not(windows))]
+pub fn open_release_url(url: &str) -> Result<(), String> {
+    if !stream_archive_server::update_check::is_allowed_release_url(url) {
+        return Err("허용되지 않은 릴리스 페이지 URL입니다.".into());
+    }
+    Err("opening a release URL is supported only by the Windows Native UI".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validated_media_file_allows_only_existing_video_extensions() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("Stream Archive media-{nonce}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ts = dir.join("recording.ts");
+        let mp4 = dir.join("recording.MP4");
+        let exe = dir.join("not-media.exe");
+        std::fs::File::create(&ts).unwrap();
+        std::fs::File::create(&mp4).unwrap();
+        std::fs::File::create(&exe).unwrap();
+
+        assert_eq!(
+            validated_media_file(ts.to_string_lossy().as_ref()).unwrap(),
+            ts
+        );
+        assert_eq!(
+            validated_media_file(mp4.to_string_lossy().as_ref()).unwrap(),
+            mp4
+        );
+        assert!(validated_media_file(exe.to_string_lossy().as_ref()).is_err());
+        assert!(validated_media_file(dir.to_string_lossy().as_ref()).is_err());
+        assert!(validated_media_file("").is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn containing_directory_preserves_spaces_and_unicode() {

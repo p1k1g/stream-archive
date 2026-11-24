@@ -292,6 +292,9 @@ pub fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a st
         "CHECK_INTERVAL" => "LIVE 상태 확인 간격(초)입니다. 허용 범위: 1~86400.",
         "MIN_FREE_SPACE_GB" => "최소 여유 디스크 공간(GB)입니다. 허용 범위: 0~1000000.",
         "QUALITY" => "LIVE 화질입니다. 예: best",
+        "FILE_NAME_PATTERN" => {
+            "LIVE 녹화 파일 이름 형식입니다. 변경사항 저장 후 새 녹화부터 적용됩니다."
+        }
         "STREAM_ARCHIVE_CLOSE_ACTION" => {
             "Windows 닫기 버튼 동작입니다. 트레이에서는 녹화·다운로드·감시가 계속됩니다. 변경사항을 저장하면 적용됩니다."
         }
@@ -300,6 +303,12 @@ pub fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a st
         }
         "GUI_NOTIFY_WARNING" => {
             "저장 공간 부족(CRITICAL) 또는 채널 오류·인증 필요 상태 전환 시 Windows 트레이 경고 알림을 표시합니다."
+        }
+        "GUI_AUTO_START_WATCHER" => {
+            "앱 실행 직후 등록된 채널의 LIVE 방송 감시를 자동으로 시작합니다. 저장 후 다음 실행부터 적용됩니다."
+        }
+        "GUI_START_MINIMIZED_TRAY" => {
+            "앱 실행 시 메인 창을 열지 않고 시스템 트레이 아이콘으로 바로 시작합니다. 저장 후 다음 실행부터 적용됩니다."
         }
         _ => fallback,
     }

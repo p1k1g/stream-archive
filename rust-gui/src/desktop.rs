@@ -1,4 +1,5 @@
 //! Windows presentation only; runtime state and shutdown stay in the core.
+pub mod windows_startup;
 #[cfg(windows)]
 pub mod windows_tray;
 

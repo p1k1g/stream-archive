@@ -95,6 +95,7 @@ pub struct AppController {
     pub(super) last_saved_window_bounds: Option<String>,
     pub(super) window_bounds_initialized: bool,
     pub(super) window_opened_before_bounds: bool,
+    pub(super) auto_start_watcher_triggered: bool,
     pub(super) seen_initial_live: bool,
     pub(super) last_watcher_running: Option<bool>,
     pub(super) notified_recordings: HashSet<(String, String)>,
@@ -168,6 +169,7 @@ impl AppController {
             last_saved_window_bounds: None,
             window_bounds_initialized: false,
             window_opened_before_bounds: false,
+            auto_start_watcher_triggered: false,
             seen_initial_live: false,
             last_watcher_running: None,
             notified_recordings: HashSet::new(),
@@ -309,6 +311,14 @@ impl AppController {
 
     pub fn dismiss_recovery_message(&mut self) {
         self.state.desktop_recovery_message.clear();
+    }
+
+    pub fn dismiss_update_banner(&mut self) {
+        self.state.update_dismissed = true;
+    }
+
+    pub fn should_start_minimized_to_tray(&self) -> bool {
+        self.state.start_minimized_tray && !self.state.first_run && !self.state.startup_failed
     }
 }
 

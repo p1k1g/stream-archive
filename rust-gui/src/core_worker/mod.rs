@@ -131,6 +131,24 @@ pub fn worker_loop(
         return;
     }
 
+    let _ = responses.send(Response::WindowsStartup(
+        crate::desktop::windows_startup::is_enabled(),
+    ));
+    {
+        let core = core.clone();
+        let responses = responses.clone();
+        runtime.spawn(async move {
+            let result = core
+                .check_latest_release()
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = responses.send(Response::UpdateCheck {
+                manual: false,
+                result,
+            });
+        });
+    }
+
     for request in requests {
         if stopping.load(Ordering::Acquire) {
             break;

@@ -373,15 +373,32 @@ pub fn render_history_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
                         }),
                 )
                 .when(!file.is_empty(), |el| {
+                    let play_file = file.clone();
                     el.child(
-                        Button::new(("hist-open", idx))
-                            .outline()
-                            .xsmall()
-                            .label("폴더 열기")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let p = file.clone();
-                                this.controller.update(cx, |c, _| c.live_open_folder(p));
-                            })),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                Button::new(("hist-play", idx))
+                                    .primary()
+                                    .xsmall()
+                                    .label("영상 재생")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let p = play_file.clone();
+                                        this.controller.update(cx, |c, _| c.open_media_file(p));
+                                    })),
+                            )
+                            .child(
+                                Button::new(("hist-open", idx))
+                                    .outline()
+                                    .xsmall()
+                                    .label("폴더 열기")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let p = file.clone();
+                                        this.controller.update(cx, |c, _| c.live_open_folder(p));
+                                    })),
+                            ),
                     )
                 }),
         );

@@ -145,36 +145,91 @@ pub fn render_diagnostics_page(view: &MainView, cx: &mut Context<MainView>) -> D
         return page.child(toolbar).child(console);
     }
 
-    // Diagnostics checks toolbar
+    // Diagnostics checks & version update toolbar
     page = page.child(
         div()
             .flex()
             .items_center()
-            .justify_end()
-            .gap(px(6.0))
+            .justify_between()
+            .gap(px(10.0))
             .child(
-                Button::new("diag-refresh-btn")
-                    .outline()
-                    .small()
-                    .disabled(state.maintenance_busy)
-                    .label("상태 새로고침")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.controller
-                            .update(cx, |c, _| c.refresh_maintenance(false));
-                        cx.notify();
-                    })),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(rgb(TEXT_SECONDARY))
+                            .child(format!("현재 버전 {}", state.app_version)),
+                    )
+                    .when(!state.update_status_message.is_empty(), |el| {
+                        el.child(status_pill(
+                            &state.update_status_message,
+                            if state.update_available {
+                                "accent"
+                            } else {
+                                "muted"
+                            },
+                            state.update_available,
+                        ))
+                    })
+                    .when(state.update_available, |el| {
+                        el.child(
+                            Button::new("diag-open-release-btn")
+                                .outline()
+                                .xsmall()
+                                .label("릴리스 열기")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.controller.update(cx, |c, _| c.open_release_url());
+                                })),
+                        )
+                    }),
             )
             .child(
-                Button::new("diag-active-probe-btn")
-                    .primary()
-                    .small()
-                    .disabled(state.maintenance_busy)
-                    .label("도구 실행 버전 확인")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.controller
-                            .update(cx, |c, _| c.refresh_maintenance(true));
-                        cx.notify();
-                    })),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        Button::new("diag-update-check-btn")
+                            .outline()
+                            .small()
+                            .disabled(state.update_checking)
+                            .label(if state.update_checking {
+                                "확인 중..."
+                            } else {
+                                "업데이트 확인"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.check_updates_manual());
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("diag-refresh-btn")
+                            .outline()
+                            .small()
+                            .disabled(state.maintenance_busy)
+                            .label("상태 새로고침")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller
+                                    .update(cx, |c, _| c.refresh_maintenance(false));
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("diag-active-probe-btn")
+                            .primary()
+                            .small()
+                            .disabled(state.maintenance_busy)
+                            .label("도구 실행 버전 확인")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller
+                                    .update(cx, |c, _| c.refresh_maintenance(true));
+                                cx.notify();
+                            })),
+                    ),
             ),
     );
 

@@ -94,6 +94,27 @@ impl AppController {
         let _ = self.sender.send(Request::OpenLiveFolder(file_path));
     }
 
+    pub fn open_media_file(&mut self, file_path: String) {
+        let _ = self.sender.send(Request::OpenMediaFile(file_path));
+    }
+
+    pub(super) fn maybe_trigger_auto_start_watcher(&mut self) {
+        if self.auto_start_watcher_triggered
+            || !self.state.auto_start_watcher
+            || !self.state.settings_loaded
+            || !self.state.live_loaded
+            || !self.state.runtime_ready
+            || self.state.first_run
+            || self.state.live_running
+            || self.state.live_busy
+            || self.state.desktop_exit_pending
+        {
+            return;
+        }
+        self.auto_start_watcher_triggered = true;
+        self.live_start();
+    }
+
     pub fn live_open_stream(&mut self, platform: String, account: String) {
         let _ = self
             .sender

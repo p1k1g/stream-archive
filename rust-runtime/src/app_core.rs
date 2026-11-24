@@ -952,6 +952,10 @@ impl StreamArchiveCore {
         crate::storage_service::snapshot(&self.store)
     }
 
+    pub async fn check_latest_release(&self) -> Result<crate::update_check::ReleaseUpdateInfo> {
+        crate::update_check::check_latest_release().await
+    }
+
     pub async fn backup_snapshot(&self) -> Result<BackupSnapshot> {
         self.backups.snapshot().await
     }

@@ -584,3 +584,123 @@ fn gpui_exit_modal_window_bounds_and_tray_alerts_deduplicate() {
     ctrl.set_channels_platform_filter("INVALID");
     assert_eq!(ctrl.state.channels_platform_filter, "ALL");
 }
+
+#[test]
+fn v1_1_0_automation_playback_startup_and_update_check_flows() {
+    use crate::core_worker::Response;
+    use stream_archive_server::{
+        environment_settings::{EnvironmentSetting, SettingKind},
+        model::NativeWatcherStatus,
+        update_check::ReleaseUpdateInfo,
+    };
+
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+
+    // Snapshot with auto_start_watcher=Y & start_minimized_tray=Y (non-first-run).
+    ctrl.apply_response_for_test(Response::Snapshot {
+        fields: Some(vec![
+            EnvironmentSetting {
+                key: "GUI_AUTO_START_WATCHER".into(),
+                value: "Y".into(),
+                description: String::new(),
+                kind: SettingKind::Text,
+            },
+            EnvironmentSetting {
+                key: "GUI_START_MINIMIZED_TRAY".into(),
+                value: "Y".into(),
+                description: String::new(),
+                kind: SettingKind::Text,
+            },
+            EnvironmentSetting {
+                key: "FILE_NAME_PATTERN".into(),
+                value: "BJ_TITLE".into(),
+                description: String::new(),
+                kind: SettingKind::Text,
+            },
+        ]),
+        diagnostics: DiagnosticsSnapshot::from_items(Vec::new()),
+        window_bounds: None,
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
+    });
+    assert!(ctrl.state.auto_start_watcher);
+    assert!(ctrl.should_start_minimized_to_tray());
+    // Not triggered before initial Live state arrives.
+    assert!(rx.try_recv().is_err());
+
+    // Initial Live snapshot arrives (stopped) -> auto-starts watcher exactly once.
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: NativeWatcherStatus {
+            running: false,
+            ..Default::default()
+        },
+        refresh_thumbnails: false,
+        message: None,
+        poll: false,
+    });
+    assert!(matches!(rx.try_recv(), Ok(Request::LiveStart)));
+    assert!(ctrl.state.live_busy);
+
+    // Subsequent stopped Live response does not re-trigger auto-start.
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: NativeWatcherStatus {
+            running: false,
+            ..Default::default()
+        },
+        refresh_thumbnails: false,
+        message: None,
+        poll: false,
+    });
+    assert!(rx.try_recv().is_err());
+
+    // Media file open dispatches Request::OpenMediaFile and reports errors on active History tab.
+    ctrl.state.active_page = Page::History;
+    ctrl.open_media_file(r"D:\recordings\test.ts".into());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::OpenMediaFile(p)) if p == r"D:\recordings\test.ts"
+    ));
+    ctrl.apply_response_for_test(Response::MediaFileOpened(Err("missing".into())));
+    assert!(ctrl.state.history_message.contains("영상 재생 실패"));
+
+    // Windows startup toggle round-trip.
+    ctrl.set_windows_startup(true);
+    assert!(ctrl.state.windows_startup_busy);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::SetWindowsStartup(true))
+    ));
+    ctrl.apply_response_for_test(Response::WindowsStartup(Ok(true)));
+    assert!(!ctrl.state.windows_startup_busy);
+    assert!(ctrl.state.windows_startup_enabled);
+
+    // Manual update check + banner dismiss + release URL open.
+    ctrl.check_updates_manual();
+    assert!(ctrl.state.update_checking);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::CheckUpdates { manual: true })
+    ));
+    ctrl.apply_response_for_test(Response::UpdateCheck {
+        manual: true,
+        result: Ok(ReleaseUpdateInfo {
+            current_version: "1.1.0".into(),
+            latest_version: "1.2.0".into(),
+            update_available: true,
+            release_url: "https://github.com/p1k1g/stream-archive/releases/tag/v1.2.0".into(),
+        }),
+    });
+    assert!(!ctrl.state.update_checking);
+    assert!(ctrl.state.update_available);
+    assert!(!ctrl.state.update_dismissed);
+    ctrl.open_release_url();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::OpenReleaseUrl(url)) if url.ends_with("/tag/v1.2.0")
+    ));
+    ctrl.dismiss_update_banner();
+    assert!(ctrl.state.update_dismissed);
+}
