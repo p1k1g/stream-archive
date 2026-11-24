@@ -694,8 +694,10 @@ pub fn resolve_package_version(manifest_path: &Path, package_name: &str) -> Resu
     // Fallback: parse [package] version directly from Cargo.toml when cargo isn't in PATH.
     let toml = fs::read_to_string(manifest_path)
         .with_context(|| format!("failed to read manifest {}", manifest_path.display()))?;
-    let re = Regex::new(r#"(?m)^version\s*=\s*"([^"]+)""#).expect("valid regex");
-    re.captures(&toml)
+    static CARGO_VERSION_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?m)^version\s*=\s*"([^"]+)""#).expect("valid regex"));
+    CARGO_VERSION_RE
+        .captures(&toml)
         .and_then(|caps| caps.get(1).map(|m| m.as_str().trim().to_string()))
         .filter(|s| !s.is_empty())
         .with_context(|| {

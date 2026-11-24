@@ -192,6 +192,7 @@ impl LocalManifestServer {
                         );
                         let _ = stream.write_all(response.as_bytes());
                         let _ = stream.flush();
+                        let _ = stream.shutdown(std::net::Shutdown::Write);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));

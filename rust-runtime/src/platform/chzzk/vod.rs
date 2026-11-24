@@ -355,11 +355,12 @@ pub(crate) fn validate_download_request(req: &VodDownloadRequest) -> Result<()> 
     if req.parts.iter().any(|part| *part != 1) {
         bail!("CHZZK VOD는 단일 영상이므로 PART 1만 선택할 수 있습니다.");
     }
-    if !req.quality.trim().is_empty()
-        && !Regex::new(r"^(?:best|worst|\d+p(?:\d+)?|best\[height<=\d+\])$")
-            .unwrap()
-            .is_match(req.quality.trim())
-    {
+    if !req.quality.trim().is_empty() && {
+        static CHZZK_VOD_QUALITY_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+            Regex::new(r"^(?:best|worst|\d+p(?:\d+)?|best\[height<=\d+\])$").unwrap()
+        });
+        !CHZZK_VOD_QUALITY_RE.is_match(req.quality.trim())
+    } {
         bail!("지원하지 않는 CHZZK VOD 화질 선택입니다.");
     }
     Ok(())
@@ -511,6 +512,20 @@ async fn run_download_prepared(
     bail!("CHZZK VOD 다운로드 실패: {last_error}")
 }
 
+fn chzzk_api_client() -> Result<Client> {
+    static SHARED_CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    if let Some(client) = SHARED_CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
+        .connect_timeout(CHZZK_API_CONNECT_TIMEOUT)
+        .timeout(CHZZK_API_TOTAL_TIMEOUT)
+        .build()
+        .context("CHZZK video detail client build failed")?;
+    let _ = SHARED_CLIENT.set(client.clone());
+    Ok(client)
+}
+
 async fn load_chzzk_metadata(
     tools: &ChzzkTools,
     vod_url: &str,
@@ -528,11 +543,7 @@ async fn load_chzzk_metadata(
     }
 
     let video_no = video_id(vod_url)?;
-    let client = Client::builder()
-        .connect_timeout(CHZZK_API_CONNECT_TIMEOUT)
-        .timeout(CHZZK_API_TOTAL_TIMEOUT)
-        .build()
-        .context("CHZZK video detail client build failed")?;
+    let client = chzzk_api_client()?;
     let mut request = client.get(format!(
         "https://api.chzzk.naver.com/service/v3/videos/{video_no}"
     ));
@@ -546,7 +557,11 @@ async fn load_chzzk_metadata(
     .error_for_status()
     .context("CHZZK video detail HTTP error")?;
     let value: Value = tokio::select! {
-        result = response.json() => result.context("CHZZK video detail JSON parse failed")?,
+        result = super::super::read_bounded_json(
+            response,
+            super::super::DEFAULT_API_BODY_LIMIT,
+            "CHZZK video detail",
+        ) => result.context("CHZZK video detail JSON parse failed")?,
         _ = wait_for_cancel(cancel) => bail!("CHZZK VOD metadata request cancelled"),
     };
     if value.get("code").and_then(Value::as_i64) != Some(200) {
@@ -616,11 +631,12 @@ fn quality_options_from_streamlink_json(value: &Value) -> Result<Vec<VodQualityO
         .get("streams")
         .and_then(Value::as_object)
         .context("Streamlink CHZZK JSON has no streams")?;
-    let quality_re = Regex::new(r"^(\d+)p(\d+)?$").unwrap();
+    static QUALITY_NAME_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"^(\d+)p(\d+)?$").unwrap());
     let mut names = streams
         .keys()
         .filter_map(|name| {
-            let captures = quality_re.captures(name)?;
+            let captures = QUALITY_NAME_RE.captures(name)?;
             let height = captures.get(1)?.as_str().parse::<u64>().ok()?;
             let fps = captures
                 .get(2)
@@ -771,10 +787,9 @@ async fn download_video(
 }
 
 fn streamlink_quality_args(quality: &str) -> (Vec<String>, String) {
-    if let Some(captures) = Regex::new(r"^best\[height<=(\d+)\]$")
-        .unwrap()
-        .captures(quality)
-    {
+    static MAX_HEIGHT_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"^best\[height<=(\d+)\]$").unwrap());
+    if let Some(captures) = MAX_HEIGHT_RE.captures(quality) {
         let height = captures.get(1).unwrap().as_str();
         return (
             vec!["--stream-sorting-excludes".into(), format!(">{height}p")],

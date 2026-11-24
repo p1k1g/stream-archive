@@ -13,7 +13,10 @@ use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock},
+    sync::{
+        Arc, Mutex, MutexGuard, OnceLock, RwLock,
+        atomic::{AtomicI64, Ordering},
+    },
 };
 
 static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
@@ -104,6 +107,7 @@ pub struct Store {
     // only after their transaction commits; it is not a second authority.
     settings_cache: Arc<RwLock<BTreeMap<String, String>>>,
     channels_cache: Arc<RwLock<Vec<Channel>>>,
+    last_data_version: Arc<AtomicI64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -245,12 +249,14 @@ impl Store {
         conn.execute_batch(SCHEMA_SQL)?;
         let settings_cache = load_all_settings_from_conn(&conn)?;
         let channels_cache = load_channels_from_conn(&conn)?;
+        let data_version = Self::query_data_version(&conn)?;
 
         let store = Self {
             inner: Arc::new(Mutex::new(conn)),
             path,
             settings_cache: Arc::new(RwLock::new(settings_cache)),
             channels_cache: Arc::new(RwLock::new(channels_cache)),
+            last_data_version: Arc::new(AtomicI64::new(data_version)),
         };
         store.ensure_runtime_defaults()?;
         if recover_interrupted {
@@ -440,7 +446,25 @@ impl Store {
         self.refresh_config_cache_from_conn(&conn)
     }
 
+    /// Refresh the in-memory settings/channels cache only if another SQLite
+    /// connection has committed changes since the last observed `PRAGMA data_version`.
+    pub(crate) fn refresh_config_cache_if_changed(&self) -> Result<bool> {
+        let conn = self.conn()?;
+        let current = Self::query_data_version(&conn)?;
+        if current == self.last_data_version.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        self.refresh_config_cache_from_conn(&conn)?;
+        Ok(true)
+    }
+
+    fn query_data_version(conn: &Connection) -> Result<i64> {
+        conn.query_row("PRAGMA data_version", [], |row| row.get(0))
+            .context("failed to read SQLite PRAGMA data_version")
+    }
+
     fn refresh_config_cache_from_conn(&self, conn: &Connection) -> Result<()> {
+        let data_version = Self::query_data_version(conn)?;
         let settings = load_all_settings_from_conn(conn)?;
         let channels = load_channels_from_conn(conn)?;
         *self
@@ -451,6 +475,8 @@ impl Store {
             .channels_cache
             .write()
             .map_err(|_| anyhow::anyhow!("channels cache lock poisoned"))? = channels;
+        self.last_data_version
+            .store(data_version, Ordering::Release);
         Ok(())
     }
 

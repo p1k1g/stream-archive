@@ -1,9 +1,25 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 pub(crate) const PROVIDER_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36";
+
+fn channel_lookup_client() -> Result<Client> {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
+        .user_agent(PROVIDER_USER_AGENT)
+        .timeout(Duration::from_secs(10))
+        .no_proxy()
+        .http1_only()
+        .build()
+        .context("채널 조회용 HTTP client 생성 실패")?;
+    let _ = CLIENT.set(client.clone());
+    Ok(client)
+}
 
 #[path = "platform/mod.rs"]
 pub mod platform;
@@ -38,12 +54,7 @@ pub async fn resolve_channel_name_for(platform: PlatformId, account: &str) -> Re
     let provider = provider(platform);
     provider.validate_account(account)?;
 
-    let client = Client::builder()
-        .user_agent(PROVIDER_USER_AGENT)
-        .timeout(Duration::from_secs(10))
-        .no_proxy()
-        .http1_only()
-        .build()
+    let client = channel_lookup_client()
         .with_context(|| format!("{} 조회용 HTTP client 생성 실패", provider.display_name()))?;
 
     let response = provider
