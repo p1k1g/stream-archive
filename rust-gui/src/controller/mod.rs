@@ -95,6 +95,7 @@ pub struct AppController {
     pub(super) last_saved_window_bounds: Option<String>,
     pub(super) window_bounds_initialized: bool,
     pub(super) window_opened_before_bounds: bool,
+    pub(super) initial_auto_start_watcher: Option<bool>,
     pub(super) auto_start_watcher_triggered: bool,
     pub(super) seen_initial_live: bool,
     pub(super) last_watcher_running: Option<bool>,
@@ -169,6 +170,7 @@ impl AppController {
             last_saved_window_bounds: None,
             window_bounds_initialized: false,
             window_opened_before_bounds: false,
+            initial_auto_start_watcher: None,
             auto_start_watcher_triggered: false,
             seen_initial_live: false,
             last_watcher_running: None,
@@ -315,6 +317,10 @@ impl AppController {
 
     pub fn dismiss_update_banner(&mut self) {
         self.state.update_dismissed = true;
+    }
+
+    pub fn has_initial_startup_decision(&self) -> bool {
+        self.state.settings_loaded || self.state.startup_failed
     }
 
     pub fn should_start_minimized_to_tray(&self) -> bool {

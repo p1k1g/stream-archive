@@ -100,7 +100,7 @@ impl AppController {
 
     pub(super) fn maybe_trigger_auto_start_watcher(&mut self) {
         if self.auto_start_watcher_triggered
-            || !self.state.auto_start_watcher
+            || self.initial_auto_start_watcher != Some(true)
             || !self.state.settings_loaded
             || !self.state.live_loaded
             || !self.state.runtime_ready

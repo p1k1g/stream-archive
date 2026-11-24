@@ -704,3 +704,59 @@ fn v1_1_0_automation_playback_startup_and_update_check_flows() {
     ctrl.dismiss_update_banner();
     assert!(ctrl.state.update_dismissed);
 }
+
+#[test]
+fn enabling_auto_start_watcher_mid_session_applies_only_on_next_launch() {
+    use crate::core_worker::Response;
+    use stream_archive_server::{
+        environment_settings::{EnvironmentSetting, SettingKind},
+        model::NativeWatcherStatus,
+    };
+
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    assert!(!ctrl.has_initial_startup_decision());
+
+    // Initial startup snapshot has GUI_AUTO_START_WATCHER=N.
+    ctrl.apply_response_for_test(Response::Snapshot {
+        fields: Some(vec![EnvironmentSetting {
+            key: "GUI_AUTO_START_WATCHER".into(),
+            value: "N".into(),
+            description: String::new(),
+            kind: SettingKind::Text,
+        }]),
+        diagnostics: DiagnosticsSnapshot::from_items(Vec::new()),
+        window_bounds: None,
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
+    });
+    assert!(ctrl.has_initial_startup_decision());
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: NativeWatcherStatus {
+            running: false,
+            ..Default::default()
+        },
+        refresh_thumbnails: false,
+        message: None,
+        poll: false,
+    });
+    assert!(rx.try_recv().is_err());
+
+    // User later enables GUI_AUTO_START_WATCHER=Y and saves -> must NOT auto-start immediately.
+    ctrl.apply_response_for_test(Response::Snapshot {
+        fields: Some(vec![EnvironmentSetting {
+            key: "GUI_AUTO_START_WATCHER".into(),
+            value: "Y".into(),
+            description: String::new(),
+            kind: SettingKind::Text,
+        }]),
+        diagnostics: DiagnosticsSnapshot::from_items(Vec::new()),
+        window_bounds: None,
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
+    });
+    assert!(ctrl.state.auto_start_watcher);
+    assert!(rx.try_recv().is_err());
+}

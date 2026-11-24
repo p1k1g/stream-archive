@@ -111,8 +111,11 @@ impl AppController {
                     if let Some(auto_watch) =
                         fields.iter().find(|f| f.key == "GUI_AUTO_START_WATCHER")
                     {
-                        self.state.auto_start_watcher =
-                            auto_watch.value.trim().eq_ignore_ascii_case("Y");
+                        let enabled = auto_watch.value.trim().eq_ignore_ascii_case("Y");
+                        self.state.auto_start_watcher = enabled;
+                        self.initial_auto_start_watcher.get_or_insert(enabled);
+                    } else {
+                        self.initial_auto_start_watcher.get_or_insert(false);
                     }
                     if let Some(start_tray) =
                         fields.iter().find(|f| f.key == "GUI_START_MINIMIZED_TRAY")
