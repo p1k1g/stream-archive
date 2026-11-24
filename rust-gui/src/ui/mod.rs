@@ -352,6 +352,9 @@ impl MainView {
                         | "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"
                         | "GUI_NOTIFY_RECORD_START"
                         | "GUI_NOTIFY_WARNING"
+                        | "GUI_AUTO_START_WATCHER"
+                        | "GUI_START_MINIMIZED_TRAY"
+                        | "FILE_NAME_PATTERN"
                 ) {
                     continue;
                 }
@@ -782,6 +785,59 @@ impl MainView {
             })
     }
 
+    fn render_update_banner(&self, latest_version: &str, cx: &mut Context<Self>) -> Div {
+        div()
+            .px(px(14.0))
+            .py(px(7.0))
+            .bg(rgb(0x162536))
+            .border_b_1()
+            .border_color(rgb(0x28496c))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(status_pill("새 버전", "accent", true))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb(TEXT_PRIMARY))
+                            .child(format!(
+                                "Stream Archive v{latest_version} 릴리스가 공개되었습니다."
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        Button::new("update-banner-open-btn")
+                            .primary()
+                            .xsmall()
+                            .label("릴리스 페이지 열기")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.open_release_url());
+                            })),
+                    )
+                    .child(
+                        Button::new("update-banner-dismiss-btn")
+                            .ghost()
+                            .xsmall()
+                            .label("닫기")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.dismiss_update_banner());
+                                cx.notify();
+                            })),
+                    ),
+            )
+    }
+
     fn render_recovery_banner(&self, message: &str, cx: &mut Context<Self>) -> Div {
         div()
             .px(px(14.0))
@@ -1121,6 +1177,13 @@ impl Render for MainView {
         };
 
         let mut workspace = div().flex_1().min_w_0().min_h_0().flex().flex_col();
+        if state.update_available
+            && !state.update_dismissed
+            && !state.update_latest_version.is_empty()
+        {
+            workspace =
+                workspace.child(self.render_update_banner(&state.update_latest_version, cx));
+        }
         if !state.desktop_recovery_message.is_empty() {
             workspace =
                 workspace.child(self.render_recovery_banner(&state.desktop_recovery_message, cx));

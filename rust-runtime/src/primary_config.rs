@@ -49,8 +49,18 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
             | "GUI_NOTIFY_RECORD_START"
             | "GUI_NOTIFY_RECORD_FINISH"
             | "GUI_NOTIFY_WARNING"
+            | "GUI_AUTO_START_WATCHER"
+            | "GUI_START_MINIMIZED_TRAY"
             | "LOG_ENABLED"
             | "BACKUP_ENABLED" => validate_yes_no(value, key)?,
+            "FILE_NAME_PATTERN"
+                if !matches!(
+                    value.trim().to_ascii_uppercase().as_str(),
+                    "LEGACY" | "TIME_TITLE" | "BJ_TITLE" | "TITLE_NUMBER"
+                ) =>
+            {
+                bail!("FILE_NAME_PATTERN must be LEGACY, TIME_TITLE, BJ_TITLE or TITLE_NUMBER");
+            }
             "CLOUDFLARE_WORKER_URL"
                 if !value.trim().is_empty() && !value.starts_with("https://") =>
             {

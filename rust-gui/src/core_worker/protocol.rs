@@ -116,11 +116,17 @@ pub enum Request {
     },
     LogsClear,
     OpenLiveFolder(String),
+    OpenMediaFile(String),
     OpenLiveStream {
         platform: String,
         account: String,
     },
     OpenLogsFolder,
+    OpenReleaseUrl(String),
+    CheckUpdates {
+        manual: bool,
+    },
+    SetWindowsStartup(bool),
     SaveWindowBounds(String),
 }
 
@@ -226,8 +232,15 @@ pub enum Response {
     },
     LogsCleared,
     LiveFolderOpened(Result<(), String>),
+    MediaFileOpened(Result<(), String>),
     LiveStreamOpened(Result<(), String>),
     LogsFolderOpened(Result<(), String>),
+    ReleaseUrlOpened(Result<(), String>),
+    UpdateCheck {
+        manual: bool,
+        result: Result<stream_archive_server::update_check::ReleaseUpdateInfo, String>,
+    },
+    WindowsStartup(Result<bool, String>),
     MaintenanceError {
         message: String,
         poll: bool,

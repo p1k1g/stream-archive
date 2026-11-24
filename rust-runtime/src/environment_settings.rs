@@ -80,9 +80,24 @@ const FIELDS: &[(&str, SettingKind, &str)] = &[
         "Windows 디스크 부족·채널 오류 경고 알림: Y / N; 변경사항 저장 후 적용",
     ),
     (
+        "GUI_AUTO_START_WATCHER",
+        SettingKind::Text,
+        "앱 시작 시 LIVE 감시 자동 시작: Y / N; 변경사항 저장 후 다음 실행부터 적용",
+    ),
+    (
+        "GUI_START_MINIMIZED_TRAY",
+        SettingKind::Text,
+        "앱 시작 시 메인 창을 열지 않고 시스템 트레이로 최소화 시작: Y / N",
+    ),
+    (
         "QUALITY",
         SettingKind::Text,
         "LIVE quality, for example best",
+    ),
+    (
+        "FILE_NAME_PATTERN",
+        SettingKind::Text,
+        "LIVE recording filename pattern: LEGACY, TIME_TITLE, BJ_TITLE or TITLE_NUMBER",
     ),
 ];
 
@@ -194,13 +209,34 @@ mod tests {
 
     #[test]
     fn live_and_warning_notifications_accept_only_y_or_n() {
-        for key in ["GUI_NOTIFY_RECORD_START", "GUI_NOTIFY_WARNING"] {
+        for key in [
+            "GUI_NOTIFY_RECORD_START",
+            "GUI_NOTIFY_WARNING",
+            "GUI_AUTO_START_WATCHER",
+            "GUI_START_MINIMIZED_TRAY",
+        ] {
             for value in ["Y", "N", "y", "n"] {
                 validate_updates(&update(key, value)).unwrap();
             }
             for value in ["", "true", "YES", "1", "Y\nN"] {
                 assert!(validate_updates(&update(key, value)).is_err());
             }
+        }
+    }
+
+    #[test]
+    fn file_name_pattern_accepts_only_known_presets() {
+        for value in [
+            "LEGACY",
+            "TIME_TITLE",
+            "BJ_TITLE",
+            "TITLE_NUMBER",
+            "bj_title",
+        ] {
+            validate_updates(&update("FILE_NAME_PATTERN", value)).unwrap();
+        }
+        for value in ["", "CUSTOM", "../bad", "LEGACY\nTIME_TITLE"] {
+            assert!(validate_updates(&update("FILE_NAME_PATTERN", value)).is_err());
         }
     }
 

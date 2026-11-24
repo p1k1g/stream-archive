@@ -231,22 +231,107 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
             continue;
         }
 
-        if row.key == "GUI_NOTIFY_RECORD_START" || row.key == "GUI_NOTIFY_WARNING" {
-            let is_start = row.key == "GUI_NOTIFY_RECORD_START";
-            let checked = if is_start {
-                row.value.trim().eq_ignore_ascii_case("Y")
-            } else {
-                !row.value.trim().eq_ignore_ascii_case("N")
+        if row.key == "FILE_NAME_PATTERN" {
+            let current = row.value.trim().to_ascii_uppercase();
+            let example = match current.as_str() {
+                "TIME_TITLE" => "예: 261124_180000_방송제목_채널명.ts",
+                "BJ_TITLE" => "예: 261124_채널명_방송제목.ts",
+                "TITLE_NUMBER" => "예: 261124_방송제목_01_채널명.ts",
+                _ => "예: 261124_180000_채널명.ts",
             };
-            let title = if is_start {
-                "LIVE 녹화 시작 트레이 알림"
-            } else {
-                "저장 공간 부족·채널 오류 경고 알림"
-            };
-            let switch_id = if is_start {
-                "notif-live-start-switch"
-            } else {
-                "notif-warning-switch"
+            let mut pills = div().flex().items_center().gap(px(4.0));
+            for (p_idx, (val, label)) in [
+                ("LEGACY", "기본 (날짜_시간_채널)"),
+                ("TIME_TITLE", "날짜_시간_제목_채널"),
+                ("BJ_TITLE", "날짜_채널_제목"),
+                ("TITLE_NUMBER", "날짜_제목_번호_채널"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let active = if current.is_empty() {
+                    val == "LEGACY"
+                } else {
+                    current == val
+                };
+                let v = val.to_string();
+                pills = pills.child(filter_pill(("fn-pattern", p_idx), label, active).when(
+                    !state.settings_busy,
+                    |el| {
+                        el.on_click(cx.listener(move |this, _, _, cx| {
+                            let val_copy = v.clone();
+                            this.controller
+                                .update(cx, |c, _| c.settings_edit(idx, val_copy));
+                            cx.notify();
+                        }))
+                    },
+                ));
+            }
+            env_card = env_card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .py(px(4.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(TEXT_PRIMARY))
+                                    .child("LIVE 녹화 파일명 패턴 (FILE_NAME_PATTERN)"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(ACCENT))
+                                    .child(example),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb(TEXT_MUTED))
+                            .child(row.description.clone()),
+                    )
+                    .child(pills),
+            );
+            continue;
+        }
+
+        if matches!(
+            row.key.as_str(),
+            "GUI_NOTIFY_RECORD_START"
+                | "GUI_NOTIFY_WARNING"
+                | "GUI_AUTO_START_WATCHER"
+                | "GUI_START_MINIMIZED_TRAY"
+        ) {
+            let (title, switch_id, checked) = match row.key.as_str() {
+                "GUI_NOTIFY_RECORD_START" => (
+                    "LIVE 녹화 시작 트레이 알림",
+                    "notif-live-start-switch",
+                    row.value.trim().eq_ignore_ascii_case("Y"),
+                ),
+                "GUI_NOTIFY_WARNING" => (
+                    "저장 공간 부족·채널 오류 경고 알림",
+                    "notif-warning-switch",
+                    !row.value.trim().eq_ignore_ascii_case("N"),
+                ),
+                "GUI_AUTO_START_WATCHER" => (
+                    "앱 실행 시 LIVE 감시 자동 시작",
+                    "auto-start-watcher-switch",
+                    row.value.trim().eq_ignore_ascii_case("Y"),
+                ),
+                _ => (
+                    "앱 실행 시 시스템 트레이로 최소화 시작",
+                    "start-minimized-tray-switch",
+                    row.value.trim().eq_ignore_ascii_case("Y"),
+                ),
             };
             env_card = env_card.child(
                 div()
@@ -343,6 +428,46 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                 ),
         );
     }
+
+    env_card = env_card.child(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .pt(px(8.0))
+            .border_t_1()
+            .border_color(rgb(BORDER))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT_PRIMARY))
+                            .child("Windows 로그인 시 자동 실행 (시작프로그램 · 즉시 적용)"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb(TEXT_MUTED))
+                            .child("현재 Windows 계정의 시작프로그램(HKCU Run)에 StreamArchive.exe를 등록하거나 해제합니다."),
+                    ),
+            )
+            .child(
+                Switch::new("windows-startup-switch")
+                    .disabled(state.windows_startup_busy)
+                    .checked(state.windows_startup_enabled)
+                    .on_click(cx.listener(|this, next, _, cx| {
+                        this.controller
+                            .update(cx, |c, _| c.set_windows_startup(*next));
+                        cx.notify();
+                    })),
+            ),
+    );
 
     page = page.child(env_card);
 

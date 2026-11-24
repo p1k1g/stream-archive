@@ -197,7 +197,7 @@ fn main() {
 
             let controller = cx.new(|_| AppController::start());
             controller.update(cx, |c, _| {
-                c.wait_initial_snapshot(Duration::from_millis(250));
+                c.wait_initial_snapshot(Duration::from_millis(500));
             });
             let active_window: Rc<RefCell<Option<AnyWindowHandle>>> = Rc::new(RefCell::new(None));
 
@@ -216,7 +216,31 @@ fn main() {
                 }
             }));
 
-            open_or_activate_main_window(&controller, &active_window, cx);
+            #[cfg(windows)]
+            let has_tray = tray.borrow().is_some();
+            #[cfg(not(windows))]
+            let has_tray = false;
+
+            let mut initial_window_decided = false;
+            if !has_tray {
+                open_or_activate_main_window(&controller, &active_window, cx);
+                initial_window_decided = true;
+            } else if controller.read(cx).has_initial_startup_decision() {
+                if controller.read(cx).should_start_minimized_to_tray() {
+                    controller.update(cx, |c, _| {
+                        c.set_window_visible(false);
+                    });
+                } else {
+                    open_or_activate_main_window(&controller, &active_window, cx);
+                }
+                initial_window_decided = true;
+            } else {
+                // Defer opening the window until the first settings snapshot or startup
+                // failure arrives so slow Windows login startup honors GUI_START_MINIMIZED_TRAY.
+                controller.update(cx, |c, _| {
+                    c.set_window_visible(false);
+                });
+            }
 
             let controller_loop = controller.clone();
             let window_loop = active_window.clone();
@@ -224,6 +248,7 @@ fn main() {
             let tray_loop = tray.clone();
 
             cx.spawn(async move |cx: &mut AsyncApp| {
+                let startup_started = Instant::now();
                 let mut last_status_poll = Instant::now();
                 let mut last_bounds_poll = Instant::now();
                 loop {
@@ -246,6 +271,26 @@ fn main() {
                                     c.state.desktop_exit_pending,
                                 )
                             });
+
+                        if !initial_window_decided {
+                            let (ready, minimized) = {
+                                let ctrl = controller_loop.read(cx);
+                                (
+                                    ctrl.has_initial_startup_decision(),
+                                    ctrl.should_start_minimized_to_tray(),
+                                )
+                            };
+                            if ready || startup_started.elapsed() >= Duration::from_secs(5) {
+                                initial_window_decided = true;
+                                if !(ready && minimized) {
+                                    open_or_activate_main_window(
+                                        &controller_loop,
+                                        &window_loop,
+                                        cx,
+                                    );
+                                }
+                            }
+                        }
 
                         for signal in signals {
                             match signal {
@@ -275,6 +320,7 @@ fn main() {
                                     }
                                 }
                                 DesktopSignal::EnsureWindowVisible => {
+                                    initial_window_decided = true;
                                     open_or_activate_main_window(
                                         &controller_loop,
                                         &window_loop,
@@ -355,6 +401,7 @@ fn main() {
                             for ev in events {
                                 match ev {
                                     desktop::windows_tray::TrayEvent::Open => {
+                                        initial_window_decided = true;
                                         open_or_activate_main_window(&controller_loop, &window_loop, cx);
                                     }
                                     desktop::windows_tray::TrayEvent::ToggleWatcher => {
@@ -368,6 +415,7 @@ fn main() {
                                         });
                                     }
                                     desktop::windows_tray::TrayEvent::History => {
+                                        initial_window_decided = true;
                                         open_or_activate_main_window(&controller_loop, &window_loop, cx);
                                         controller_loop.update(cx, |c, cx| {
                                             c.select_page(Page::History);
@@ -376,6 +424,7 @@ fn main() {
                                         });
                                     }
                                     desktop::windows_tray::TrayEvent::Live => {
+                                        initial_window_decided = true;
                                         open_or_activate_main_window(&controller_loop, &window_loop, cx);
                                         controller_loop.update(cx, |c, cx| {
                                             c.select_page(Page::Live);

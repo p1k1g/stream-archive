@@ -253,10 +253,36 @@ pub(super) fn handle_request(
         Request::OpenLiveFolder(file_path) => {
             return handle_open_live_folder(responses, file_path);
         }
+        Request::OpenMediaFile(file_path) => {
+            return handle_open_media_file(responses, file_path);
+        }
         Request::OpenLiveStream { platform, account } => {
             return handle_open_live_stream(responses, platform, account);
         }
         Request::OpenLogsFolder => return handle_open_logs_folder(core, responses),
+        Request::OpenReleaseUrl(url) => return handle_open_release_url(responses, url),
+        Request::CheckUpdates { manual } => {
+            let core = core.clone();
+            let responses = responses.clone();
+            runtime.spawn(async move {
+                let result = core
+                    .check_latest_release()
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                let _ = responses.send(Response::UpdateCheck { manual, result });
+            });
+            return LoopAction::Continue;
+        }
+        Request::SetWindowsStartup(enabled) => {
+            let responses = responses.clone();
+            match spawn_detached_task("windows-startup", move || {
+                let result = crate::desktop::windows_startup::set_enabled(enabled);
+                let _ = responses.send(Response::WindowsStartup(result));
+            }) {
+                Ok(()) => return LoopAction::Continue,
+                Err(error) => Response::WindowsStartup(Err(error)),
+            }
+        }
     };
     send_response(responses, response)
 }
@@ -768,5 +794,27 @@ fn handle_open_logs_folder(
             }
         }
         Err(err) => send_response(responses, Response::LogsFolderOpened(Err(err))),
+    }
+}
+
+fn handle_open_media_file(responses: &mpsc::Sender<Response>, file_path: String) -> LoopAction {
+    let responses_clone = responses.clone();
+    match spawn_detached_task("native-shell", move || {
+        let result = native_shell::open_media_file(&file_path);
+        let _ = responses_clone.send(Response::MediaFileOpened(result));
+    }) {
+        Ok(()) => LoopAction::Continue,
+        Err(error) => send_response(responses, Response::MediaFileOpened(Err(error))),
+    }
+}
+
+fn handle_open_release_url(responses: &mpsc::Sender<Response>, url: String) -> LoopAction {
+    let responses_clone = responses.clone();
+    match spawn_detached_task("native-shell", move || {
+        let result = native_shell::open_release_url(&url);
+        let _ = responses_clone.send(Response::ReleaseUrlOpened(result));
+    }) {
+        Ok(()) => LoopAction::Continue,
+        Err(error) => send_response(responses, Response::ReleaseUrlOpened(Err(error))),
     }
 }

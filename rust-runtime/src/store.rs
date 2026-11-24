@@ -285,6 +285,8 @@ impl Store {
             ("GUI_NOTIFY_RECORD_START", "N"),
             ("GUI_NOTIFY_RECORD_FINISH", "Y"),
             ("GUI_NOTIFY_WARNING", "Y"),
+            ("GUI_AUTO_START_WATCHER", "N"),
+            ("GUI_START_MINIMIZED_TRAY", "N"),
             ("STREAM_ARCHIVE_CLOSE_ACTION", "EXIT"),
             ("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS", "true"),
             ("MIN_FREE_SPACE_GB", "20"),

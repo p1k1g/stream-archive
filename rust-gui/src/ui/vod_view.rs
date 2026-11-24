@@ -220,17 +220,29 @@ pub fn render_vod_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
 
         let mut btns = div().flex().items_center().gap(px(6.0));
         if !state.vod_output_file.is_empty() {
-            let path = state.vod_output_file.clone();
-            btns = btns.child(
-                Button::new("vod-open-folder")
-                    .ghost()
-                    .small()
-                    .label("폴더 열기")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let p = path.clone();
-                        this.controller.update(cx, |c, _| c.live_open_folder(p));
-                    })),
-            );
+            let play_path = state.vod_output_file.clone();
+            let dir_path = state.vod_output_file.clone();
+            btns = btns
+                .child(
+                    Button::new("vod-play-file")
+                        .outline()
+                        .small()
+                        .label("영상 재생")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let p = play_path.clone();
+                            this.controller.update(cx, |c, _| c.open_media_file(p));
+                        })),
+                )
+                .child(
+                    Button::new("vod-open-folder")
+                        .ghost()
+                        .small()
+                        .label("폴더 열기")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let p = dir_path.clone();
+                            this.controller.update(cx, |c, _| c.live_open_folder(p));
+                        })),
+                );
         }
         if state.vod_can_cancel {
             btns = btns.child(

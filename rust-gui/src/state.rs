@@ -259,6 +259,18 @@ pub struct UiState {
     pub download_notifications_enabled: bool,
     pub notify_record_start: bool,
     pub notify_warning: bool,
+    pub auto_start_watcher: bool,
+    pub start_minimized_tray: bool,
+    pub windows_startup_enabled: bool,
+    pub windows_startup_busy: bool,
+
+    // GitHub release update check
+    pub update_checking: bool,
+    pub update_available: bool,
+    pub update_latest_version: String,
+    pub update_release_url: String,
+    pub update_status_message: String,
+    pub update_dismissed: bool,
 
     // General Settings & Providers
     pub settings_rows: Vec<SettingRow>,
@@ -423,6 +435,17 @@ impl Default for UiState {
             download_notifications_enabled: true,
             notify_record_start: false,
             notify_warning: true,
+            auto_start_watcher: false,
+            start_minimized_tray: false,
+            windows_startup_enabled: false,
+            windows_startup_busy: false,
+
+            update_checking: false,
+            update_available: false,
+            update_latest_version: String::new(),
+            update_release_url: String::new(),
+            update_status_message: String::new(),
+            update_dismissed: false,
 
             settings_rows: Vec::new(),
             settings_revision: 0,

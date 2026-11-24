@@ -108,6 +108,21 @@ impl AppController {
                         self.state.notify_warning =
                             !notify_warn.value.trim().eq_ignore_ascii_case("N");
                     }
+                    if let Some(auto_watch) =
+                        fields.iter().find(|f| f.key == "GUI_AUTO_START_WATCHER")
+                    {
+                        let enabled = auto_watch.value.trim().eq_ignore_ascii_case("Y");
+                        self.state.auto_start_watcher = enabled;
+                        self.initial_auto_start_watcher.get_or_insert(enabled);
+                    } else {
+                        self.initial_auto_start_watcher.get_or_insert(false);
+                    }
+                    if let Some(start_tray) =
+                        fields.iter().find(|f| f.key == "GUI_START_MINIMIZED_TRAY")
+                    {
+                        self.state.start_minimized_tray =
+                            start_tray.value.trim().eq_ignore_ascii_case("Y");
+                    }
                     if let Some(out) = fields.iter().find(|f| f.key == "OUTPUT_DIR") {
                         self.vod_draft.sync_default_output(&out.value);
                         self.state.vod_output_directory = self.vod_draft.output_directory.clone();
@@ -120,6 +135,7 @@ impl AppController {
                 if first_run && self.state.active_page == Page::Live {
                     self.state.active_page = Page::Settings;
                 }
+                self.maybe_trigger_auto_start_watcher();
             }
             Response::Configuration {
                 channels,
@@ -227,6 +243,7 @@ impl AppController {
                 } else if let Some(status) = self.live_model.latest.clone() {
                     self.render_live_summary(&status);
                 }
+                self.maybe_trigger_auto_start_watcher();
             }
             Response::LiveError { message, poll } => {
                 if poll {
@@ -390,6 +407,16 @@ impl AppController {
                     self.state.live_message = format!("폴더 열기 실패: {err}");
                 }
             }
+            Response::MediaFileOpened(result) => {
+                if let Err(err) = result {
+                    let message = format!("영상 재생 실패: {err}");
+                    match self.state.active_page {
+                        Page::History => self.state.history_message = message,
+                        Page::Vod => self.state.vod_message = message,
+                        _ => self.state.live_message = message,
+                    }
+                }
+            }
             Response::LiveStreamOpened(result) => {
                 if let Err(err) = result {
                     self.state.live_message = format!("방송 페이지 열기 실패: {err}");
@@ -398,6 +425,52 @@ impl AppController {
             Response::LogsFolderOpened(result) => {
                 if let Err(err) = result {
                     self.state.maintenance_message = format!("로그 폴더 열기 실패: {err}");
+                }
+            }
+            Response::ReleaseUrlOpened(result) => {
+                if let Err(err) = result {
+                    self.state.maintenance_message = format!("릴리스 페이지 열기 실패: {err}");
+                }
+            }
+            Response::UpdateCheck { manual, result } => {
+                self.state.update_checking = false;
+                match result {
+                    Ok(info) => {
+                        self.state.update_available = info.update_available;
+                        self.state.update_latest_version = info.latest_version.clone();
+                        self.state.update_release_url = info.release_url;
+                        if info.update_available {
+                            if manual {
+                                self.state.update_dismissed = false;
+                            }
+                            self.state.update_status_message = format!(
+                                "새 버전 v{}이(가) 출시되었습니다 (현재 v{}).",
+                                info.latest_version, info.current_version
+                            );
+                        } else if manual {
+                            self.state.update_status_message = format!(
+                                "현재 최신 버전(v{})을 사용 중입니다.",
+                                info.current_version
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        if manual {
+                            self.state.update_status_message = format!("업데이트 확인 실패: {err}");
+                        }
+                    }
+                }
+            }
+            Response::WindowsStartup(result) => {
+                self.state.windows_startup_busy = false;
+                match result {
+                    Ok(enabled) => {
+                        self.state.windows_startup_enabled = enabled;
+                    }
+                    Err(err) => {
+                        self.state.settings_message =
+                            format!("Windows 시작프로그램 설정 실패: {err}");
+                    }
                 }
             }
             Response::MaintenanceError { message, poll } => {
