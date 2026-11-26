@@ -1,10 +1,13 @@
 //! Read-only Diagnostics & Runtime Logs view.
 
-use crate::{state::MaintenanceSection, theme::*, ui::MainView};
+use crate::{
+    maintenance_adapter::log_matches_filter, state::MaintenanceSection, theme::*, ui::MainView,
+};
 use gpui_kit::{
     component::{
         Disableable as _, Sizable as _,
         button::{Button, ButtonVariants as _},
+        input::Input,
         switch::Switch,
     },
     prelude::FluentBuilder as _,
@@ -68,6 +71,26 @@ pub fn render_diagnostics_page(view: &MainView, cx: &mut Context<MainView>) -> D
     }
 
     if is_logs {
+        let visible_rows: Vec<&crate::state::MaintenanceLogRow> = state
+            .log_rows
+            .iter()
+            .filter(|line| {
+                log_matches_filter(
+                    &line.text,
+                    &line.level,
+                    &state.log_level_filter,
+                    &state.log_search,
+                )
+            })
+            .collect();
+        let visible_count = visible_rows.len();
+        let total_count = state.log_rows.len();
+        let copy_payload = visible_rows
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
         let toolbar = div()
             .flex()
             .items_center()
@@ -88,6 +111,30 @@ pub fn render_diagnostics_page(view: &MainView, cx: &mut Context<MainView>) -> D
                     .flex()
                     .items_center()
                     .gap(px(6.0))
+                    .child(
+                        Button::new("logs-copy-btn")
+                            .outline()
+                            .small()
+                            .disabled(visible_count == 0)
+                            .label("로그 복사")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if copy_payload.is_empty() {
+                                    this.controller.update(cx, |c, _| {
+                                        c.set_maintenance_message("복사할 로그가 없습니다.".into())
+                                    });
+                                } else {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        copy_payload.clone(),
+                                    ));
+                                    this.controller.update(cx, |c, _| {
+                                        c.set_maintenance_message(format!(
+                                            "표시 중인 로그 {visible_count}줄을 클립보드에 복사했습니다."
+                                        ))
+                                    });
+                                }
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         Button::new("logs-refresh")
                             .outline()
@@ -119,6 +166,47 @@ pub fn render_diagnostics_page(view: &MainView, cx: &mut Context<MainView>) -> D
                     ),
             );
 
+        let mut level_pills = div().flex().items_center().gap(px(4.0));
+        for (idx, (key, label)) in [
+            ("ALL", "전체"),
+            ("WARN_ERR", "경고·오류"),
+            ("ERR", "오류만"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let active = state.log_level_filter == key;
+            let k = key.to_string();
+            level_pills = level_pills.child(filter_pill(("log-lvl", idx), label, active).on_click(
+                cx.listener(move |this, _, _, cx| {
+                    let f = k.clone();
+                    this.controller
+                        .update(cx, |c, _| c.set_log_level_filter(&f));
+                    cx.notify();
+                }),
+            ));
+        }
+
+        let filter_bar = surface_card()
+            .p(px(10.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(10.0))
+            .child(level_pills)
+            .child(
+                div()
+                    .flex_1()
+                    .max_w(px(360.0))
+                    .child(Input::new(&view.log_search_input).small()),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(format!("{visible_count} / {total_count}줄")),
+            );
+
         let mut console = surface_card()
             .p(px(12.0))
             .bg(rgb(BG_CHROME))
@@ -132,17 +220,31 @@ pub fn render_diagnostics_page(view: &MainView, cx: &mut Context<MainView>) -> D
                     .text_color(rgb(TEXT_MUTED))
                     .child("표시할 런타임 로그가 없습니다."),
             );
+        } else if visible_rows.is_empty() {
+            console = console.child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("선택한 레벨 필터 또는 검색어와 일치하는 로그가 없습니다."),
+            );
         } else {
-            for line in &state.log_rows {
-                console = console.child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(rgb(TEXT_SECONDARY))
-                        .child(line.text.clone()),
-                );
+            for line in visible_rows {
+                let mut row_el = div()
+                    .px(px(6.0))
+                    .py(px(1.5))
+                    .rounded(px(3.0))
+                    .font_family("Consolas")
+                    .text_size(px(11.5))
+                    .child(line.text.clone());
+                row_el = match line.level.as_str() {
+                    "error" => row_el.text_color(rgb(ERR_FG)).bg(rgba(0x331c2466)),
+                    "warn" => row_el.text_color(rgb(WARN_FG)).bg(rgba(0x31281966)),
+                    _ => row_el.text_color(rgb(TEXT_SECONDARY)),
+                };
+                console = console.child(row_el);
             }
         }
-        return page.child(toolbar).child(console);
+        return page.child(toolbar).child(filter_bar).child(console);
     }
 
     // Diagnostics checks & version update toolbar

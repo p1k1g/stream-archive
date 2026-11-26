@@ -13,6 +13,14 @@ use gpui_kit::{
 pub fn render_queue_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
     let state = view.controller.read(cx).state.clone();
     let mut page = div().flex().flex_col().gap(px(12.0)).w_full();
+    let has_clearable = state
+        .queue_rows
+        .iter()
+        .any(|row| matches!(row.state.as_str(), "COMPLETED" | "CANCELLED"));
+    let has_retryable_failed = state
+        .queue_rows
+        .iter()
+        .any(|row| matches!(row.state.as_str(), "FAILED" | "INTERRUPTED"));
 
     page = page.child(
         div()
@@ -33,6 +41,28 @@ pub fn render_queue_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
                     .child(metric_chip("대기", &state.queue_queued_count, TEXT_PRIMARY))
                     .child(metric_chip("완료", &state.queue_completed_count, OK_FG))
                     .child(metric_chip("실패", &state.queue_failed_count, ERR_FG))
+                    .child(
+                        Button::new("queue-retry-failed-btn")
+                            .outline()
+                            .small()
+                            .disabled(state.queue_busy || !has_retryable_failed)
+                            .label("실패 일괄 재시도")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.queue_retry_failed());
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("queue-clear-completed-btn")
+                            .outline()
+                            .small()
+                            .disabled(state.queue_busy || !has_clearable)
+                            .label("완료 항목 정리")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.queue_clear_completed());
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         Button::new("queue-refresh-btn")
                             .outline()
@@ -85,6 +115,8 @@ pub fn render_queue_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
         let cancel_id = row.id.clone();
         let retry_id = row.id.clone();
         let remove_id = row.id.clone();
+        let play_path = (row.state == "COMPLETED" && !row.output_file.is_empty())
+            .then(|| row.output_file.clone());
         let folder_path = if !row.output_file.is_empty() {
             row.output_file.clone()
         } else {
@@ -92,6 +124,18 @@ pub fn render_queue_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
         };
 
         let mut actions = div().flex().items_center().gap(px(6.0)).flex_shrink_0();
+        if let Some(play_path) = play_path {
+            actions = actions.child(
+                Button::new(("q-play", idx))
+                    .primary()
+                    .xsmall()
+                    .label("영상 재생")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let p = play_path.clone();
+                        this.controller.update(cx, |c, _| c.open_media_file(p));
+                    })),
+            );
+        }
         if !folder_path.is_empty() {
             actions = actions.child(
                 Button::new(("q-folder", idx))

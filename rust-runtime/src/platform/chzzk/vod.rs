@@ -371,7 +371,7 @@ async fn run_download(
     req: VodDownloadRequest,
     logs: &LogBuffer,
     status: &Arc<RwLock<VodJobStatus>>,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<()> {
     validate_download_request(&req)?;
     let tools = resolve_chzzk_tools(backend, &req.ffmpeg_path)?;
@@ -410,7 +410,7 @@ async fn run_download_prepared(
     output_dir: &Path,
     logs: &LogBuffer,
     status: &Arc<RwLock<VodJobStatus>>,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<()> {
     let view = analysis_view(&req.vod_url, &metadata);
     {
@@ -464,7 +464,18 @@ async fn run_download_prepared(
                 }
                 let staged_file = find_finished_output(&staging_output)?;
                 loop {
-                    match finalize_output(&staged_file, &destination, cancel)? {
+                    let staged_file_for_task = staged_file.clone();
+                    let cancel_for_task = cancel.clone();
+                    let (claim, publish_result) = tokio::task::spawn_blocking(move || {
+                        let staged_file = staged_file_for_task;
+                        let cancel = cancel_for_task.as_ref();
+                        let res = finalize_output(&staged_file, &destination, cancel);
+                        (destination, res)
+                    })
+                    .await
+                    .context("CHZZK VOD 최종 파일 이동 태스크 실행 실패")?;
+                    destination = claim;
+                    match publish_result? {
                         PublishOutcome::Published => break,
                         PublishOutcome::Cancelled => {
                             cleanup_job_media(job_dir);
@@ -2366,7 +2377,7 @@ mod provider_e2e {
             }],
         };
         let status = Arc::new(RwLock::new(VodJobStatus::default()));
-        let cancel = AtomicBool::new(false);
+        let cancel = Arc::new(AtomicBool::new(false));
         let logs = LogBuffer::new();
 
         run_download_prepared(

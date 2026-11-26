@@ -282,6 +282,7 @@ fn render_live_row(
     let name_pw = row.name.clone();
     let stream_platform = row.platform.clone();
     let stream_account = row.account.clone();
+    let play_file = row.file.clone();
     let folder_file = if !row.file.is_empty() {
         row.file.clone()
     } else {
@@ -356,6 +357,18 @@ fn render_live_row(
                     let acc = stream_account.clone();
                     this.controller
                         .update(cx, |c, _| c.live_open_stream(plat, acc));
+                })),
+        );
+    }
+    if !play_file.is_empty() {
+        actions = actions.child(
+            Button::new(("live-play", idx))
+                .primary()
+                .xsmall()
+                .label("영상 재생")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let path = play_file.clone();
+                    this.controller.update(cx, |c, _| c.open_media_file(path));
                 })),
         );
     }

@@ -154,13 +154,19 @@ impl BackupManager {
     }
 
     pub async fn snapshot(&self) -> Result<BackupSnapshot> {
-        let _guard = self.operation.lock().await;
-        Ok(BackupSnapshot {
-            directory: self.backup_dir().display().to_string(),
-            directory_editable: self.backup_dir_editable(),
-            policy: self.policy()?,
-            backups: self.list_locked()?,
+        let guard = Arc::clone(&self.operation).lock_owned().await;
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            Ok(BackupSnapshot {
+                directory: manager.backup_dir().display().to_string(),
+                directory_editable: manager.backup_dir_editable(),
+                policy: manager.policy()?,
+                backups: manager.list_locked()?,
+            })
         })
+        .await
+        .context("backup snapshot task failed")?
     }
 
     pub async fn update_policy(
@@ -175,92 +181,121 @@ impl BackupManager {
             bail!("backup retention days must not be negative");
         }
 
-        let _guard = self.operation.lock().await;
-        let mut updates = BTreeMap::from([
-            (
-                "BACKUP_ENABLED".to_string(),
-                if policy.enabled { "Y" } else { "N" }.to_string(),
-            ),
-            (
-                "BACKUP_INTERVAL_HOURS".to_string(),
-                policy.interval_hours.to_string(),
-            ),
-            (
-                "BACKUP_KEEP_COUNT".to_string(),
-                policy.keep_count.to_string(),
-            ),
-            (
-                "BACKUP_RETENTION_DAYS".to_string(),
-                policy.retention_days.to_string(),
-            ),
-        ]);
+        let guard = Arc::clone(&self.operation).lock_owned().await;
+        let manager = self.clone();
+        let policy = policy.clone();
+        let directory = directory.map(str::to_owned);
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            let mut updates = BTreeMap::from([
+                (
+                    "BACKUP_ENABLED".to_string(),
+                    if policy.enabled { "Y" } else { "N" }.to_string(),
+                ),
+                (
+                    "BACKUP_INTERVAL_HOURS".to_string(),
+                    policy.interval_hours.to_string(),
+                ),
+                (
+                    "BACKUP_KEEP_COUNT".to_string(),
+                    policy.keep_count.to_string(),
+                ),
+                (
+                    "BACKUP_RETENTION_DAYS".to_string(),
+                    policy.retention_days.to_string(),
+                ),
+            ]);
 
-        if let Some(directory) = directory {
-            if !self.backup_dir_editable() {
-                bail!("backup directory is controlled by STREAM_ARCHIVE_BACKUP_DIR");
+            if let Some(directory) = directory.as_deref() {
+                if !manager.backup_dir_editable() {
+                    bail!("backup directory is controlled by STREAM_ARCHIVE_BACKUP_DIR");
+                }
+                updates.insert("BACKUP_DIR".into(), directory.trim().to_string());
             }
-            updates.insert("BACKUP_DIR".into(), directory.trim().to_string());
-        }
 
-        // Reuse canonical settings validation, including numeric ranges and
-        // writable-directory checks.
-        validate_setting_updates(&updates)?;
-        self.store.sync_settings(&updates, "native-backup")?;
-        self.ensure_policy_defaults()?;
-        Ok(BackupSnapshot {
-            directory: self.backup_dir().display().to_string(),
-            directory_editable: self.backup_dir_editable(),
-            policy: self.policy()?,
-            backups: self.list_locked()?,
+            // Reuse canonical settings validation, including numeric ranges and
+            // writable-directory checks.
+            validate_setting_updates(&updates)?;
+            manager.store.sync_settings(&updates, "native-backup")?;
+            manager.ensure_policy_defaults()?;
+            Ok(BackupSnapshot {
+                directory: manager.backup_dir().display().to_string(),
+                directory_editable: manager.backup_dir_editable(),
+                policy: manager.policy()?,
+                backups: manager.list_locked()?,
+            })
         })
+        .await
+        .context("backup policy update task failed")?
     }
 
     pub async fn create_manual(&self) -> Result<BackupInfo> {
-        let _guard = self.operation.lock().await;
-        self.create_locked("manual")
+        let guard = Arc::clone(&self.operation).lock_owned().await;
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            manager.create_locked("manual")
+        })
+        .await
+        .context("manual backup task failed")?
     }
 
     async fn create_auto_if_due(&self) -> Result<Option<BackupInfo>> {
-        let _guard = self.operation.lock().await;
-        let policy = self.policy()?;
-        if !policy.enabled {
-            return Ok(None);
-        }
-        let backups = self.list_locked()?;
-        let newest_auto = backups
-            .iter()
-            .filter(|item| item.kind == "auto")
-            .filter_map(|item| DateTime::parse_from_rfc3339(&item.created_at).ok())
-            .map(|dt| dt.with_timezone(&Utc))
-            .max();
-        let due = newest_auto
-            .map(|last| Utc::now() - last >= ChronoDuration::hours(policy.interval_hours as i64))
-            .unwrap_or(true);
-        if due {
-            Ok(Some(self.create_locked("auto")?))
-        } else {
-            self.cleanup_locked(&policy)?;
-            Ok(None)
-        }
+        let guard = Arc::clone(&self.operation).lock_owned().await;
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            let policy = manager.policy()?;
+            if !policy.enabled {
+                return Ok(None);
+            }
+            let backups = manager.list_locked()?;
+            let newest_auto = backups
+                .iter()
+                .filter(|item| item.kind == "auto")
+                .filter_map(|item| DateTime::parse_from_rfc3339(&item.created_at).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+                .max();
+            let due = newest_auto
+                .map(|last| {
+                    Utc::now() - last >= ChronoDuration::hours(policy.interval_hours as i64)
+                })
+                .unwrap_or(true);
+            if due {
+                Ok(Some(manager.create_locked("auto")?))
+            } else {
+                manager.cleanup_locked(&policy)?;
+                Ok(None)
+            }
+        })
+        .await
+        .context("automatic backup task failed")?
     }
 
     pub async fn restore(&self, file_name: &str) -> Result<RestoreOutcome> {
-        let _guard = self.operation.lock().await;
-        let source = self.resolve_file(file_name)?;
-        let selected = inspect_backup(&source)?;
-        if selected.integrity != "OK" {
-            bail!("backup integrity check failed: {}", selected.integrity);
-        }
-        let safety = self.create_locked_with_cleanup("pre_restore", false)?;
-        self.store.restore_from(&source)?;
-        self.store.ensure_schema()?;
-        self.ensure_policy_defaults()?;
-        let policy = self.policy()?;
-        self.cleanup_locked(&policy)?;
-        Ok(RestoreOutcome {
-            restored: selected,
-            safety_backup: safety,
+        let guard = Arc::clone(&self.operation).lock_owned().await;
+        let manager = self.clone();
+        let file_name = file_name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            let source = manager.resolve_file(&file_name)?;
+            let selected = inspect_backup(&source)?;
+            if selected.integrity != "OK" {
+                bail!("backup integrity check failed: {}", selected.integrity);
+            }
+            let safety = manager.create_locked_with_cleanup("pre_restore", false)?;
+            manager.store.restore_from(&source)?;
+            manager.store.ensure_schema()?;
+            manager.ensure_policy_defaults()?;
+            let policy = manager.policy()?;
+            manager.cleanup_locked(&policy)?;
+            Ok(RestoreOutcome {
+                restored: selected,
+                safety_backup: safety,
+            })
         })
+        .await
+        .context("backup restore task failed")?
     }
 
     fn create_locked(&self, kind: &str) -> Result<BackupInfo> {

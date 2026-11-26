@@ -287,6 +287,46 @@ impl VodQueueManager {
         Ok(())
     }
 
+    pub async fn clear_completed(&self) -> Result<usize> {
+        let active = self.active_id.lock().await.clone();
+        let changed = match active.as_deref() {
+            Some(active_id) => self.conn()?.execute(
+                "DELETE FROM vod_queue WHERE state IN ('COMPLETED','CANCELLED') AND id != ?1",
+                params![active_id],
+            )?,
+            None => self.conn()?.execute(
+                "DELETE FROM vod_queue WHERE state IN ('COMPLETED','CANCELLED')",
+                [],
+            )?,
+        };
+        if changed > 0 {
+            self.logs
+                .push(format!(
+                    "[VOD_QUEUE] cleared completed/cancelled count={changed}"
+                ))
+                .await;
+        }
+        Ok(changed)
+    }
+
+    pub async fn retry_failed(&self) -> Result<usize> {
+        if self.stopping.load(Ordering::Acquire) {
+            bail!("VOD queue is shutting down");
+        }
+        let now = Utc::now().to_rfc3339();
+        let changed = self.conn()?.execute(
+            "UPDATE vod_queue SET state='QUEUED', message='재시도 대기 중', output_file=NULL, started_at=NULL, finished_at=NULL, updated_at=?1 WHERE state IN ('FAILED','INTERRUPTED')",
+            params![now],
+        )?;
+        if changed > 0 {
+            self.logs
+                .push(format!("[VOD_QUEUE] retried failed count={changed}"))
+                .await;
+            self.wake.notify_one();
+        }
+        Ok(changed)
+    }
+
     async fn wait_for_work(&self, delay: Duration) {
         tokio::select! {
             _ = self.wake.notified() => {}
@@ -730,5 +770,61 @@ mod tests {
         assert_eq!(item.current_part, 2);
         assert_eq!(item.part_count, 3);
         assert_eq!(item.percent, 66.5);
+    }
+
+    #[tokio::test]
+    async fn clear_completed_and_retry_failed_preserve_other_states() {
+        let (_dir, queue) = queue();
+        let completed = queue.enqueue(request("out")).await.unwrap();
+        let cancelled = queue.enqueue(request("out")).await.unwrap();
+        let failed = queue.enqueue(request("out")).await.unwrap();
+        let interrupted = queue.enqueue(request("out")).await.unwrap();
+        let queued = queue.enqueue(request("out")).await.unwrap();
+
+        {
+            let conn = queue.conn().unwrap();
+            conn.execute(
+                "UPDATE vod_queue SET state='COMPLETED' WHERE id=?1",
+                params![completed.id],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE vod_queue SET state='CANCELLED' WHERE id=?1",
+                params![cancelled.id],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE vod_queue SET state='FAILED' WHERE id=?1",
+                params![failed.id],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE vod_queue SET state='INTERRUPTED' WHERE id=?1",
+                params![interrupted.id],
+            )
+            .unwrap();
+        }
+
+        let removed = queue.clear_completed().await.unwrap();
+        assert_eq!(removed, 2);
+        assert!(queue.item(&completed.id).unwrap().is_none());
+        assert!(queue.item(&cancelled.id).unwrap().is_none());
+        assert_eq!(queue.item(&failed.id).unwrap().unwrap().state, "FAILED");
+        assert_eq!(
+            queue.item(&interrupted.id).unwrap().unwrap().state,
+            "INTERRUPTED"
+        );
+        assert_eq!(queue.item(&queued.id).unwrap().unwrap().state, "QUEUED");
+
+        let retried = queue.retry_failed().await.unwrap();
+        assert_eq!(retried, 2);
+        assert_eq!(queue.item(&failed.id).unwrap().unwrap().state, "QUEUED");
+        assert_eq!(
+            queue.item(&interrupted.id).unwrap().unwrap().state,
+            "QUEUED"
+        );
+        assert_eq!(queue.snapshot().await.unwrap().queued_count, 3);
+        assert_eq!(queue.retry_failed().await.unwrap(), 0);
+        assert_eq!(queue.clear_completed().await.unwrap(), 0);
     }
 }

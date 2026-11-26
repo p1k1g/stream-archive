@@ -221,6 +221,8 @@ pub(super) fn handle_request(
         Request::QueueStatus { poll } => queue_status(core, runtime, poll),
         Request::QueueEnqueue(req) => handle_queue_enqueue(core, runtime, req),
         Request::QueueAction { id, action } => handle_queue_action(core, runtime, id, action),
+        Request::QueueClearCompleted => handle_queue_clear_completed(core, runtime),
+        Request::QueueRetryFailed => handle_queue_retry_failed(core, runtime),
         Request::HistoryLoad { filter, view } => handle_history_load(core, filter, view),
         Request::MaintenanceLoad { active_tools } => maintenance_snapshot(
             core,
@@ -621,6 +623,48 @@ fn handle_queue_action(
         },
         Err(error) => Response::QueueError {
             message: format!("대기열 작업 실패: {error:#}"),
+            poll: false,
+        },
+    }
+}
+
+fn handle_queue_clear_completed(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+) -> Response {
+    match runtime.block_on(core.clear_completed_queue_items()) {
+        Ok((removed, snapshot)) => Response::Queue {
+            snapshot,
+            message: Some(if removed > 0 {
+                format!("완료·취소 항목 {removed}건을 대기열에서 정리했습니다.")
+            } else {
+                "정리할 완료·취소 항목이 없습니다.".into()
+            }),
+            poll: false,
+        },
+        Err(error) => Response::QueueError {
+            message: format!("완료 항목 정리 실패: {error:#}"),
+            poll: false,
+        },
+    }
+}
+
+fn handle_queue_retry_failed(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+) -> Response {
+    match runtime.block_on(core.retry_failed_queue_items()) {
+        Ok((retried, snapshot)) => Response::Queue {
+            snapshot,
+            message: Some(if retried > 0 {
+                format!("실패·중단 항목 {retried}건을 재시도 대기열에 등록했습니다.")
+            } else {
+                "재시도할 실패·중단 항목이 없습니다.".into()
+            }),
+            poll: false,
+        },
+        Err(error) => Response::QueueError {
+            message: format!("실패 항목 일괄 재시도 실패: {error:#}"),
             poll: false,
         },
     }

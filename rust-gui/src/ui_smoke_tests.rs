@@ -760,3 +760,208 @@ fn enabling_auto_start_watcher_mid_session_applies_only_on_next_launch() {
     assert!(ctrl.state.auto_start_watcher);
     assert!(rx.try_recv().is_err());
 }
+
+#[test]
+fn v1_1_1_finish_notification_queue_bulk_logs_and_shortcuts_flows() {
+    use crate::core_worker::Response;
+    use stream_archive_server::{
+        environment_settings::{EnvironmentSetting, SettingKind},
+        model::{ChannelRuntimeStatus, NativeWatcherStatus},
+    };
+
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    ctrl.state.notify_record_start = false;
+    ctrl.state.notify_warning = true;
+
+    // GUI_NOTIFY_RECORD_FINISH binds cleanly from Snapshot.
+    ctrl.apply_response_for_test(Response::Snapshot {
+        fields: Some(vec![EnvironmentSetting {
+            key: "GUI_NOTIFY_RECORD_FINISH".into(),
+            value: "Y".into(),
+            description: String::new(),
+            kind: SettingKind::Text,
+        }]),
+        diagnostics: DiagnosticsSnapshot::from_items(Vec::new()),
+        window_bounds: None,
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
+    });
+    assert!(ctrl.state.notify_record_finish);
+
+    // Baseline LIVE snapshot with one active recording.
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: NativeWatcherStatus {
+            running: true,
+            channels: vec![ChannelRuntimeStatus {
+                platform: PlatformId::Chzzk,
+                account: "ch1".into(),
+                name: "치지지".into(),
+                status: "RECORDING".into(),
+                bno: Some("101".into()),
+                started_at: Some("2026-11-26T00:00:00Z".into()),
+                size_bytes: 5 * 1024 * 1024,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        refresh_thumbnails: false,
+        message: None,
+        poll: true,
+    });
+    let _ = ctrl.take_desktop_signals();
+
+    // Recording finishes cleanly (OFFLINE) -> emits finish TrayAlert with file size once.
+    let offline_status = NativeWatcherStatus {
+        running: true,
+        channels: vec![ChannelRuntimeStatus {
+            platform: PlatformId::Chzzk,
+            account: "ch1".into(),
+            name: "치지지".into(),
+            status: "OFFLINE".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: offline_status.clone(),
+        refresh_thumbnails: false,
+        message: None,
+        poll: true,
+    });
+    let signals = ctrl.take_desktop_signals();
+    assert!(signals.iter().any(|s| matches!(
+        s,
+        DesktopSignal::TrayAlert { title, body, warning: false }
+            if title == "Stream Archive LIVE 녹화 완료"
+                && body.contains("[CHZZK] 치지지")
+                && body.contains("5.0 MiB")
+    )));
+
+    // Repeated OFFLINE poll emits zero duplicate finish alerts.
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: offline_status,
+        refresh_thumbnails: false,
+        message: None,
+        poll: true,
+    });
+    assert!(ctrl.take_desktop_signals().is_empty());
+
+    // Transitioning RECORDING -> ERROR suppresses finish alert and emits warning alert instead.
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: NativeWatcherStatus {
+            running: true,
+            channels: vec![ChannelRuntimeStatus {
+                platform: PlatformId::Soop,
+                account: "ch2".into(),
+                name: "숲채널".into(),
+                status: "RECORDING".into(),
+                bno: Some("202".into()),
+                size_bytes: 1024 * 1024,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        refresh_thumbnails: false,
+        message: None,
+        poll: true,
+    });
+    let _ = ctrl.take_desktop_signals();
+    ctrl.apply_response_for_test(Response::Live {
+        generation: None,
+        status: NativeWatcherStatus {
+            running: true,
+            channels: vec![ChannelRuntimeStatus {
+                platform: PlatformId::Soop,
+                account: "ch2".into(),
+                name: "숲채널".into(),
+                status: "ERROR".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        refresh_thumbnails: false,
+        message: None,
+        poll: true,
+    });
+    let signals = ctrl.take_desktop_signals();
+    assert!(!signals.iter().any(|s| matches!(
+        s,
+        DesktopSignal::TrayAlert { title, .. } if title == "Stream Archive LIVE 녹화 완료"
+    )));
+    assert!(
+        signals
+            .iter()
+            .any(|s| matches!(s, DesktopSignal::TrayAlert { warning: true, .. }))
+    );
+
+    // Disabling GUI_NOTIFY_RECORD_FINISH suppresses finish alert.
+    ctrl.apply_response_for_test(Response::Snapshot {
+        fields: Some(vec![EnvironmentSetting {
+            key: "GUI_NOTIFY_RECORD_FINISH".into(),
+            value: "N".into(),
+            description: String::new(),
+            kind: SettingKind::Text,
+        }]),
+        diagnostics: DiagnosticsSnapshot::from_items(Vec::new()),
+        window_bounds: None,
+        first_run: false,
+        startup_failed: false,
+        message: String::new(),
+    });
+    assert!(!ctrl.state.notify_record_finish);
+
+    // Queue bulk actions & media playback error routing on Queue page.
+    let _ = rx.try_iter().count();
+    ctrl.state.queue_busy = false;
+    ctrl.queue_clear_completed();
+    assert!(ctrl.state.queue_busy);
+    assert!(matches!(rx.try_recv(), Ok(Request::QueueClearCompleted)));
+
+    ctrl.state.queue_busy = false;
+    ctrl.queue_retry_failed();
+    assert!(ctrl.state.queue_busy);
+    assert!(matches!(rx.try_recv(), Ok(Request::QueueRetryFailed)));
+
+    ctrl.state.active_page = Page::Queue;
+    ctrl.apply_response_for_test(Response::MediaFileOpened(Err("file missing".into())));
+    assert!(ctrl.state.queue_message.contains("영상 재생 실패"));
+
+    // Log filters, search, and collapsible advanced settings toggle.
+    ctrl.set_log_level_filter("WARN_ERR");
+    assert_eq!(ctrl.state.log_level_filter, "WARN_ERR");
+    ctrl.set_log_level_filter("UNKNOWN");
+    assert_eq!(ctrl.state.log_level_filter, "ALL");
+    ctrl.set_log_search("CHZZK".into());
+    assert_eq!(ctrl.state.log_search, "CHZZK");
+    assert!(!ctrl.state.settings_advanced_open);
+    ctrl.toggle_settings_advanced();
+    assert!(ctrl.state.settings_advanced_open);
+
+    // refresh_active_page dispatches appropriate requests per active tab.
+    ctrl.state.queue_busy = false;
+    ctrl.state.active_page = Page::Queue;
+    let _ = rx.try_iter().count();
+    ctrl.refresh_active_page();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::QueueStatus { poll: false })
+    ));
+
+    ctrl.state.history_busy = false;
+    ctrl.state.active_page = Page::History;
+    let _ = rx.try_iter().count();
+    ctrl.refresh_active_page();
+    assert!(matches!(rx.try_recv(), Ok(Request::HistoryLoad { .. })));
+
+    ctrl.state.live_busy = false;
+    ctrl.state.storage_busy = false;
+    ctrl.state.active_page = Page::Live;
+    let _ = rx.try_iter().count();
+    ctrl.refresh_active_page();
+    assert!(matches!(rx.try_recv(), Ok(Request::LiveRefresh)));
+}

@@ -133,7 +133,17 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
             ),
     );
 
+    let is_advanced_key = |key: &str| {
+        matches!(
+            key,
+            "RECORD_STALL_TIMEOUT" | "RECORD_RETRY_INTERVAL" | "LOG_ENABLED" | "LOG_RETENTION_DAYS"
+        )
+    };
+
     for (idx, row) in state.settings_rows.iter().enumerate() {
+        if is_advanced_key(&row.key) {
+            continue;
+        }
         if row.key == "STREAM_ARCHIVE_CLOSE_ACTION" {
             let mut pills = div().flex().items_center().gap(px(4.0));
             for (p_idx, (val, label)) in [
@@ -307,6 +317,7 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
         if matches!(
             row.key.as_str(),
             "GUI_NOTIFY_RECORD_START"
+                | "GUI_NOTIFY_RECORD_FINISH"
                 | "GUI_NOTIFY_WARNING"
                 | "GUI_AUTO_START_WATCHER"
                 | "GUI_START_MINIMIZED_TRAY"
@@ -316,6 +327,11 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                     "LIVE 녹화 시작 트레이 알림",
                     "notif-live-start-switch",
                     row.value.trim().eq_ignore_ascii_case("Y"),
+                ),
+                "GUI_NOTIFY_RECORD_FINISH" => (
+                    "LIVE 녹화 완료 트레이 알림",
+                    "notif-live-finish-switch",
+                    !row.value.trim().eq_ignore_ascii_case("N"),
                 ),
                 "GUI_NOTIFY_WARNING" => (
                     "저장 공간 부족·채널 오류 경고 알림",
@@ -468,6 +484,141 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                     })),
             ),
     );
+
+    // Collapsible Advanced Settings (stall timeout, retry interval, file log retention)
+    let mut adv_section = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .pt(px(8.0))
+        .border_t_1()
+        .border_color(rgb(BORDER))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(TEXT_PRIMARY))
+                                .child("고급 설정 (녹화 정체 감지 · 재시도 · 로그 보관)"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(rgb(TEXT_MUTED))
+                                .child("RECORD_STALL_TIMEOUT · RECORD_RETRY_INTERVAL · LOG_ENABLED · LOG_RETENTION_DAYS"),
+                        ),
+                )
+                .child(
+                    Button::new("settings-advanced-toggle")
+                        .ghost()
+                        .xsmall()
+                        .label(if state.settings_advanced_open {
+                            "접기"
+                        } else {
+                            "펼치기"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.controller
+                                .update(cx, |c, _| c.toggle_settings_advanced());
+                            cx.notify();
+                        })),
+                ),
+        );
+
+    if state.settings_advanced_open {
+        for (idx, row) in state.settings_rows.iter().enumerate() {
+            if !is_advanced_key(&row.key) {
+                continue;
+            }
+            if row.key == "LOG_ENABLED" {
+                let checked = !row.value.trim().eq_ignore_ascii_case("N");
+                adv_section = adv_section.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .py(px(4.0))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(TEXT_PRIMARY))
+                                        .child("일별 파일 로그 기록 (LOG_ENABLED)"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(rgb(TEXT_MUTED))
+                                        .child(row.description.clone()),
+                                ),
+                        )
+                        .child(
+                            Switch::new("log-enabled-switch")
+                                .disabled(state.settings_busy)
+                                .checked(checked)
+                                .on_click(cx.listener(move |this, next, _, cx| {
+                                    let v = if *next { "Y" } else { "N" }.to_string();
+                                    this.controller.update(cx, |c, _| c.settings_edit(idx, v));
+                                    cx.notify();
+                                })),
+                        ),
+                );
+                continue;
+            }
+
+            let Some(input_entity) = view.setting_inputs.get(&row.key) else {
+                continue;
+            };
+            adv_section = adv_section.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(TEXT_PRIMARY))
+                                    .child(row.key.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(TEXT_MUTED))
+                                    .child(row.description.clone()),
+                            ),
+                    )
+                    .child(
+                        Input::new(input_entity)
+                            .small()
+                            .disabled(state.settings_busy),
+                    ),
+            );
+        }
+    }
+
+    env_card = env_card.child(adv_section);
 
     page = page.child(env_card);
 

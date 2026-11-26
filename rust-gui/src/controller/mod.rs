@@ -59,6 +59,14 @@ pub enum DesktopSignal {
     StatusUpdated(String),
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct ActiveRecordingMeta {
+    pub platform: String,
+    pub name: String,
+    pub started_at: Option<String>,
+    pub size_bytes: u64,
+}
+
 pub struct AppController {
     pub state: UiState,
     pub live_model: LiveModel,
@@ -99,7 +107,7 @@ pub struct AppController {
     pub(super) auto_start_watcher_triggered: bool,
     pub(super) seen_initial_live: bool,
     pub(super) last_watcher_running: Option<bool>,
-    pub(super) notified_recordings: HashSet<(String, String)>,
+    pub(super) active_recordings: HashMap<(String, String), ActiveRecordingMeta>,
     pub(super) notified_error_targets: HashSet<String>,
     pub(super) notified_critical_volumes: HashSet<String>,
 
@@ -174,7 +182,7 @@ impl AppController {
             auto_start_watcher_triggered: false,
             seen_initial_live: false,
             last_watcher_running: None,
-            notified_recordings: HashSet::new(),
+            active_recordings: HashMap::new(),
             notified_error_targets: HashSet::new(),
             notified_critical_volumes: HashSet::new(),
             pending_signals: Vec::new(),
@@ -317,6 +325,30 @@ impl AppController {
 
     pub fn dismiss_update_banner(&mut self) {
         self.state.update_dismissed = true;
+    }
+
+    pub fn refresh_active_page(&mut self) {
+        match self.state.active_page {
+            Page::Live => self.live_refresh(),
+            Page::Channels => self.reload_config(),
+            Page::Vod => self.vod_refresh(),
+            Page::Queue => self.queue_refresh(),
+            Page::History => self.refresh_history(),
+            Page::Settings => {
+                if self.state.settings_view == SettingsView::Manage {
+                    self.refresh_maintenance(false);
+                } else {
+                    self.refresh_requested();
+                }
+            }
+            Page::Diagnostics => {
+                if self.state.maintenance_section == MaintenanceSection::Logs {
+                    self.refresh_logs();
+                } else {
+                    self.refresh_maintenance(false);
+                }
+            }
+        }
     }
 
     pub fn has_initial_startup_decision(&self) -> bool {
