@@ -1,16 +1,16 @@
 //! LIVE watcher, storage diagnostics, transfer speed tracking, and alert handling.
 
-use super::{AppController, DesktopSignal, request_thumbnails_with};
+use super::{ActiveRecordingMeta, AppController, DesktopSignal, request_thumbnails_with};
 use crate::{
     core_worker::Request,
-    formatting::format_transfer_rate,
+    formatting::{format_bytes, format_elapsed_since, format_transfer_rate},
     live_adapter,
     live_model::LiveModel,
     state::{LiveChannelRow, StorageDisplayRow},
     storage_adapter,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 use stream_archive_server::{model::NativeWatcherStatus, storage_service::StorageSnapshot};
@@ -246,7 +246,7 @@ impl AppController {
                 .push(DesktopSignal::WatcherStateChanged(status.running));
         }
 
-        let mut current_recordings = HashSet::new();
+        let mut current_recordings = HashMap::new();
         let mut current_errors = HashSet::new();
         let mut new_recordings = Vec::new();
         let mut new_errors = Vec::new();
@@ -266,10 +266,18 @@ impl AppController {
                     .or_else(|| ch.started_at.clone())
                     .unwrap_or_default();
                 let key = (target.clone(), session_key);
-                if self.seen_initial_live && !self.notified_recordings.contains(&key) {
+                if self.seen_initial_live && !self.active_recordings.contains_key(&key) {
                     new_recordings.push((ch.platform.as_str().to_string(), display_name.clone()));
                 }
-                current_recordings.insert(key);
+                current_recordings.insert(
+                    key,
+                    ActiveRecordingMeta {
+                        platform: ch.platform.as_str().to_string(),
+                        name: display_name,
+                        started_at: ch.started_at.clone(),
+                        size_bytes: ch.size_bytes,
+                    },
+                );
             } else if matches!(
                 ch.status.as_str(),
                 "ERROR" | "AUTH" | "LOW_DISK" | "STALLED"
@@ -301,6 +309,69 @@ impl AppController {
                     warning: false,
                 });
             }
+
+            if self.state.notify_record_finish {
+                let mut finished_recordings: Vec<&ActiveRecordingMeta> = self
+                    .active_recordings
+                    .iter()
+                    .filter(|(key, _)| {
+                        !current_recordings.contains_key(*key) && !current_errors.contains(&key.0)
+                    })
+                    .map(|(_, meta)| meta)
+                    .collect();
+                finished_recordings.sort_by(|a, b| {
+                    a.platform
+                        .cmp(&b.platform)
+                        .then_with(|| a.name.cmp(&b.name))
+                });
+                if !finished_recordings.is_empty() {
+                    let body = if finished_recordings.len() == 1 {
+                        let meta = finished_recordings[0];
+                        let elapsed = meta
+                            .started_at
+                            .as_deref()
+                            .map(format_elapsed_since)
+                            .unwrap_or_default();
+                        let size = if meta.size_bytes > 0 {
+                            format_bytes(meta.size_bytes)
+                        } else {
+                            String::new()
+                        };
+                        match (!elapsed.is_empty(), !size.is_empty()) {
+                            (true, true) => format!(
+                                "[{}] {} 녹화 완료 ({elapsed} · {size})",
+                                meta.platform, meta.name
+                            ),
+                            (false, true) => {
+                                format!("[{}] {} 녹화 완료 ({size})", meta.platform, meta.name)
+                            }
+                            (true, false) => {
+                                format!("[{}] {} 녹화 완료 ({elapsed})", meta.platform, meta.name)
+                            }
+                            (false, false) => {
+                                format!(
+                                    "[{}] {} 방송 녹화가 완료되었습니다.",
+                                    meta.platform, meta.name
+                                )
+                            }
+                        }
+                    } else {
+                        let names = finished_recordings
+                            .iter()
+                            .take(3)
+                            .map(|meta| meta.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{}개 채널 녹화 완료: {names}", finished_recordings.len())
+                    };
+                    self.pending_signals.push(DesktopSignal::TrayAlert {
+                        title: "Stream Archive LIVE 녹화 완료".into(),
+                        body,
+                        warning: false,
+                    });
+                }
+            }
+
             if self.state.notify_warning && !new_errors.is_empty() {
                 let body = if new_errors.len() == 1 {
                     let (name, st) = &new_errors[0];
@@ -324,7 +395,7 @@ impl AppController {
             self.seen_initial_live = true;
         }
 
-        self.notified_recordings = current_recordings;
+        self.active_recordings = current_recordings;
         self.notified_error_targets = current_errors;
     }
 

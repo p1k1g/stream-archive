@@ -6,8 +6,17 @@ use anyhow::{Context, Result, bail};
 use reqwest::{Client, StatusCode, header::COOKIE};
 use serde_json::Value;
 
+const LIVE_STATUS_URL: &str =
+    "https://api.chzzk.naver.com/polling/v2/channels/{channel_id}/live-status";
 const LIVE_DETAIL_URL: &str =
     "https://api.chzzk.naver.com/service/v2/channels/{channel_id}/live-detail";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveStatusDecision {
+    Offline,
+    Open,
+    FallbackToDetail,
+}
 
 #[derive(Debug, Clone)]
 pub struct ChzzkBroadcast {
@@ -42,9 +51,59 @@ impl ChzzkLiveSession {
 
     pub async fn probe(&self, channel_id: &str) -> Result<ChzzkProbe> {
         let auth = ChzzkAuth::load()?;
-        let url = LIVE_DETAIL_URL.replace("{channel_id}", channel_id.trim());
-        let mut request = self.client.get(url);
-        if let Some(cookie) = auth.cookie_header() {
+        self.probe_with_templates(channel_id, &auth, LIVE_STATUS_URL, LIVE_DETAIL_URL)
+            .await
+    }
+
+    async fn probe_with_templates(
+        &self,
+        channel_id: &str,
+        auth: &ChzzkAuth,
+        status_url_template: &str,
+        detail_url_template: &str,
+    ) -> Result<ChzzkProbe> {
+        let trimmed_id = channel_id.trim();
+        let cookie = auth.cookie_header();
+
+        // Stage 1: query the lightweight polling/live-status endpoint first so offline
+        // channels do not repeatedly hit the heavier live-detail endpoint (which can
+        // return spurious HTTP 500 errors for offline/closed channels).
+        let status_url = status_url_template.replace("{channel_id}", trimmed_id);
+        let mut status_req = self.client.get(status_url);
+        if let Some(cookie) = cookie.as_deref() {
+            status_req = status_req.header(COOKIE, cookie);
+        }
+        if let Ok(status_resp) = status_req.send().await {
+            let http_status = status_resp.status();
+            if http_status == StatusCode::NOT_FOUND {
+                return Ok(ChzzkProbe::Offline);
+            }
+            if matches!(
+                http_status,
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) {
+                return auth_failure(auth);
+            }
+            if http_status.is_success()
+                && let Ok(value) = read_bounded_json::<Value>(
+                    status_resp,
+                    DEFAULT_API_BODY_LIMIT,
+                    "CHZZK live-status",
+                )
+                .await
+            {
+                match parse_live_status_content(&value) {
+                    LiveStatusDecision::Offline => return Ok(ChzzkProbe::Offline),
+                    LiveStatusDecision::Open | LiveStatusDecision::FallbackToDetail => {}
+                }
+            }
+        }
+
+        // Stage 2: fetch full live-detail metadata when live-status reports OPEN
+        // (or fallback if live-status returned 5xx / unexpected payload).
+        let detail_url = detail_url_template.replace("{channel_id}", trimmed_id);
+        let mut request = self.client.get(detail_url);
+        if let Some(cookie) = cookie.as_deref() {
             request = request.header(COOKIE, cookie);
         }
         let response = request.send().await?;
@@ -55,7 +114,7 @@ impl ChzzkLiveSession {
             response.status(),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
         ) {
-            return auth_failure(&auth);
+            return auth_failure(auth);
         }
         let value: Value = read_bounded_json(
             response
@@ -65,7 +124,7 @@ impl ChzzkLiveSession {
             "CHZZK live-detail",
         )
         .await?;
-        parse_probe_content(channel_id, &value, &auth)
+        parse_probe_content(channel_id, &value, auth)
     }
 
     pub fn recover_auth(&self) -> Result<String> {
@@ -79,6 +138,23 @@ impl ChzzkLiveSession {
     ) -> Result<ChzzkResolvedStream> {
         let auth = ChzzkAuth::load()?;
         resolve_stream_with_auth(channel_id, live, &auth)
+    }
+}
+
+fn parse_live_status_content(value: &Value) -> LiveStatusDecision {
+    if value.get("code").and_then(Value::as_i64) != Some(200) {
+        return LiveStatusDecision::FallbackToDetail;
+    }
+    let Some(content) = value.get("content") else {
+        return LiveStatusDecision::FallbackToDetail;
+    };
+    if content.is_null() {
+        return LiveStatusDecision::Offline;
+    }
+    match content.get("status").and_then(Value::as_str) {
+        Some("OPEN") => LiveStatusDecision::Open,
+        Some(_) => LiveStatusDecision::Offline,
+        None => LiveStatusDecision::FallbackToDetail,
     }
 }
 
@@ -371,5 +447,159 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("재생 정보를 받지 못했습니다"));
+    }
+
+    #[test]
+    fn parse_live_status_distinguishes_offline_open_and_fallback() {
+        assert_eq!(
+            parse_live_status_content(&serde_json::json!({
+                "code": 200,
+                "content": null
+            })),
+            LiveStatusDecision::Offline
+        );
+        assert_eq!(
+            parse_live_status_content(&serde_json::json!({
+                "code": 200,
+                "content": { "status": "CLOSE" }
+            })),
+            LiveStatusDecision::Offline
+        );
+        assert_eq!(
+            parse_live_status_content(&serde_json::json!({
+                "code": 200,
+                "content": { "status": "OPEN" }
+            })),
+            LiveStatusDecision::Open
+        );
+        assert_eq!(
+            parse_live_status_content(&serde_json::json!({
+                "code": 500,
+                "message": "internal"
+            })),
+            LiveStatusDecision::FallbackToDetail
+        );
+        assert_eq!(
+            parse_live_status_content(&serde_json::json!({
+                "code": 200,
+                "content": {}
+            })),
+            LiveStatusDecision::FallbackToDetail
+        );
+    }
+
+    async fn spawn_mock_chzzk_server(
+        status_code: u16,
+        status_body: &'static str,
+        detail_code: u16,
+        detail_body: &'static str,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let detail_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hits_clone = detail_hits.clone();
+        let handle = tokio::spawn(async move {
+            for _ in 0..4 {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut req_bytes = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !req_bytes.windows(4).any(|w| w == b"\r\n\r\n") && req_bytes.len() < 8192 {
+                    let n = socket.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    req_bytes.extend_from_slice(&chunk[..n]);
+                }
+                let req = String::from_utf8_lossy(&req_bytes);
+                let first_line = req.lines().next().unwrap_or("");
+                let (code, body) = if first_line.contains("/live-detail") {
+                    hits_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    (detail_code, detail_body)
+                } else {
+                    (status_code, status_body)
+                };
+                let resp = format!(
+                    "HTTP/1.1 {code} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (format!("http://{addr}"), detail_hits, handle)
+    }
+
+    #[tokio::test]
+    async fn two_stage_probe_skips_live_detail_when_live_status_is_closed() {
+        let (base, detail_hits, handle) = spawn_mock_chzzk_server(
+            200,
+            r#"{"code":200,"content":{"status":"CLOSE"}}"#,
+            500,
+            r#"{"code":500}"#,
+        )
+        .await;
+        let session = ChzzkLiveSession::new(Client::builder().no_proxy().build().unwrap());
+        let probe = session
+            .probe_with_templates(
+                CHANNEL,
+                &ChzzkAuth::from_plain("", ""),
+                &format!("{base}/polling/v2/channels/{{channel_id}}/live-status"),
+                &format!("{base}/service/v2/channels/{{channel_id}}/live-detail"),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(probe, ChzzkProbe::Offline));
+        assert_eq!(detail_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn two_stage_probe_fetches_detail_when_open_and_falls_back_on_status_500() {
+        let detail_json = r#"{"code":200,"content":{"status":"OPEN","liveId":456,"liveTitle":"방송 중","adult":false,"livePlaybackJson":"{}","channel":{"channelName":"테스트"}}}"#;
+        let (base, detail_hits, handle) = spawn_mock_chzzk_server(
+            200,
+            r#"{"code":200,"content":{"status":"OPEN"}}"#,
+            200,
+            detail_json,
+        )
+        .await;
+        let session = ChzzkLiveSession::new(Client::builder().no_proxy().build().unwrap());
+        let probe = session
+            .probe_with_templates(
+                CHANNEL,
+                &ChzzkAuth::from_plain("", ""),
+                &format!("{base}/polling/v2/channels/{{channel_id}}/live-status"),
+                &format!("{base}/service/v2/channels/{{channel_id}}/live-detail"),
+            )
+            .await
+            .unwrap();
+        let ChzzkProbe::Live(live) = probe else {
+            panic!("expected live");
+        };
+        assert_eq!(live.live_id, "456");
+        assert_eq!(detail_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        handle.abort();
+
+        let (base2, detail_hits2, handle2) =
+            spawn_mock_chzzk_server(500, r#"{"code":500}"#, 200, detail_json).await;
+        let probe2 = session
+            .probe_with_templates(
+                CHANNEL,
+                &ChzzkAuth::from_plain("", ""),
+                &format!("{base2}/polling/v2/channels/{{channel_id}}/live-status"),
+                &format!("{base2}/service/v2/channels/{{channel_id}}/live-detail"),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(probe2, ChzzkProbe::Live(_)));
+        assert_eq!(detail_hits2.load(std::sync::atomic::Ordering::SeqCst), 1);
+        handle2.abort();
     }
 }

@@ -106,6 +106,14 @@ impl AppController {
         let _ = self.sender.send(Request::VodCancel);
     }
 
+    pub fn vod_refresh(&mut self) {
+        if self.state.vod_busy {
+            return;
+        }
+        self.state.vod_busy = true;
+        let _ = self.sender.send(Request::VodStatus { poll: false });
+    }
+
     // ---- Queue actions ----
 
     pub fn queue_refresh(&mut self) {
@@ -122,6 +130,24 @@ impl AppController {
         }
         self.state.queue_busy = true;
         let _ = self.sender.send(Request::QueueAction { id, action });
+    }
+
+    pub fn queue_clear_completed(&mut self) {
+        if self.state.queue_busy {
+            return;
+        }
+        self.state.queue_busy = true;
+        self.state.queue_message = "완료·취소 항목을 정리하는 중...".into();
+        let _ = self.sender.send(Request::QueueClearCompleted);
+    }
+
+    pub fn queue_retry_failed(&mut self) {
+        if self.state.queue_busy {
+            return;
+        }
+        self.state.queue_busy = true;
+        self.state.queue_message = "실패·중단 항목을 재시도 대기열에 등록하는 중...".into();
+        let _ = self.sender.send(Request::QueueRetryFailed);
     }
 
     pub fn queue_toggle_expand(&mut self, id: &str) {

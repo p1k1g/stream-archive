@@ -35,6 +35,7 @@ pub struct DiagnosticRowView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogRowView {
     pub text: String,
+    pub level: String,
 }
 
 pub fn backup_rows(snapshot: &BackupSnapshot) -> Vec<BackupRowView> {
@@ -131,14 +132,53 @@ fn localized_detail(item: &DiagnosticItem) -> String {
     detail
 }
 
+pub fn classify_log_level(line: &str) -> &'static str {
+    let upper = line.to_ascii_uppercase();
+    if upper.contains(":ERR]")
+        || upper.contains("[ERR]")
+        || upper.contains("[ERROR]")
+        || upper.contains("[PANIC]")
+        || upper.contains("[FATAL]")
+        || upper.contains("[CLI][ERROR]")
+    {
+        "error"
+    } else if upper.contains(":WARN]")
+        || upper.contains("[WARN]")
+        || upper.contains("[WARNING]")
+        || upper.contains("[CLI][WARNING]")
+    {
+        "warn"
+    } else {
+        "info"
+    }
+}
+
+pub fn log_matches_filter(text: &str, level: &str, filter_level: &str, query: &str) -> bool {
+    let level_ok = match filter_level {
+        "WARN_ERR" => matches!(level, "warn" | "error"),
+        "ERR" => level == "error",
+        _ => true,
+    };
+    if !level_ok {
+        return false;
+    }
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return true;
+    }
+    text.to_lowercase().contains(&needle)
+}
+
 pub fn log_rows(lines: Vec<String>, max_lines: usize) -> Vec<LogRowView> {
     let max_lines = max_lines.max(1);
     let start = lines.len().saturating_sub(max_lines);
     lines
         .into_iter()
         .skip(start)
-        .map(|line| LogRowView {
-            text: line.replace(['\r', '\n'], " "),
+        .map(|line| {
+            let text = line.replace(['\r', '\n'], " ");
+            let level = classify_log_level(&text).into();
+            LogRowView { text, level }
         })
         .collect()
 }
@@ -291,5 +331,52 @@ mod tests {
         let row = diagnostic_row(&item);
         assert_eq!(row.name, item.name);
         assert_eq!(row.detail, item.detail);
+    }
+
+    #[test]
+    fn log_level_classification_and_filtering_cover_warn_err_and_keyword() {
+        assert_eq!(classify_log_level("[LIVE:CHZZK] started"), "info");
+        assert_eq!(classify_log_level("[VOD:CHZZK:WARN] retry 1/3"), "warn");
+        assert_eq!(classify_log_level("[LIVE:SOOP:ERR] failed"), "error");
+        assert_eq!(classify_log_level("[ERROR] disk full"), "error");
+        assert_eq!(classify_log_level("[WARNING] low space"), "warn");
+
+        let rows = log_rows(
+            vec![
+                "[LIVE] info line".into(),
+                "[VOD:WARN] retry CHZZK".into(),
+                "[LIVE:ERR] timeout SOOP".into(),
+            ],
+            10,
+        );
+        assert_eq!(rows[0].level, "info");
+        assert_eq!(rows[1].level, "warn");
+        assert_eq!(rows[2].level, "error");
+
+        assert!(log_matches_filter(&rows[0].text, &rows[0].level, "ALL", ""));
+        assert!(!log_matches_filter(
+            &rows[0].text,
+            &rows[0].level,
+            "WARN_ERR",
+            ""
+        ));
+        assert!(log_matches_filter(
+            &rows[1].text,
+            &rows[1].level,
+            "WARN_ERR",
+            "chzzk"
+        ));
+        assert!(!log_matches_filter(
+            &rows[1].text,
+            &rows[1].level,
+            "ERR",
+            ""
+        ));
+        assert!(log_matches_filter(
+            &rows[2].text,
+            &rows[2].level,
+            "ERR",
+            "SOOP"
+        ));
     }
 }

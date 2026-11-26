@@ -301,6 +301,9 @@ pub fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a st
         "GUI_NOTIFY_RECORD_START" => {
             "새 LIVE 방송 녹화가 시작될 때 Windows 트레이 알림을 표시합니다. 변경사항 저장 후 적용됩니다."
         }
+        "GUI_NOTIFY_RECORD_FINISH" => {
+            "LIVE 방송 녹화가 완료되었을 때 총 녹화 시간·용량과 함께 Windows 트레이 알림을 표시합니다."
+        }
         "GUI_NOTIFY_WARNING" => {
             "저장 공간 부족(CRITICAL) 또는 채널 오류·인증 필요 상태 전환 시 Windows 트레이 경고 알림을 표시합니다."
         }
@@ -309,6 +312,18 @@ pub fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a st
         }
         "GUI_START_MINIMIZED_TRAY" => {
             "앱 실행 시 메인 창을 열지 않고 시스템 트레이 아이콘으로 바로 시작합니다. 저장 후 다음 실행부터 적용됩니다."
+        }
+        "RECORD_STALL_TIMEOUT" => {
+            "녹화 파일 크기가 증가하지 않을 때 정체로 판정하고 재연결하는 시간(초)입니다. 허용 범위: 10~86400."
+        }
+        "RECORD_RETRY_INTERVAL" => {
+            "녹화 실패·종료 후 재시도까지 대기하는 간격(초)입니다. 허용 범위: 1~3600."
+        }
+        "LOG_ENABLED" => {
+            "일별 런타임 로그 파일(.\\log\\runtime-YYYY-MM-DD.log) 기록 여부입니다. 저장 후 다음 실행부터 적용됩니다."
+        }
+        "LOG_RETENTION_DAYS" => {
+            "일별 런타임 로그 파일 보관 일수입니다(0은 무기한 보관). 허용 범위: 0~36500."
         }
         _ => fallback,
     }

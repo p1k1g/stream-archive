@@ -230,6 +230,7 @@ pub struct MaintenanceDiagnosticRow {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MaintenanceLogRow {
     pub text: String,
+    pub level: String,
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +259,7 @@ pub struct UiState {
     pub desktop_recovery_message: String,
     pub download_notifications_enabled: bool,
     pub notify_record_start: bool,
+    pub notify_record_finish: bool,
     pub notify_warning: bool,
     pub auto_start_watcher: bool,
     pub start_minimized_tray: bool,
@@ -279,6 +281,7 @@ pub struct UiState {
     pub settings_busy: bool,
     pub settings_loaded: bool,
     pub settings_dirty: bool,
+    pub settings_advanced_open: bool,
     pub settings_message: String,
 
     pub channels_rows: Vec<ChannelConfigRow>,
@@ -406,6 +409,8 @@ pub struct UiState {
     pub maintenance_diagnostic_rows: Vec<MaintenanceDiagnosticRow>,
     pub log_rows: Vec<MaintenanceLogRow>,
     pub log_auto_refresh: bool,
+    pub log_level_filter: String,
+    pub log_search: String,
 }
 
 impl Default for UiState {
@@ -434,6 +439,7 @@ impl Default for UiState {
             desktop_recovery_message: String::new(),
             download_notifications_enabled: true,
             notify_record_start: false,
+            notify_record_finish: true,
             notify_warning: true,
             auto_start_watcher: false,
             start_minimized_tray: false,
@@ -453,6 +459,7 @@ impl Default for UiState {
             settings_busy: true,
             settings_loaded: false,
             settings_dirty: false,
+            settings_advanced_open: false,
             settings_message: "설정을 불러오는 중...".into(),
 
             channels_rows: Vec::new(),
@@ -575,6 +582,8 @@ impl Default for UiState {
             maintenance_diagnostic_rows: Vec::new(),
             log_rows: Vec::new(),
             log_auto_refresh: false,
+            log_level_filter: "ALL".into(),
+            log_search: String::new(),
         }
     }
 }

@@ -351,6 +351,25 @@ impl AppController {
         self.state.log_auto_refresh = !self.state.log_auto_refresh;
     }
 
+    pub fn set_log_level_filter(&mut self, filter: &str) {
+        self.state.log_level_filter = match filter {
+            "WARN_ERR" | "ERR" => filter.to_string(),
+            _ => "ALL".to_string(),
+        };
+    }
+
+    pub fn set_log_search(&mut self, query: String) {
+        self.state.log_search = query;
+    }
+
+    pub fn set_maintenance_message(&mut self, message: String) {
+        self.state.maintenance_message = message;
+    }
+
+    pub fn toggle_settings_advanced(&mut self) {
+        self.state.settings_advanced_open = !self.state.settings_advanced_open;
+    }
+
     pub fn open_logs_folder(&mut self) {
         let _ = self.sender.send(Request::OpenLogsFolder);
     }
@@ -427,7 +446,10 @@ impl AppController {
     pub(super) fn render_logs(&mut self, lines: Vec<String>) {
         self.state.log_rows = maintenance_adapter::log_rows(lines, 200)
             .into_iter()
-            .map(|row| MaintenanceLogRow { text: row.text })
+            .map(|row| MaintenanceLogRow {
+                text: row.text,
+                level: row.level,
+            })
             .collect();
     }
 

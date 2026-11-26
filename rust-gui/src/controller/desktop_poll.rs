@@ -141,7 +141,9 @@ impl AppController {
 
             // While hidden in tray (or on another tab), still watch LIVE/storage transitions
             // at a low cadence when LIVE/warning tray alerts are enabled.
-            let tray_alert_enabled = self.state.notify_record_start || self.state.notify_warning;
+            let tray_alert_enabled = self.state.notify_record_start
+                || self.state.notify_record_finish
+                || self.state.notify_warning;
             if tray_alert_enabled
                 && self.state.live_running
                 && now.duration_since(self.last_tray_alert_poll) >= Duration::from_secs(5)

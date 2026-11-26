@@ -75,6 +75,11 @@ const FIELDS: &[(&str, SettingKind, &str)] = &[
         "Windows LIVE 녹화 시작 알림: Y / N; 변경사항 저장 후 적용",
     ),
     (
+        "GUI_NOTIFY_RECORD_FINISH",
+        SettingKind::Text,
+        "Windows LIVE 녹화 완료 알림: Y / N; 변경사항 저장 후 적용",
+    ),
+    (
         "GUI_NOTIFY_WARNING",
         SettingKind::Text,
         "Windows 디스크 부족·채널 오류 경고 알림: Y / N; 변경사항 저장 후 적용",
@@ -98,6 +103,26 @@ const FIELDS: &[(&str, SettingKind, &str)] = &[
         "FILE_NAME_PATTERN",
         SettingKind::Text,
         "LIVE recording filename pattern: LEGACY, TIME_TITLE, BJ_TITLE or TITLE_NUMBER",
+    ),
+    (
+        "RECORD_STALL_TIMEOUT",
+        SettingKind::Text,
+        "LIVE recording stall timeout in seconds (10–86400)",
+    ),
+    (
+        "RECORD_RETRY_INTERVAL",
+        SettingKind::Text,
+        "LIVE recording retry interval in seconds (1–3600)",
+    ),
+    (
+        "LOG_ENABLED",
+        SettingKind::Text,
+        "Persist daily runtime log files: Y / N; applies on next restart",
+    ),
+    (
+        "LOG_RETENTION_DAYS",
+        SettingKind::Text,
+        "Runtime log file retention in days (0–36500, 0 keeps forever)",
     ),
 ];
 
@@ -211,9 +236,11 @@ mod tests {
     fn live_and_warning_notifications_accept_only_y_or_n() {
         for key in [
             "GUI_NOTIFY_RECORD_START",
+            "GUI_NOTIFY_RECORD_FINISH",
             "GUI_NOTIFY_WARNING",
             "GUI_AUTO_START_WATCHER",
             "GUI_START_MINIMIZED_TRAY",
+            "LOG_ENABLED",
         ] {
             for value in ["Y", "N", "y", "n"] {
                 validate_updates(&update(key, value)).unwrap();
@@ -222,6 +249,20 @@ mod tests {
                 assert!(validate_updates(&update(key, value)).is_err());
             }
         }
+    }
+
+    #[test]
+    fn advanced_numeric_settings_validate_bounds() {
+        validate_updates(&update("RECORD_STALL_TIMEOUT", "90")).unwrap();
+        validate_updates(&update("RECORD_STALL_TIMEOUT", "10")).unwrap();
+        assert!(validate_updates(&update("RECORD_STALL_TIMEOUT", "9")).is_err());
+
+        validate_updates(&update("RECORD_RETRY_INTERVAL", "5")).unwrap();
+        assert!(validate_updates(&update("RECORD_RETRY_INTERVAL", "0")).is_err());
+
+        validate_updates(&update("LOG_RETENTION_DAYS", "0")).unwrap();
+        validate_updates(&update("LOG_RETENTION_DAYS", "30")).unwrap();
+        assert!(validate_updates(&update("LOG_RETENTION_DAYS", "-1")).is_err());
     }
 
     #[test]

@@ -103,6 +103,12 @@ impl AppController {
                         self.state.notify_record_start =
                             notify_start.value.trim().eq_ignore_ascii_case("Y");
                     }
+                    if let Some(notify_finish) =
+                        fields.iter().find(|f| f.key == "GUI_NOTIFY_RECORD_FINISH")
+                    {
+                        self.state.notify_record_finish =
+                            !notify_finish.value.trim().eq_ignore_ascii_case("N");
+                    }
                     if let Some(notify_warn) = fields.iter().find(|f| f.key == "GUI_NOTIFY_WARNING")
                     {
                         self.state.notify_warning =
@@ -413,6 +419,7 @@ impl AppController {
                     match self.state.active_page {
                         Page::History => self.state.history_message = message,
                         Page::Vod => self.state.vod_message = message,
+                        Page::Queue => self.state.queue_message = message,
                         _ => self.state.live_message = message,
                     }
                 }

@@ -93,6 +93,8 @@ pub enum Request {
         id: String,
         action: String,
     },
+    QueueClearCompleted,
+    QueueRetryFailed,
     HistoryLoad {
         filter: HistoryFilter,
         view: String,

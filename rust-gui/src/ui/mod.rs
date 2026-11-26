@@ -37,6 +37,7 @@ pub struct ChannelInputSet {
 
 pub struct MainView {
     pub controller: Entity<AppController>,
+    focus_handle: FocusHandle,
     brand_icon: Option<Arc<RenderImage>>,
     soop_icon: Option<Arc<RenderImage>>,
     chzzk_icon: Option<Arc<RenderImage>>,
@@ -46,6 +47,7 @@ pub struct MainView {
     pub history_search_input: Entity<InputState>,
     pub live_search_input: Entity<InputState>,
     pub channels_search_input: Entity<InputState>,
+    pub log_search_input: Entity<InputState>,
     pub channel_inputs: Vec<ChannelInputSet>,
     pub setting_inputs: BTreeMap<String, Entity<InputState>>,
 
@@ -83,6 +85,7 @@ impl MainView {
         cx: &mut Context<Self>,
     ) -> Self {
         let initial = controller.read(cx).state.clone();
+        let focus_handle = cx.focus_handle();
         let brand_icon = png_bytes_to_render_image(BRAND_ICON_PNG);
         let soop_icon = png_bytes_to_render_image(PLATFORM_SOOP_PNG);
         let chzzk_icon = png_bytes_to_render_image(PLATFORM_CHZZK_PNG);
@@ -111,6 +114,11 @@ impl MainView {
             InputState::new(window, cx)
                 .placeholder("채널 ID · 표시 이름 · 폴더 검색")
                 .default_value(initial.channels_search.clone())
+        });
+        let log_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("로그 키워드 검색 (예: CHZZK, SOOP, WARN, ERR)")
+                .default_value(initial.log_search.clone())
         });
 
         let prov_soop_user = cx.new(|cx| {
@@ -252,6 +260,17 @@ impl MainView {
             },
         ));
         subscriptions.push(cx.subscribe_in(
+            &log_search_input,
+            window,
+            |this, state, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let val = state.read(cx).value().to_string();
+                    this.controller.update(cx, |c, _| c.set_log_search(val));
+                    cx.notify();
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
             &live_password_input,
             window,
             |this, state, event: &InputEvent, _, cx| {
@@ -294,6 +313,7 @@ impl MainView {
 
         let mut view = Self {
             controller,
+            focus_handle: focus_handle.clone(),
             brand_icon,
             soop_icon,
             chzzk_icon,
@@ -302,6 +322,7 @@ impl MainView {
             history_search_input,
             live_search_input,
             channels_search_input,
+            log_search_input,
             channel_inputs: Vec::new(),
             setting_inputs: BTreeMap::new(),
             prov_soop_user,
@@ -327,6 +348,7 @@ impl MainView {
             setting_subscriptions: Vec::new(),
         };
         view.sync_inputs_from_controller(window, cx);
+        window.focus(&focus_handle, cx);
         view
     }
 
@@ -351,10 +373,12 @@ impl MainView {
                     "STREAM_ARCHIVE_CLOSE_ACTION"
                         | "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"
                         | "GUI_NOTIFY_RECORD_START"
+                        | "GUI_NOTIFY_RECORD_FINISH"
                         | "GUI_NOTIFY_WARNING"
                         | "GUI_AUTO_START_WATCHER"
                         | "GUI_START_MINIMIZED_TRAY"
                         | "FILE_NAME_PATTERN"
+                        | "LOG_ENABLED"
                 ) {
                     continue;
                 }
@@ -776,13 +800,20 @@ impl MainView {
                         state.queue_queued_count
                     )),
             )
-            .child(if state.runtime_ready {
-                "런타임 준비됨 · Canonical SQLite"
-            } else if state.startup_failed {
-                "런타임 초기화 오류"
-            } else {
-                "런타임 초기화 중..."
-            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child("Ctrl+1~7 탭 · F5/Ctrl+R 새로고침 · Ctrl+F 검색")
+                    .child(if state.runtime_ready {
+                        "런타임 준비됨 · Canonical SQLite"
+                    } else if state.startup_failed {
+                        "런타임 초기화 오류"
+                    } else {
+                        "런타임 초기화 중..."
+                    }),
+            )
     }
 
     fn render_update_banner(&self, latest_version: &str, cx: &mut Context<Self>) -> Div {
@@ -1201,18 +1232,22 @@ impl Render for MainView {
         let mut root = div()
             .relative()
             .size_full()
+            .track_focus(&self.focus_handle)
             .bg(rgb(BG_CANVAS))
             .text_color(rgb(TEXT_PRIMARY))
             .flex()
             .flex_col()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" {
-                    let s = this.controller.read(cx).state.clone();
-                    if s.exit_confirm_visible {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let s = this.controller.read(cx).state.clone();
+                let key = event.keystroke.key.as_str();
+                let mods = event.keystroke.modifiers;
+
+                if key == "escape" {
+                    if s.exit_confirm_visible && !s.exit_shutting_down {
                         this.controller
                             .update(cx, |c, _| c.complete_exit_confirmation(false));
                         cx.notify();
-                    } else if s.close_dialog_visible {
+                    } else if s.close_dialog_visible && !s.close_choice_busy {
                         this.controller.update(cx, |c, _| c.cancel_close_dialog());
                         cx.notify();
                     } else if s.password_prompt_target.is_some() {
@@ -1222,7 +1257,74 @@ impl Render for MainView {
                     } else if s.restore_confirm_file.is_some() {
                         this.controller.update(cx, |c, _| c.cancel_restore());
                         cx.notify();
+                    } else if s.history_calendar_open {
+                        this.controller
+                            .update(cx, |c, _| c.state.history_calendar_open = false);
+                        cx.notify();
                     }
+                    return;
+                }
+
+                let modal_open = s.exit_confirm_visible
+                    || s.exit_shutting_down
+                    || s.close_dialog_visible
+                    || s.password_prompt_target.is_some()
+                    || s.restore_confirm_file.is_some();
+                if modal_open {
+                    return;
+                }
+
+                if mods.control && !mods.alt && !mods.shift {
+                    let target_page = match key {
+                        "1" => Some(Page::Live),
+                        "2" => Some(Page::Channels),
+                        "3" => Some(Page::Vod),
+                        "4" => Some(Page::Queue),
+                        "5" => Some(Page::History),
+                        "6" => Some(Page::Settings),
+                        "7" => Some(Page::Diagnostics),
+                        _ => None,
+                    };
+                    if let Some(page) = target_page {
+                        this.controller.update(cx, |c, _| c.select_page(page));
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
+                    if key.eq_ignore_ascii_case("r") {
+                        this.controller.update(cx, |c, _| c.refresh_active_page());
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
+                    if key.eq_ignore_ascii_case("f") {
+                        let focus_target = match s.active_page {
+                            Page::Live => Some(&this.live_search_input),
+                            Page::Channels => Some(&this.channels_search_input),
+                            Page::Vod => Some(&this.vod_url_input),
+                            Page::History => Some(&this.history_search_input),
+                            Page::Diagnostics
+                                if s.maintenance_section
+                                    == crate::state::MaintenanceSection::Logs =>
+                            {
+                                Some(&this.log_search_input)
+                            }
+                            _ => None,
+                        };
+                        if let Some(input) = focus_target {
+                            let handle = input.read(cx).focus_handle(cx);
+                            window.focus(&handle, cx);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                        return;
+                    }
+                }
+
+                if key.eq_ignore_ascii_case("f5") && !mods.control && !mods.alt && !mods.shift {
+                    this.controller.update(cx, |c, _| c.refresh_active_page());
+                    cx.stop_propagation();
+                    cx.notify();
                 }
             }))
             .child(self.render_top_chrome(cx))

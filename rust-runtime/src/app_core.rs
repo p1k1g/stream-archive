@@ -944,6 +944,18 @@ impl StreamArchiveCore {
         self.queue.snapshot().await
     }
 
+    pub async fn clear_completed_queue_items(&self) -> Result<(usize, VodQueueSnapshot)> {
+        let _config_guard = self.config_write_lock.lock().await;
+        let removed = self.queue.clear_completed().await?;
+        Ok((removed, self.queue.snapshot().await?))
+    }
+
+    pub async fn retry_failed_queue_items(&self) -> Result<(usize, VodQueueSnapshot)> {
+        let _config_guard = self.config_write_lock.lock().await;
+        let retried = self.queue.retry_failed().await?;
+        Ok((retried, self.queue.snapshot().await?))
+    }
+
     pub fn history(&self, filter: &HistoryFilter) -> Result<HistoryResponse> {
         load_history(self.store.path(), filter)
     }
