@@ -656,6 +656,86 @@ fn provider_clear_removes_scoped_native_entry_and_retains_cleanup_on_helper_fail
 }
 
 #[test]
+fn cli_configures_and_clears_webhook_settings_and_secrets_without_leaking_values() {
+    let layout = Layout::new();
+    layout.init();
+
+    assert_success(
+        "set TELEGRAM_CHAT_ID",
+        &layout.cli(&["providers", "set", "TELEGRAM_CHAT_ID", "-1001234567890"]),
+    );
+
+    let conn = Connection::open(layout.data.join("stream-archive.db")).unwrap();
+    for (key, value) in [
+        ("DISCORD_WEBHOOK_URL", "legacy-discord-fixture"),
+        ("TELEGRAM_BOT_TOKEN", "legacy-telegram-fixture"),
+    ] {
+        conn.execute(
+            "INSERT INTO settings(key,value,source,updated_at) VALUES(?1,?2,'test','now') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        )
+        .unwrap();
+    }
+
+    let text_status = layout.cli(&["providers", "status"]);
+    assert_success("webhook text status", &text_status);
+    let text = String::from_utf8_lossy(&text_status.stdout);
+    assert!(text.contains("Discord webhook URL : yes"));
+    assert!(text.contains("Telegram bot token  : yes"));
+    assert!(text.contains("Telegram chat ID    : yes"));
+    assert!(!text.contains("legacy-discord-fixture"));
+    assert!(!text.contains("legacy-telegram-fixture"));
+    assert!(!text.contains("-1001234567890"));
+
+    let providers = json_output(
+        "webhook json status",
+        layout.cli(&["providers", "status", "--json"]),
+    );
+    assert_eq!(providers["WEBHOOK"]["discord_webhook_configured"], true);
+    assert_eq!(providers["WEBHOOK"]["telegram_bot_token_configured"], true);
+    assert_eq!(providers["WEBHOOK"]["telegram_chat_id_configured"], true);
+
+    assert_success(
+        "clear DISCORD_WEBHOOK_URL",
+        &layout.cli(&["providers", "clear-secret", "DISCORD_WEBHOOK_URL"]),
+    );
+    let providers_after_discord = json_output(
+        "webhook json status after discord clear",
+        layout.cli(&["providers", "status", "--json"]),
+    );
+    assert_eq!(
+        providers_after_discord["WEBHOOK"]["discord_webhook_configured"],
+        false
+    );
+    assert_eq!(
+        providers_after_discord["WEBHOOK"]["telegram_bot_token_configured"],
+        true
+    );
+
+    assert_success(
+        "clear TELEGRAM_BOT_TOKEN",
+        &layout.cli(&["providers", "clear-secret", "TELEGRAM_BOT_TOKEN"]),
+    );
+    let providers_after_telegram = json_output(
+        "webhook json status after telegram clear",
+        layout.cli(&["providers", "status", "--json"]),
+    );
+    assert_eq!(
+        providers_after_telegram["WEBHOOK"]["telegram_bot_token_configured"],
+        false
+    );
+
+    let argv_reject = layout.cli(&[
+        "providers",
+        "secret",
+        "DISCORD_WEBHOOK_URL",
+        "argv-webhook-secret",
+    ]);
+    assert!(!argv_reject.status.success());
+    assert!(String::from_utf8_lossy(&argv_reject.stderr).contains("--stdin"));
+}
+
+#[test]
 fn provider_secret_cli_rejects_secret_as_argv_value() {
     let layout = Layout::new();
     layout.init();

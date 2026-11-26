@@ -1,5 +1,8 @@
 use crate::{
-    app_core::StreamArchiveCore,
+    app_core::{
+        NATIVE_PROVIDER_SECRET_KEYS as PROVIDER_SECRET_KEYS,
+        NATIVE_PROVIDER_SETTING_KEYS as PROVIDER_SETTING_KEYS, StreamArchiveCore,
+    },
     backend::resolve_backend_dir,
     headless::{run_headless, wait_for_shutdown_signal},
     history_service::HistoryFilter,
@@ -19,15 +22,6 @@ use std::{
     io::{self, Read},
     time::Duration,
 };
-
-const PROVIDER_SETTING_KEYS: &[&str] = &["SOOP_USERNAME", "CLOUDFLARE_WORKER_URL"];
-const PROVIDER_SECRET_KEYS: &[&str] = &[
-    "SOOP_PASSWORD",
-    "CLOUDFLARE_API_KEY",
-    "CHZZK_NID_AUT",
-    "CHZZK_NID_SES",
-    "KICK_SESSION_TOKEN",
-];
 
 pub async fn run_management(command: &str, args: &[String]) -> Result<()> {
     match command {
@@ -231,8 +225,10 @@ async fn command_providers(args: &[String]) -> Result<()> {
                 "CHZZK_NID_AUT" | "CHZZK_NID_SES" => {
                     core.clear_provider_credentials("CHZZK").await?
                 }
+                "DISCORD_WEBHOOK_URL" => core.clear_provider_credentials("DISCORD_WEBHOOK").await?,
+                "TELEGRAM_BOT_TOKEN" => core.clear_provider_credentials("TELEGRAM_WEBHOOK").await?,
                 _ => bail!(
-                    "clear-secret supports SOOP_PASSWORD, CHZZK_NID_AUT, CHZZK_NID_SES and KICK_SESSION_TOKEN"
+                    "clear-secret supports SOOP_PASSWORD, CHZZK_NID_AUT, CHZZK_NID_SES, KICK_SESSION_TOKEN, DISCORD_WEBHOOK_URL and TELEGRAM_BOT_TOKEN"
                 ),
             }
             println!("cleared provider secret: {key}");
@@ -240,8 +236,11 @@ async fn command_providers(args: &[String]) -> Result<()> {
         [action] if action == "test-soop" => {
             println!("{}", core.test_soop_auth().await?);
         }
+        [action] if action == "test-webhook" => {
+            println!("{}", core.test_webhook().await?);
+        }
         _ => bail!(
-            "usage: stream-archive-cli providers status [--json] | providers set <KEY> <VALUE> | providers secret <KEY> --stdin | providers clear-secret <KEY> | providers test-soop"
+            "usage: stream-archive-cli providers status [--json] | providers set <KEY> <VALUE> | providers secret <KEY> --stdin | providers clear-secret <KEY> | providers test-soop | providers test-webhook"
         ),
     }
     core.shutdown().await;
@@ -273,6 +272,11 @@ fn print_provider_status(core: &StreamArchiveCore, json_mode: bool) -> Result<()
         "CHZZK": {
             "nid_aut_configured": configured_secret(&secrets, "CHZZK_NID_AUT"),
             "nid_ses_configured": configured_secret(&secrets, "CHZZK_NID_SES"),
+        },
+        "WEBHOOK": {
+            "discord_webhook_configured": configured_secret(&secrets, "DISCORD_WEBHOOK_URL"),
+            "telegram_bot_token_configured": configured_secret(&secrets, "TELEGRAM_BOT_TOKEN"),
+            "telegram_chat_id_configured": configured_setting(&settings, "TELEGRAM_CHAT_ID"),
         }
     });
     if json_mode {
@@ -307,6 +311,18 @@ fn print_provider_status(core: &StreamArchiveCore, json_mode: bool) -> Result<()
         println!(
             "CHZZK NID_SES       : {}",
             yes_no(configured_secret(&secrets, "CHZZK_NID_SES"))
+        );
+        println!(
+            "Discord webhook URL : {}",
+            yes_no(configured_secret(&secrets, "DISCORD_WEBHOOK_URL"))
+        );
+        println!(
+            "Telegram bot token  : {}",
+            yes_no(configured_secret(&secrets, "TELEGRAM_BOT_TOKEN"))
+        );
+        println!(
+            "Telegram chat ID    : {}",
+            yes_no(configured_setting(&settings, "TELEGRAM_CHAT_ID"))
         );
     }
     Ok(())
@@ -1344,8 +1360,11 @@ mod tests {
 
     #[test]
     fn provider_secret_keys_are_explicit_and_values_never_part_of_status() {
+        assert!(PROVIDER_SETTING_KEYS.contains(&"TELEGRAM_CHAT_ID"));
         assert!(validate_provider_secret_key("SOOP_PASSWORD").is_ok());
         assert!(validate_provider_secret_key("CHZZK_NID_AUT").is_ok());
+        assert!(validate_provider_secret_key("DISCORD_WEBHOOK_URL").is_ok());
+        assert!(validate_provider_secret_key("TELEGRAM_BOT_TOKEN").is_ok());
         assert!(validate_provider_secret_key("NOT_A_SECRET").is_err());
 
         let settings = BTreeMap::from([
@@ -1354,15 +1373,24 @@ mod tests {
                 "CLOUDFLARE_WORKER_URL".into(),
                 "https://worker.example".into(),
             ),
+            ("TELEGRAM_CHAT_ID".into(), "-100999888777".into()),
         ]);
-        let secrets = BTreeMap::from([("SOOP_PASSWORD".into(), true)]);
+        let secrets = BTreeMap::from([
+            ("SOOP_PASSWORD".into(), true),
+            ("DISCORD_WEBHOOK_URL".into(), true),
+            ("TELEGRAM_BOT_TOKEN".into(), true),
+        ]);
         let value = json!({
             "username_configured": configured_setting(&settings, "SOOP_USERNAME"),
             "password_configured": configured_secret(&secrets, "SOOP_PASSWORD"),
+            "discord_webhook_configured": configured_secret(&secrets, "DISCORD_WEBHOOK_URL"),
+            "telegram_bot_token_configured": configured_secret(&secrets, "TELEGRAM_BOT_TOKEN"),
+            "telegram_chat_id_configured": configured_setting(&settings, "TELEGRAM_CHAT_ID"),
         });
         let encoded = serde_json::to_string(&value).unwrap();
         assert!(!encoded.contains("private-user"));
         assert!(!encoded.contains("worker.example"));
+        assert!(!encoded.contains("-100999888777"));
     }
 
     #[test]

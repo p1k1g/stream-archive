@@ -42,9 +42,9 @@ use tokio::sync::Mutex;
 
 const WINDOW_BOUNDS_SETTING_KEY: &str = "STREAM_ARCHIVE_WINDOW_BOUNDS";
 
-const NATIVE_PROVIDER_SETTING_KEYS: &[&str] =
+pub(crate) const NATIVE_PROVIDER_SETTING_KEYS: &[&str] =
     &["SOOP_USERNAME", "CLOUDFLARE_WORKER_URL", "TELEGRAM_CHAT_ID"];
-const NATIVE_PROVIDER_SECRET_KEYS: &[&str] = &[
+pub(crate) const NATIVE_PROVIDER_SECRET_KEYS: &[&str] = &[
     "SOOP_PASSWORD",
     "CLOUDFLARE_API_KEY",
     "CHZZK_NID_AUT",
@@ -564,12 +564,14 @@ impl StreamArchiveCore {
         self.store.configured_secrets()
     }
 
-    /// Clear saved login secrets without changing Worker configuration or other providers.
+    /// Clear saved login or webhook secrets without changing Worker configuration or other providers.
     pub async fn clear_provider_credentials(&self, provider: &str) -> Result<()> {
         let keys: &[&str] = match provider {
             "SOOP" => &["SOOP_PASSWORD"],
             "CHZZK" => &["CHZZK_NID_AUT", "CHZZK_NID_SES"],
             "WEBHOOK" => &["DISCORD_WEBHOOK_URL", "TELEGRAM_BOT_TOKEN"],
+            "DISCORD_WEBHOOK" => &["DISCORD_WEBHOOK_URL"],
+            "TELEGRAM_WEBHOOK" => &["TELEGRAM_BOT_TOKEN"],
             _ => bail!("unsupported credential deletion provider"),
         };
         let _guard = self.config_write_lock.lock().await;

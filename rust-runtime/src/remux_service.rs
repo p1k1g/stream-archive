@@ -15,7 +15,7 @@ use crate::{
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
     ffi::OsString,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 const MAX_CONCURRENT_REMUX_JOBS: usize = 2;
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+static REMUX_FINALIZE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RemuxFormat {
@@ -203,24 +204,87 @@ pub fn build_remux_args(source: &Path, staging: &Path, format: RemuxFormat) -> V
     args
 }
 
+fn remux_target_candidate(
+    parent: &Path,
+    stem: &std::ffi::OsStr,
+    extension: &str,
+    index: usize,
+) -> PathBuf {
+    let mut name = stem.to_os_string();
+    if index <= 1 {
+        name.push(format!(".{extension}"));
+    } else {
+        name.push(format!("_{index:02}.{extension}"));
+    }
+    parent.join(name)
+}
+
 pub fn unique_remux_target(source: &Path, extension: &str) -> Result<PathBuf> {
     let parent = source.parent().unwrap_or_else(|| Path::new("."));
     let stem = source
         .file_stem()
-        .ok_or_else(|| anyhow!("remux source has no file stem: {}", source.display()))?
-        .to_os_string();
-    let mut first_name = stem.clone();
-    first_name.push(format!(".{extension}"));
-    let first = parent.join(first_name);
-    if !first.exists() {
-        return Ok(first);
-    }
-    for number in 2..=9999 {
-        let mut candidate_name = stem.clone();
-        candidate_name.push(format!("_{number:02}.{extension}"));
-        let candidate = parent.join(candidate_name);
-        if !candidate.exists() {
+        .ok_or_else(|| anyhow!("remux source has no file stem: {}", source.display()))?;
+    for index in 1..=9999 {
+        let candidate = remux_target_candidate(parent, stem, extension, index);
+        if fs::symlink_metadata(&candidate).is_err() {
             return Ok(candidate);
+        }
+    }
+    bail!(
+        "too many remux output filename collisions for {}",
+        source.display()
+    )
+}
+
+/// Atomically publish `staging` to a collision-free output path without ever
+/// overwriting an existing file.
+///
+/// Uses `fs::hard_link` + `fs::remove_file` (guaranteed no-replace on both
+/// POSIX and NTFS/Windows), serialized by `REMUX_FINALIZE_LOCK`, with a
+/// lock-serialized fallback to `fs::rename` only on filesystems where hard
+/// links are unsupported (e.g. FAT32/exFAT/network mounts).
+pub(crate) fn finalize_remux_output(
+    staging: &Path,
+    source: &Path,
+    extension: &str,
+) -> Result<PathBuf> {
+    let parent = source.parent().unwrap_or_else(|| Path::new("."));
+    let stem = source
+        .file_stem()
+        .ok_or_else(|| anyhow!("remux source has no file stem: {}", source.display()))?;
+    let _guard = REMUX_FINALIZE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for index in 1..=9999 {
+        let candidate = remux_target_candidate(parent, stem, extension, index);
+        match fs::hard_link(staging, &candidate) {
+            Ok(()) => {
+                let _ = fs::remove_file(staging);
+                return Ok(candidate);
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "failed to finalize remux file {} -> {}",
+                        staging.display(),
+                        candidate.display()
+                    )
+                });
+            }
+            Err(_) => {
+                if fs::symlink_metadata(&candidate).is_ok() {
+                    continue;
+                }
+                fs::rename(staging, &candidate).with_context(|| {
+                    format!(
+                        "failed to finalize remux file {} -> {}",
+                        staging.display(),
+                        candidate.display()
+                    )
+                })?;
+                return Ok(candidate);
+            }
         }
     }
     bail!(
@@ -354,17 +418,13 @@ pub(crate) async fn execute_remux(
         bail!("FFmpeg remux produced an empty output file; original .ts preserved");
     }
 
-    let target = unique_remux_target(&job.source, extension)?;
-    if let Err(err) = fs::rename(&staging, &target) {
-        let _ = fs::remove_file(&staging);
-        return Err(err).with_context(|| {
-            format!(
-                "failed to finalize remux file {} -> {}",
-                staging.display(),
-                target.display()
-            )
-        });
-    }
+    let target = match finalize_remux_output(&staging, &job.source, extension) {
+        Ok(target) => target,
+        Err(err) => {
+            let _ = fs::remove_file(&staging);
+            return Err(err);
+        }
+    };
 
     if let Some(db) = store
         && !job.history_id.is_empty()
@@ -630,6 +690,100 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".remuxing-"))
             .collect();
         assert!(leftovers.is_empty(), "staging file must be cleaned up");
+    }
+
+    #[test]
+    fn finalize_remux_output_never_overwrites_existing_file_on_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing_foo_mp4 = dir.path().join("foo.mp4");
+        fs::write(&existing_foo_mp4, b"existing-foo").unwrap();
+
+        let foo_ts = dir.path().join("foo.ts");
+        let foo_02_ts = dir.path().join("foo_02.ts");
+        let staging_a = dir.path().join("foo.remuxing-aaaaaaaa.mp4");
+        let staging_b = dir.path().join("foo_02.remuxing-bbbbbbbb.mp4");
+        fs::write(&staging_a, b"payload-from-foo-ts").unwrap();
+        fs::write(&staging_b, b"payload-from-foo-02-ts").unwrap();
+
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let b1 = barrier.clone();
+        let s1 = staging_a.clone();
+        let t1 = foo_ts.clone();
+        let h1 = std::thread::spawn(move || {
+            b1.wait();
+            finalize_remux_output(&s1, &t1, "mp4").unwrap()
+        });
+
+        let b2 = barrier.clone();
+        let s2 = staging_b.clone();
+        let t2 = foo_02_ts.clone();
+        let h2 = std::thread::spawn(move || {
+            b2.wait();
+            finalize_remux_output(&s2, &t2, "mp4").unwrap()
+        });
+
+        let out_a = h1.join().unwrap();
+        let out_b = h2.join().unwrap();
+
+        assert_ne!(out_a, existing_foo_mp4);
+        assert_ne!(out_b, existing_foo_mp4);
+        assert_ne!(out_a, out_b);
+        assert_eq!(fs::read(&existing_foo_mp4).unwrap(), b"existing-foo");
+        assert_eq!(fs::read(&out_a).unwrap(), b"payload-from-foo-ts");
+        assert_eq!(fs::read(&out_b).unwrap(), b"payload-from-foo-02-ts");
+        assert!(!staging_a.exists());
+        assert!(!staging_b.exists());
+    }
+
+    #[tokio::test]
+    async fn concurrent_execute_remux_preserves_distinct_outputs_when_source_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = LogBuffer::new();
+        let fake_ffmpeg = create_mock_ffmpeg(dir.path(), true);
+
+        let existing_foo_mp4 = dir.path().join("foo.mp4");
+        fs::write(&existing_foo_mp4, b"original-existing-mp4").unwrap();
+
+        let foo_ts = dir.path().join("foo.ts");
+        let foo_02_ts = dir.path().join("foo_02.ts");
+        fs::write(&foo_ts, b"ts-a").unwrap();
+        fs::write(&foo_02_ts, b"ts-b").unwrap();
+
+        let job_a = RemuxJob {
+            source: foo_ts.clone(),
+            history_id: String::new(),
+            format: RemuxFormat::Mp4,
+            delete_source: true,
+            ffmpeg_path: fake_ffmpeg.display().to_string(),
+            streamlink_path: PathBuf::new(),
+        };
+        let job_b = RemuxJob {
+            source: foo_02_ts.clone(),
+            history_id: String::new(),
+            format: RemuxFormat::Mp4,
+            delete_source: true,
+            ffmpeg_path: fake_ffmpeg.display().to_string(),
+            streamlink_path: PathBuf::new(),
+        };
+
+        let (res_a, res_b) = tokio::join!(
+            execute_remux(dir.path(), &job_a, None, &logs, MediaCancellation::new()),
+            execute_remux(dir.path(), &job_b, None, &logs, MediaCancellation::new()),
+        );
+        let out_a = res_a.unwrap().expect("job_a outcome");
+        let out_b = res_b.unwrap().expect("job_b outcome");
+
+        assert_ne!(out_a.output_path, existing_foo_mp4);
+        assert_ne!(out_b.output_path, existing_foo_mp4);
+        assert_ne!(out_a.output_path, out_b.output_path);
+        assert_eq!(
+            fs::read(&existing_foo_mp4).unwrap(),
+            b"original-existing-mp4"
+        );
+        assert!(out_a.output_path.is_file());
+        assert!(out_b.output_path.is_file());
+        assert!(out_a.source_deleted && !foo_ts.exists());
+        assert!(out_b.source_deleted && !foo_02_ts.exists());
     }
 
     #[cfg(windows)]
