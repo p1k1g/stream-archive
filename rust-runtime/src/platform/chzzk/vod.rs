@@ -1,3 +1,7 @@
+mod helpers;
+
+use helpers::*;
+
 use super::auth::{ChzzkAuth, ChzzkAuthState};
 use crate::platform_runtime::{configure_utf8_cli, restrict_private_dir, spawn_owned};
 use crate::{
@@ -11,7 +15,7 @@ use crate::{
     support::platform::PlatformId,
 };
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{Datelike, Local, Utc};
+use chrono::Utc;
 use fs2::FileExt;
 use regex::Regex;
 use reqwest::Client;
@@ -22,7 +26,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{ExitStatus, Stdio},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -35,7 +39,6 @@ use tokio::{
     sync::{Mutex, RwLock, mpsc},
     task::JoinHandle,
 };
-use url::Url;
 use uuid::Uuid;
 
 const TERMINAL_CACHE_LIMIT: usize = 32;
@@ -637,109 +640,6 @@ async fn streamlink_quality_options(
     quality_options_from_streamlink_json(&value)
 }
 
-fn quality_options_from_streamlink_json(value: &Value) -> Result<Vec<VodQualityOption>> {
-    let streams = value
-        .get("streams")
-        .and_then(Value::as_object)
-        .context("Streamlink CHZZK JSON has no streams")?;
-    static QUALITY_NAME_RE: std::sync::LazyLock<Regex> =
-        std::sync::LazyLock::new(|| Regex::new(r"^(\d+)p(\d+)?$").unwrap());
-    let mut names = streams
-        .keys()
-        .filter_map(|name| {
-            let captures = QUALITY_NAME_RE.captures(name)?;
-            let height = captures.get(1)?.as_str().parse::<u64>().ok()?;
-            let fps = captures
-                .get(2)
-                .and_then(|value| value.as_str().parse::<u64>().ok())
-                .unwrap_or(0);
-            Some((height, fps, name.clone()))
-        })
-        .collect::<Vec<_>>();
-    names.sort_by(|left, right| right.cmp(left));
-
-    let mut options = vec![VodQualityOption {
-        value: "best".into(),
-        label: "최고 화질 (자동)".into(),
-    }];
-    for (_, _, name) in names {
-        options.push(VodQualityOption {
-            value: name.clone(),
-            label: name,
-        });
-    }
-    Ok(options)
-}
-
-fn metadata_from_chzzk_content(content: &Value) -> Result<Metadata> {
-    let title = content
-        .get("videoTitle")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if title.is_empty() {
-        bail!("CHZZK API did not return a VOD title");
-    }
-    let streamer = content
-        .pointer("/channel/channelName")
-        .and_then(Value::as_str)
-        .unwrap_or("CHZZK")
-        .trim()
-        .to_string();
-    let streamer_id = content
-        .pointer("/channel/channelId")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let duration_seconds = content
-        .get("duration")
-        .and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_f64().map(|n| n.max(0.0) as u64))
-        })
-        .unwrap_or(0);
-    let date = content
-        .get("publishDate")
-        .and_then(Value::as_str)
-        .and_then(short_date)
-        .or_else(|| {
-            content
-                .get("publishDateAt")
-                .and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|n| n as i64)))
-                .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
-                .map(|timestamp| {
-                    let local = timestamp.with_timezone(&Local);
-                    format!(
-                        "{:02}{:02}{:02}",
-                        local.year() % 100,
-                        local.month(),
-                        local.day()
-                    )
-                })
-        })
-        .unwrap_or_else(today_short_date);
-    Ok(Metadata {
-        title,
-        thumbnail_url: content
-            .get("thumbnailImageUrl")
-            .or_else(|| content.get("videoImageUrl"))
-            .and_then(Value::as_str)
-            .filter(|url| !url.trim().is_empty())
-            .map(str::to_string),
-        streamer,
-        streamer_id,
-        date,
-        duration_seconds,
-        qualities: vec![VodQualityOption {
-            value: "best".into(),
-            label: "최고 화질 (자동)".into(),
-        }],
-    })
-}
-
 fn analysis_view(vod_url: &str, metadata: &Metadata) -> VodAnalysisView {
     VodAnalysisView {
         vod_url: vod_url.to_string(),
@@ -795,41 +695,6 @@ async fn download_video(
         cancel,
     )
     .await
-}
-
-fn streamlink_quality_args(quality: &str) -> (Vec<String>, String) {
-    static MAX_HEIGHT_RE: std::sync::LazyLock<Regex> =
-        std::sync::LazyLock::new(|| Regex::new(r"^best\[height<=(\d+)\]$").unwrap());
-    if let Some(captures) = MAX_HEIGHT_RE.captures(quality) {
-        let height = captures.get(1).unwrap().as_str();
-        return (
-            vec!["--stream-sorting-excludes".into(), format!(">{height}p")],
-            "best".into(),
-        );
-    }
-    let stream = if quality.is_empty() { "best" } else { quality };
-    (Vec::new(), stream.to_string())
-}
-
-fn ffmpeg_progress_seconds(line: &str) -> Option<f64> {
-    let raw = line.trim().strip_prefix("out_time_us=")?;
-    let micros = raw.parse::<u64>().ok()?;
-    Some(micros as f64 / 1_000_000.0)
-}
-
-fn download_progress_percent(media_seconds: f64, duration_seconds: u64) -> f64 {
-    if duration_seconds == 0 {
-        return 0.0;
-    }
-    (media_seconds.max(0.0) / duration_seconds as f64 * 100.0).clamp(0.0, 99.0)
-}
-
-fn format_media_time(seconds: f64) -> String {
-    let total = seconds.max(0.0).floor() as u64;
-    let hours = total / 3600;
-    let minutes = (total % 3600) / 60;
-    let seconds = total % 60;
-    format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
 async fn update_download_progress(
@@ -1566,40 +1431,6 @@ fn claim_collision_path(dir: &Path, base: &str, extension: &str) -> Result<Desti
     bail!("CHZZK VOD 파일명 충돌이 너무 많습니다.")
 }
 
-fn find_finished_output(expected: &Path) -> Result<PathBuf> {
-    if expected.is_file() {
-        return Ok(expected.to_path_buf());
-    }
-    let parent = expected.parent().unwrap_or_else(|| Path::new("."));
-    let stem = expected
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
-    let mut candidates = fs::read_dir(parent)?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .is_some_and(|value| value.starts_with(stem))
-                && matches!(
-                    path.extension()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("")
-                        .to_ascii_lowercase()
-                        .as_str(),
-                    "ts" | "mp4" | "mkv" | "webm"
-                )
-        })
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("CHZZK 완료 파일을 찾지 못했습니다: {}", expected.display()))
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PublishOutcome {
     Published,
@@ -1764,90 +1595,6 @@ fn cleanup_job_media(job_dir: &Path) {
     }
 }
 
-fn validate_url(raw: &str) -> Result<()> {
-    video_id(raw).map(|_| ())
-}
-
-fn video_id(raw: &str) -> Result<String> {
-    let url = Url::parse(raw.trim()).context("CHZZK VOD URL 형식이 올바르지 않습니다.")?;
-    if url.scheme() != "https" && url.scheme() != "http" {
-        bail!("CHZZK VOD URL은 http/https 주소여야 합니다.");
-    }
-    if !url
-        .host_str()
-        .is_some_and(|host| host.eq_ignore_ascii_case("chzzk.naver.com"))
-    {
-        bail!("CHZZK VOD URL 호스트가 아닙니다.");
-    }
-    let parts = url
-        .path_segments()
-        .map(|segments| segments.filter(|part| !part.is_empty()).collect::<Vec<_>>())
-        .unwrap_or_default();
-    if parts.len() != 2 || parts[0] != "video" || !parts[1].chars().all(|c| c.is_ascii_digit()) {
-        bail!("CHZZK VOD URL은 https://chzzk.naver.com/video/<숫자> 형식이어야 합니다.");
-    }
-    Ok(parts[1].to_string())
-}
-
-fn short_date(value: &str) -> Option<String> {
-    let digits = value
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect::<String>();
-    (digits.len() >= 8).then(|| digits[2..8].to_string())
-}
-
-fn today_short_date() -> String {
-    let today = Local::now().date_naive();
-    format!(
-        "{:02}{:02}{:02}",
-        today.year() % 100,
-        today.month(),
-        today.day()
-    )
-}
-
-fn safe_name(value: &str, max: usize) -> String {
-    let mut output = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if ch.is_control() {
-            continue;
-        }
-        if r#"\/:*?"<>|"#.contains(ch) {
-            output.push('_');
-        } else {
-            output.push(ch);
-        }
-    }
-    let mut output = output
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .trim_end_matches('.')
-        .to_string();
-    if output.is_empty() {
-        output = "UNKNOWN".into();
-    }
-    if output.chars().count() > max {
-        output = output
-            .chars()
-            .take(max)
-            .collect::<String>()
-            .trim()
-            .trim_end_matches('.')
-            .to_string();
-    }
-    output
-}
-
-fn validate_retries(retries: u32) -> Result<()> {
-    if !(1..=20).contains(&retries) {
-        bail!("VOD 재시도 횟수는 1~20 사이여야 합니다.");
-    }
-    Ok(())
-}
-
 async fn set_status(status: &Arc<RwLock<VodJobStatus>>, state: &str, message: &str) {
     let mut current = status.write().await;
     current.platform = PlatformId::Chzzk;
@@ -1865,27 +1612,10 @@ async fn sleep_retry(attempt: u32, cancel: &AtomicBool) {
     }
 }
 
-fn push_tail(tail: &mut VecDeque<String>, line: &str) {
-    if tail.len() >= 20 {
-        tail.pop_front();
-    }
-    let clean = redact(line.trim());
-    if !clean.is_empty() {
-        tail.push_back(clean);
-    }
-}
-
 fn redact(value: &str) -> String {
     static COOKIE_RE: std::sync::LazyLock<Regex> =
         std::sync::LazyLock::new(|| Regex::new(r"(?i)(NID_(?:AUT|SES)=)[^;\s]+").unwrap());
     COOKIE_RE.replace_all(value, "$1<redacted>").into_owned()
-}
-
-fn exit_code(status: ExitStatus) -> String {
-    status
-        .code()
-        .map(|code| code.to_string())
-        .unwrap_or_else(|| "unknown".into())
 }
 
 #[cfg(test)]

@@ -98,6 +98,55 @@ impl AppController {
         }
     }
 
+    pub fn vod_toggle_batch(&mut self) {
+        self.state.vod_batch_open = !self.state.vod_batch_open;
+    }
+
+    pub fn vod_edit_batch_urls(&mut self, urls: String) {
+        self.state.vod_batch_urls = urls;
+    }
+
+    pub fn vod_select_batch_quality(&mut self, quality: String) {
+        self.state.vod_batch_quality = if quality.trim().is_empty() {
+            "best".into()
+        } else {
+            quality
+        };
+    }
+
+    pub fn vod_enqueue_batch(&mut self) {
+        if self.state.queue_busy {
+            return;
+        }
+        let urls: Vec<String> = self
+            .state
+            .vod_batch_urls
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_string)
+            .collect();
+        if urls.is_empty() {
+            self.state.vod_batch_message =
+                "일괄 등록할 VOD URL을 한 줄에 하나씩 입력하세요.".into();
+            return;
+        }
+        let output_directory = self.vod_draft.output_directory.trim().to_string();
+        if output_directory.is_empty() {
+            self.state.vod_batch_message = "VOD 저장 폴더를 먼저 선택하세요.".into();
+            return;
+        }
+        self.state.queue_busy = true;
+        self.state.vod_batch_message =
+            format!("{}개 URL을 대기열에 일괄 등록하는 중...", urls.len());
+        let _ = self.sender.send(Request::QueueEnqueueBatch {
+            urls,
+            quality: self.state.vod_batch_quality.clone(),
+            output_directory,
+            merge: self.vod_draft.merge,
+        });
+    }
+
     pub fn vod_cancel(&mut self) {
         if self.state.vod_busy {
             return;

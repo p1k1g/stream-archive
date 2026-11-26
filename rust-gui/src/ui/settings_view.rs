@@ -314,6 +314,66 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
             continue;
         }
 
+        if row.key == "LIVE_AUTO_REMUX" {
+            let current = row.value.trim().to_ascii_uppercase();
+            let mut pills = div().flex().items_center().gap(px(4.0));
+            for (p_idx, (val, label)) in [
+                ("OFF", "사용 안 함 (.ts 유지)"),
+                ("MP4", "MP4 (무손실 -c copy)"),
+                ("MKV", "MKV (무손실 -c copy)"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let active = if current.is_empty() {
+                    val == "OFF"
+                } else {
+                    current == val
+                };
+                let v = val.to_string();
+                pills = pills.child(filter_pill(("remux-fmt", p_idx), label, active).when(
+                    !state.settings_busy,
+                    |el| {
+                        el.on_click(cx.listener(move |this, _, _, cx| {
+                            let val_copy = v.clone();
+                            this.controller
+                                .update(cx, |c, _| c.settings_edit(idx, val_copy));
+                            cx.notify();
+                        }))
+                    },
+                ));
+            }
+            env_card = env_card.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.0))
+                    .py(px(4.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(TEXT_PRIMARY))
+                                    .child("LIVE 녹화 후 무손실 자동 Remux (LIVE_AUTO_REMUX)"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(TEXT_MUTED))
+                                    .child(row.description.clone()),
+                            ),
+                    )
+                    .child(pills),
+            );
+            continue;
+        }
+
         if matches!(
             row.key.as_str(),
             "GUI_NOTIFY_RECORD_START"
@@ -321,6 +381,11 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                 | "GUI_NOTIFY_WARNING"
                 | "GUI_AUTO_START_WATCHER"
                 | "GUI_START_MINIMIZED_TRAY"
+                | "LIVE_REMUX_DELETE_SOURCE"
+                | "WEBHOOK_ENABLED"
+                | "WEBHOOK_NOTIFY_LIVE"
+                | "WEBHOOK_NOTIFY_VOD"
+                | "WEBHOOK_NOTIFY_WARNING"
         ) {
             let (title, switch_id, checked) = match row.key.as_str() {
                 "GUI_NOTIFY_RECORD_START" => (
@@ -343,10 +408,35 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                     "auto-start-watcher-switch",
                     row.value.trim().eq_ignore_ascii_case("Y"),
                 ),
-                _ => (
+                "GUI_START_MINIMIZED_TRAY" => (
                     "앱 실행 시 시스템 트레이로 최소화 시작",
                     "start-minimized-tray-switch",
                     row.value.trim().eq_ignore_ascii_case("Y"),
+                ),
+                "LIVE_REMUX_DELETE_SOURCE" => (
+                    "Remux 성공 후 원본 .ts 자동 삭제",
+                    "remux-delete-source-switch",
+                    row.value.trim().eq_ignore_ascii_case("Y"),
+                ),
+                "WEBHOOK_ENABLED" => (
+                    "외부 알림 웹훅 사용 (Discord · Telegram)",
+                    "webhook-enabled-switch",
+                    row.value.trim().eq_ignore_ascii_case("Y"),
+                ),
+                "WEBHOOK_NOTIFY_LIVE" => (
+                    "웹훅 · LIVE 녹화 시작/종료 알림",
+                    "webhook-live-switch",
+                    !row.value.trim().eq_ignore_ascii_case("N"),
+                ),
+                "WEBHOOK_NOTIFY_VOD" => (
+                    "웹훅 · VOD 다운로드 완료/실패 알림",
+                    "webhook-vod-switch",
+                    !row.value.trim().eq_ignore_ascii_case("N"),
+                ),
+                _ => (
+                    "웹훅 · 디스크 부족/채널 오류 경고 알림",
+                    "webhook-warning-switch",
+                    !row.value.trim().eq_ignore_ascii_case("N"),
                 ),
             };
             env_card = env_card.child(
@@ -664,6 +754,17 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                                 })),
                         )
                         .child(
+                            Button::new("prov-test-webhook")
+                                .outline()
+                                .small()
+                                .disabled(state.config_busy)
+                                .label("웹훅 테스트 발송")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.controller.update(cx, |c, _| c.provider_test_webhook());
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
                             Button::new("prov-save-btn")
                                 .primary()
                                 .small()
@@ -733,6 +834,29 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                         .small()
                         .disabled(state.config_busy)
                         .mask_toggle(),
+                ))
+                .child(labeled_input(
+                    "Discord Webhook URL (외부 알림)",
+                    Some(state.provider_discord_webhook_set),
+                    Input::new(&view.prov_discord_webhook)
+                        .small()
+                        .disabled(state.config_busy)
+                        .mask_toggle(),
+                ))
+                .child(labeled_input(
+                    "Telegram Bot Token (외부 알림)",
+                    Some(state.provider_telegram_bot_token_set),
+                    Input::new(&view.prov_telegram_token)
+                        .small()
+                        .disabled(state.config_busy)
+                        .mask_toggle(),
+                ))
+                .child(labeled_input(
+                    "Telegram Chat ID (-100... 또는 @채널명)",
+                    None,
+                    Input::new(&view.prov_telegram_chat_id)
+                        .small()
+                        .disabled(state.config_busy),
                 )),
         )
         .child(
@@ -773,6 +897,18 @@ pub fn render_settings_page(view: &MainView, cx: &mut Context<MainView>) -> Div 
                         .label("KICK 인증정보 삭제")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.controller.update(cx, |c, _| c.provider_clear("KICK"));
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("clear-webhook-auth")
+                        .danger()
+                        .xsmall()
+                        .disabled(state.config_busy)
+                        .label("웹훅 인증정보 삭제")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.controller
+                                .update(cx, |c, _| c.provider_clear("WEBHOOK"));
                             cx.notify();
                         })),
                 ),

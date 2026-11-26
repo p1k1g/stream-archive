@@ -51,8 +51,24 @@ pub fn validate_setting_updates(updates: &BTreeMap<String, String>) -> Result<()
             | "GUI_NOTIFY_WARNING"
             | "GUI_AUTO_START_WATCHER"
             | "GUI_START_MINIMIZED_TRAY"
+            | "LIVE_REMUX_DELETE_SOURCE"
+            | "WEBHOOK_ENABLED"
+            | "WEBHOOK_NOTIFY_LIVE"
+            | "WEBHOOK_NOTIFY_VOD"
+            | "WEBHOOK_NOTIFY_WARNING"
             | "LOG_ENABLED"
             | "BACKUP_ENABLED" => validate_yes_no(value, key)?,
+            "LIVE_AUTO_REMUX"
+                if !matches!(
+                    value.trim().to_ascii_uppercase().as_str(),
+                    "OFF" | "MP4" | "MKV"
+                ) =>
+            {
+                bail!("LIVE_AUTO_REMUX must be OFF, MP4 or MKV");
+            }
+            "TELEGRAM_CHAT_ID" => {
+                crate::webhook_service::validate_telegram_chat_id(value)?;
+            }
             "FILE_NAME_PATTERN"
                 if !matches!(
                     value.trim().to_ascii_uppercase().as_str(),
@@ -81,6 +97,15 @@ pub fn validate_secret_updates(updates: &BTreeMap<String, String>) -> Result<()>
             bail!("unsupported secret key: {key}");
         }
         validate_single_line(value, 16_384, &format!("secret {key}"))?;
+        match key.as_str() {
+            "DISCORD_WEBHOOK_URL" => {
+                crate::webhook_service::validate_discord_webhook_url(value)?;
+            }
+            "TELEGRAM_BOT_TOKEN" => {
+                crate::webhook_service::validate_telegram_bot_token(value)?;
+            }
+            _ => {}
+        }
     }
     Ok(())
 }

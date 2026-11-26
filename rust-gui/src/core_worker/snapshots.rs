@@ -84,6 +84,10 @@ pub(super) fn configuration_snapshot(
             .get("CLOUDFLARE_WORKER_URL")
             .cloned()
             .unwrap_or_default(),
+        telegram_chat_id: settings
+            .get("TELEGRAM_CHAT_ID")
+            .cloned()
+            .unwrap_or_default(),
         secrets,
         reload_channels,
         reload_provider,
@@ -294,6 +298,27 @@ pub fn localized_setting_description<'a>(key: &str, fallback: &'a str) -> &'a st
         "QUALITY" => "LIVE 화질입니다. 예: best",
         "FILE_NAME_PATTERN" => {
             "LIVE 녹화 파일 이름 형식입니다. 변경사항 저장 후 새 녹화부터 적용됩니다."
+        }
+        "LIVE_AUTO_REMUX" => {
+            "LIVE 녹화 종료 후 FFmpeg 무손실 스트림 복사(-c copy)로 .ts 파일을 .mp4 또는 .mkv로 자동 변환합니다."
+        }
+        "LIVE_REMUX_DELETE_SOURCE" => {
+            "무손실 Remux가 성공적으로 완료된 경우에만 원본 .ts 파일을 자동 삭제합니다. 실패 시 원본은 안전하게 보존됩니다."
+        }
+        "WEBHOOK_ENABLED" => {
+            "Discord Webhook 또는 Telegram Bot을 통해 외부 알림을 발송합니다. 아래 인증정보 섹션에 URL/토큰을 저장하세요."
+        }
+        "WEBHOOK_NOTIFY_LIVE" => {
+            "LIVE 녹화 시작 및 종료 시 설정된 Discord · Telegram 웹훅으로 알림을 발송합니다."
+        }
+        "WEBHOOK_NOTIFY_VOD" => {
+            "VOD 다운로드 완료 또는 실패 시 설정된 Discord · Telegram 웹훅으로 알림을 발송합니다."
+        }
+        "WEBHOOK_NOTIFY_WARNING" => {
+            "LIVE 디스크 부족, 녹화 정체, 채널 오류 또는 인증 필요 상태 시 웹훅 경고 알림을 발송합니다."
+        }
+        "TELEGRAM_CHAT_ID" => {
+            "Telegram 알림을 받을 채팅 ID(예: -1001234567890) 또는 @채널명입니다."
         }
         "STREAM_ARCHIVE_CLOSE_ACTION" => {
             "Windows 닫기 버튼 동작입니다. 트레이에서는 녹화·다운로드·감시가 계속됩니다. 변경사항을 저장하면 적용됩니다."

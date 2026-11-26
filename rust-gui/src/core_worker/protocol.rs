@@ -50,9 +50,11 @@ pub enum Request {
     ProviderSave {
         username: String,
         worker_url: String,
+        telegram_chat_id: String,
         secrets: BTreeMap<String, String>,
     },
     ProviderTestSoop,
+    WebhookTest,
     ClearKickToken,
     ClearProviderCredentials(String),
     LiveStatus {
@@ -89,6 +91,12 @@ pub enum Request {
         poll: bool,
     },
     QueueEnqueue(VodDownloadRequest),
+    QueueEnqueueBatch {
+        urls: Vec<String>,
+        quality: String,
+        output_directory: String,
+        merge: bool,
+    },
     QueueAction {
         id: String,
         action: String,
@@ -156,6 +164,7 @@ pub enum Response {
         channels: Vec<Channel>,
         username: String,
         worker_url: String,
+        telegram_chat_id: String,
         secrets: BTreeMap<String, bool>,
         reload_channels: bool,
         reload_provider: bool,
@@ -210,6 +219,11 @@ pub enum Response {
         snapshot: VodQueueSnapshot,
         message: Option<String>,
         poll: bool,
+    },
+    QueueBatch {
+        snapshot: VodQueueSnapshot,
+        message: String,
+        clear_input: bool,
     },
     QueueError {
         message: String,

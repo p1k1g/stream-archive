@@ -1,6 +1,8 @@
 use crate::{
     backend::LogBuffer,
-    model::{VodDownloadRequest, VodJobStatus, VodQueueItem, VodQueueSnapshot},
+    model::{
+        VodBatchEnqueueResult, VodDownloadRequest, VodJobStatus, VodQueueItem, VodQueueSnapshot,
+    },
     store::Store,
     support::platform::{PlatformId, detect_vod_platform},
     vod::{VodManager, validate_download_request},
@@ -9,6 +11,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{
+    collections::HashSet,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -187,6 +190,54 @@ impl VodQueueManager {
             .await;
         self.wake.notify_one();
         self.item(&id)?.context("queued item disappeared")
+    }
+
+    pub async fn enqueue_batch(
+        &self,
+        raw_urls: &[String],
+        template: VodDownloadRequest,
+    ) -> Result<VodBatchEnqueueResult> {
+        if self.stopping.load(Ordering::Acquire) {
+            bail!("VOD queue is shutting down");
+        }
+        if template.output_directory.trim().is_empty() {
+            bail!("VOD 저장 폴더를 선택해 주세요.");
+        }
+        let (urls, skipped_duplicates) = parse_batch_vod_urls(raw_urls);
+        if urls.is_empty() {
+            bail!("등록할 VOD URL을 한 줄에 하나씩 입력해 주세요.");
+        }
+
+        let mut enqueued = 0usize;
+        let mut failures = Vec::new();
+        for url in urls {
+            let platform = match detect_vod_platform(&url) {
+                Ok(platform) => platform,
+                Err(err) => {
+                    failures.push((url, format!("{err:#}")));
+                    continue;
+                }
+            };
+            let mut req = template.clone();
+            req.vod_url = url.clone();
+            req.parts = if platform == PlatformId::Soop {
+                Vec::new()
+            } else {
+                vec![1]
+            };
+            req.quality = normalize_batch_quality(platform, &template.quality);
+            match self.enqueue(req).await {
+                Ok(_) => enqueued += 1,
+                Err(err) => failures.push((url, format!("{err:#}"))),
+            }
+        }
+        let snapshot = self.snapshot().await?;
+        Ok(VodBatchEnqueueResult {
+            enqueued,
+            skipped_duplicates,
+            failures,
+            snapshot,
+        })
     }
 
     pub async fn snapshot(&self) -> Result<VodQueueSnapshot> {
@@ -605,6 +656,37 @@ fn apply_runtime_status(item: &mut VodQueueItem, status: &VodJobStatus) {
     }
 }
 
+pub fn parse_batch_vod_urls(raw_lines: &[String]) -> (Vec<String>, usize) {
+    let mut seen = HashSet::new();
+    let mut urls = Vec::new();
+    let mut skipped_duplicates = 0usize;
+    for block in raw_lines {
+        for raw_line in block.lines() {
+            let trimmed = raw_line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if seen.insert(trimmed.to_string()) {
+                urls.push(trimmed.to_string());
+            } else {
+                skipped_duplicates += 1;
+            }
+        }
+    }
+    (urls, skipped_duplicates)
+}
+
+pub fn normalize_batch_quality(platform: PlatformId, quality: &str) -> String {
+    let trimmed = quality.trim();
+    if trimmed.is_empty() {
+        return "best".into();
+    }
+    if platform == PlatformId::Kick && trimmed != "best" && trimmed != "worst" {
+        return "best".into();
+    }
+    trimmed.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -826,5 +908,52 @@ mod tests {
         assert_eq!(queue.snapshot().await.unwrap().queued_count, 3);
         assert_eq!(queue.retry_failed().await.unwrap(), 0);
         assert_eq!(queue.clear_completed().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn batch_enqueue_deduplicates_normalizes_platforms_and_isolates_invalid_urls() {
+        let (_dir, queue) = queue();
+        let kick_uuid = "123e4567-e89b-12d3-a456-426614174000";
+        let input = vec![
+            "# comment line".to_string(),
+            "  https://vod.sooplive.com/player/100001  ".to_string(),
+            "https://chzzk.naver.com/video/200002\nhttps://kick.com/tester/videos/123e4567-e89b-12d3-a456-426614174000".to_string(),
+            "https://vod.sooplive.com/player/100001".to_string(),
+            "https://invalid.example.com/watch/1".to_string(),
+        ];
+        let mut template = request("out");
+        template.quality = "best[height<=1080]".into();
+
+        let result = queue.enqueue_batch(&input, template).await.unwrap();
+        assert_eq!(result.enqueued, 3);
+        assert_eq!(result.skipped_duplicates, 1);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures[0].0, "https://invalid.example.com/watch/1");
+        assert_eq!(result.snapshot.queued_count, 3);
+
+        let platforms: Vec<PlatformId> = result
+            .snapshot
+            .items
+            .iter()
+            .map(|item| item.platform)
+            .collect();
+        assert!(platforms.contains(&PlatformId::Soop));
+        assert!(platforms.contains(&PlatformId::Chzzk));
+        assert!(platforms.contains(&PlatformId::Kick));
+        assert_eq!(
+            normalize_batch_quality(PlatformId::Kick, "best[height<=1080]"),
+            "best"
+        );
+        assert_eq!(
+            normalize_batch_quality(PlatformId::Soop, "best[height<=1080]"),
+            "best[height<=1080]"
+        );
+        assert!(
+            result
+                .snapshot
+                .items
+                .iter()
+                .any(|item| item.vod_url.ends_with(kick_uuid))
+        );
     }
 }

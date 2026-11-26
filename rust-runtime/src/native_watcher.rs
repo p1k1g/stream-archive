@@ -2,6 +2,7 @@ use crate::{
     backend::{HIDDEN_SETTING_KEYS, LogBuffer, SAFE_SETTING_KEYS},
     model::{Channel, ChannelRuntimeStatus, NativeWatcherStatus as WatcherStatus},
     recorder::{RecorderConfig, RecorderManager, Recording, RecordingPoll},
+    remux_service::{RemuxFormat, RemuxJob, RemuxManager},
     security::{unprotect_secret, with_provider_settings},
     store,
     support::platform::{
@@ -11,6 +12,7 @@ use crate::{
             session_for,
         },
     },
+    webhook_service::{WebhookDispatcher, WebhookEvent},
 };
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Local, Utc};
@@ -35,6 +37,9 @@ struct WatcherConfig {
     worker_max_retry: usize,
     output_dir: PathBuf,
     file_name_pattern: String,
+    remux_format: RemuxFormat,
+    remux_delete_source: bool,
+    ffmpeg_path: String,
     worker_url: String,
     worker_api_key: String,
     soop_username: String,
@@ -118,6 +123,7 @@ struct ChannelState {
     pending_removal: bool,
     cached_output_dir: Option<String>,
     output_dir_checked_at: Option<Instant>,
+    last_warning_key: Option<String>,
 }
 
 impl ChannelState {
@@ -146,6 +152,7 @@ impl ChannelState {
             pending_removal: false,
             cached_output_dir: None,
             output_dir_checked_at: None,
+            last_warning_key: None,
         }
     }
 
@@ -153,6 +160,23 @@ impl ChannelState {
         self.consecutive_probe_errors = 0;
         self.last_probe_error = None;
         self.suppressed_error_logs = 0;
+    }
+
+    fn notify_warning(&mut self, status: &str, detail: &str, webhooks: Option<&WebhookDispatcher>) {
+        let key = format!("{status}:{detail}");
+        if self.last_warning_key.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        self.last_warning_key = Some(key);
+        if let Some(dispatcher) = webhooks {
+            dispatcher.notify(WebhookEvent::LiveWarning {
+                platform: self.channel.platform,
+                channel_name: self.channel.name.clone(),
+                account: self.channel.account.clone(),
+                status: status.to_string(),
+                detail: detail.to_string(),
+            });
+        }
     }
 }
 
@@ -287,6 +311,8 @@ struct Runtime {
 
 struct WatcherControl {
     trace: crate::resource_trace::ResourceTrace,
+    remux: Arc<RemuxManager>,
+    webhooks: Option<WebhookDispatcher>,
     stop_rx: oneshot::Receiver<()>,
     command_rx: mpsc::Receiver<WatcherCommand>,
 }
@@ -295,6 +321,8 @@ pub struct NativeWatcherManager {
     trace: crate::resource_trace::ResourceTrace,
     backend_dir: PathBuf,
     logs: LogBuffer,
+    remux: Arc<RemuxManager>,
+    webhooks: Option<WebhookDispatcher>,
     lifecycle: Mutex<()>,
     runtime: Mutex<Runtime>,
     snapshot: Arc<RwLock<WatcherStatus>>,
@@ -309,10 +337,23 @@ impl NativeWatcherManager {
         logs: LogBuffer,
         trace: crate::resource_trace::ResourceTrace,
     ) -> Self {
+        let remux = Arc::new(RemuxManager::new(backend_dir.clone(), logs.clone()));
+        Self::new_with_services(backend_dir, logs, trace, remux, None)
+    }
+
+    pub(crate) fn new_with_services(
+        backend_dir: PathBuf,
+        logs: LogBuffer,
+        trace: crate::resource_trace::ResourceTrace,
+        remux: Arc<RemuxManager>,
+        webhooks: Option<WebhookDispatcher>,
+    ) -> Self {
         Self {
             trace,
             backend_dir,
             logs,
+            remux,
+            webhooks,
             lifecycle: Mutex::new(()),
             runtime: Mutex::new(Runtime {
                 task: None,
@@ -387,6 +428,8 @@ impl NativeWatcherManager {
         }
 
         let trace = self.trace.clone();
+        let remux = self.remux.clone();
+        let webhooks = self.webhooks.clone();
         let task = tokio::spawn(async move {
             let result = run_native_watcher(
                 backend_dir,
@@ -397,6 +440,8 @@ impl NativeWatcherManager {
                 snapshot.clone(),
                 WatcherControl {
                     trace,
+                    remux,
+                    webhooks,
                     stop_rx,
                     command_rx,
                 },
@@ -591,13 +636,24 @@ async fn run_native_watcher(
     let mut sessions = create_sessions(&initial_channels, &client)?;
     refresh_soop_login(&mut sessions, &config, &logs, "initial").await;
     let trace = control.trace.clone();
+    let remux = control.remux.clone();
+    let webhooks = control.webhooks.clone();
     let recorder = RecorderManager::new_with_trace(logs.clone(), trace.clone());
     let mut next_trace = Instant::now();
 
     clear_all_stream_passwords();
     let mut last_channel_signature = channel_signature(&initial_channels);
     let mut states = HashMap::new();
-    apply_channels(&mut states, initial_channels, &recorder, &logs).await;
+    apply_channels(
+        &mut states,
+        initial_channels,
+        &config,
+        &recorder,
+        &remux,
+        webhooks.as_ref(),
+        &logs,
+    )
+    .await;
     // Stagger initial channel probes slightly so large channel lists do not hit upstream APIs all at once.
     let stagger_cap_ms = config.check_interval.clamp(1, 10) * 1000;
     for (idx, state) in states.values_mut().enumerate() {
@@ -621,7 +677,7 @@ async fn run_native_watcher(
         tokio::select! {
             _ = &mut control.stop_rx => break,
             Some(command) = control.command_rx.recv() => {
-                handle_command(command, &mut states, &recorder, &logs).await;
+                handle_command(command, &mut states, &config, &recorder, &remux, webhooks.as_ref(), &logs).await;
                 update_snapshot(&mut states, &snapshot, &config.output_dir).await;
             }
             _ = tokio::time::sleep(Duration::from_millis(400)) => {
@@ -668,7 +724,16 @@ async fn run_native_watcher(
                                             if require_soop {
                                                 refresh_soop_login(&mut sessions, &config, &logs, "channel reload").await;
                                             }
-                                            apply_channels(&mut states, channels, &recorder, &logs).await;
+                                            apply_channels(
+                                                &mut states,
+                                                channels,
+                                                &config,
+                                                &recorder,
+                                                &remux,
+                                                webhooks.as_ref(),
+                                                &logs,
+                                            )
+                                            .await;
                                             last_channel_signature = signature;
                                             trace.record(crate::resource_trace::Event::ChannelsReloaded,
                                                 crate::resource_trace::Sample { channels: Some(states.len()), ..Default::default() });
@@ -688,6 +753,8 @@ async fn run_native_watcher(
                     &config,
                     &sessions,
                     &recorder,
+                    &remux,
+                    webhooks.as_ref(),
                     &logs,
                     &mut control.stop_rx,
                 )
@@ -695,12 +762,21 @@ async fn run_native_watcher(
                 {
                     break;
                 }
-                monitor_recordings(&mut states, &config, &recorder, &logs).await;
+                monitor_recordings(
+                    &mut states,
+                    &config,
+                    &recorder,
+                    &remux,
+                    webhooks.as_ref(),
+                    &logs,
+                )
+                .await;
                 if poll_channels(
                     &mut states,
                     &config,
                     &mut sessions,
                     &recorder,
+                    webhooks.as_ref(),
                     &logs,
                     &mut control.stop_rx,
                 )
@@ -722,7 +798,17 @@ async fn run_native_watcher(
         }
     }
     for state in states.values_mut() {
-        stop_state_recording(state, "WATCHER EXIT", &recorder, &logs).await;
+        stop_state_recording(
+            state,
+            "WATCHER EXIT",
+            false,
+            &config,
+            &recorder,
+            &remux,
+            webhooks.as_ref(),
+            &logs,
+        )
+        .await;
     }
     mark_watcher_stopped(&mut states);
     clear_all_stream_passwords();
@@ -814,7 +900,10 @@ fn mark_watcher_stopped(states: &mut HashMap<String, ChannelState>) {
 async fn apply_channels(
     states: &mut HashMap<String, ChannelState>,
     channels: Vec<Channel>,
+    config: &WatcherConfig,
     recorder: &RecorderManager,
+    remux: &RemuxManager,
+    webhooks: Option<&WebhookDispatcher>,
     logs: &LogBuffer,
 ) {
     let mut incoming = HashMap::new();
@@ -827,7 +916,17 @@ async fn apply_channels(
         if !incoming.contains_key(&key) {
             let mut can_remove = false;
             if let Some(state) = states.get_mut(&key) {
-                stop_state_recording(state, "CHANNEL REMOVED", recorder, logs).await;
+                stop_state_recording(
+                    state,
+                    "CHANNEL REMOVED",
+                    true,
+                    config,
+                    recorder,
+                    remux,
+                    webhooks,
+                    logs,
+                )
+                .await;
                 can_remove = state.recording.is_none();
                 if !can_remove {
                     state.channel.enabled = false;
@@ -865,7 +964,17 @@ async fn apply_channels(
                 state.output_dir_checked_at = None;
             }
             if was_enabled && !state.channel.enabled {
-                stop_state_recording(state, "CHANNEL DISABLED", recorder, logs).await;
+                stop_state_recording(
+                    state,
+                    "CHANNEL DISABLED",
+                    true,
+                    config,
+                    recorder,
+                    remux,
+                    webhooks,
+                    logs,
+                )
+                .await;
                 if state.recording.is_none() {
                     state.status = "DISABLED".into();
                 }
@@ -906,7 +1015,10 @@ fn command_state_key(states: &HashMap<String, ChannelState>, target: &str) -> Re
 async fn handle_command(
     command: WatcherCommand,
     states: &mut HashMap<String, ChannelState>,
+    config: &WatcherConfig,
     recorder: &RecorderManager,
+    remux: &RemuxManager,
+    webhooks: Option<&WebhookDispatcher>,
     logs: &LogBuffer,
 ) {
     let (target, action) = match &command {
@@ -931,7 +1043,17 @@ async fn handle_command(
                 .last_broadcast_id
                 .clone()
                 .or_else(|| state.recording.as_ref().map(|rec| rec.bno.clone()));
-            stop_state_recording(state, "USER CHANNEL STOP", recorder, logs).await;
+            stop_state_recording(
+                state,
+                "USER CHANNEL STOP",
+                true,
+                config,
+                recorder,
+                remux,
+                webhooks,
+                logs,
+            )
+            .await;
             state.status = "PAUSED".into();
         }
         WatcherCommand::Resume(_) => {
@@ -966,6 +1088,7 @@ async fn poll_channels(
     config: &WatcherConfig,
     sessions: &mut HashMap<PlatformId, LiveSession>,
     recorder: &RecorderManager,
+    webhooks: Option<&WebhookDispatcher>,
     logs: &LogBuffer,
     stop_rx: &mut oneshot::Receiver<()>,
 ) -> bool {
@@ -1019,6 +1142,7 @@ async fn poll_channels(
                 state.last_broadcast_id = None;
                 state.thumbnail_url = None;
                 state.detail = None;
+                state.last_warning_key = None;
                 state.consecutive_auth_retries = 0;
                 state.consecutive_short_exits = 0;
                 state.reset_probe_errors();
@@ -1055,6 +1179,7 @@ async fn poll_channels(
                         }
                     }
                     Err(err) => {
+                        state.notify_warning("AUTH", &err, webhooks);
                         state.detail = Some(err);
                         state.next_check = Instant::now()
                             + backoff_delay(
@@ -1109,10 +1234,20 @@ async fn poll_channels(
                 match start_recording(&state.channel, &live, config, session, recorder, logs).await
                 {
                     Ok(recording) => {
+                        let rec_title = recording.title.clone();
                         state.last_broadcast_id = Some(live.id);
                         state.status = "RECORDING".into();
                         state.detail = None;
+                        state.last_warning_key = None;
                         state.recording = Some(recording);
+                        if let Some(dispatcher) = webhooks {
+                            dispatcher.notify(WebhookEvent::LiveStarted {
+                                platform,
+                                channel_name: state.channel.name.clone(),
+                                account: state.channel.account.clone(),
+                                title: rec_title,
+                            });
+                        }
                     }
                     Err(err) => {
                         state.next_check =
@@ -1124,9 +1259,11 @@ async fn poll_channels(
                             state.detail = Some("방송 비밀번호가 올바르지 않거나 보호 스트림 확인에 실패했습니다. 다시 입력하세요.".into());
                             logs.push(format!("[RUST:WARN] protected stream resolve failed {}/{}; password cleared: {err:#}", platform, state.channel.account)).await;
                         } else {
+                            let detail = err.to_string();
                             state.thumbnail_url = None;
                             state.status = "ERROR".into();
-                            state.detail = Some(err.to_string());
+                            state.detail = Some(detail.clone());
+                            state.notify_warning("ERROR", &detail, webhooks);
                             logs.push(format!(
                                 "[RUST:ERR] record start failed {}/{}: {err:#}",
                                 platform, state.channel.account
@@ -1179,11 +1316,14 @@ async fn poll_channels(
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn check_recording_broadcasts(
     states: &mut HashMap<String, ChannelState>,
     config: &WatcherConfig,
     sessions: &HashMap<PlatformId, LiveSession>,
     recorder: &RecorderManager,
+    remux: &RemuxManager,
+    webhooks: Option<&WebhookDispatcher>,
     logs: &LogBuffer,
     stop_rx: &mut oneshot::Receiver<()>,
 ) -> bool {
@@ -1237,7 +1377,17 @@ async fn check_recording_broadcasts(
             Ok(LiveProbe::Offline) => {
                 state.reset_probe_errors();
                 clear_stream_password(platform, &state.channel.account);
-                stop_state_recording(state, "BROADCAST ENDED", recorder, logs).await;
+                stop_state_recording(
+                    state,
+                    "BROADCAST ENDED",
+                    true,
+                    config,
+                    recorder,
+                    remux,
+                    webhooks,
+                    logs,
+                )
+                .await;
                 state.status = "OFFLINE".into();
                 state.last_broadcast_id = None;
                 state.thumbnail_url = None;
@@ -1251,7 +1401,17 @@ async fn check_recording_broadcasts(
             Ok(LiveProbe::Live(live)) if live.id != *expected_id => {
                 state.reset_probe_errors();
                 clear_stream_password(platform, &state.channel.account);
-                stop_state_recording(state, "BROADCAST CHANGED", recorder, logs).await;
+                stop_state_recording(
+                    state,
+                    "BROADCAST CHANGED",
+                    true,
+                    config,
+                    recorder,
+                    remux,
+                    webhooks,
+                    logs,
+                )
+                .await;
                 state.status = "UNKNOWN".into();
                 state.thumbnail_url = live.thumbnail_url();
                 state.last_broadcast_id = Some(live.id);
@@ -1321,6 +1481,8 @@ async fn monitor_recordings(
     states: &mut HashMap<String, ChannelState>,
     config: &WatcherConfig,
     recorder: &RecorderManager,
+    remux: &RemuxManager,
+    webhooks: Option<&WebhookDispatcher>,
     logs: &LogBuffer,
 ) {
     let keys: Vec<String> = states.keys().cloned().collect();
@@ -1350,6 +1512,7 @@ async fn monitor_recordings(
                         )
                         .await;
                     state.recording_finished(&rec.bno);
+                    finish_recording_hooks(state, &rec, &outcome.1, true, config, remux, webhooks);
                     outcome
                 } else {
                     recording_exit_outcome(code)
@@ -1377,6 +1540,7 @@ async fn monitor_recordings(
                 } else {
                     state.status = "ERROR".into();
                     state.detail = Some(reason.clone());
+                    state.notify_warning("ERROR", &reason, webhooks);
                     state.consecutive_short_exits = state.consecutive_short_exits.saturating_add(1);
                     state.next_check = Instant::now()
                         + backoff_delay(config.retry_interval, state.consecutive_short_exits, 300);
@@ -1388,18 +1552,42 @@ async fn monitor_recordings(
                 }
             }
             Ok(RecordingPoll::LowDisk(free)) => {
-                state.status = "LOW_DISK".into();
-                state.detail = Some(format!(
+                let detail = format!(
                     "free {free:.2} GB / limit {:.2} GB",
                     config.recorder.min_free_space_gb
-                ));
-                stop_state_recording(state, "LOW DISK SPACE", recorder, logs).await;
+                );
+                state.status = "LOW_DISK".into();
+                state.detail = Some(detail.clone());
+                state.notify_warning("LOW_DISK", &detail, webhooks);
+                stop_state_recording(
+                    state,
+                    "LOW DISK SPACE",
+                    true,
+                    config,
+                    recorder,
+                    remux,
+                    webhooks,
+                    logs,
+                )
+                .await;
                 state.next_check = Instant::now() + Duration::from_secs(30);
             }
             Ok(RecordingPoll::Stalled) => {
+                let detail = format!("{}s no growth", config.recorder.stall_timeout);
                 state.status = "STALLED".into();
-                state.detail = Some(format!("{}s no growth", config.recorder.stall_timeout));
-                stop_state_recording(state, "RECORD STALLED", recorder, logs).await;
+                state.detail = Some(detail.clone());
+                state.notify_warning("STALLED", &detail, webhooks);
+                stop_state_recording(
+                    state,
+                    "RECORD STALLED",
+                    true,
+                    config,
+                    recorder,
+                    remux,
+                    webhooks,
+                    logs,
+                )
+                .await;
                 state.consecutive_short_exits = state.consecutive_short_exits.saturating_add(1);
                 state.next_check = Instant::now()
                     + backoff_delay(config.retry_interval, state.consecutive_short_exits, 300);
@@ -1464,10 +1652,54 @@ async fn start_recording(
         .await
 }
 
+fn finish_recording_hooks(
+    state: &ChannelState,
+    rec: &Recording,
+    reason: &str,
+    trigger_remux: bool,
+    config: &WatcherConfig,
+    remux: &RemuxManager,
+    webhooks: Option<&WebhookDispatcher>,
+) {
+    let output_size = rec.output_size();
+    let duration_secs = (Utc::now() - rec.started_at).num_seconds().max(0);
+    if trigger_remux && config.remux_format != RemuxFormat::Off && output_size > 0 {
+        remux.enqueue(
+            RemuxJob {
+                source: rec.file.clone(),
+                history_id: rec.history_id.clone(),
+                format: config.remux_format,
+                delete_source: config.remux_delete_source,
+                ffmpeg_path: config.ffmpeg_path.clone(),
+                streamlink_path: config.recorder.streamlink.clone(),
+            },
+            store::global().ok(),
+        );
+    }
+    if reason != "WATCHER EXIT"
+        && let Some(dispatcher) = webhooks
+    {
+        dispatcher.notify(WebhookEvent::LiveFinished {
+            platform: state.channel.platform,
+            channel_name: state.channel.name.clone(),
+            account: state.channel.account.clone(),
+            title: rec.title.clone(),
+            duration_secs,
+            size_bytes: output_size,
+            reason: reason.to_string(),
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn stop_state_recording(
     state: &mut ChannelState,
     reason: &str,
+    trigger_remux: bool,
+    config: &WatcherConfig,
     recorder: &RecorderManager,
+    remux: &RemuxManager,
+    webhooks: Option<&WebhookDispatcher>,
     logs: &LogBuffer,
 ) {
     let Some(mut rec) = state.recording.take() else {
@@ -1479,6 +1711,7 @@ async fn stop_state_recording(
                 .log_finished(&state.channel.name, &state.channel.account, &rec, reason)
                 .await;
             state.recording_finished(&rec.bno);
+            finish_recording_hooks(state, &rec, reason, trigger_remux, config, remux, webhooks);
         }
         Err(err) => {
             state.status = "ERROR".into();
@@ -1587,6 +1820,7 @@ impl WatcherConfig {
     ) -> Result<(BTreeMap<String, String>, Option<Self>)> {
         let mut keys = SAFE_SETTING_KEYS.to_vec();
         keys.extend_from_slice(HIDDEN_SETTING_KEYS);
+        keys.push("FFMPEG_PATH");
         with_provider_settings(db, &keys, |values| {
             let config = if previous == Some(&values) {
                 None
@@ -1640,6 +1874,13 @@ impl WatcherConfig {
                 .cloned()
                 .unwrap_or_else(|| "LEGACY".into())
                 .to_ascii_uppercase(),
+            remux_format: RemuxFormat::from_setting(
+                map.get("LIVE_AUTO_REMUX").map(String::as_str).unwrap_or(""),
+            ),
+            remux_delete_source: map
+                .get("LIVE_REMUX_DELETE_SOURCE")
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("Y")),
+            ffmpeg_path: raw("FFMPEG_PATH"),
             worker_url,
             worker_api_key,
             soop_username,
@@ -1834,6 +2075,10 @@ fn default_output_dir() -> String {
 }
 
 #[cfg(test)]
+#[path = "native_watcher/tests.rs"]
+mod watcher_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1855,89 +2100,6 @@ mod tests {
             account: "0123456789abcdef0123456789abcdef".into(),
             outdir: String::new(),
         }
-    }
-
-    #[test]
-    fn watcher_initial_and_reload_snapshots_observe_external_secret_changes() {
-        let dir = tempfile::tempdir().unwrap();
-        let streamlink_fixture = dir.path().join("streamlink.exe");
-        fs::write(&streamlink_fixture, b"test fixture").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&streamlink_fixture, fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let path = dir.path().join("test.db");
-        let owner = store::Store::open(path.clone()).unwrap();
-        owner
-            .sync_settings(
-                &BTreeMap::from([
-                    ("SOOP_USERNAME".into(), "test-user".into()),
-                    (
-                        "SOOP_PASSWORD".into(),
-                        "native-secret:v1:123e4567-e89b-12d3-a456-426614174000".into(),
-                    ),
-                    (
-                        "CLOUDFLARE_WORKER_URL".into(),
-                        "https://worker.example".into(),
-                    ),
-                    ("CLOUDFLARE_API_KEY".into(), "test-worker-key".into()),
-                    (
-                        "OUTPUT_DIR".into(),
-                        dir.path().join("output").display().to_string(),
-                    ),
-                ]),
-                "test",
-            )
-            .unwrap();
-        let observer = store::Store::open_observer(path).unwrap();
-        // Owner cache still contains a retired native reference; no watcher refreshed it.
-        observer
-            .sync_settings(
-                &BTreeMap::from([("SOOP_PASSWORD".into(), "replacement".into())]),
-                "test",
-            )
-            .unwrap();
-        let (initial, config) =
-            WatcherConfig::load_if_changed(&owner, dir.path(), true, None).unwrap();
-        assert_eq!(config.unwrap().soop_password, "replacement");
-        assert!(
-            WatcherConfig::load_if_changed(&owner, dir.path(), true, Some(&initial))
-                .unwrap()
-                .1
-                .is_none()
-        );
-        observer
-            .sync_settings(
-                &BTreeMap::from([("SOOP_PASSWORD".into(), String::new())]),
-                "test",
-            )
-            .unwrap();
-        let (cleared, config) =
-            WatcherConfig::load_if_changed(&owner, dir.path(), true, Some(&initial)).unwrap();
-        assert_eq!(config.unwrap().soop_password, "");
-        // Channel reload must also acquire a fresh snapshot, even without a settings tick.
-        observer
-            .sync_settings(
-                &BTreeMap::from([("SOOP_PASSWORD".into(), "new-login".into())]),
-                "test",
-            )
-            .unwrap();
-        assert_eq!(
-            WatcherConfig::load_if_changed(&owner, dir.path(), true, None)
-                .unwrap()
-                .1
-                .unwrap()
-                .soop_password,
-            "new-login"
-        );
-        assert_ne!(cleared, initial);
-    }
-
-    #[test]
-    fn safe_filename_replaces_windows_reserved_chars() {
-        assert_eq!(safe_name("a:b/c*?d", 80), "a_b_c__d");
-        assert_eq!(safe_name("CON", 80), "_CON");
     }
 
     #[test]
@@ -1990,13 +2152,6 @@ mod tests {
     }
 
     #[test]
-    fn channel_signature_is_case_insensitive_for_accounts() {
-        let a = vec![channel("A", "UserA")];
-        let b = vec![channel("A", "usera")];
-        assert_eq!(channel_signature(&a), channel_signature(&b));
-    }
-
-    #[test]
     fn kick_session_and_scoped_commands_do_not_require_soop_credentials() {
         let kick = Channel {
             platform: PlatformId::Kick,
@@ -2017,88 +2172,6 @@ mod tests {
             "KICK:fixture"
         );
         assert!(command_state_key(&states, "SOOP:fixture").is_err());
-    }
-
-    #[test]
-    fn soop_worker_credentials_are_needed_only_for_enabled_soop_channels() {
-        assert!(!channels_require_soop(&[chzzk_channel(true)]));
-
-        let mut disabled_soop = channel("SOOP", "disabled");
-        disabled_soop.enabled = false;
-        assert!(!channels_require_soop(&[
-            disabled_soop,
-            chzzk_channel(true)
-        ]));
-
-        assert!(channels_require_soop(&[
-            channel("SOOP", "enabled"),
-            chzzk_channel(true),
-        ]));
-    }
-
-    #[test]
-    fn recorder_exit_outcome_distinguishes_crashes() {
-        assert_eq!(
-            recording_exit_outcome(Some(0)),
-            (true, "NORMAL".to_string())
-        );
-        assert_eq!(
-            recording_exit_outcome_with_size(Some(0), 1024),
-            (true, "NORMAL".to_string())
-        );
-        assert_eq!(
-            recording_exit_outcome_with_size(Some(0), 0),
-            (false, "EMPTY OUTPUT (0 bytes)".to_string())
-        );
-        assert_eq!(
-            recording_exit_outcome(Some(23)),
-            (false, "RECORDER EXIT CODE=23".to_string())
-        );
-        assert_eq!(
-            recording_exit_outcome(None),
-            (false, "RECORDER EXIT CODE=unknown".to_string())
-        );
-    }
-
-    #[test]
-    fn watcher_exit_replaces_paused_state_and_clears_runtime_markers() {
-        let mut disabled = channel("Disabled", "disabled");
-        disabled.enabled = false;
-        let mut states = HashMap::new();
-        let mut live = ChannelState::new(channel("Live", "live"));
-        live.status = "PAUSED".into();
-        live.last_broadcast_id = Some("123".into());
-        live.suppressed_broadcast_id = Some("123".into());
-        live.detail = Some("old detail".into());
-        states.insert(channel_key(PlatformId::Soop, "live"), live);
-        states.insert(
-            channel_key(PlatformId::Soop, "disabled"),
-            ChannelState::new(disabled),
-        );
-
-        mark_watcher_stopped(&mut states);
-
-        let live = states.get(&channel_key(PlatformId::Soop, "live")).unwrap();
-        assert_eq!(live.status, "WATCHER_STOPPED");
-        assert!(live.last_broadcast_id.is_none());
-        assert!(live.suppressed_broadcast_id.is_none());
-        assert!(live.detail.is_none());
-        assert_eq!(
-            states
-                .get(&channel_key(PlatformId::Soop, "disabled"))
-                .unwrap()
-                .status,
-            "DISABLED"
-        );
-    }
-
-    #[test]
-    fn channel_key_namespaces_accounts_by_platform() {
-        assert_eq!(channel_key(PlatformId::Soop, "User"), "SOOP:user");
-        assert_eq!(
-            channel_key(PlatformId::Chzzk, "ABCDEF0123456789ABCDEF0123456789"),
-            "CHZZK:abcdef0123456789abcdef0123456789"
-        );
     }
 
     #[test]
@@ -2124,66 +2197,6 @@ mod tests {
         );
         assert!(command_state_key(&states, account).is_err());
     }
-
-    #[test]
-    fn probe_error_backoff_and_duplicate_log_suppression() {
-        assert_eq!(
-            backoff_delay(30, 1, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
-            30
-        );
-        assert_eq!(
-            backoff_delay(30, 2, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
-            60
-        );
-        assert_eq!(
-            backoff_delay(30, 3, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
-            120
-        );
-        assert_eq!(
-            backoff_delay(30, 6, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
-            900
-        );
-        assert_eq!(
-            backoff_delay(30, 12, PROBE_ERROR_MAX_BACKOFF_SECS).as_secs(),
-            900
-        );
-
-        assert!(should_log_probe_error(1, false));
-        assert!(!should_log_probe_error(2, true));
-        assert!(should_log_probe_error(2, false));
-        assert!(!should_log_probe_error(9, true));
-        assert!(should_log_probe_error(10, true));
-        assert!(!should_log_probe_error(11, true));
-        assert!(should_log_probe_error(20, true));
-    }
-
-    #[tokio::test]
-    async fn bounded_concurrent_runner_caps_parallelism_and_collects_all_results() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let in_flight = Arc::new(AtomicUsize::new(0));
-        let peak = Arc::new(AtomicUsize::new(0));
-        let items: Vec<usize> = (0..18).collect();
-
-        let mut results = run_bounded_concurrent(items, 4, |item| {
-            let in_flight = in_flight.clone();
-            let peak = peak.clone();
-            async move {
-                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                peak.fetch_max(current, Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                in_flight.fetch_sub(1, Ordering::SeqCst);
-                item * 2
-            }
-        })
-        .await;
-
-        results.sort_unstable();
-        let expected: Vec<usize> = (0..18).map(|i| i * 2).collect();
-        assert_eq!(results, expected);
-        assert!(peak.load(Ordering::SeqCst) <= 4);
-        assert!(peak.load(Ordering::SeqCst) >= 2);
-    }
 }
 
 #[cfg(test)]
@@ -2204,37 +2217,5 @@ mod provider_e2e {
             resolve_streamlink(fixture.root(), &settings).unwrap(),
             streamlink
         );
-    }
-}
-
-#[cfg(test)]
-mod thumbnail_completion_tests {
-    use super::*;
-    #[tokio::test]
-    async fn completion_revision_survives_same_broadcast_restart_in_snapshots() {
-        let channel = Channel {
-            platform: PlatformId::Soop,
-            enabled: true,
-            name: "test".into(),
-            account: "test".into(),
-            outdir: String::new(),
-        };
-        let mut state = ChannelState::new(channel);
-        state.last_broadcast_id = Some("123".into());
-        state.thumbnail_url = Some("https://fixture.invalid/thumbnail.jpg".into());
-        state.recording_finished("123");
-        assert!(state.thumbnail_url.is_none());
-        let first = state.completion_revision;
-        state.recording_finished("123");
-        assert!(state.completion_revision > first);
-        let snapshot = Arc::new(RwLock::new(WatcherStatus::default()));
-        let mut states = HashMap::from([("SOOP:test".into(), state)]);
-        update_snapshot(&mut states, &snapshot, Path::new("")).await;
-        let snapshot = snapshot.read().await;
-        assert_eq!(
-            snapshot.channels[0].completed_broadcast_id.as_deref(),
-            Some("123")
-        );
-        assert!(snapshot.channels[0].completion_revision > first);
     }
 }

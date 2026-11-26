@@ -112,3 +112,4 @@ Phase 20에서는 cross-platform native picker나 Linux/macOS GUI launcher를 �
 - 1.0.9 ✅ SOOP 구독·구독플러스 전용 LIVE 녹화 지원(`_subscribe` CDN + 서명 쿠키 자동 갱신 로컬 HLS 프록시) 공개 (2026-11-22). [릴리스 노트](RELEASE_NOTES_1_0_9.md)
 - 1.1.0 ✅ 앱 시작 자동화(감시 자동 시작·트레이 최소화 시작·Windows 시작프로그램), 파일명 패턴 UI, 기록/VOD 바로 재생, GitHub 최신 릴리스 확인, 런타임 캐시/응답 제한 최적화 및 GUI 모듈 분할 (2026-11-24). [릴리스 노트](RELEASE_NOTES_1_1_0.md)
 - 1.1.1 ✅ CHZZK LIVE 2단계 경량 폴링, LIVE 녹화 완료 트레이 알림, 대용량 VOD/백업 I/O `spawn_blocking` 분리, 대기열 바로 재생·일괄 정리/재시도, LIVE 녹화 중 바로 재생, 실전형 런타임 로그 뷰어, 전역 단축키 및 접이식 고급 설정 UI (2026-11-26). [릴리스 노트](RELEASE_NOTES_1_1_1.md)
+- 1.2.0 ✅ LIVE 무손실 자동 Remux(`.ts` → `.mp4`/`.mkv`), Discord·Telegram 외부 알림 웹훅, 다중 VOD URL 일괄 대기열 등록, macOS/Windows 테스트 안정화 및 대형 런타임 모듈 서브모듈 분리 (2026-11-26). [릴리스 노트](RELEASE_NOTES_1_2_0.md)

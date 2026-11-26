@@ -304,6 +304,11 @@ pub struct UiState {
     pub provider_chzzk_nid_ses_set: bool,
     pub provider_kick_token: String,
     pub provider_kick_token_set: bool,
+    pub provider_telegram_chat_id: String,
+    pub provider_discord_webhook: String,
+    pub provider_discord_webhook_set: bool,
+    pub provider_telegram_bot_token: String,
+    pub provider_telegram_bot_token_set: bool,
     pub provider_revision: u64,
 
     // LIVE & Storage
@@ -361,6 +366,11 @@ pub struct UiState {
     pub vod_thumbnail_image: Option<Arc<RenderImage>>,
     pub vod_qualities: Vec<VodQualityRow>,
     pub vod_parts: Vec<VodPartRow>,
+    pub vod_batch_open: bool,
+    pub vod_batch_urls: String,
+    pub vod_batch_quality: String,
+    pub vod_batch_revision: u64,
+    pub vod_batch_message: String,
 
     // Queue
     pub queue_rows: Vec<QueueDisplayRow>,
@@ -482,6 +492,11 @@ impl Default for UiState {
             provider_chzzk_nid_ses_set: false,
             provider_kick_token: String::new(),
             provider_kick_token_set: false,
+            provider_telegram_chat_id: String::new(),
+            provider_discord_webhook: String::new(),
+            provider_discord_webhook_set: false,
+            provider_telegram_bot_token: String::new(),
+            provider_telegram_bot_token_set: false,
             provider_revision: 0,
 
             live_running: false,
@@ -537,6 +552,11 @@ impl Default for UiState {
             vod_thumbnail_image: None,
             vod_qualities: Vec::new(),
             vod_parts: Vec::new(),
+            vod_batch_open: false,
+            vod_batch_urls: String::new(),
+            vod_batch_quality: "best".into(),
+            vod_batch_revision: 0,
+            vod_batch_message: String::new(),
 
             queue_rows: Vec::new(),
             expanded_queue_id: String::new(),

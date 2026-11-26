@@ -271,16 +271,20 @@ mod tests {
         fs::create_dir_all(&vod).unwrap();
 
         for kind in [ToolKind::YtDlp, ToolKind::Ffmpeg] {
-            let before = resolve_tool(kind, temp.path(), &[]);
-            assert!(!before.found());
-
             let binary = vod.join(kind.binary_names()[0]);
+            let before = resolve_tool(kind, temp.path(), &[]);
+            assert_ne!(before.source, "bundled");
+            assert_ne!(before.path.as_deref(), Some(binary.as_path()));
+
             make_executable(&binary);
             let after = resolve_tool(kind, temp.path(), &[]);
             assert_eq!(after.path.as_deref(), Some(binary.as_path()));
             assert_eq!(after.source, "bundled");
 
-            fs::remove_file(binary).unwrap();
+            fs::remove_file(&binary).unwrap();
+            let after_remove = resolve_tool(kind, temp.path(), &[]);
+            assert_ne!(after_remove.source, "bundled");
+            assert_ne!(after_remove.path.as_deref(), Some(binary.as_path()));
         }
     }
 

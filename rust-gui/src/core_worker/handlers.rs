@@ -142,8 +142,16 @@ pub(super) fn handle_request(
         Request::ProviderSave {
             username,
             worker_url,
+            telegram_chat_id,
             secrets,
-        } => handle_provider_save(core, runtime, username, worker_url, secrets),
+        } => handle_provider_save(
+            core,
+            runtime,
+            username,
+            worker_url,
+            telegram_chat_id,
+            secrets,
+        ),
         Request::ClearProviderCredentials(provider) => {
             handle_clear_provider_credentials(core, runtime, provider)
         }
@@ -159,6 +167,20 @@ pub(super) fn handle_request(
                     Ok(message) => Response::ConfigMessage(message),
                     Err(error) => {
                         Response::ConfigError(format!("SOOP / Worker 테스트 실패: {error:#}"))
+                    }
+                };
+                let _ = responses.send(response);
+            });
+            return LoopAction::Continue;
+        }
+        Request::WebhookTest => {
+            let core = core.clone();
+            let responses = responses.clone();
+            runtime.spawn(async move {
+                let response = match core.test_webhook().await {
+                    Ok(message) => Response::ConfigMessage(message),
+                    Err(error) => {
+                        Response::ConfigError(format!("웹훅 테스트 발송 실패: {error:#}"))
                     }
                 };
                 let _ = responses.send(response);
@@ -220,6 +242,12 @@ pub(super) fn handle_request(
         },
         Request::QueueStatus { poll } => queue_status(core, runtime, poll),
         Request::QueueEnqueue(req) => handle_queue_enqueue(core, runtime, req),
+        Request::QueueEnqueueBatch {
+            urls,
+            quality,
+            output_directory,
+            merge,
+        } => handle_queue_enqueue_batch(core, runtime, urls, quality, output_directory, merge),
         Request::QueueAction { id, action } => handle_queue_action(core, runtime, id, action),
         Request::QueueClearCompleted => handle_queue_clear_completed(core, runtime),
         Request::QueueRetryFailed => handle_queue_retry_failed(core, runtime),
@@ -383,18 +411,20 @@ fn handle_provider_save(
     runtime: &tokio::runtime::Runtime,
     username: String,
     worker_url: String,
+    telegram_chat_id: String,
     secrets: BTreeMap<String, String>,
 ) -> Response {
     let settings = BTreeMap::from([
         ("SOOP_USERNAME".into(), username),
         ("CLOUDFLARE_WORKER_URL".into(), worker_url),
+        ("TELEGRAM_CHAT_ID".into(), telegram_chat_id),
     ]);
     match runtime.block_on(core.update_provider_configuration(&settings, &secrets)) {
         Ok(_) => configuration_snapshot(
             core,
             false,
             true,
-            "서비스 연결 정보를 저장했습니다. 비밀 값은 암호화 상태로 유지되며 UI로 다시 읽어오지 않습니다.",
+            "서비스 연결 및 웹훅 인증정보를 저장했습니다. 비밀 값은 암호화 상태로 유지되며 UI로 다시 읽어오지 않습니다.",
         ),
         Err(error) => {
             Response::ConfigError(format!("서비스 연결 정보를 저장하지 못했습니다: {error:#}"))
@@ -586,6 +616,41 @@ fn handle_queue_enqueue(
         },
         Err(error) => Response::QueueError {
             message: format!("대기열 추가 실패: {error:#}"),
+            poll: false,
+        },
+    }
+}
+
+fn handle_queue_enqueue_batch(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    urls: Vec<String>,
+    quality: String,
+    output_directory: String,
+    merge: bool,
+) -> Response {
+    match runtime.block_on(core.enqueue_vod_batch(&urls, &quality, &output_directory, merge)) {
+        Ok(result) => {
+            let mut parts = vec![format!("{}건 대기열에 등록했습니다", result.enqueued)];
+            if result.skipped_duplicates > 0 {
+                parts.push(format!("중복 {}건 제외", result.skipped_duplicates));
+            }
+            if !result.failures.is_empty() {
+                let first_err = result
+                    .failures
+                    .first()
+                    .map(|(_, reason)| reason.as_str())
+                    .unwrap_or("");
+                parts.push(format!("실패 {}건 ({first_err})", result.failures.len()));
+            }
+            Response::QueueBatch {
+                snapshot: result.snapshot,
+                message: parts.join(" · "),
+                clear_input: result.failures.is_empty(),
+            }
+        }
+        Err(error) => Response::QueueError {
+            message: format!("일괄 대기열 등록 실패: {error:#}"),
             poll: false,
         },
     }

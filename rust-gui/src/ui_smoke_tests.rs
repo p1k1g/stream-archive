@@ -965,3 +965,96 @@ fn v1_1_1_finish_notification_queue_bulk_logs_and_shortcuts_flows() {
     ctrl.refresh_active_page();
     assert!(matches!(rx.try_recv(), Ok(Request::LiveRefresh)));
 }
+
+#[test]
+fn v1_2_batch_vod_enqueue_and_webhook_actions_dispatch_cleanly() {
+    use crate::controller::ProviderSaveInput;
+    use crate::core_worker::Response;
+
+    let (mut ctrl, rx) = AppController::new_disconnected_for_test();
+    ctrl.state.queue_busy = false;
+    ctrl.state.config_busy = false;
+
+    // Batch VOD enqueue validation & dispatch
+    ctrl.vod_toggle_batch();
+    assert!(ctrl.state.vod_batch_open);
+    ctrl.vod_enqueue_batch();
+    assert!(ctrl.state.vod_batch_message.contains("한 줄에 하나씩"));
+
+    ctrl.vod_edit_batch_urls(
+        "# comment\nhttps://vod.sooplive.com/player/111\nhttps://chzzk.naver.com/video/222\n"
+            .into(),
+    );
+    ctrl.vod_edit_output(r"C:\SOOP_VOD".into());
+    ctrl.vod_select_batch_quality("best[height<=1080]".into());
+    let _ = rx.try_iter().count();
+    ctrl.vod_enqueue_batch();
+    assert!(ctrl.state.queue_busy);
+    match rx.try_recv() {
+        Ok(Request::QueueEnqueueBatch {
+            urls,
+            quality,
+            output_directory,
+            merge,
+        }) => {
+            assert_eq!(urls.len(), 2);
+            assert_eq!(quality, "best[height<=1080]");
+            assert_eq!(output_directory, r"C:\SOOP_VOD");
+            assert!(merge);
+        }
+        _ => panic!("expected QueueEnqueueBatch"),
+    }
+
+    // Applying QueueBatch response clears textarea when no failures occurred
+    let before_rev = ctrl.state.vod_batch_revision;
+    ctrl.apply_response_for_test(Response::QueueBatch {
+        snapshot: VodQueueSnapshot::default(),
+        message: "2건 대기열에 등록했습니다".into(),
+        clear_input: true,
+    });
+    assert!(!ctrl.state.queue_busy);
+    assert!(ctrl.state.vod_batch_urls.is_empty());
+    assert_eq!(ctrl.state.vod_batch_revision, before_rev.wrapping_add(1));
+
+    // Webhook test, save, and clear actions
+    let _ = rx.try_iter().count();
+    ctrl.provider_test_webhook();
+    assert!(matches!(rx.try_recv(), Ok(Request::WebhookTest)));
+
+    let sample_discord = format!(
+        "https://{}/api/webhooks/{}/{}",
+        "discord.com", "1234567890", "sample_token_value"
+    );
+    ctrl.provider_save(ProviderSaveInput {
+        username: String::new(),
+        worker_url: String::new(),
+        telegram_chat_id: "-100123456".into(),
+        soop_password: String::new(),
+        worker_api_key: String::new(),
+        chzzk_nid_aut: String::new(),
+        chzzk_nid_ses: String::new(),
+        kick_token: String::new(),
+        discord_webhook: sample_discord.clone(),
+        telegram_bot_token: format!("{}:{}", "123456", "SampleBotSecretToken"),
+    });
+    assert!(ctrl.state.config_busy);
+    match rx.try_recv() {
+        Ok(Request::ProviderSave {
+            telegram_chat_id,
+            secrets,
+            ..
+        }) => {
+            assert_eq!(telegram_chat_id, "-100123456");
+            assert_eq!(secrets.get("DISCORD_WEBHOOK_URL"), Some(&sample_discord));
+            assert!(secrets.contains_key("TELEGRAM_BOT_TOKEN"));
+        }
+        _ => panic!("expected ProviderSave"),
+    }
+
+    ctrl.state.config_busy = false;
+    ctrl.provider_clear("WEBHOOK");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Request::ClearProviderCredentials(ref p)) if p == "WEBHOOK"
+    ));
+}

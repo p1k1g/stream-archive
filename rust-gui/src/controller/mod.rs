@@ -32,11 +32,14 @@ use stream_archive_server::diagnostics::DiagnosticsSnapshot;
 pub struct ProviderSaveInput {
     pub username: String,
     pub worker_url: String,
+    pub telegram_chat_id: String,
     pub soop_password: String,
     pub worker_api_key: String,
     pub chzzk_nid_aut: String,
     pub chzzk_nid_ses: String,
     pub kick_token: String,
+    pub discord_webhook: String,
+    pub telegram_bot_token: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
