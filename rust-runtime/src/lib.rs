@@ -15,6 +15,7 @@ pub mod primary_config;
 pub mod queue_service;
 pub mod recorder;
 pub mod release_tooling;
+pub mod remux_service;
 pub mod resource_trace;
 pub mod security;
 pub mod storage_service;
@@ -24,6 +25,7 @@ pub mod thumbnail_service;
 pub mod tool_discovery;
 pub mod update_check;
 pub mod vod;
+pub mod webhook_service;
 
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -105,6 +105,36 @@ const FIELDS: &[(&str, SettingKind, &str)] = &[
         "LIVE recording filename pattern: LEGACY, TIME_TITLE, BJ_TITLE or TITLE_NUMBER",
     ),
     (
+        "LIVE_AUTO_REMUX",
+        SettingKind::Text,
+        "LIVE 녹화 종료 후 무손실 자동 Remux 형식: OFF / MP4 / MKV",
+    ),
+    (
+        "LIVE_REMUX_DELETE_SOURCE",
+        SettingKind::Text,
+        "무손실 Remux 완료 후 원본 .ts 파일 삭제: Y / N (기본 N)",
+    ),
+    (
+        "WEBHOOK_ENABLED",
+        SettingKind::Text,
+        "외부 알림 웹훅 (Discord · Telegram) 활성화: Y / N",
+    ),
+    (
+        "WEBHOOK_NOTIFY_LIVE",
+        SettingKind::Text,
+        "LIVE 녹화 시작·종료 외부 웹훅 알림: Y / N",
+    ),
+    (
+        "WEBHOOK_NOTIFY_VOD",
+        SettingKind::Text,
+        "VOD 다운로드 완료·실패 외부 웹훅 알림: Y / N",
+    ),
+    (
+        "WEBHOOK_NOTIFY_WARNING",
+        SettingKind::Text,
+        "LIVE 채널 오류·디스크 부족 경고 외부 웹훅 알림: Y / N",
+    ),
+    (
         "RECORD_STALL_TIMEOUT",
         SettingKind::Text,
         "LIVE recording stall timeout in seconds (10–86400)",

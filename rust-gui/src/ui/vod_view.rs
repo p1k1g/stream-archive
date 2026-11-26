@@ -6,7 +6,7 @@ use gpui_kit::{
         Disableable as _, Sizable as _,
         button::{Button, ButtonVariants as _},
         checkbox::Checkbox,
-        input::Input,
+        input::{Input, Textarea},
     },
     prelude::FluentBuilder as _,
     *,
@@ -43,8 +43,164 @@ pub fn render_vod_page(view: &MainView, cx: &mut Context<MainView>) -> Div {
                         this.controller.update(cx, |c, _| c.vod_analyze());
                         cx.notify();
                     })),
+            )
+            .child(
+                Button::new("vod-batch-toggle-btn")
+                    .outline()
+                    .small()
+                    .label(if state.vod_batch_open {
+                        "다중 URL 접기"
+                    } else {
+                        "다중 URL 일괄 등록"
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.controller.update(cx, |c, _| c.vod_toggle_batch());
+                        cx.notify();
+                    })),
             ),
     );
+
+    // Collapsible Batch VOD URL Enqueue card
+    if state.vod_batch_open {
+        let valid_line_count = state
+            .vod_batch_urls
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .count();
+
+        let mut quality_pills = div().flex().items_center().gap(px(4.0));
+        for (p_idx, (val, label)) in [
+            ("best", "최고 화질 (자동)"),
+            ("best[height<=1080]", "1080p 이하"),
+            ("best[height<=720]", "720p 이하"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let active = state.vod_batch_quality == val;
+            let q = val.to_string();
+            quality_pills =
+                quality_pills.child(filter_pill(("vod-batch-q", p_idx), label, active).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        let q_copy = q.clone();
+                        this.controller
+                            .update(cx, |c, _| c.vod_select_batch_quality(q_copy));
+                        cx.notify();
+                    }),
+                ));
+        }
+
+        let mut batch_card = surface_card()
+            .p(px(14.0))
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(TEXT_PRIMARY))
+                                    .child("다중 VOD URL 일괄 대기열 등록"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(TEXT_MUTED))
+                                    .child("SOOP · CHZZK · KICK URL을 한 줄에 하나씩 붙여넣으면 중복을 제외하고 대기열에 일괄 등록합니다. (KICK은 최고 화질로 자동 정규화)"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(ACCENT))
+                            .child(format!("입력된 URL: {valid_line_count}개")),
+                    ),
+            )
+            .child(
+                Textarea::new(&view.vod_batch_input)
+                    .h(px(110.0))
+                    .small()
+                    .disabled(state.queue_busy),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(rgb(TEXT_SECONDARY))
+                                    .child("기본 화질"),
+                            )
+                            .child(quality_pills),
+                    )
+                    .child(
+                        Checkbox::new("vod-batch-merge-cb")
+                            .checked(state.vod_merge)
+                            .label("SOOP PART 병합")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.vod_toggle_merge());
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(Input::new(&view.vod_output_input).small()),
+                    )
+                    .child(
+                        Button::new("vod-batch-pick-dir")
+                            .outline()
+                            .small()
+                            .label("폴더 선택")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.vod_pick_output());
+                            })),
+                    )
+                    .child(
+                        Button::new("vod-batch-enqueue-btn")
+                            .primary()
+                            .small()
+                            .disabled(state.queue_busy || valid_line_count == 0)
+                            .label("일괄 대기열 등록")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.vod_enqueue_batch());
+                                cx.notify();
+                            })),
+                    ),
+            );
+
+        if !state.vod_batch_message.is_empty() {
+            batch_card = batch_card.child(notice_banner(&state.vod_batch_message));
+        }
+
+        page = page.child(batch_card);
+    }
 
     if !state.vod_message.is_empty() {
         page = page.child(notice_banner(&state.vod_message));

@@ -82,8 +82,9 @@ Usage:
   stream-archive-cli providers status [--json]
   stream-archive-cli providers set <KEY> <VALUE>
   stream-archive-cli providers secret <KEY> --stdin
-  stream-archive-cli providers clear-secret KICK_SESSION_TOKEN
+  stream-archive-cli providers clear-secret <KEY>
   stream-archive-cli providers test-soop
+  stream-archive-cli providers test-webhook
   stream-archive-cli tools [--json|configure]
   stream-archive-cli doctor [--json] [--active-tools]
   stream-archive-cli channels list [--json]

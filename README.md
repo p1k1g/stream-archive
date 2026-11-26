@@ -4,11 +4,11 @@
 
 Windows에서는 순수 Rust GPUI Native GUI를, Linux/macOS에서는 CLI·headless 실행을 제공합니다. Queue, History, 백업·복구, Diagnostics를 한곳에서 관리할 수 있습니다.
 
-[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.1.1 릴리스 노트](docs/RELEASE_NOTES_1_1_1.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
+[릴리스 및 다운로드](https://github.com/p1k1g/stream-archive/releases) · [1.2.0 릴리스 노트](docs/RELEASE_NOTES_1_2_0.md) · [운영 가이드](docs/OPERATIONS.md) · [문제 제보](https://github.com/p1k1g/stream-archive/issues)
 
-> **Stream Archive 1.1.1 공개 — 2026-11-26**
+> **Stream Archive 1.2.0 공개 — 2026-11-26**
 >
-> [1.1.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.1.1)는 CHZZK LIVE 2단계 경량 폴링(`live-status` → `live-detail`), LIVE 녹화 완료 트레이 알림(`GUI_NOTIFY_RECORD_FINISH`), 대용량 VOD 이동·백업 I/O의 `spawn_blocking` 비동기 분리, 대기열 `영상 재생`·`완료 항목 정리`·`실패 일괄 재시도`, LIVE 녹화 중 바로 재생, 실전형 런타임 로그 뷰어(레벨 필터·검색·복사), 전역 단축키(`Ctrl+1~7`, `F5`/`Ctrl+R`, `Ctrl+F`, `Esc`) 및 접이식 고급 설정 UI를 포함합니다. 기존 [1.1.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.1.0), [1.0.9 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.9), [1.0.8 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.8), [1.0.7 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.7), [1.0.6 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.6), [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5), [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)는 보존합니다.
+> [1.2.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.2.0)는 LIVE 녹화 후 FFmpeg 무손실 자동 Remux(`.ts` → `.mp4`/`.mkv`, 원본 삭제 옵션 포함), Discord·Telegram 외부 알림 웹훅(LIVE 시작·종료, VOD 완료·실패, 채널 경고 및 테스트 발송), 다중 VOD URL 일괄 대기열 등록 UI, 그리고 macOS/Windows 테스트 안정화 및 핵심 런타임 모듈 구조 개선을 포함합니다. 기존 [1.1.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.1.1), [1.1.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.1.0), [1.0.9 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.9), [1.0.8 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.8), [1.0.7 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.7), [1.0.6 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.6), [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5), [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)는 보존합니다.
 
 ## 화면 미리보기
 
@@ -45,17 +45,17 @@ VOD 다운로드의 대기·진행·완료·실패 상태를 확인합니다.
 
 ## 다운로드 및 지원 환경
 
-[1.1.1 Release 페이지](https://github.com/p1k1g/stream-archive/releases/tag/v1.1.1)와 아래 정식 Release asset 링크에서 패키지를 다운로드할 수 있습니다.
+[1.2.0 Release 페이지](https://github.com/p1k1g/stream-archive/releases/tag/v1.2.0)와 아래 정식 Release asset 링크에서 패키지를 다운로드할 수 있습니다.
 
 | 운영체제 | 다운로드 | 패키지 | 실행 방식 |
 |---|---|---|---|
-| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.1.1/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
-| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.1.1/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
-| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.1.1/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
+| Windows x64 | [Windows 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.2.0/stream-archive-windows-x64.zip) | `stream-archive-windows-x64.zip` | `StreamArchive.exe` / `RUN.bat` |
+| Linux x64 | [Linux 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.2.0/stream-archive-linux-x64.tar.gz) | `stream-archive-linux-x64.tar.gz` | CLI·headless |
+| macOS arm64 | [macOS 다운로드](https://github.com/p1k1g/stream-archive/releases/download/v1.2.0/stream-archive-macos-arm64.tar.gz) | `stream-archive-macos-arm64.tar.gz` | CLI·headless |
 
-체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.1.1/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.1.1/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.1.1/stream-archive-macos-arm64.tar.gz.sha256)
+체크섬 파일: [Windows `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.2.0/stream-archive-windows-x64.zip.sha256) · [Linux `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.2.0/stream-archive-linux-x64.tar.gz.sha256) · [macOS `.sha256`](https://github.com/p1k1g/stream-archive/releases/download/v1.2.0/stream-archive-macos-arm64.tar.gz.sha256)
 
-이전 버전은 [1.1.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.1.0), [1.0.9 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.9), [1.0.8 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.8), [1.0.7 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.7), [1.0.6 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.6), [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5), [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 받을 수 있으며 [1.0.2 체크섬](docs/releases/v1.0.2/), [1.0.1 체크섬](docs/releases/v1.0.1/), [1.0.0 체크섬](docs/releases/v1.0.0/)도 유지합니다.
+이전 버전은 [1.1.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.1.1), [1.1.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.1.0), [1.0.9 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.9), [1.0.8 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.8), [1.0.7 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.7), [1.0.6 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.6), [1.0.5 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.5), [1.0.4 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.4), [1.0.3 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.3), [1.0.2 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.2), [1.0.1 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.1), [1.0.0 Release](https://github.com/p1k1g/stream-archive/releases/tag/v1.0.0)에서 받을 수 있으며 [1.0.2 체크섬](docs/releases/v1.0.2/), [1.0.1 체크섬](docs/releases/v1.0.1/), [1.0.0 체크섬](docs/releases/v1.0.0/)도 유지합니다.
 
 패키지 build와 smoke는 각 플랫폼의 CI에서 검증합니다. 실제 서비스 세션, GUI 조작 및 OS별 비밀정보 저장의 최종 수동 검증은 별도로 관리합니다. Linux/macOS에는 GUI를 제공하지 않으며, 검증하지 않은 아키텍처의 지원을 주장하지 않습니다.
 
@@ -115,11 +115,13 @@ cd stream-archive
 | 취소·재시도 | ✅ | ✅ | LIVE 중지·재확인 / VOD 취소·새 파일 재시도 (이어받기 미지원) |
 | 클립 / CATCH / 쇼츠 / 기타 별도 콘텐츠 | 미지원 | 미지원 | 미지원 |
 
-- Windows Native UI에서 채널·녹화·다운로드 관리
+- Windows Native UI에서 채널·녹화·다운로드 관리 및 다중 VOD URL 일괄 대기열 등록
+- LIVE 녹화 후 FFmpeg 무손실 자동 Remux(`.ts` → `.mp4` / `.mkv`) 및 원본 자동 삭제 옵션
+- Discord Webhook · Telegram Bot 외부 알림(LIVE 시작·종료, VOD 완료·실패, 채널 경고)
 - 저장 경로·품질 설정 및 LIVE 저장공간 확인
 - SQLite 기반 설정·Channels·Queue·History 유지
 - 자동 백업 정책, Backup / Restore, Diagnostics / Runtime Logs
-- Windows DPAPI / Linux Secret Service / macOS Keychain을 통한 비밀정보 보호
+- Windows DPAPI / Linux Secret Service / macOS Keychain을 통한 비밀정보 보호(플랫폼 인증정보 + 웹훅 시크릿)
 
 지원 대상은 SOOP/CHZZK의 일반 LIVE/VOD, KICK 공개 LIVE 및 공개·구독 VOD입니다. KICK은 채널 URL의 마지막 이름(slug)을 등록합니다. API 차단은 오프라인으로 처리하지 않으며, 최신 Streamlink 및 JS challenge 처리용 Chromium 계열 브라우저가 필요할 수 있습니다. 실제 서비스·계정 환경의 수동 검증은 자동 CI 검증과 별도로 관리합니다. [KICK LIVE 사용 조건과 수동 QA](docs/PHASE26_1_KICK_LIVE.md)를 참고하세요. 클립, CATCH, 쇼츠·짧은 영상, 별도 게시물·커뮤니티 콘텐츠 등은 지원하지 않습니다.
 
@@ -178,8 +180,8 @@ Windows는 CurrentUser DPAPI, Linux는 `secret-tool`을 통한 Secret Service, m
 
 | 문서 | 내용 |
 |---|---|
-| [1.1.1 릴리스 노트](docs/RELEASE_NOTES_1_1_1.md) | 지원 범위·변경사항·안내 |
-| [1.1.0 릴리스 노트](docs/RELEASE_NOTES_1_1_0.md) | 이전 버전 릴리스 노트 |
+| [1.2.0 릴리스 노트](docs/RELEASE_NOTES_1_2_0.md) | 지원 범위·변경사항·안내 |
+| [1.1.1 릴리스 노트](docs/RELEASE_NOTES_1_1_1.md) | 이전 버전 릴리스 노트 |
 | [운영 가이드](docs/OPERATIONS.md) | 백업·복구·업그레이드·rollback |
 | [Cloudflare Worker 설정](docs/CLOUDFLARE_WORKER.md) | SOOP LIVE용 Worker 생성·secret·앱 연결 |
 | [Unix CLI 가이드](docs/UNIX_CLI.md) | Linux/macOS 명령 및 운영 조건 |

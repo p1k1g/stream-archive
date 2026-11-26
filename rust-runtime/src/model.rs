@@ -284,3 +284,11 @@ pub struct VodQueueSnapshot {
     pub queued_count: usize,
     pub items: Vec<VodQueueItem>,
 }
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct VodBatchEnqueueResult {
+    pub enqueued: usize,
+    pub skipped_duplicates: usize,
+    pub failures: Vec<(String, String)>,
+    pub snapshot: VodQueueSnapshot,
+}

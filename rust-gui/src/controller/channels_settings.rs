@@ -150,11 +150,18 @@ impl AppController {
         if !input.kick_token.trim().is_empty() {
             secrets.insert("KICK_SESSION_TOKEN".into(), input.kick_token);
         }
+        if !input.discord_webhook.trim().is_empty() {
+            secrets.insert("DISCORD_WEBHOOK_URL".into(), input.discord_webhook);
+        }
+        if !input.telegram_bot_token.trim().is_empty() {
+            secrets.insert("TELEGRAM_BOT_TOKEN".into(), input.telegram_bot_token);
+        }
         self.state.config_busy = true;
-        self.state.config_message = "서비스 연결 정보를 저장하는 중...".into();
+        self.state.config_message = "서비스 연결 및 웹훅 인증정보를 저장하는 중...".into();
         let _ = self.sender.send(Request::ProviderSave {
             username: input.username,
             worker_url: input.worker_url,
+            telegram_chat_id: input.telegram_chat_id,
             secrets,
         });
     }
@@ -165,6 +172,14 @@ impl AppController {
         }
         self.state.config_message = "SOOP / Worker 연결을 테스트하는 중...".into();
         let _ = self.sender.send(Request::ProviderTestSoop);
+    }
+
+    pub fn provider_test_webhook(&mut self) {
+        if self.state.config_busy {
+            return;
+        }
+        self.state.config_message = "외부 알림 웹훅 테스트 메시지를 발송하는 중...".into();
+        let _ = self.sender.send(Request::WebhookTest);
     }
 
     pub fn provider_clear(&mut self, provider: &str) {

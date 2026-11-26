@@ -147,6 +147,7 @@ impl AppController {
                 channels,
                 username,
                 worker_url,
+                telegram_chat_id,
                 secrets,
                 reload_channels,
                 reload_provider,
@@ -162,11 +163,14 @@ impl AppController {
                 if reload_provider {
                     self.state.provider_soop_username = username;
                     self.state.provider_worker_url = worker_url;
+                    self.state.provider_telegram_chat_id = telegram_chat_id;
                     self.state.provider_soop_password.clear();
                     self.state.provider_worker_api_key.clear();
                     self.state.provider_chzzk_nid_aut.clear();
                     self.state.provider_chzzk_nid_ses.clear();
                     self.state.provider_kick_token.clear();
+                    self.state.provider_discord_webhook.clear();
+                    self.state.provider_telegram_bot_token.clear();
                     self.state.provider_soop_password_set =
                         secrets.get("SOOP_PASSWORD").copied().unwrap_or(false);
                     self.state.provider_worker_api_key_set =
@@ -177,6 +181,10 @@ impl AppController {
                         secrets.get("CHZZK_NID_SES").copied().unwrap_or(false);
                     self.state.provider_kick_token_set =
                         secrets.get("KICK_SESSION_TOKEN").copied().unwrap_or(false);
+                    self.state.provider_discord_webhook_set =
+                        secrets.get("DISCORD_WEBHOOK_URL").copied().unwrap_or(false);
+                    self.state.provider_telegram_bot_token_set =
+                        secrets.get("TELEGRAM_BOT_TOKEN").copied().unwrap_or(false);
                     self.state.provider_revision = self.state.provider_revision.wrapping_add(1);
                 }
             }
@@ -349,12 +357,30 @@ impl AppController {
                 }
                 self.render_queue(snapshot);
             }
+            Response::QueueBatch {
+                snapshot,
+                message,
+                clear_input,
+            } => {
+                self.state.queue_busy = false;
+                self.state.queue_loaded = true;
+                self.state.vod_batch_message = message.clone();
+                self.state.queue_message = message;
+                if clear_input {
+                    self.state.vod_batch_urls.clear();
+                    self.state.vod_batch_revision = self.state.vod_batch_revision.wrapping_add(1);
+                }
+                self.render_queue(snapshot);
+            }
             Response::QueueError { message, poll } => {
                 if poll {
                     self.queue_poll_in_flight = false;
                 } else {
                     self.state.queue_busy = false;
-                    self.state.queue_message = message;
+                    self.state.queue_message = message.clone();
+                    if self.state.active_page == Page::Vod {
+                        self.state.vod_batch_message = message;
+                    }
                 }
             }
             Response::History {

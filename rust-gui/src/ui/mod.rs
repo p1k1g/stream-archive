@@ -17,7 +17,7 @@ use gpui_kit::{
         Disableable as _, Sizable as _, TitleBar,
         button::{Button, ButtonVariants as _},
         checkbox::Checkbox,
-        input::{Input, InputEvent, InputState},
+        input::{Input, InputEvent, InputState, TextareaState},
         scroll::ScrollableElement as _,
     },
     prelude::FluentBuilder as _,
@@ -44,6 +44,7 @@ pub struct MainView {
 
     pub vod_url_input: Entity<InputState>,
     pub vod_output_input: Entity<InputState>,
+    pub vod_batch_input: Entity<TextareaState>,
     pub history_search_input: Entity<InputState>,
     pub live_search_input: Entity<InputState>,
     pub channels_search_input: Entity<InputState>,
@@ -58,6 +59,9 @@ pub struct MainView {
     pub prov_chzzk_aut: Entity<InputState>,
     pub prov_chzzk_ses: Entity<InputState>,
     pub prov_kick_token: Entity<InputState>,
+    pub prov_discord_webhook: Entity<InputState>,
+    pub prov_telegram_token: Entity<InputState>,
+    pub prov_telegram_chat_id: Entity<InputState>,
 
     pub backup_interval_input: Entity<InputState>,
     pub backup_keep_input: Entity<InputState>,
@@ -72,6 +76,7 @@ pub struct MainView {
     synced_backup_rev: Option<u64>,
     synced_backup_dir_rev: Option<u64>,
     synced_vod_output_rev: Option<u64>,
+    synced_vod_batch_rev: Option<u64>,
 
     _subscriptions: Vec<Subscription>,
     channel_subscriptions: Vec<Subscription>,
@@ -99,6 +104,13 @@ impl MainView {
             InputState::new(window, cx)
                 .placeholder("VOD 저장 폴더")
                 .default_value(initial.vod_output_directory.clone())
+        });
+        let vod_batch_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder(
+                    "한 줄에 하나씩 SOOP · CHZZK · KICK VOD URL을 입력하세요 (# 시작 줄은 주석)",
+                )
+                .default_value(initial.vod_batch_urls.clone())
         });
         let history_search_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -161,6 +173,25 @@ impl MainView {
                 .default_value(initial.provider_kick_token.clone())
                 .masked(true)
         });
+        let prov_discord_webhook = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(
+                    "https://discord.com/api/webhooks/<ID>/<TOKEN> (비워두면 기존 값 유지)",
+                )
+                .default_value(initial.provider_discord_webhook.clone())
+                .masked(true)
+        });
+        let prov_telegram_token = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("<봇ID>:<토큰> (비워두면 기존 값 유지)")
+                .default_value(initial.provider_telegram_bot_token.clone())
+                .masked(true)
+        });
+        let prov_telegram_chat_id = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("-1001234567890 또는 @채널명")
+                .default_value(initial.provider_telegram_chat_id.clone())
+        });
 
         let backup_interval_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -217,6 +248,18 @@ impl MainView {
                 if matches!(event, InputEvent::Change) {
                     let val = state.read(cx).value().to_string();
                     this.controller.update(cx, |c, _| c.vod_edit_output(val));
+                    cx.notify();
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &vod_batch_input,
+            window,
+            |this, state, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let val = state.read(cx).value().to_string();
+                    this.controller
+                        .update(cx, |c, _| c.vod_edit_batch_urls(val));
                     cx.notify();
                 }
             },
@@ -294,6 +337,13 @@ impl MainView {
             (&prov_chzzk_aut, |s, v| s.provider_chzzk_nid_aut = v),
             (&prov_chzzk_ses, |s, v| s.provider_chzzk_nid_ses = v),
             (&prov_kick_token, |s, v| s.provider_kick_token = v),
+            (&prov_discord_webhook, |s, v| s.provider_discord_webhook = v),
+            (&prov_telegram_token, |s, v| {
+                s.provider_telegram_bot_token = v
+            }),
+            (&prov_telegram_chat_id, |s, v| {
+                s.provider_telegram_chat_id = v
+            }),
             (&backup_interval_input, |s, v| s.backup_interval_hours = v),
             (&backup_keep_input, |s, v| s.backup_keep_count = v),
             (&backup_retention_input, |s, v| s.backup_retention_days = v),
@@ -319,6 +369,7 @@ impl MainView {
             chzzk_icon,
             vod_url_input,
             vod_output_input,
+            vod_batch_input,
             history_search_input,
             live_search_input,
             channels_search_input,
@@ -332,6 +383,9 @@ impl MainView {
             prov_chzzk_aut,
             prov_chzzk_ses,
             prov_kick_token,
+            prov_discord_webhook,
+            prov_telegram_token,
+            prov_telegram_chat_id,
             backup_interval_input,
             backup_keep_input,
             backup_retention_input,
@@ -343,6 +397,7 @@ impl MainView {
             synced_backup_rev: None,
             synced_backup_dir_rev: None,
             synced_vod_output_rev: None,
+            synced_vod_batch_rev: None,
             _subscriptions: subscriptions,
             channel_subscriptions: Vec::new(),
             setting_subscriptions: Vec::new(),
@@ -378,6 +433,12 @@ impl MainView {
                         | "GUI_AUTO_START_WATCHER"
                         | "GUI_START_MINIMIZED_TRAY"
                         | "FILE_NAME_PATTERN"
+                        | "LIVE_AUTO_REMUX"
+                        | "LIVE_REMUX_DELETE_SOURCE"
+                        | "WEBHOOK_ENABLED"
+                        | "WEBHOOK_NOTIFY_LIVE"
+                        | "WEBHOOK_NOTIFY_VOD"
+                        | "WEBHOOK_NOTIFY_WARNING"
                         | "LOG_ENABLED"
                 ) {
                     continue;
@@ -490,6 +551,15 @@ impl MainView {
             self.prov_kick_token.update(cx, |s, cx| {
                 s.set_value(state.provider_kick_token.clone(), window, cx)
             });
+            self.prov_discord_webhook.update(cx, |s, cx| {
+                s.set_value(state.provider_discord_webhook.clone(), window, cx)
+            });
+            self.prov_telegram_token.update(cx, |s, cx| {
+                s.set_value(state.provider_telegram_bot_token.clone(), window, cx)
+            });
+            self.prov_telegram_chat_id.update(cx, |s, cx| {
+                s.set_value(state.provider_telegram_chat_id.clone(), window, cx)
+            });
         }
 
         if self.synced_backup_rev != Some(state.backup_revision) {
@@ -518,6 +588,13 @@ impl MainView {
                 s.set_value(state.vod_output_directory.clone(), window, cx)
             });
         }
+
+        if self.synced_vod_batch_rev != Some(state.vod_batch_revision) {
+            self.synced_vod_batch_rev = Some(state.vod_batch_revision);
+            self.vod_batch_input.update(cx, |s, cx| {
+                s.set_value(state.vod_batch_urls.clone(), window, cx)
+            });
+        }
     }
 
     pub fn open_password_modal(
@@ -538,11 +615,14 @@ impl MainView {
         let input = crate::controller::ProviderSaveInput {
             username: self.prov_soop_user.read(cx).value().to_string(),
             worker_url: self.prov_worker_url.read(cx).value().to_string(),
+            telegram_chat_id: self.prov_telegram_chat_id.read(cx).value().to_string(),
             soop_password: self.prov_soop_pass.read(cx).value().to_string(),
             worker_api_key: self.prov_worker_key.read(cx).value().to_string(),
             chzzk_nid_aut: self.prov_chzzk_aut.read(cx).value().to_string(),
             chzzk_nid_ses: self.prov_chzzk_ses.read(cx).value().to_string(),
             kick_token: self.prov_kick_token.read(cx).value().to_string(),
+            discord_webhook: self.prov_discord_webhook.read(cx).value().to_string(),
+            telegram_bot_token: self.prov_telegram_token.read(cx).value().to_string(),
         };
         self.controller.update(cx, |c, _| c.provider_save(input));
         cx.notify();

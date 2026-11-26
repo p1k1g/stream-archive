@@ -171,18 +171,24 @@ impl LocalManifestServer {
                             || stream
                                 .set_read_timeout(Some(Duration::from_secs(2)))
                                 .is_err()
+                            || stream
+                                .set_write_timeout(Some(Duration::from_millis(500)))
+                                .is_err()
                         {
                             continue;
                         }
                         let mut request = Vec::new();
                         let mut chunk = [0u8; 1024];
-                        while request.len() < 16 * 1024 && !request.ends_with(b"\r\n\r\n") {
+                        while request.len() < 16 * 1024
+                            && !request.ends_with(b"\r\n\r\n")
+                            && !thread_stop.load(Ordering::Acquire)
+                        {
                             match stream.read(&mut chunk) {
                                 Ok(0) | Err(_) => break,
                                 Ok(size) => request.extend_from_slice(&chunk[..size]),
                             }
                         }
-                        if !request.ends_with(b"\r\n\r\n") {
+                        if !request.ends_with(b"\r\n\r\n") || thread_stop.load(Ordering::Acquire) {
                             continue;
                         }
                         let response = format!(
@@ -190,12 +196,31 @@ impl LocalManifestServer {
                             body.len(),
                             body
                         );
-                        let _ = stream.write_all(response.as_bytes());
+                        // Write in bounded chunks with a write timeout so oversized responses
+                        // (e.g. 1 MiB on macOS loopback) never deadlock Drop::drop when the
+                        // client aborts early and closes its read side.
+                        for slice in response.as_bytes().chunks(64 * 1024) {
+                            if thread_stop.load(Ordering::Acquire)
+                                || stream.write_all(slice).is_err()
+                            {
+                                break;
+                            }
+                        }
                         let _ = stream.flush();
                         let _ = stream.shutdown(std::net::Shutdown::Write);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::Interrupted
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                        ) =>
+                    {
+                        continue;
                     }
                     Err(_) => break,
                 }
