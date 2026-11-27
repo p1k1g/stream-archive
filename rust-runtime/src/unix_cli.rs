@@ -50,17 +50,7 @@ async fn command_status(args: &[String]) -> Result<()> {
     let diagnostics = core.diagnostics();
     let local_watcher = core.watcher_status().await?;
     let local_vod = core.local_vod_status().await;
-    let remote = runtime_control(
-        &core,
-        RuntimeControlRequest {
-            command: "runtime.status".into(),
-            target: None,
-            action: None,
-            secret: None,
-            max_lines: None,
-        },
-    )
-    .await?;
+    let remote = runtime_control(&core, RuntimeControlRequest::command("runtime.status")).await?;
     let watcher_value = remote
         .as_ref()
         .and_then(|value| value.get("watcher"))
@@ -116,27 +106,12 @@ async fn command_status(args: &[String]) -> Result<()> {
         println!("runtime ready : {}", diagnostics.runtime_ready);
         println!("blocking      : {}", diagnostics.summary.blocking_errors);
         println!("runtime owner : {}", yes_no(runtime_owner_active));
-        println!(
-            "watcher       : {}",
-            watcher_value
-                .get("running")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        );
+        println!("watcher       : {}", json_bool(&watcher_value, "running"));
         println!(
             "recordings    : {}",
-            watcher_value
-                .get("recording_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
+            json_u64(&watcher_value, "recording_count")
         );
-        println!(
-            "VOD running   : {}",
-            vod_value
-                .get("running")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        );
+        println!("VOD running   : {}", json_bool(&vod_value, "running"));
         println!(
             "queue active  : {}",
             queue.active_id.as_deref().unwrap_or("-")
@@ -356,13 +331,9 @@ async fn command_channels(args: &[String]) -> Result<()> {
             let platform = platform.parse::<PlatformId>()?;
             require_runtime_control(
                 &core,
-                RuntimeControlRequest {
-                    command: "channel.action".into(),
-                    target: Some(format!("{platform}:{account}")),
-                    action: Some(verb.clone()),
-                    secret: None,
-                    max_lines: None,
-                },
+                RuntimeControlRequest::command("channel.action")
+                    .with_target(format!("{platform}:{account}"))
+                    .with_action(verb.clone()),
             )
             .await?;
             println!("channel action sent to running watcher: {platform}/{account} {verb}");
@@ -372,13 +343,9 @@ async fn command_channels(args: &[String]) -> Result<()> {
             let secret = read_secret_stdin()?;
             require_runtime_control(
                 &core,
-                RuntimeControlRequest {
-                    command: "channel.password".into(),
-                    target: Some(format!("{platform}:{account}")),
-                    action: None,
-                    secret: Some(secret),
-                    max_lines: None,
-                },
+                RuntimeControlRequest::command("channel.password")
+                    .with_target(format!("{platform}:{account}"))
+                    .with_secret(secret),
             )
             .await?;
             println!(
@@ -469,17 +436,8 @@ async fn command_watcher(args: &[String]) -> Result<()> {
         [action] if action == "start" => run_headless(true).await,
         [action] if action == "status" => {
             let core = open_core()?;
-            if let Some(value) = runtime_control(
-                &core,
-                RuntimeControlRequest {
-                    command: "watcher.status".into(),
-                    target: None,
-                    action: None,
-                    secret: None,
-                    max_lines: None,
-                },
-            )
-            .await?
+            if let Some(value) =
+                runtime_control(&core, RuntimeControlRequest::command("watcher.status")).await?
             {
                 print_watcher_value(&value, false)?;
             } else {
@@ -491,17 +449,8 @@ async fn command_watcher(args: &[String]) -> Result<()> {
         }
         [action, flag] if action == "status" && flag == "--json" => {
             let core = open_core()?;
-            if let Some(value) = runtime_control(
-                &core,
-                RuntimeControlRequest {
-                    command: "watcher.status".into(),
-                    target: None,
-                    action: None,
-                    secret: None,
-                    max_lines: None,
-                },
-            )
-            .await?
+            if let Some(value) =
+                runtime_control(&core, RuntimeControlRequest::command("watcher.status")).await?
             {
                 print_json(&value)?;
             } else {
@@ -513,17 +462,9 @@ async fn command_watcher(args: &[String]) -> Result<()> {
         }
         [action] if action == "stop" => {
             let core = open_core()?;
-            let value = require_runtime_control(
-                &core,
-                RuntimeControlRequest {
-                    command: "watcher.stop".into(),
-                    target: None,
-                    action: None,
-                    secret: None,
-                    max_lines: None,
-                },
-            )
-            .await?;
+            let value =
+                require_runtime_control(&core, RuntimeControlRequest::command("watcher.stop"))
+                    .await?;
             print_watcher_value(&value, false)?;
             core.shutdown().await;
             Ok(())
@@ -539,41 +480,11 @@ fn print_watcher_value(value: &Value, json_mode: bool) -> Result<()> {
         return print_json(value);
     }
     println!("watcher");
-    println!(
-        "  running    : {}",
-        value
-            .get("running")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    );
-    println!(
-        "  channels   : {}",
-        value
-            .get("channel_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    );
-    println!(
-        "  recordings : {}",
-        value
-            .get("recording_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    );
-    println!(
-        "  offline    : {}",
-        value
-            .get("offline_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    );
-    println!(
-        "  errors     : {}",
-        value
-            .get("error_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    );
+    println!("  running    : {}", json_bool(value, "running"));
+    println!("  channels   : {}", json_u64(value, "channel_count"));
+    println!("  recordings : {}", json_u64(value, "recording_count"));
+    println!("  offline    : {}", json_u64(value, "offline_count"));
+    println!("  errors     : {}", json_u64(value, "error_count"));
     Ok(())
 }
 
@@ -605,17 +516,8 @@ async fn command_vod(args: &[String]) -> Result<()> {
         "status" => {
             let json_mode = only_json(&args[1..], "vod status")?;
             let core = open_core()?;
-            if let Some(value) = runtime_control(
-                &core,
-                RuntimeControlRequest {
-                    command: "vod.status".into(),
-                    target: None,
-                    action: None,
-                    secret: None,
-                    max_lines: None,
-                },
-            )
-            .await?
+            if let Some(value) =
+                runtime_control(&core, RuntimeControlRequest::command("vod.status")).await?
             {
                 if json_mode {
                     print_json(&value)?;
@@ -631,17 +533,9 @@ async fn command_vod(args: &[String]) -> Result<()> {
         "cancel" => {
             let json_mode = only_json(&args[1..], "vod cancel")?;
             let core = open_core()?;
-            let value = require_runtime_control(
-                &core,
-                RuntimeControlRequest {
-                    command: "vod.cancel".into(),
-                    target: None,
-                    action: None,
-                    secret: None,
-                    max_lines: None,
-                },
-            )
-            .await?;
+            let value =
+                require_runtime_control(&core, RuntimeControlRequest::command("vod.cancel"))
+                    .await?;
             if json_mode {
                 print_json(&value)?;
             } else {
@@ -722,21 +616,9 @@ fn ensure_vod_success(status: &VodJobStatus) -> Result<()> {
 
 fn print_vod_value(value: &Value) -> Result<()> {
     println!("VOD");
-    println!(
-        "  state    : {}",
-        value.get("state").and_then(Value::as_str).unwrap_or("IDLE")
-    );
-    println!(
-        "  running  : {}",
-        value
-            .get("running")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    );
-    println!(
-        "  progress : {:.1}%",
-        value.get("percent").and_then(Value::as_f64).unwrap_or(0.0)
-    );
+    println!("  state    : {}", json_str(value, "state", "IDLE"));
+    println!("  running  : {}", json_bool(value, "running"));
+    println!("  progress : {:.1}%", json_f64(value, "percent"));
     if let Some(message) = value.get("message").and_then(Value::as_str)
         && !message.trim().is_empty()
     {
@@ -961,13 +843,7 @@ async fn command_queue(args: &[String]) -> Result<()> {
             let (id, json_mode) = parse_id_and_json(&args[1..], "queue cancel")?;
             if let Some(value) = runtime_control(
                 &core,
-                RuntimeControlRequest {
-                    command: "queue.cancel".into(),
-                    target: Some(id.to_string()),
-                    action: None,
-                    secret: None,
-                    max_lines: None,
-                },
+                RuntimeControlRequest::command("queue.cancel").with_target(id),
             )
             .await?
             {
@@ -1015,28 +891,16 @@ fn print_queue_value(value: &Value, json_mode: bool) -> Result<()> {
     }
 
     println!("VOD queue");
-    println!(
-        "active : {}",
-        value
-            .get("active_id")
-            .and_then(Value::as_str)
-            .unwrap_or("-")
-    );
-    println!(
-        "queued : {}",
-        value
-            .get("queued_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    );
+    println!("active : {}", json_str(value, "active_id", "-"));
+    println!("queued : {}", json_u64(value, "queued_count"));
     if let Some(items) = value.get("items").and_then(Value::as_array) {
         for item in items {
             println!(
                 "{} {:<10} {:>6.1}% {}",
-                item.get("id").and_then(Value::as_str).unwrap_or("-"),
-                item.get("state").and_then(Value::as_str).unwrap_or("-"),
-                item.get("percent").and_then(Value::as_f64).unwrap_or(0.0),
-                item.get("vod_url").and_then(Value::as_str).unwrap_or("-")
+                json_str(item, "id", "-"),
+                json_str(item, "state", "-"),
+                json_f64(item, "percent"),
+                json_str(item, "vod_url", "-")
             );
         }
     }
@@ -1219,13 +1083,7 @@ async fn command_logs(args: &[String]) -> Result<()> {
     let core = open_core()?;
     let logs = if let Some(value) = runtime_control(
         &core,
-        RuntimeControlRequest {
-            command: "logs".into(),
-            target: None,
-            action: None,
-            secret: None,
-            max_lines: Some(tail),
-        },
+        RuntimeControlRequest::command("logs").with_max_lines(tail),
     )
     .await?
     {
@@ -1313,6 +1171,22 @@ fn configured_setting(settings: &BTreeMap<String, String>, key: &str) -> bool {
 
 fn configured_secret(secrets: &BTreeMap<String, bool>, key: &str) -> bool {
     secrets.get(key).copied().unwrap_or(false)
+}
+
+fn json_str<'a>(value: &'a Value, key: &str, default: &'a str) -> &'a str {
+    value.get(key).and_then(Value::as_str).unwrap_or(default)
+}
+
+fn json_bool(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn json_u64(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn json_f64(value: &Value, key: &str) -> f64 {
+    value.get(key).and_then(Value::as_f64).unwrap_or(0.0)
 }
 
 fn yes_no(value: bool) -> &'static str {

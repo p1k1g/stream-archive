@@ -1,4 +1,5 @@
 //! KICK playback authentication and parallel native HLS download to MPEG-TS.
+use super::super::vod::{ProviderVodConfig, ProviderVodRunner};
 use crate::{
     backend::LogBuffer,
     model::{
@@ -8,9 +9,7 @@ use crate::{
     support::platform::PlatformId,
 };
 use anyhow::{Result, bail};
-use chrono::Utc;
 use std::{
-    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -18,27 +17,11 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{
-    sync::{Mutex, RwLock},
-    task::JoinHandle,
-};
+use tokio::sync::RwLock;
 use url::Url;
 use uuid::Uuid;
-const TERMINAL_CACHE_LIMIT: usize = 32;
-struct JobRuntime {
-    task: Option<JoinHandle<()>>,
-    cancel: Arc<AtomicBool>,
-}
 
-pub struct VodManager {
-    backend_dir: PathBuf,
-    logs: LogBuffer,
-    runtime: Mutex<JobRuntime>,
-    status: Arc<RwLock<VodJobStatus>>,
-    terminal: Arc<Mutex<VecDeque<(String, VodJobStatus)>>>,
-    events: crate::download_events::DownloadEvents,
-    notification_epoch: Arc<std::sync::atomic::AtomicU64>,
-}
+pub struct VodManager(ProviderVodRunner);
 
 impl VodManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
@@ -50,166 +33,57 @@ impl VodManager {
         logs: LogBuffer,
         events: crate::download_events::DownloadEvents,
     ) -> Self {
-        Self {
+        Self(ProviderVodRunner::new(
             backend_dir,
             logs,
-            runtime: Mutex::new(JobRuntime {
-                task: None,
-                cancel: Arc::new(AtomicBool::new(false)),
-            }),
-            status: Arc::new(RwLock::new(VodJobStatus {
-                platform: PlatformId::Kick,
-                ..Default::default()
-            })),
-            terminal: Arc::new(Mutex::new(VecDeque::new())),
             events,
-            notification_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        }
+            ProviderVodConfig {
+                platform: PlatformId::Kick,
+                busy_message: "다른 KICK VOD 작업이 이미 실행 중입니다.",
+                starting_message: "KICK VOD 작업 준비 중…",
+                cancelling_message: "KICK VOD 프로세스 종료 중…",
+                cancelled_message: "KICK VOD 작업이 취소되었습니다. 생성된 partial.ts / .part 부분 파일은 보존됩니다. 재시도는 새 파일로 시작합니다.",
+                cancel_log: "[VOD:KICK] job cancelled",
+                error_log_prefix: "[VOD:KICK:ERR]",
+                log_job_id_on_error: true,
+                redact_error: str::to_owned,
+            },
+        ))
     }
 
     pub(crate) fn notification_state(
         &self,
     ) -> (&RwLock<VodJobStatus>, &std::sync::atomic::AtomicU64) {
-        (&self.status, &self.notification_epoch)
+        self.0.notification_state()
     }
 
     pub async fn status(&self) -> VodJobStatus {
-        {
-            let mut runtime = self.runtime.lock().await;
-            if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
-                runtime.task.take();
-            }
-        }
-        self.status.read().await.clone()
+        self.0.status().await
     }
 
     pub async fn terminal_status(&self, job_id: &str) -> Option<VodJobStatus> {
-        self.terminal
-            .lock()
-            .await
-            .iter()
-            .rev()
-            .find(|(id, _)| id == job_id)
-            .map(|(_, status)| status.clone())
+        self.0.terminal_status(job_id).await
     }
 
     pub async fn analyze(&self, req: VodAnalyzeRequest) -> Result<VodJobStatus> {
-        self.start_job(VodJobKind::Analyze(req)).await
+        self.0
+            .start_job(false, move |backend, logs, status, cancel| async move {
+                run_analysis(&backend, req, &logs, &status, &cancel).await
+            })
+            .await
     }
 
     pub async fn download(&self, req: VodDownloadRequest) -> Result<VodJobStatus> {
-        self.start_job(VodJobKind::Download(req)).await
-    }
-
-    async fn start_job(&self, kind: VodJobKind) -> Result<VodJobStatus> {
-        let mut runtime = self.runtime.lock().await;
-        if runtime
-            .task
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
-        {
-            bail!("다른 KICK VOD 작업이 이미 실행 중입니다.");
-        }
-        runtime.task.take();
-
-        let cancel = Arc::new(AtomicBool::new(false));
-        runtime.cancel = cancel.clone();
-        let backend = self.backend_dir.clone();
-        let logs = self.logs.clone();
-        let status = self.status.clone();
-        let terminal = self.terminal.clone();
-        let job_id = Uuid::new_v4().to_string();
-        let terminal_job_id = job_id.clone();
-        {
-            let mut current = status.write().await;
-            *current = VodJobStatus {
-                platform: PlatformId::Kick,
-                state: "STARTING".into(),
-                running: true,
-                job_id: Some(job_id),
-                message: "KICK VOD 작업 준비 중…".into(),
-                started_at: Some(Utc::now().to_rfc3339()),
-                ..Default::default()
-            };
-            self.notification_epoch
-                .store(self.events.epoch(), Ordering::Release);
-        }
-
-        let events = self.events.clone();
-        let event_epoch = self.notification_epoch.clone();
-        let download = matches!(&kind, VodJobKind::Download(_));
-        let task = tokio::spawn(async move {
-            let result = match kind {
-                VodJobKind::Analyze(req) => {
-                    run_analysis(&backend, req, &logs, &status, &cancel).await
-                }
-                VodJobKind::Download(req) => {
-                    run_download(&backend, req, &logs, &status, &cancel).await
-                }
-            };
-            let final_status = {
-                let mut current = status.write().await;
-                current.running = false;
-                current.finished_at = Some(Utc::now().to_rfc3339());
-                if should_mark_cancelled(&cancel, &current.state) {
-                    current.state = "CANCELLED".into();
-                    current.message = "KICK VOD 작업이 취소되었습니다. 생성된 partial.ts / .part 부분 파일은 보존됩니다. 재시도는 새 파일로 시작합니다.".into();
-                    logs.push("[VOD:KICK] job cancelled").await;
-                } else if let Err(err) = result {
-                    current.state = "FAILED".into();
-                    current.message = format!("{err:#}");
-                    logs.push(format!(
-                        "[VOD:KICK:ERR] job={terminal_job_id} {}",
-                        current.message
-                    ))
-                    .await;
-                }
-                current.clone()
-            };
-            let mut terminal = terminal.lock().await;
-            if terminal.len() >= TERMINAL_CACHE_LIMIT {
-                terminal.pop_front();
-            }
-            events.terminal(&final_status, download, event_epoch.load(Ordering::Acquire));
-            terminal.push_back((terminal_job_id, final_status));
-        });
-        runtime.task = Some(task);
-        Ok(self.status.read().await.clone())
+        self.0
+            .start_job(true, move |backend, logs, status, cancel| async move {
+                run_download(&backend, req, &logs, &status, &cancel).await
+            })
+            .await
     }
 
     pub async fn cancel(&self) -> Result<VodJobStatus> {
-        let task = {
-            let mut runtime = self.runtime.lock().await;
-            if runtime
-                .task
-                .as_ref()
-                .is_some_and(|task| !task.is_finished())
-            {
-                runtime.cancel.store(true, Ordering::SeqCst);
-            }
-            runtime.task.take()
-        };
-        {
-            let mut current = self.status.write().await;
-            if current.running {
-                current.state = "CANCELLING".into();
-                current.message = "KICK VOD 프로세스 종료 중…".into();
-            }
-        }
-        if let Some(task) = task {
-            let _ = task.await;
-        }
-        Ok(self.status.read().await.clone())
+        self.0.cancel().await
     }
-}
-
-fn should_mark_cancelled(cancel: &AtomicBool, state: &str) -> bool {
-    cancel.load(Ordering::SeqCst) && state != "COMPLETED"
-}
-
-enum VodJobKind {
-    Analyze(VodAnalyzeRequest),
-    Download(VodDownloadRequest),
 }
 
 #[cfg(test)]
@@ -835,18 +709,7 @@ fn output_stem(streamer: &str, title: &str, id: Uuid) -> String {
 }
 
 fn safe_name(raw: &str) -> String {
-    raw.chars()
-        .map(|c| {
-            if c.is_control() || "<>:\"/\\|?*".contains(c) {
-                '_'
-            } else {
-                c
-            }
-        })
-        .take(60)
-        .collect::<String>()
-        .trim_matches([' ', '.'])
-        .to_owned()
+    crate::support::sanitize_filename_segment(raw, 60, None)
 }
 
 fn validate_media_playlist(playlist: &str, duration: u64) -> Result<u64> {

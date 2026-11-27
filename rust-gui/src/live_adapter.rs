@@ -91,19 +91,7 @@ fn status_presentation(status: &str) -> (&str, &str) {
 }
 
 fn format_bytes(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-    let bytes_f = bytes as f64;
-    if bytes_f >= GB {
-        format!("{:.2} GB", bytes_f / GB)
-    } else if bytes_f >= MB {
-        format!("{:.1} MB", bytes_f / MB)
-    } else if bytes_f >= KB {
-        format!("{:.1} KB", bytes_f / KB)
-    } else {
-        format!("{bytes} B")
-    }
+    crate::formatting::format_bytes_short(bytes)
 }
 
 fn channel_view(channel: ChannelRuntimeStatus, watcher_running: bool) -> LiveChannelView {

@@ -1982,65 +1982,7 @@ fn unique_output_file(
 }
 
 fn safe_name(value: &str, max: usize) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if ch.is_control() {
-            continue;
-        }
-        if r#"\/:*?"<>|"#.contains(ch) {
-            out.push('_');
-        } else {
-            out.push(ch);
-        }
-    }
-    let mut out = out
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .trim_end_matches('.')
-        .to_string();
-    if out.is_empty() {
-        out = "UNKNOWN".into();
-    }
-    if out.chars().count() > max {
-        out = out
-            .chars()
-            .take(max)
-            .collect::<String>()
-            .trim()
-            .trim_end_matches('.')
-            .to_string();
-    }
-    let upper = out.to_ascii_uppercase();
-    if matches!(
-        upper.as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    ) {
-        out.insert(0, '_');
-    }
-    out
+    crate::support::sanitize_filename_segment(value, max, Some("UNKNOWN"))
 }
 
 fn int(map: &BTreeMap<String, String>, key: &str, default: u64) -> u64 {

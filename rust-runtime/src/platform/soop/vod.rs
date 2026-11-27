@@ -4,6 +4,10 @@ mod parser;
 use cookies::*;
 use parser::*;
 
+use super::super::{
+    PlatformId,
+    vod::{ProviderVodConfig, ProviderVodRunner},
+};
 use crate::platform_runtime::spawn_owned;
 use crate::{
     backend::LogBuffer,
@@ -23,7 +27,6 @@ use reqwest::{
 };
 use serde_json::Value;
 use std::{
-    collections::VecDeque,
     fs,
     path::{Path, PathBuf},
     process::Stdio,
@@ -36,7 +39,6 @@ use std::{
 use tokio::{
     process::Command,
     sync::{Mutex, RwLock},
-    task::JoinHandle,
 };
 use url::Url;
 use uuid::Uuid;
@@ -102,11 +104,6 @@ impl RetryBudget {
     }
 }
 
-struct JobRuntime {
-    task: Option<JoinHandle<()>>,
-    cancel: Arc<AtomicBool>,
-}
-
 struct JobDirGuard(PathBuf);
 impl Drop for JobDirGuard {
     fn drop(&mut self) {
@@ -114,17 +111,7 @@ impl Drop for JobDirGuard {
     }
 }
 
-const TERMINAL_CACHE_LIMIT: usize = 32;
-
-pub struct VodManager {
-    backend_dir: PathBuf,
-    logs: LogBuffer,
-    runtime: Mutex<JobRuntime>,
-    status: Arc<RwLock<VodJobStatus>>,
-    terminal: Arc<Mutex<VecDeque<(String, VodJobStatus)>>>,
-    events: crate::download_events::DownloadEvents,
-    notification_epoch: Arc<std::sync::atomic::AtomicU64>,
-}
+pub struct VodManager(ProviderVodRunner);
 
 impl VodManager {
     pub fn new(backend_dir: PathBuf, logs: LogBuffer) -> Self {
@@ -136,143 +123,59 @@ impl VodManager {
         logs: LogBuffer,
         events: crate::download_events::DownloadEvents,
     ) -> Self {
-        Self {
+        Self(ProviderVodRunner::new(
             backend_dir,
             logs,
-            runtime: Mutex::new(JobRuntime {
-                task: None,
-                cancel: Arc::new(AtomicBool::new(false)),
-            }),
-            status: Arc::new(RwLock::new(VodJobStatus::default())),
-            terminal: Arc::new(Mutex::new(VecDeque::new())),
             events,
-            notification_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        }
+            ProviderVodConfig {
+                platform: PlatformId::Soop,
+                busy_message: "다른 VOD 작업이 이미 실행 중입니다.",
+                starting_message: "VOD 작업 준비 중…",
+                cancelling_message: "외부 프로세스 종료 중…",
+                cancelled_message: "VOD 작업이 취소되었습니다.",
+                cancel_log: "[VOD] job cancelled",
+                error_log_prefix: "[VOD:ERR]",
+                log_job_id_on_error: false,
+                redact_error: redact,
+            },
+        ))
     }
 
     pub(crate) fn notification_state(
         &self,
     ) -> (&RwLock<VodJobStatus>, &std::sync::atomic::AtomicU64) {
-        (&self.status, &self.notification_epoch)
+        self.0.notification_state()
     }
 
     pub async fn status(&self) -> VodJobStatus {
-        {
-            let mut runtime = self.runtime.lock().await;
-            if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
-                runtime.task.take();
-            }
-        }
-        self.status.read().await.clone()
+        self.0.status().await
     }
 
     pub async fn terminal_status(&self, job_id: &str) -> Option<VodJobStatus> {
-        let terminal = self.terminal.lock().await;
-        terminal
-            .iter()
-            .rev()
-            .find(|(id, _)| id == job_id)
-            .map(|(_, status)| status.clone())
+        self.0.terminal_status(job_id).await
     }
 
     pub async fn analyze(&self, req: VodAnalyzeRequest) -> Result<VodJobStatus> {
-        self.start_job(VodJobKind::Analyze(req)).await
+        self.0
+            .start_job(false, move |backend, logs, status, cancel| async move {
+                run_analysis(&backend, req, &logs, &status, &cancel)
+                    .await
+                    .map(|_| ())
+            })
+            .await
     }
 
     pub async fn download(&self, req: VodDownloadRequest) -> Result<VodJobStatus> {
-        self.start_job(VodJobKind::Download(req)).await
-    }
-
-    async fn start_job(&self, kind: VodJobKind) -> Result<VodJobStatus> {
-        let mut runtime = self.runtime.lock().await;
-        if runtime.task.as_ref().is_some_and(|t| !t.is_finished()) {
-            bail!("다른 VOD 작업이 이미 실행 중입니다.");
-        }
-        runtime.task.take();
-        let cancel = Arc::new(AtomicBool::new(false));
-        runtime.cancel = cancel.clone();
-        let backend = self.backend_dir.clone();
-        let logs = self.logs.clone();
-        let status = self.status.clone();
-        let terminal = self.terminal.clone();
-        let job_id = Uuid::new_v4().to_string();
-        let terminal_job_id = job_id.clone();
-        {
-            let mut s = status.write().await;
-            *s = VodJobStatus {
-                state: "STARTING".into(),
-                running: true,
-                job_id: Some(job_id),
-                message: "VOD 작업 준비 중…".into(),
-                started_at: Some(Utc::now().to_rfc3339()),
-                ..Default::default()
-            };
-            self.notification_epoch
-                .store(self.events.epoch(), Ordering::Release);
-        }
-        let events = self.events.clone();
-        let event_epoch = self.notification_epoch.clone();
-        let download = matches!(&kind, VodJobKind::Download(_));
-        let task = tokio::spawn(async move {
-            let result = match kind {
-                VodJobKind::Analyze(req) => run_analysis(&backend, req, &logs, &status, &cancel)
-                    .await
-                    .map(|_| ()),
-                VodJobKind::Download(req) => {
-                    run_download(&backend, req, &logs, &status, &cancel).await
-                }
-            };
-            let final_status = {
-                let mut s = status.write().await;
-                s.running = false;
-                s.finished_at = Some(Utc::now().to_rfc3339());
-                if cancel.load(Ordering::SeqCst) && s.state != "COMPLETED" {
-                    s.state = "CANCELLED".into();
-                    s.message = "VOD 작업이 취소되었습니다.".into();
-                    logs.push("[VOD] job cancelled").await;
-                } else if let Err(err) = result {
-                    s.state = "FAILED".into();
-                    s.message = redact(&format!("{err:#}"));
-                    logs.push(format!("[VOD:ERR] {}", s.message)).await;
-                }
-                s.clone()
-            };
-            let mut terminal = terminal.lock().await;
-            if terminal.len() >= TERMINAL_CACHE_LIMIT {
-                terminal.pop_front();
-            }
-            events.terminal(&final_status, download, event_epoch.load(Ordering::Acquire));
-            terminal.push_back((terminal_job_id, final_status));
-        });
-        runtime.task = Some(task);
-        Ok(self.status.read().await.clone())
+        self.0
+            .start_job(true, move |backend, logs, status, cancel| async move {
+                run_download(&backend, req, &logs, &status, &cancel).await
+            })
+            .await
     }
 
     pub async fn cancel(&self) -> Result<VodJobStatus> {
-        let task = {
-            let mut runtime = self.runtime.lock().await;
-            if runtime.task.as_ref().is_some_and(|t| !t.is_finished()) {
-                runtime.cancel.store(true, Ordering::SeqCst);
-            }
-            runtime.task.take()
-        };
-        {
-            let mut s = self.status.write().await;
-            if s.running {
-                s.state = "CANCELLING".into();
-                s.message = "외부 프로세스 종료 중…".into();
-            }
-        }
-        if let Some(task) = task {
-            let _ = task.await;
-        }
-        Ok(self.status.read().await.clone())
+        self.0.cancel().await
     }
-}
-
-enum VodJobKind {
-    Analyze(VodAnalyzeRequest),
-    Download(VodDownloadRequest),
 }
 
 #[derive(Clone, Copy)]
@@ -1555,7 +1458,7 @@ mod tests {
             crate::backend::LogBuffer::new(),
             events.clone(),
         );
-        let terminal_guard = manager.terminal.lock().await;
+        let terminal_guard = manager.0.terminal.lock().await;
         let missing = dir.path().join("missing-media-tool").display().to_string();
         let started = manager
             .download(crate::model::VodDownloadRequest {
@@ -1586,7 +1489,7 @@ mod tests {
         // The old job is idle, but cannot publish until terminal_guard is dropped.
         events.invalidate();
         drop(terminal_guard);
-        let task = manager.runtime.lock().await.task.take().unwrap();
+        let task = manager.0.take_task().await.unwrap();
         task.await.unwrap();
         let terminal = manager
             .terminal_status(started.job_id.as_deref().unwrap())

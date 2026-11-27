@@ -95,16 +95,20 @@ impl MainView {
         let soop_icon = png_bytes_to_render_image(PLATFORM_SOOP_PNG);
         let chzzk_icon = png_bytes_to_render_image(PLATFORM_CHZZK_PNG);
 
-        let vod_url_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("https://vod.sooplive.com/... · https://chzzk.naver.com/video/... · https://kick.com/...")
-                .default_value(initial.vod_url.clone())
-        });
-        let vod_output_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("VOD 저장 폴더")
-                .default_value(initial.vod_output_directory.clone())
-        });
+        let vod_url_input = create_input(
+            window,
+            cx,
+            "https://vod.sooplive.com/... · https://chzzk.naver.com/video/... · https://kick.com/...",
+            initial.vod_url.clone(),
+            false,
+        );
+        let vod_output_input = create_input(
+            window,
+            cx,
+            "VOD 저장 폴더",
+            initial.vod_output_directory.clone(),
+            false,
+        );
         let vod_batch_input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder(
@@ -112,113 +116,136 @@ impl MainView {
                 )
                 .default_value(initial.vod_batch_urls.clone())
         });
-        let history_search_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("채널명 · 방송 제목 · 파일명 검색 (Enter로 조회)")
-                .default_value(initial.history_search.clone())
-        });
-        let live_search_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("채널명 · 계정 · 방송 제목 검색")
-                .default_value(initial.live_search.clone())
-        });
-        let channels_search_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("채널 ID · 표시 이름 · 폴더 검색")
-                .default_value(initial.channels_search.clone())
-        });
-        let log_search_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("로그 키워드 검색 (예: CHZZK, SOOP, WARN, ERR)")
-                .default_value(initial.log_search.clone())
-        });
+        let history_search_input = create_input(
+            window,
+            cx,
+            "채널명 · 방송 제목 · 파일명 검색 (Enter로 조회)",
+            initial.history_search.clone(),
+            false,
+        );
+        let live_search_input = create_input(
+            window,
+            cx,
+            "채널명 · 계정 · 방송 제목 검색",
+            initial.live_search.clone(),
+            false,
+        );
+        let channels_search_input = create_input(
+            window,
+            cx,
+            "채널 ID · 표시 이름 · 폴더 검색",
+            initial.channels_search.clone(),
+            false,
+        );
+        let log_search_input = create_input(
+            window,
+            cx,
+            "로그 키워드 검색 (예: CHZZK, SOOP, WARN, ERR)",
+            initial.log_search.clone(),
+            false,
+        );
 
-        let prov_soop_user = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("SOOP 아이디")
-                .default_value(initial.provider_soop_username.clone())
-        });
-        let prov_soop_pass = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("새 비밀번호 입력 (비워두면 기존 값 유지)")
-                .default_value(initial.provider_soop_password.clone())
-                .masked(true)
-        });
-        let prov_worker_url = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("https://your-worker.workers.dev/soop/url")
-                .default_value(initial.provider_worker_url.clone())
-        });
-        let prov_worker_key = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("새 API_SECRET 입력 (비워두면 기존 값 유지)")
-                .default_value(initial.provider_worker_api_key.clone())
-                .masked(true)
-        });
-        let prov_chzzk_aut = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("NID_AUT 쿠키 (비워두면 기존 값 유지)")
-                .default_value(initial.provider_chzzk_nid_aut.clone())
-                .masked(true)
-        });
-        let prov_chzzk_ses = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("NID_SES 쿠키 (비워두면 기존 값 유지)")
-                .default_value(initial.provider_chzzk_nid_ses.clone())
-                .masked(true)
-        });
-        let prov_kick_token = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("session_token (비워두면 기존 값 유지)")
-                .default_value(initial.provider_kick_token.clone())
-                .masked(true)
-        });
-        let prov_discord_webhook = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(
-                    "https://discord.com/api/webhooks/<ID>/<TOKEN> (비워두면 기존 값 유지)",
-                )
-                .default_value(initial.provider_discord_webhook.clone())
-                .masked(true)
-        });
-        let prov_telegram_token = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("<봇ID>:<토큰> (비워두면 기존 값 유지)")
-                .default_value(initial.provider_telegram_bot_token.clone())
-                .masked(true)
-        });
-        let prov_telegram_chat_id = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("-1001234567890 또는 @채널명")
-                .default_value(initial.provider_telegram_chat_id.clone())
-        });
+        let prov_soop_user = create_input(
+            window,
+            cx,
+            "SOOP 아이디",
+            initial.provider_soop_username.clone(),
+            false,
+        );
+        let prov_soop_pass = create_input(
+            window,
+            cx,
+            "새 비밀번호 입력 (비워두면 기존 값 유지)",
+            initial.provider_soop_password.clone(),
+            true,
+        );
+        let prov_worker_url = create_input(
+            window,
+            cx,
+            "https://your-worker.workers.dev/soop/url",
+            initial.provider_worker_url.clone(),
+            false,
+        );
+        let prov_worker_key = create_input(
+            window,
+            cx,
+            "새 API_SECRET 입력 (비워두면 기존 값 유지)",
+            initial.provider_worker_api_key.clone(),
+            true,
+        );
+        let prov_chzzk_aut = create_input(
+            window,
+            cx,
+            "NID_AUT 쿠키 (비워두면 기존 값 유지)",
+            initial.provider_chzzk_nid_aut.clone(),
+            true,
+        );
+        let prov_chzzk_ses = create_input(
+            window,
+            cx,
+            "NID_SES 쿠키 (비워두면 기존 값 유지)",
+            initial.provider_chzzk_nid_ses.clone(),
+            true,
+        );
+        let prov_kick_token = create_input(
+            window,
+            cx,
+            "session_token (비워두면 기존 값 유지)",
+            initial.provider_kick_token.clone(),
+            true,
+        );
+        let prov_discord_webhook = create_input(
+            window,
+            cx,
+            "https://discord.com/api/webhooks/<ID>/<TOKEN> (비워두면 기존 값 유지)",
+            initial.provider_discord_webhook.clone(),
+            true,
+        );
+        let prov_telegram_token = create_input(
+            window,
+            cx,
+            "<봇ID>:<토큰> (비워두면 기존 값 유지)",
+            initial.provider_telegram_bot_token.clone(),
+            true,
+        );
+        let prov_telegram_chat_id = create_input(
+            window,
+            cx,
+            "-1001234567890 또는 @채널명",
+            initial.provider_telegram_chat_id.clone(),
+            false,
+        );
 
-        let backup_interval_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("24")
-                .default_value(initial.backup_interval_hours.clone())
-        });
-        let backup_keep_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("10")
-                .default_value(initial.backup_keep_count.clone())
-        });
-        let backup_retention_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("3")
-                .default_value(initial.backup_retention_days.clone())
-        });
-        let backup_dir_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("백업 폴더 경로")
-                .default_value(initial.backup_directory.clone())
-        });
-
-        let live_password_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("방송 비밀번호 입력 후 Enter")
-                .masked(true)
-        });
+        let backup_interval_input = create_input(
+            window,
+            cx,
+            "24",
+            initial.backup_interval_hours.clone(),
+            false,
+        );
+        let backup_keep_input =
+            create_input(window, cx, "10", initial.backup_keep_count.clone(), false);
+        let backup_retention_input = create_input(
+            window,
+            cx,
+            "3",
+            initial.backup_retention_days.clone(),
+            false,
+        );
+        let backup_dir_input = create_input(
+            window,
+            cx,
+            "백업 폴더 경로",
+            initial.backup_directory.clone(),
+            false,
+        );
+        let live_password_input = create_input(
+            window,
+            cx,
+            "방송 비밀번호 입력 후 Enter",
+            String::new(),
+            true,
+        );
 
         let mut subscriptions = Vec::new();
         subscriptions.push(cx.observe_in(&controller, window, |this, _, window, cx| {
@@ -241,17 +268,14 @@ impl MainView {
                 _ => {}
             },
         ));
-        subscriptions.push(cx.subscribe_in(
+        subscribe_input_change(
+            &mut subscriptions,
             &vod_output_input,
             window,
-            |this, state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let val = state.read(cx).value().to_string();
-                    this.controller.update(cx, |c, _| c.vod_edit_output(val));
-                    cx.notify();
-                }
-            },
-        ));
+            cx,
+            true,
+            |c, v| c.vod_edit_output(v),
+        );
         subscriptions.push(cx.subscribe_in(
             &vod_batch_input,
             window,
@@ -279,40 +303,30 @@ impl MainView {
                 _ => {}
             },
         ));
-        subscriptions.push(cx.subscribe_in(
+        subscribe_input_change(
+            &mut subscriptions,
             &live_search_input,
             window,
-            |this, state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let val = state.read(cx).value().to_string();
-                    this.controller.update(cx, |c, _| c.set_live_search(val));
-                    cx.notify();
-                }
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
+            cx,
+            true,
+            |c, v| c.set_live_search(v),
+        );
+        subscribe_input_change(
+            &mut subscriptions,
             &channels_search_input,
             window,
-            |this, state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let val = state.read(cx).value().to_string();
-                    this.controller
-                        .update(cx, |c, _| c.set_channels_search(val));
-                    cx.notify();
-                }
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
+            cx,
+            true,
+            |c, v| c.set_channels_search(v),
+        );
+        subscribe_input_change(
+            &mut subscriptions,
             &log_search_input,
             window,
-            |this, state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let val = state.read(cx).value().to_string();
-                    this.controller.update(cx, |c, _| c.set_log_search(val));
-                    cx.notify();
-                }
-            },
-        ));
+            cx,
+            true,
+            |c, v| c.set_log_search(v),
+        );
         subscriptions.push(cx.subscribe_in(
             &live_password_input,
             window,
@@ -349,16 +363,16 @@ impl MainView {
             (&backup_retention_input, |s, v| s.backup_retention_days = v),
             (&backup_dir_input, |s, v| s.backup_directory = v),
         ] {
-            subscriptions.push(cx.subscribe_in(
+            subscribe_input_change(
+                &mut subscriptions,
                 entity,
                 window,
-                move |this, state, event: &InputEvent, _, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        let val = state.read(cx).value().to_string();
-                        this.controller.update(cx, |c, _| apply(&mut c.state, val));
-                    }
+                cx,
+                false,
+                move |c, v| {
+                    apply(&mut c.state, v);
                 },
-            ));
+            );
         }
 
         let mut view = Self {
@@ -423,42 +437,21 @@ impl MainView {
             self.setting_inputs.clear();
             self.setting_subscriptions.clear();
             for row in &state.settings_rows {
-                if matches!(
-                    row.key.as_str(),
-                    "STREAM_ARCHIVE_CLOSE_ACTION"
-                        | "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS"
-                        | "GUI_NOTIFY_RECORD_START"
-                        | "GUI_NOTIFY_RECORD_FINISH"
-                        | "GUI_NOTIFY_WARNING"
-                        | "GUI_AUTO_START_WATCHER"
-                        | "GUI_START_MINIMIZED_TRAY"
-                        | "FILE_NAME_PATTERN"
-                        | "LIVE_AUTO_REMUX"
-                        | "LIVE_REMUX_DELETE_SOURCE"
-                        | "WEBHOOK_ENABLED"
-                        | "WEBHOOK_NOTIFY_LIVE"
-                        | "WEBHOOK_NOTIFY_VOD"
-                        | "WEBHOOK_NOTIFY_WARNING"
-                        | "LOG_ENABLED"
-                ) {
+                if settings_view::is_non_text_setting_key(&row.key) {
                     continue;
                 }
                 let key = row.key.clone();
-                let value = row.value.clone();
-                let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+                let input = create_input(window, cx, "", row.value.clone(), false);
                 let key_for_cb = key.clone();
-                let sub =
-                    cx.subscribe_in(&input, window, move |this, st, ev: &InputEvent, _, cx| {
-                        if matches!(ev, InputEvent::Change) {
-                            let next = st.read(cx).value().to_string();
-                            let k = key_for_cb.clone();
-                            this.controller
-                                .update(cx, |c, _| c.settings_set_key(&k, next));
-                            cx.notify();
-                        }
-                    });
+                subscribe_input_change(
+                    &mut self.setting_subscriptions,
+                    &input,
+                    window,
+                    cx,
+                    true,
+                    move |c, next| c.settings_set_key(&key_for_cb, next),
+                );
                 self.setting_inputs.insert(key, input);
-                self.setting_subscriptions.push(sub);
             }
         }
 
@@ -467,59 +460,33 @@ impl MainView {
             self.channel_inputs.clear();
             self.channel_subscriptions.clear();
             for (idx, row) in state.channels_rows.iter().enumerate() {
-                let account = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("예: streamer_id")
-                        .default_value(row.account.clone())
-                });
-                let name = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("자동 조회 또는 직접 입력")
-                        .default_value(row.name.clone())
-                });
-                let outdir = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("기본 OUTPUT_DIR 사용")
-                        .default_value(row.outdir.clone())
-                });
-
-                self.channel_subscriptions.push(cx.subscribe_in(
-                    &account,
+                let account =
+                    create_input(window, cx, "예: streamer_id", row.account.clone(), false);
+                let name = create_input(
                     window,
-                    move |this, st, ev: &InputEvent, _, cx| {
-                        if matches!(ev, InputEvent::Change) {
-                            let val = st.read(cx).value().to_string();
-                            this.controller
-                                .update(cx, |c, _| c.channels_edit(idx, "account", val));
-                            cx.notify();
-                        }
-                    },
-                ));
-                self.channel_subscriptions.push(cx.subscribe_in(
-                    &name,
+                    cx,
+                    "자동 조회 또는 직접 입력",
+                    row.name.clone(),
+                    false,
+                );
+                let outdir = create_input(
                     window,
-                    move |this, st, ev: &InputEvent, _, cx| {
-                        if matches!(ev, InputEvent::Change) {
-                            let val = st.read(cx).value().to_string();
-                            this.controller
-                                .update(cx, |c, _| c.channels_edit(idx, "name", val));
-                            cx.notify();
-                        }
-                    },
-                ));
-                self.channel_subscriptions.push(cx.subscribe_in(
-                    &outdir,
-                    window,
-                    move |this, st, ev: &InputEvent, _, cx| {
-                        if matches!(ev, InputEvent::Change) {
-                            let val = st.read(cx).value().to_string();
-                            this.controller
-                                .update(cx, |c, _| c.channels_edit(idx, "outdir", val));
-                            cx.notify();
-                        }
-                    },
-                ));
-
+                    cx,
+                    "기본 OUTPUT_DIR 사용",
+                    row.outdir.clone(),
+                    false,
+                );
+                for (entity, field) in [(&account, "account"), (&name, "name"), (&outdir, "outdir")]
+                {
+                    subscribe_input_change(
+                        &mut self.channel_subscriptions,
+                        entity,
+                        window,
+                        cx,
+                        true,
+                        move |c, val| c.channels_edit(idx, field, val),
+                    );
+                }
                 self.channel_inputs.push(ChannelInputSet {
                     account,
                     name,
@@ -530,63 +497,52 @@ impl MainView {
 
         if self.synced_provider_rev != Some(state.provider_revision) {
             self.synced_provider_rev = Some(state.provider_revision);
-            self.prov_soop_user.update(cx, |s, cx| {
-                s.set_value(state.provider_soop_username.clone(), window, cx)
-            });
-            self.prov_soop_pass.update(cx, |s, cx| {
-                s.set_value(state.provider_soop_password.clone(), window, cx)
-            });
-            self.prov_worker_url.update(cx, |s, cx| {
-                s.set_value(state.provider_worker_url.clone(), window, cx)
-            });
-            self.prov_worker_key.update(cx, |s, cx| {
-                s.set_value(state.provider_worker_api_key.clone(), window, cx)
-            });
-            self.prov_chzzk_aut.update(cx, |s, cx| {
-                s.set_value(state.provider_chzzk_nid_aut.clone(), window, cx)
-            });
-            self.prov_chzzk_ses.update(cx, |s, cx| {
-                s.set_value(state.provider_chzzk_nid_ses.clone(), window, cx)
-            });
-            self.prov_kick_token.update(cx, |s, cx| {
-                s.set_value(state.provider_kick_token.clone(), window, cx)
-            });
-            self.prov_discord_webhook.update(cx, |s, cx| {
-                s.set_value(state.provider_discord_webhook.clone(), window, cx)
-            });
-            self.prov_telegram_token.update(cx, |s, cx| {
-                s.set_value(state.provider_telegram_bot_token.clone(), window, cx)
-            });
-            self.prov_telegram_chat_id.update(cx, |s, cx| {
-                s.set_value(state.provider_telegram_chat_id.clone(), window, cx)
-            });
+            for (entity, value) in [
+                (&self.prov_soop_user, &state.provider_soop_username),
+                (&self.prov_soop_pass, &state.provider_soop_password),
+                (&self.prov_worker_url, &state.provider_worker_url),
+                (&self.prov_worker_key, &state.provider_worker_api_key),
+                (&self.prov_chzzk_aut, &state.provider_chzzk_nid_aut),
+                (&self.prov_chzzk_ses, &state.provider_chzzk_nid_ses),
+                (&self.prov_kick_token, &state.provider_kick_token),
+                (&self.prov_discord_webhook, &state.provider_discord_webhook),
+                (
+                    &self.prov_telegram_token,
+                    &state.provider_telegram_bot_token,
+                ),
+                (
+                    &self.prov_telegram_chat_id,
+                    &state.provider_telegram_chat_id,
+                ),
+            ] {
+                sync_input(entity, value, window, cx);
+            }
         }
 
         if self.synced_backup_rev != Some(state.backup_revision) {
             self.synced_backup_rev = Some(state.backup_revision);
-            self.backup_interval_input.update(cx, |s, cx| {
-                s.set_value(state.backup_interval_hours.clone(), window, cx)
-            });
-            self.backup_keep_input.update(cx, |s, cx| {
-                s.set_value(state.backup_keep_count.clone(), window, cx)
-            });
-            self.backup_retention_input.update(cx, |s, cx| {
-                s.set_value(state.backup_retention_days.clone(), window, cx)
-            });
+            for (entity, value) in [
+                (&self.backup_interval_input, &state.backup_interval_hours),
+                (&self.backup_keep_input, &state.backup_keep_count),
+                (&self.backup_retention_input, &state.backup_retention_days),
+            ] {
+                sync_input(entity, value, window, cx);
+            }
         }
 
         if self.synced_backup_dir_rev != Some(state.backup_dir_revision) {
             self.synced_backup_dir_rev = Some(state.backup_dir_revision);
-            self.backup_dir_input.update(cx, |s, cx| {
-                s.set_value(state.backup_directory.clone(), window, cx)
-            });
+            sync_input(&self.backup_dir_input, &state.backup_directory, window, cx);
         }
 
         if self.synced_vod_output_rev != Some(state.vod_output_revision) {
             self.synced_vod_output_rev = Some(state.vod_output_revision);
-            self.vod_output_input.update(cx, |s, cx| {
-                s.set_value(state.vod_output_directory.clone(), window, cx)
-            });
+            sync_input(
+                &self.vod_output_input,
+                &state.vod_output_directory,
+                window,
+                cx,
+            );
         }
 
         if self.synced_vod_batch_rev != Some(state.vod_batch_revision) {
@@ -983,91 +939,72 @@ impl MainView {
         let state = self.controller.read(cx).state.clone();
         modal_backdrop(
             "close-dialog-backdrop",
-            surface_card()
-                .w(px(440.0))
-                .p(px(18.0))
-                .bg(rgb(BG_SURFACE))
-                .border_color(rgb(BORDER_STRONG))
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
+            modal_shell(
+                440.0,
+                BORDER_STRONG,
+                "창을 닫을 때 어떻게 동작할까요?",
+                TEXT_PRIMARY,
+                "트레이로 이동하면 창 GPU 리소스를 해제하고 백그라운드에서 녹화·다운로드를 계속 유지합니다.",
+            )
+            .child(
+                Checkbox::new("close-remember-cb")
+                    .checked(state.close_remember)
+                    .label("이 선택을 기본 동작으로 기억하기")
+                    .on_click(cx.listener(|this, checked, _, cx| {
+                        this.controller.update(cx, |c, _| {
+                            c.state.close_remember = *checked;
+                        });
+                        cx.notify();
+                    })),
+            )
+            .when(!state.close_choice_error.is_empty(), |el| {
+                el.child(
                     div()
-                        .text_size(px(15.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(TEXT_PRIMARY))
-                        .child("창을 닫을 때 어떻게 동작할까요?"),
+                        .text_size(px(11.5))
+                        .text_color(rgb(ERR_FG))
+                        .child(state.close_choice_error.clone()),
                 )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb(TEXT_SECONDARY))
-                        .child("트레이로 이동하면 창 GPU 리소스를 해제하고 백그라운드에서 녹화·다운로드를 계속 유지합니다."),
-                )
-                .child(
-                    Checkbox::new("close-remember-cb")
-                        .checked(state.close_remember)
-                        .label("이 선택을 기본 동작으로 기억하기")
-                        .on_click(cx.listener(|this, checked, _, cx| {
-                            this.controller.update(cx, |c, _| {
-                                c.state.close_remember = *checked;
-                            });
-                            cx.notify();
-                        })),
-                )
-                .when(!state.close_choice_error.is_empty(), |el| {
-                    el.child(
-                        div()
-                            .text_size(px(11.5))
-                            .text_color(rgb(ERR_FG))
-                            .child(state.close_choice_error.clone()),
+            })
+            .child(
+                modal_actions(true)
+                    .child(
+                        Button::new("close-cancel-btn")
+                            .ghost()
+                            .small()
+                            .disabled(state.close_choice_busy)
+                            .label("취소")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.cancel_close_dialog());
+                                cx.notify();
+                            })),
                     )
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .gap(px(8.0))
-                        .pt(px(6.0))
-                        .child(
-                            Button::new("close-cancel-btn")
-                                .ghost()
-                                .small()
-                                .disabled(state.close_choice_busy)
-                                .label("취소")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.controller.update(cx, |c, _| c.cancel_close_dialog());
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("close-tray-btn")
-                                .primary()
-                                .small()
-                                .disabled(state.close_choice_busy)
-                                .label("트레이로 이동")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let remember = this.controller.read(cx).state.close_remember;
-                                    this.controller
-                                        .update(cx, |c, _| c.submit_close_choice("TRAY", remember));
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("close-exit-btn")
-                                .danger()
-                                .small()
-                                .disabled(state.close_choice_busy)
-                                .label("앱 종료")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let remember = this.controller.read(cx).state.close_remember;
-                                    this.controller
-                                        .update(cx, |c, _| c.submit_close_choice("EXIT", remember));
-                                    cx.notify();
-                                })),
-                        ),
-                ),
+                    .child(
+                        Button::new("close-tray-btn")
+                            .primary()
+                            .small()
+                            .disabled(state.close_choice_busy)
+                            .label("트레이로 이동")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let remember = this.controller.read(cx).state.close_remember;
+                                this.controller
+                                    .update(cx, |c, _| c.submit_close_choice("TRAY", remember));
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("close-exit-btn")
+                            .danger()
+                            .small()
+                            .disabled(state.close_choice_busy)
+                            .label("앱 종료")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let remember = this.controller.read(cx).state.close_remember;
+                                this.controller
+                                    .update(cx, |c, _| c.submit_close_choice("EXIT", remember));
+                                cx.notify();
+                            })),
+                    ),
+            ),
         )
     }
 
@@ -1075,58 +1012,40 @@ impl MainView {
         let name = self.controller.read(cx).state.password_prompt_name.clone();
         modal_backdrop(
             "password-modal-backdrop",
-            surface_card()
-                .w(px(400.0))
-                .p(px(18.0))
-                .bg(rgb(BG_SURFACE))
-                .border_color(rgb(BORDER_STRONG))
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .text_size(px(14.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(TEXT_PRIMARY))
-                        .child(format!("비밀번호 방송 녹화 — {name}")),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb(TEXT_SECONDARY))
-                        .child("현재 방송 회차에만 임시 적용되며 디스크에 저장되지 않습니다."),
-                )
-                .child(Input::new(&self.live_password_input).small().mask_toggle())
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .gap(px(8.0))
-                        .child(
-                            Button::new("pw-cancel-btn")
-                                .ghost()
-                                .small()
-                                .label("취소")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.controller
-                                        .update(cx, |c, _| c.cancel_password_prompt());
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("pw-submit-btn")
-                                .primary()
-                                .small()
-                                .label("적용 후 재시도")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let pw = this.live_password_input.read(cx).value().to_string();
-                                    this.controller
-                                        .update(cx, |c, _| c.submit_live_password(pw));
-                                    cx.notify();
-                                })),
-                        ),
-                ),
+            modal_shell(
+                400.0,
+                BORDER_STRONG,
+                format!("비밀번호 방송 녹화 — {name}"),
+                TEXT_PRIMARY,
+                "현재 방송 회차에만 임시 적용되며 디스크에 저장되지 않습니다.",
+            )
+            .child(Input::new(&self.live_password_input).small().mask_toggle())
+            .child(
+                modal_actions(false)
+                    .child(
+                        Button::new("pw-cancel-btn")
+                            .ghost()
+                            .small()
+                            .label("취소")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller
+                                    .update(cx, |c, _| c.cancel_password_prompt());
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("pw-submit-btn")
+                            .primary()
+                            .small()
+                            .label("적용 후 재시도")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let pw = this.live_password_input.read(cx).value().to_string();
+                                this.controller
+                                    .update(cx, |c, _| c.submit_live_password(pw));
+                                cx.notify();
+                            })),
+                    ),
+            ),
         )
     }
 
@@ -1135,129 +1054,186 @@ impl MainView {
         let busy = state.exit_shutting_down;
         modal_backdrop(
             "exit-confirm-backdrop",
-            surface_card()
-                .w(px(450.0))
-                .p(px(18.0))
-                .bg(rgb(BG_SURFACE))
-                .border_color(rgb(WARN_BORDER))
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
+            modal_shell(
+                450.0,
+                WARN_BORDER,
+                "Stream Archive 종료",
+                TEXT_PRIMARY,
+                if busy {
+                    "진행 중인 녹화·다운로드·감시 작업을 안전하게 정리하고 종료하는 중입니다..."
+                } else {
+                    "녹화·다운로드·채널 감시 또는 대기 중인 Queue가 진행 중입니다. 현재 앱의 작업을 안전하게 정리하고 종료할까요?"
+                },
+            )
+            .when(!state.exit_confirm_error.is_empty(), |el| {
+                el.child(
                     div()
-                        .text_size(px(15.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(TEXT_PRIMARY))
-                        .child("Stream Archive 종료"),
+                        .text_size(px(11.5))
+                        .text_color(rgb(WARN_FG))
+                        .child(state.exit_confirm_error.clone()),
                 )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb(TEXT_SECONDARY))
-                        .child(if busy {
-                            "진행 중인 녹화·다운로드·감시 작업을 안전하게 정리하고 종료하는 중입니다..."
-                        } else {
-                            "녹화·다운로드·채널 감시 또는 대기 중인 Queue가 진행 중입니다. 현재 앱의 작업을 안전하게 정리하고 종료할까요?"
-                        }),
-                )
-                .when(!state.exit_confirm_error.is_empty(), |el| {
-                    el.child(
-                        div()
-                            .text_size(px(11.5))
-                            .text_color(rgb(WARN_FG))
-                            .child(state.exit_confirm_error.clone()),
+            })
+            .child(
+                modal_actions(true)
+                    .child(
+                        Button::new("exit-confirm-cancel-btn")
+                            .ghost()
+                            .small()
+                            .disabled(busy)
+                            .label("계속 실행")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller
+                                    .update(cx, |c, _| c.complete_exit_confirmation(false));
+                                cx.notify();
+                            })),
                     )
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .gap(px(8.0))
-                        .pt(px(6.0))
-                        .child(
-                            Button::new("exit-confirm-cancel-btn")
-                                .ghost()
-                                .small()
-                                .disabled(busy)
-                                .label("계속 실행")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.controller
-                                        .update(cx, |c, _| c.complete_exit_confirmation(false));
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("exit-confirm-ok-btn")
-                                .danger()
-                                .small()
-                                .disabled(busy)
-                                .label(if busy { "종료 정리 중..." } else { "정리 후 종료" })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.controller
-                                        .update(cx, |c, _| c.complete_exit_confirmation(true));
-                                    cx.notify();
-                                })),
-                        ),
-                ),
+                    .child(
+                        Button::new("exit-confirm-ok-btn")
+                            .danger()
+                            .small()
+                            .disabled(busy)
+                            .label(if busy { "종료 정리 중..." } else { "정리 후 종료" })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller
+                                    .update(cx, |c, _| c.complete_exit_confirmation(true));
+                                cx.notify();
+                            })),
+                    ),
+            ),
         )
     }
 
     fn render_restore_modal(&self, file_name: &str, cx: &mut Context<Self>) -> Div {
         modal_backdrop(
             "restore-modal-backdrop",
-            surface_card()
-                .w(px(440.0))
-                .p(px(18.0))
-                .bg(rgb(BG_SURFACE))
-                .border_color(rgb(ERR_BORDER))
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .text_size(px(14.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(ERR_FG))
-                        .child("백업 복원을 진행할까요?"),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb(TEXT_SECONDARY))
-                        .child(format!(
-                            "선택한 백업({file_name})으로 SQLite 데이터베이스를 복원합니다. 복원 전 안전 백업이 자동 생성되며 진행 중인 감시·VOD 작업이 중지됩니다."
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .gap(px(8.0))
-                        .child(
-                            Button::new("restore-cancel-btn")
-                                .ghost()
-                                .small()
-                                .label("취소")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.controller.update(cx, |c, _| c.cancel_restore());
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("restore-confirm-btn")
-                                .danger()
-                                .small()
-                                .label("복원 실행")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.controller.update(cx, |c, _| c.confirm_restore());
-                                    cx.notify();
-                                })),
-                        ),
+            modal_shell(
+                440.0,
+                ERR_BORDER,
+                "백업 복원을 진행할까요?",
+                ERR_FG,
+                format!(
+                    "선택한 백업({file_name})으로 SQLite 데이터베이스를 복원합니다. 복원 전 안전 백업이 자동 생성되며 진행 중인 감시·VOD 작업이 중지됩니다."
                 ),
+            )
+            .child(
+                modal_actions(false)
+                    .child(
+                        Button::new("restore-cancel-btn")
+                            .ghost()
+                            .small()
+                            .label("취소")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.cancel_restore());
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("restore-confirm-btn")
+                            .danger()
+                            .small()
+                            .label("복원 실행")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.controller.update(cx, |c, _| c.confirm_restore());
+                                cx.notify();
+                            })),
+                    ),
+            ),
         )
     }
+}
+
+fn create_input(
+    window: &mut Window,
+    cx: &mut Context<MainView>,
+    placeholder: &'static str,
+    default_value: String,
+    masked: bool,
+) -> Entity<InputState> {
+    cx.new(|cx| {
+        let mut state = InputState::new(window, cx);
+        if !placeholder.is_empty() {
+            state = state.placeholder(placeholder);
+        }
+        if !default_value.is_empty() {
+            state = state.default_value(default_value);
+        }
+        if masked {
+            state = state.masked(true);
+        }
+        state
+    })
+}
+
+fn subscribe_input_change(
+    subs: &mut Vec<Subscription>,
+    entity: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<MainView>,
+    notify: bool,
+    apply: impl Fn(&mut AppController, String) + 'static,
+) {
+    subs.push(cx.subscribe_in(
+        entity,
+        window,
+        move |this, state, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                let val = state.read(cx).value().to_string();
+                this.controller.update(cx, |c, _| apply(c, val));
+                if notify {
+                    cx.notify();
+                }
+            }
+        },
+    ));
+}
+
+fn sync_input(
+    entity: &Entity<InputState>,
+    value: &str,
+    window: &mut Window,
+    cx: &mut Context<MainView>,
+) {
+    let value = value.to_string();
+    entity.update(cx, |s, cx| s.set_value(value, window, cx));
+}
+
+fn modal_shell(
+    width: f32,
+    border_color: u32,
+    title: impl Into<SharedString>,
+    title_color: u32,
+    description: impl Into<SharedString>,
+) -> Div {
+    surface_card()
+        .w(px(width))
+        .p(px(18.0))
+        .bg(rgb(BG_SURFACE))
+        .border_color(rgb(border_color))
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(
+            div()
+                .text_size(px(14.5))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(title_color))
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_size(px(12.0))
+                .text_color(rgb(TEXT_SECONDARY))
+                .child(description.into()),
+        )
+}
+
+fn modal_actions(padded_top: bool) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap(px(8.0))
+        .when(padded_top, |el| el.pt(px(6.0)))
 }
 
 fn modal_backdrop(_id: &'static str, dialog: Div) -> Div {

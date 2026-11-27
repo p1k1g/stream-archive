@@ -4,8 +4,225 @@ use crate::{
     model::{VodAnalyzeRequest, VodDownloadRequest, VodJobStatus},
 };
 use anyhow::{Result, bail};
-use std::path::PathBuf;
-use tokio::sync::Mutex;
+use chrono::Utc;
+use std::{
+    collections::VecDeque,
+    future::Future,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::JoinHandle,
+};
+use uuid::Uuid;
+
+const TERMINAL_CACHE_LIMIT: usize = 32;
+
+pub(crate) struct ProviderVodConfig {
+    pub platform: PlatformId,
+    pub busy_message: &'static str,
+    pub starting_message: &'static str,
+    pub cancelling_message: &'static str,
+    pub cancelled_message: &'static str,
+    pub cancel_log: &'static str,
+    pub error_log_prefix: &'static str,
+    pub log_job_id_on_error: bool,
+    pub redact_error: fn(&str) -> String,
+}
+
+struct JobRuntime {
+    task: Option<JoinHandle<()>>,
+    cancel: Arc<AtomicBool>,
+}
+
+pub(crate) fn should_mark_cancelled(cancel: &AtomicBool, state: &str) -> bool {
+    cancel.load(Ordering::SeqCst) && state != "COMPLETED"
+}
+
+/// Shared single-active-job lifecycle, cancellation, terminal cache, and
+/// notification epoch coordination reused by every VOD provider.
+pub(crate) struct ProviderVodRunner {
+    backend_dir: PathBuf,
+    logs: LogBuffer,
+    config: ProviderVodConfig,
+    runtime: Mutex<JobRuntime>,
+    status: Arc<RwLock<VodJobStatus>>,
+    pub(crate) terminal: Arc<Mutex<VecDeque<(String, VodJobStatus)>>>,
+    events: crate::download_events::DownloadEvents,
+    notification_epoch: Arc<AtomicU64>,
+}
+
+impl ProviderVodRunner {
+    pub(crate) fn new(
+        backend_dir: PathBuf,
+        logs: LogBuffer,
+        events: crate::download_events::DownloadEvents,
+        config: ProviderVodConfig,
+    ) -> Self {
+        let initial_status = VodJobStatus {
+            platform: config.platform,
+            ..Default::default()
+        };
+        Self {
+            backend_dir,
+            logs,
+            config,
+            runtime: Mutex::new(JobRuntime {
+                task: None,
+                cancel: Arc::new(AtomicBool::new(false)),
+            }),
+            status: Arc::new(RwLock::new(initial_status)),
+            terminal: Arc::new(Mutex::new(VecDeque::new())),
+            events,
+            notification_epoch: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub(crate) fn notification_state(&self) -> (&RwLock<VodJobStatus>, &AtomicU64) {
+        (&self.status, &self.notification_epoch)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn take_task(&self) -> Option<JoinHandle<()>> {
+        self.runtime.lock().await.task.take()
+    }
+
+    pub(crate) async fn status(&self) -> VodJobStatus {
+        {
+            let mut runtime = self.runtime.lock().await;
+            if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
+                runtime.task.take();
+            }
+        }
+        self.status.read().await.clone()
+    }
+
+    pub(crate) async fn terminal_status(&self, job_id: &str) -> Option<VodJobStatus> {
+        self.terminal
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find(|(id, _)| id == job_id)
+            .map(|(_, status)| status.clone())
+    }
+
+    pub(crate) async fn start_job<F, Fut>(&self, is_download: bool, work: F) -> Result<VodJobStatus>
+    where
+        F: FnOnce(PathBuf, LogBuffer, Arc<RwLock<VodJobStatus>>, Arc<AtomicBool>) -> Fut,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let mut runtime = self.runtime.lock().await;
+        if runtime
+            .task
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            bail!("{}", self.config.busy_message);
+        }
+        runtime.task.take();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        runtime.cancel = cancel.clone();
+        let backend = self.backend_dir.clone();
+        let logs = self.logs.clone();
+        let status = self.status.clone();
+        let terminal = self.terminal.clone();
+        let job_id = Uuid::new_v4().to_string();
+        let terminal_job_id = job_id.clone();
+        {
+            let mut current = status.write().await;
+            *current = VodJobStatus {
+                platform: self.config.platform,
+                state: "STARTING".into(),
+                running: true,
+                job_id: Some(job_id),
+                message: self.config.starting_message.into(),
+                started_at: Some(Utc::now().to_rfc3339()),
+                ..Default::default()
+            };
+            self.notification_epoch
+                .store(self.events.epoch(), Ordering::Release);
+        }
+
+        let events = self.events.clone();
+        let event_epoch = self.notification_epoch.clone();
+        let cancelled_message = self.config.cancelled_message;
+        let cancel_log = self.config.cancel_log;
+        let error_log_prefix = self.config.error_log_prefix;
+        let log_job_id_on_error = self.config.log_job_id_on_error;
+        let redact_error = self.config.redact_error;
+        let future = work(backend, logs.clone(), status.clone(), cancel.clone());
+        let task = tokio::spawn(async move {
+            let result = future.await;
+            let final_status = {
+                let mut current = status.write().await;
+                current.running = false;
+                current.finished_at = Some(Utc::now().to_rfc3339());
+                if should_mark_cancelled(&cancel, &current.state) {
+                    current.state = "CANCELLED".into();
+                    current.message = cancelled_message.into();
+                    logs.push(cancel_log).await;
+                } else if let Err(err) = result {
+                    current.state = "FAILED".into();
+                    current.message = redact_error(&format!("{err:#}"));
+                    if log_job_id_on_error {
+                        logs.push(format!(
+                            "{error_log_prefix} job={terminal_job_id} {}",
+                            current.message
+                        ))
+                        .await;
+                    } else {
+                        logs.push(format!("{error_log_prefix} {}", current.message))
+                            .await;
+                    }
+                }
+                current.clone()
+            };
+            let mut terminal = terminal.lock().await;
+            if terminal.len() >= TERMINAL_CACHE_LIMIT {
+                terminal.pop_front();
+            }
+            events.terminal(
+                &final_status,
+                is_download,
+                event_epoch.load(Ordering::Acquire),
+            );
+            terminal.push_back((terminal_job_id, final_status));
+        });
+        runtime.task = Some(task);
+        Ok(self.status.read().await.clone())
+    }
+
+    pub(crate) async fn cancel(&self) -> Result<VodJobStatus> {
+        let task = {
+            let mut runtime = self.runtime.lock().await;
+            if runtime
+                .task
+                .as_ref()
+                .is_some_and(|task| !task.is_finished())
+            {
+                runtime.cancel.store(true, Ordering::SeqCst);
+            }
+            runtime.task.take()
+        };
+        {
+            let mut current = self.status.write().await;
+            if current.running {
+                current.state = "CANCELLING".into();
+                current.message = self.config.cancelling_message.into();
+            }
+        }
+        if let Some(task) = task {
+            let _ = task.await;
+        }
+        Ok(self.status.read().await.clone())
+    }
+}
 
 pub(crate) fn validate_thumbnail_url(platform: PlatformId, url: &url::Url) -> bool {
     match platform {

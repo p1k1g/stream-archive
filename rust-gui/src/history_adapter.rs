@@ -293,14 +293,7 @@ fn state_tone(state: &str) -> &'static str {
 }
 
 pub fn format_duration(seconds: u64) -> String {
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let seconds = seconds % 60;
-    if hours > 0 {
-        format!("{hours:02}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
-    }
+    crate::formatting::format_duration_padded(seconds)
 }
 
 #[cfg(test)]
