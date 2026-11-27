@@ -403,54 +403,7 @@ pub(super) fn value_as_string(value: &Value) -> String {
 }
 
 pub(super) fn safe_name(value: &str) -> String {
-    let mut safe = value
-        .chars()
-        .map(|c| {
-            if c.is_control() || r#"\/:*?"<>|"#.contains(c) {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect::<String>();
-    safe = safe
-        .trim()
-        .trim_end_matches(['.', ' '])
-        .chars()
-        .take(100)
-        .collect();
-    if safe.is_empty() {
-        safe = "UNKNOWN".into();
-    }
-    let upper = safe.to_ascii_uppercase();
-    if matches!(
-        upper.as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    ) {
-        safe.insert(0, '_');
-    }
-    safe
+    crate::support::sanitize_filename_segment(value, 100, Some("UNKNOWN"))
 }
 
 pub(super) fn collision_path(dir: &Path, base: &str, extension: &str) -> Result<PathBuf> {

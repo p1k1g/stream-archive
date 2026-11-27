@@ -1,16 +1,49 @@
-pub fn format_bytes(bytes: u64) -> String {
+fn format_byte_units(bytes: u64, units: [&str; 4]) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
     const GIB: f64 = MIB * 1024.0;
     let value = bytes as f64;
     if value >= GIB {
-        format!("{:.2} GiB", value / GIB)
+        format!("{:.2} {}", value / GIB, units[3])
     } else if value >= MIB {
-        format!("{:.1} MiB", value / MIB)
+        format!("{:.1} {}", value / MIB, units[2])
     } else if value >= KIB {
-        format!("{:.1} KiB", value / KIB)
+        format!("{:.1} {}", value / KIB, units[1])
     } else {
-        format!("{bytes} B")
+        format!("{bytes} {}", units[0])
+    }
+}
+
+pub fn format_bytes(bytes: u64) -> String {
+    format_byte_units(bytes, ["B", "KiB", "MiB", "GiB"])
+}
+
+pub fn format_bytes_short(bytes: u64) -> String {
+    format_byte_units(bytes, ["B", "KB", "MB", "GB"])
+}
+
+fn split_hms(seconds: u64) -> (u64, u64, u64) {
+    (seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+}
+
+pub fn format_duration_padded(seconds: u64) -> String {
+    let (hours, minutes, secs) = split_hms(seconds);
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes:02}:{secs:02}")
+    }
+}
+
+pub fn format_duration_compact(seconds: u64) -> String {
+    if seconds == 0 {
+        return "-".into();
+    }
+    let (hours, minutes, secs) = split_hms(seconds);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes}:{secs:02}")
     }
 }
 
@@ -18,11 +51,9 @@ pub fn format_elapsed_ms(started_ms: i64, now_ms: i64) -> String {
     if started_ms == i64::MIN {
         return String::new();
     }
-    let secs = (now_ms.saturating_sub(started_ms).max(0) / 1000) as u64;
-    let hours = secs / 3600;
-    let minutes = (secs % 3600) / 60;
-    let seconds = secs % 60;
-    format!("{hours:02}:{minutes:02}:{seconds:02}")
+    let (hours, minutes, secs) =
+        split_hms((now_ms.saturating_sub(started_ms).max(0) / 1000) as u64);
+    format!("{hours:02}:{minutes:02}:{secs:02}")
 }
 
 pub fn format_elapsed_since(started_at: &str) -> String {

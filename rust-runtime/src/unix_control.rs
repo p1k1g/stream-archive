@@ -32,7 +32,7 @@ const CONTROL_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5
 #[cfg(unix)]
 const CONTROL_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RuntimeControlRequest {
     pub command: String,
     #[serde(default)]
@@ -43,6 +43,35 @@ pub struct RuntimeControlRequest {
     pub secret: Option<String>,
     #[serde(default)]
     pub max_lines: Option<usize>,
+}
+
+impl RuntimeControlRequest {
+    pub fn command(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    pub fn with_action(mut self, action: impl Into<String>) -> Self {
+        self.action = Some(action.into());
+        self
+    }
+
+    pub fn with_secret(mut self, secret: impl Into<String>) -> Self {
+        self.secret = Some(secret.into());
+        self
+    }
+
+    pub fn with_max_lines(mut self, max_lines: usize) -> Self {
+        self.max_lines = Some(max_lines);
+        self
+    }
 }
 
 #[cfg(unix)]

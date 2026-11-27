@@ -228,37 +228,7 @@ pub(super) fn today_short_date() -> String {
 }
 
 pub(super) fn safe_name(value: &str, max: usize) -> String {
-    let mut output = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if ch.is_control() {
-            continue;
-        }
-        if r#"\/:*?"<>|"#.contains(ch) {
-            output.push('_');
-        } else {
-            output.push(ch);
-        }
-    }
-    let mut output = output
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .trim_end_matches('.')
-        .to_string();
-    if output.is_empty() {
-        output = "UNKNOWN".into();
-    }
-    if output.chars().count() > max {
-        output = output
-            .chars()
-            .take(max)
-            .collect::<String>()
-            .trim()
-            .trim_end_matches('.')
-            .to_string();
-    }
-    output
+    crate::support::sanitize_filename_segment(value, max, Some("UNKNOWN"))
 }
 
 pub(super) fn validate_retries(retries: u32) -> Result<()> {

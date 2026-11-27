@@ -82,55 +82,40 @@ impl AppController {
                 self.window_opened_before_bounds = false;
                 bind_core_snapshot(&mut self.state, diagnostics);
                 if let Some(fields) = fields {
+                    let setting = |key: &str| {
+                        fields
+                            .iter()
+                            .find(|f| f.key == key)
+                            .map(|f| f.value.as_str())
+                    };
+                    let setting_yes = |key: &str, default: bool| {
+                        setting(key).map_or(default, |v| {
+                            if default {
+                                !v.trim().eq_ignore_ascii_case("N")
+                            } else {
+                                v.trim().eq_ignore_ascii_case("Y")
+                            }
+                        })
+                    };
                     self.state.settings_loaded = true;
-                    if let Some(action) = fields
-                        .iter()
-                        .find(|f| f.key == "STREAM_ARCHIVE_CLOSE_ACTION")
-                    {
-                        self.state.close_action = action.value.clone();
-                        self.state.close_to_tray = action.value == "TRAY";
+                    if let Some(action) = setting("STREAM_ARCHIVE_CLOSE_ACTION") {
+                        self.state.close_action = action.to_string();
+                        self.state.close_to_tray = action == "TRAY";
                     }
-                    if let Some(notif) = fields
-                        .iter()
-                        .find(|f| f.key == "STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS")
-                    {
-                        let enabled = !notif.value.eq_ignore_ascii_case("false");
-                        self.state.download_notifications_enabled = enabled;
+                    if let Some(notif) = setting("STREAM_ARCHIVE_DOWNLOAD_NOTIFICATIONS") {
+                        self.state.download_notifications_enabled =
+                            !notif.eq_ignore_ascii_case("false");
                     }
-                    if let Some(notify_start) =
-                        fields.iter().find(|f| f.key == "GUI_NOTIFY_RECORD_START")
-                    {
-                        self.state.notify_record_start =
-                            notify_start.value.trim().eq_ignore_ascii_case("Y");
-                    }
-                    if let Some(notify_finish) =
-                        fields.iter().find(|f| f.key == "GUI_NOTIFY_RECORD_FINISH")
-                    {
-                        self.state.notify_record_finish =
-                            !notify_finish.value.trim().eq_ignore_ascii_case("N");
-                    }
-                    if let Some(notify_warn) = fields.iter().find(|f| f.key == "GUI_NOTIFY_WARNING")
-                    {
-                        self.state.notify_warning =
-                            !notify_warn.value.trim().eq_ignore_ascii_case("N");
-                    }
-                    if let Some(auto_watch) =
-                        fields.iter().find(|f| f.key == "GUI_AUTO_START_WATCHER")
-                    {
-                        let enabled = auto_watch.value.trim().eq_ignore_ascii_case("Y");
-                        self.state.auto_start_watcher = enabled;
-                        self.initial_auto_start_watcher.get_or_insert(enabled);
-                    } else {
-                        self.initial_auto_start_watcher.get_or_insert(false);
-                    }
-                    if let Some(start_tray) =
-                        fields.iter().find(|f| f.key == "GUI_START_MINIMIZED_TRAY")
-                    {
-                        self.state.start_minimized_tray =
-                            start_tray.value.trim().eq_ignore_ascii_case("Y");
-                    }
-                    if let Some(out) = fields.iter().find(|f| f.key == "OUTPUT_DIR") {
-                        self.vod_draft.sync_default_output(&out.value);
+                    self.state.notify_record_start = setting_yes("GUI_NOTIFY_RECORD_START", false);
+                    self.state.notify_record_finish = setting_yes("GUI_NOTIFY_RECORD_FINISH", true);
+                    self.state.notify_warning = setting_yes("GUI_NOTIFY_WARNING", true);
+                    let auto_watch = setting_yes("GUI_AUTO_START_WATCHER", false);
+                    self.state.auto_start_watcher = auto_watch;
+                    self.initial_auto_start_watcher.get_or_insert(auto_watch);
+                    self.state.start_minimized_tray =
+                        setting_yes("GUI_START_MINIMIZED_TRAY", false);
+                    if let Some(out) = setting("OUTPUT_DIR") {
+                        self.vod_draft.sync_default_output(out);
                         self.state.vod_output_directory = self.vod_draft.output_directory.clone();
                         self.state.vod_output_revision =
                             self.state.vod_output_revision.wrapping_add(1);
@@ -161,30 +146,28 @@ impl AppController {
                     self.sync_channels_view(true);
                 }
                 if reload_provider {
+                    let has_secret = |key: &str| secrets.get(key).copied().unwrap_or(false);
                     self.state.provider_soop_username = username;
                     self.state.provider_worker_url = worker_url;
                     self.state.provider_telegram_chat_id = telegram_chat_id;
-                    self.state.provider_soop_password.clear();
-                    self.state.provider_worker_api_key.clear();
-                    self.state.provider_chzzk_nid_aut.clear();
-                    self.state.provider_chzzk_nid_ses.clear();
-                    self.state.provider_kick_token.clear();
-                    self.state.provider_discord_webhook.clear();
-                    self.state.provider_telegram_bot_token.clear();
-                    self.state.provider_soop_password_set =
-                        secrets.get("SOOP_PASSWORD").copied().unwrap_or(false);
-                    self.state.provider_worker_api_key_set =
-                        secrets.get("CLOUDFLARE_API_KEY").copied().unwrap_or(false);
-                    self.state.provider_chzzk_nid_aut_set =
-                        secrets.get("CHZZK_NID_AUT").copied().unwrap_or(false);
-                    self.state.provider_chzzk_nid_ses_set =
-                        secrets.get("CHZZK_NID_SES").copied().unwrap_or(false);
-                    self.state.provider_kick_token_set =
-                        secrets.get("KICK_SESSION_TOKEN").copied().unwrap_or(false);
-                    self.state.provider_discord_webhook_set =
-                        secrets.get("DISCORD_WEBHOOK_URL").copied().unwrap_or(false);
-                    self.state.provider_telegram_bot_token_set =
-                        secrets.get("TELEGRAM_BOT_TOKEN").copied().unwrap_or(false);
+                    for draft in [
+                        &mut self.state.provider_soop_password,
+                        &mut self.state.provider_worker_api_key,
+                        &mut self.state.provider_chzzk_nid_aut,
+                        &mut self.state.provider_chzzk_nid_ses,
+                        &mut self.state.provider_kick_token,
+                        &mut self.state.provider_discord_webhook,
+                        &mut self.state.provider_telegram_bot_token,
+                    ] {
+                        draft.clear();
+                    }
+                    self.state.provider_soop_password_set = has_secret("SOOP_PASSWORD");
+                    self.state.provider_worker_api_key_set = has_secret("CLOUDFLARE_API_KEY");
+                    self.state.provider_chzzk_nid_aut_set = has_secret("CHZZK_NID_AUT");
+                    self.state.provider_chzzk_nid_ses_set = has_secret("CHZZK_NID_SES");
+                    self.state.provider_kick_token_set = has_secret("KICK_SESSION_TOKEN");
+                    self.state.provider_discord_webhook_set = has_secret("DISCORD_WEBHOOK_URL");
+                    self.state.provider_telegram_bot_token_set = has_secret("TELEGRAM_BOT_TOKEN");
                     self.state.provider_revision = self.state.provider_revision.wrapping_add(1);
                 }
             }
@@ -214,11 +197,7 @@ impl AppController {
                     self.state.config_message = format!("채널 이름을 확인했습니다: {name}");
                 }
             }
-            Response::ConfigMessage(message) => {
-                self.state.config_busy = false;
-                self.state.config_message = message;
-            }
-            Response::ConfigError(message) => {
+            Response::ConfigMessage(message) | Response::ConfigError(message) => {
                 self.state.config_busy = false;
                 self.state.config_message = message;
             }

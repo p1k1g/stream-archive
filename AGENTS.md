@@ -112,3 +112,20 @@ Headless runtime ┘             |
 ```
 
 Presentation layers must not call each other. GPUI must not use localhost HTTP as its application API and must not duplicate provider, storage, process, security, queue, backup or persistence logic.
+
+## Code style and conciseness standards
+
+All new features, refactors, and bug fixes in `rust-runtime` and `rust-gui` must follow these anti-bloat and DRY principles:
+
+- **Single source of truth for allowlists, keys, and utilities**:
+  - Do not duplicate setting/secret key allowlists across `app_core`, `unix_cli`, or GPUI views — share constants or predicates (`app_core::NATIVE_PROVIDER_*_KEYS`, `settings_view::is_non_text_setting_key`).
+  - Shared utilities live in one canonical module: filename sanitization in `rust-runtime/src/support.rs` (`sanitize_filename_segment`), provider VOD lifecycle in `rust-runtime/src/platform/vod.rs` (`ProviderVodRunner`), byte/duration formatting in `rust-gui/src/formatting.rs`, and reusable GPUI card/chrome helpers in `rust-gui/src/theme.rs`.
+- **Extract helpers on repetition (Rule of Three)**:
+  - Whenever an orchestration, IPC, worker-dispatch, or GPUI layout pattern repeats 3 or more times, extract a small focused helper instead of copy-pasting blocks (e.g., `RuntimeControlRequest::command(...)` builders in `unix_control.rs`, `spawn_async` / `spawn_detached` in `core_worker/handlers.rs`, `create_input` / `subscribe_input_change` / `sync_input` / `modal_shell` in `ui/mod.rs`).
+  - Avoid speculative abstractions for one-off code; keep helpers small, local, and readable.
+- **Data-driven UI and CLI definitions**:
+  - Express repetitive toggle lists, pill options, credential fields, clear buttons, and input syncs as compact tables/arrays iterated with a loop (e.g., `YES_NO_SETTINGS`, provider input arrays, `setting_switch_row`, `setting_pill_options`) rather than repeating 30–50 line element trees.
+- **Focused modules and test separation**:
+  - Keep modules cohesive; when a file accumulates unrelated responsibilities or large inline test blocks, extract clean submodules (`helpers.rs`, `parser.rs`, `tests.rs`) while keeping `runtime_contracts` boundaries intact.
+- **Verification before commit**:
+  - Every refactor must keep `cargo fmt --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `runtime_contracts`, and both `rust-runtime` and `rust-gui` test suites passing without behavioral regression.

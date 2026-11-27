@@ -13,11 +13,9 @@ use crate::{live_adapter, native_picker, native_shell};
 use std::{collections::BTreeMap, sync::mpsc};
 use stream_archive_server::{
     app_core::StreamArchiveCore,
-    backup_service::BackupPolicy,
-    environment_settings::SettingKind,
+    backup_service::BackupSnapshot,
     history_service::HistoryFilter,
-    model::{Channel, VodDownloadRequest},
-    support::platform::PlatformId,
+    model::{NativeWatcherStatus, VodDownloadRequest},
 };
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -34,6 +32,43 @@ fn send_response(responses: &mpsc::Sender<Response>, response: Response) -> Loop
     }
 }
 
+fn spawn_async<F, Fut>(
+    core: &StreamArchiveCore,
+    runtime: &tokio::runtime::Runtime,
+    responses: &mpsc::Sender<Response>,
+    work: F,
+) -> LoopAction
+where
+    F: FnOnce(StreamArchiveCore) -> Fut,
+    Fut: std::future::Future<Output = Response> + Send + 'static,
+{
+    let responses = responses.clone();
+    let future = work(core.clone());
+    runtime.spawn(async move {
+        let _ = responses.send(future.await);
+    });
+    LoopAction::Continue
+}
+
+fn spawn_detached<F, E>(
+    responses: &mpsc::Sender<Response>,
+    name: &'static str,
+    work: F,
+    on_spawn_error: E,
+) -> LoopAction
+where
+    F: FnOnce() -> Response + Send + 'static,
+    E: FnOnce(String) -> Response,
+{
+    let responses_clone = responses.clone();
+    match spawn_detached_task(name, move || {
+        let _ = responses_clone.send(work());
+    }) {
+        Ok(()) => LoopAction::Continue,
+        Err(error) => send_response(responses, on_spawn_error(error)),
+    }
+}
+
 pub(super) fn handle_request(
     core: &StreamArchiveCore,
     runtime: &tokio::runtime::Runtime,
@@ -47,17 +82,14 @@ pub(super) fn handle_request(
             job_id,
             url,
         } => {
-            let core = core.clone();
-            let responses = responses.clone();
-            runtime.spawn(async move {
+            return spawn_async(core, runtime, responses, move |core| async move {
                 let image = core.vod_thumbnail(&job_id, &url).await.ok();
-                let _ = responses.send(Response::VodThumbnail {
+                Response::VodThumbnail {
                     generation,
                     url,
                     image,
-                });
+                }
             });
-            return LoopAction::Continue;
         }
         Request::Thumbnail {
             token,
@@ -66,28 +98,21 @@ pub(super) fn handle_request(
             broadcast_id,
             completion_revision,
         } => {
-            let core = core.clone();
-            let responses = responses.clone();
-            runtime.spawn(async move {
+            return spawn_async(core, runtime, responses, move |core| async move {
                 let image = core
                     .live_thumbnail(platform, &account, &broadcast_id, completion_revision)
                     .await
                     .ok();
-                let _ = responses.send(Response::Thumbnail { token, image });
+                Response::Thumbnail { token, image }
             });
-            return LoopAction::Continue;
         }
         Request::DesktopStatus => {
-            let core = core.clone();
-            let responses = responses.clone();
-            runtime.spawn(async move {
-                let status = desktop_snapshot(&core).await;
-                let _ = responses.send(Response::DesktopStatus(match status {
+            return spawn_async(core, runtime, responses, |core| async move {
+                Response::DesktopStatus(match desktop_snapshot(&core).await {
                     Ok((summary, _)) => summary,
                     Err(error) => format!("상태 확인 실패: {error}"),
-                }));
+                })
             });
-            return LoopAction::Continue;
         }
         Request::PrepareExit => Response::ExitCheck(
             runtime
@@ -120,7 +145,15 @@ pub(super) fn handle_request(
         ),
         Request::Save(patch) => handle_save_settings(core, runtime, responses, patch),
         Request::Pick(index, kind, initial) => {
-            return handle_pick_setting(responses, index, kind, initial);
+            return spawn_detached(
+                responses,
+                "native-picker",
+                move || match native_picker::pick(kind, &initial) {
+                    Ok(path) => Response::Picked(index, path),
+                    Err(error) => Response::Error(format!("폴더 선택기 오류: {error}")),
+                },
+                Response::Error,
+            );
         }
         Request::ConfigReload => configuration_snapshot(
             core,
@@ -133,12 +166,39 @@ pub(super) fn handle_request(
             index,
             expected,
             initial,
-        } => return handle_channel_pick_output(responses, index, expected, initial),
+        } => {
+            return spawn_detached(
+                responses,
+                "native-picker",
+                move || match native_picker::pick_directory(&initial) {
+                    Ok(path) => Response::ChannelPicked {
+                        index,
+                        expected,
+                        path,
+                    },
+                    Err(message) => Response::ConfigError(message),
+                },
+                Response::ConfigError,
+            );
+        }
         Request::ChannelResolve {
             index,
             platform,
             account,
-        } => return handle_channel_resolve(core, runtime, responses, index, platform, account),
+        } => {
+            return spawn_async(core, runtime, responses, move |core| async move {
+                match core.resolve_channel_name(platform, &account).await {
+                    Ok(name) => Response::ChannelResolved {
+                        index,
+                        account,
+                        name,
+                    },
+                    Err(error) => Response::ConfigError(format!(
+                        "채널 이름 조회 실패 {platform}/{account}: {error:#}"
+                    )),
+                }
+            });
+        }
         Request::ProviderSave {
             username,
             worker_url,
@@ -160,53 +220,46 @@ pub(super) fn handle_request(
             Err(error) => Response::ConfigError(format!("KICK 인증정보 삭제 실패: {error:#}")),
         },
         Request::ProviderTestSoop => {
-            let core = core.clone();
-            let responses = responses.clone();
-            runtime.spawn(async move {
-                let response = match core.test_soop_auth().await {
+            return spawn_async(core, runtime, responses, |core| async move {
+                match core.test_soop_auth().await {
                     Ok(message) => Response::ConfigMessage(message),
                     Err(error) => {
                         Response::ConfigError(format!("SOOP / Worker 테스트 실패: {error:#}"))
                     }
-                };
-                let _ = responses.send(response);
+                }
             });
-            return LoopAction::Continue;
         }
         Request::WebhookTest => {
-            let core = core.clone();
-            let responses = responses.clone();
-            runtime.spawn(async move {
-                let response = match core.test_webhook().await {
+            return spawn_async(core, runtime, responses, |core| async move {
+                match core.test_webhook().await {
                     Ok(message) => Response::ConfigMessage(message),
                     Err(error) => {
                         Response::ConfigError(format!("웹훅 테스트 발송 실패: {error:#}"))
                     }
-                };
-                let _ = responses.send(response);
+                }
             });
-            return LoopAction::Continue;
         }
         Request::LiveStatus { poll, generation } => {
-            let core = core.clone();
-            let responses = responses.clone();
-            runtime.spawn(async move {
-                let _ =
-                    responses.send(live_status_async(&core, poll, Some(generation), false).await);
+            return spawn_async(core, runtime, responses, move |core| async move {
+                live_status_async(&core, poll, Some(generation), false).await
             });
-            return LoopAction::Continue;
         }
         Request::LiveRefresh => {
-            let core = core.clone();
-            let responses = responses.clone();
-            runtime.spawn(async move {
-                let _ = responses.send(live_status_async(&core, false, None, true).await);
+            return spawn_async(core, runtime, responses, |core| async move {
+                live_status_async(&core, false, None, true).await
             });
-            return LoopAction::Continue;
         }
         Request::StorageLoad { poll, generation } => storage_status(core, poll, generation),
-        Request::LiveStart => handle_live_start(core, runtime),
-        Request::LiveStop => handle_live_stop(core, runtime),
+        Request::LiveStart => live_watcher_response(
+            runtime.block_on(core.start_watcher()),
+            "LIVE Watcher를 시작했습니다",
+            "Watcher 시작 실패",
+        ),
+        Request::LiveStop => live_watcher_response(
+            runtime.block_on(core.stop_watcher()),
+            "LIVE Watcher를 중지했습니다",
+            "Watcher 중지 실패",
+        ),
         Request::LiveAction { target, action } => {
             return handle_live_action(core, runtime, responses, target, action);
         }
@@ -227,7 +280,23 @@ pub(super) fn handle_request(
                 },
             }
         }
-        Request::VodPickOutput { initial } => return handle_vod_pick_output(responses, initial),
+        Request::VodPickOutput { initial } => {
+            return spawn_detached(
+                responses,
+                "native-picker",
+                move || match native_picker::pick_directory(&initial) {
+                    Ok(path) => Response::VodPicked(path),
+                    Err(error) => Response::VodError {
+                        message: format!("VOD 출력 폴더 선택기 오류: {error}"),
+                        poll: false,
+                    },
+                },
+                |message| Response::VodError {
+                    message,
+                    poll: false,
+                },
+            );
+        }
         Request::VodDownload(req) => handle_vod_download(core, runtime, req),
         Request::VodCancel => match runtime.block_on(core.cancel_vod()) {
             Ok(status) => Response::Vod {
@@ -263,12 +332,36 @@ pub(super) fn handle_request(
             },
         ),
         Request::BackupPickDirectory { initial } => {
-            return handle_backup_pick_directory(responses, initial);
+            return spawn_detached(
+                responses,
+                "native-picker",
+                move || match native_picker::pick_directory(&initial) {
+                    Ok(path) => Response::MaintenancePicked(path),
+                    Err(error) => Response::MaintenanceError {
+                        message: format!("백업 폴더 선택기 오류: {error}"),
+                        poll: false,
+                    },
+                },
+                |message| Response::MaintenanceError {
+                    message,
+                    poll: false,
+                },
+            );
         }
-        Request::BackupSave { policy, directory } => {
-            handle_backup_save(core, runtime, policy, directory)
-        }
-        Request::BackupCreate => handle_backup_create(core, runtime),
+        Request::BackupSave { policy, directory } => maintenance_response(
+            core,
+            runtime,
+            runtime.block_on(core.update_backup_policy(&policy, directory.as_deref())),
+            "백업 정책을 canonical SQLite에 저장했습니다.",
+            "백업 정책을 저장하지 못했습니다",
+        ),
+        Request::BackupCreate => maintenance_response(
+            core,
+            runtime,
+            runtime.block_on(core.create_manual_backup()),
+            "수동 백업을 생성하고 검증했습니다.",
+            "수동 백업 실패",
+        ),
         Request::BackupRestore { file_name } => {
             handle_backup_restore(core, runtime, responses, file_name)
         }
@@ -281,37 +374,60 @@ pub(super) fn handle_request(
             Response::LogsCleared
         }
         Request::OpenLiveFolder(file_path) => {
-            return handle_open_live_folder(responses, file_path);
+            return spawn_detached(
+                responses,
+                "native-shell",
+                move || {
+                    Response::LiveFolderOpened(native_shell::open_containing_directory(&file_path))
+                },
+                |err| Response::LiveFolderOpened(Err(err)),
+            );
         }
         Request::OpenMediaFile(file_path) => {
-            return handle_open_media_file(responses, file_path);
+            return spawn_detached(
+                responses,
+                "native-shell",
+                move || Response::MediaFileOpened(native_shell::open_media_file(&file_path)),
+                |err| Response::MediaFileOpened(Err(err)),
+            );
         }
         Request::OpenLiveStream { platform, account } => {
-            return handle_open_live_stream(responses, platform, account);
+            return spawn_detached(
+                responses,
+                "native-shell",
+                move || {
+                    Response::LiveStreamOpened(native_shell::open_provider_url(&platform, &account))
+                },
+                |err| Response::LiveStreamOpened(Err(err)),
+            );
         }
         Request::OpenLogsFolder => return handle_open_logs_folder(core, responses),
-        Request::OpenReleaseUrl(url) => return handle_open_release_url(responses, url),
+        Request::OpenReleaseUrl(url) => {
+            return spawn_detached(
+                responses,
+                "native-shell",
+                move || Response::ReleaseUrlOpened(native_shell::open_release_url(&url)),
+                |err| Response::ReleaseUrlOpened(Err(err)),
+            );
+        }
         Request::CheckUpdates { manual } => {
-            let core = core.clone();
-            let responses = responses.clone();
-            runtime.spawn(async move {
+            return spawn_async(core, runtime, responses, move |core| async move {
                 let result = core
                     .check_latest_release()
                     .await
                     .map_err(|e| format!("{e:#}"));
-                let _ = responses.send(Response::UpdateCheck { manual, result });
+                Response::UpdateCheck { manual, result }
             });
-            return LoopAction::Continue;
         }
         Request::SetWindowsStartup(enabled) => {
-            let responses = responses.clone();
-            match spawn_detached_task("windows-startup", move || {
-                let result = crate::desktop::windows_startup::set_enabled(enabled);
-                let _ = responses.send(Response::WindowsStartup(result));
-            }) {
-                Ok(()) => return LoopAction::Continue,
-                Err(error) => Response::WindowsStartup(Err(error)),
-            }
+            return spawn_detached(
+                responses,
+                "windows-startup",
+                move || {
+                    Response::WindowsStartup(crate::desktop::windows_startup::set_enabled(enabled))
+                },
+                |err| Response::WindowsStartup(Err(err)),
+            );
         }
     };
     send_response(responses, response)
@@ -336,74 +452,6 @@ fn handle_save_settings(
         }
         Err(error) => Response::Error(format!("저장 실패: {error:#}")),
     }
-}
-
-fn handle_pick_setting(
-    responses: &mpsc::Sender<Response>,
-    index: usize,
-    kind: SettingKind,
-    initial: String,
-) -> LoopAction {
-    let responses_clone = responses.clone();
-    match spawn_detached_task("native-picker", move || {
-        let response = match native_picker::pick(kind, &initial) {
-            Ok(path) => Response::Picked(index, path),
-            Err(error) => Response::Error(format!("폴더 선택기 오류: {error}")),
-        };
-        let _ = responses_clone.send(response);
-    }) {
-        Ok(()) => LoopAction::Continue,
-        Err(error) => send_response(responses, Response::Error(error)),
-    }
-}
-
-fn handle_channel_pick_output(
-    responses: &mpsc::Sender<Response>,
-    index: usize,
-    expected: Vec<Channel>,
-    initial: String,
-) -> LoopAction {
-    let responses_clone = responses.clone();
-    match spawn_detached_task("native-picker", move || {
-        let response = match native_picker::pick_directory(&initial) {
-            Ok(path) => Response::ChannelPicked {
-                index,
-                expected,
-                path,
-            },
-            Err(message) => Response::ConfigError(message),
-        };
-        let _ = responses_clone.send(response);
-    }) {
-        Ok(()) => LoopAction::Continue,
-        Err(error) => send_response(responses, Response::ConfigError(error)),
-    }
-}
-
-fn handle_channel_resolve(
-    core: &StreamArchiveCore,
-    runtime: &tokio::runtime::Runtime,
-    responses: &mpsc::Sender<Response>,
-    index: usize,
-    platform: PlatformId,
-    account: String,
-) -> LoopAction {
-    let core = core.clone();
-    let responses = responses.clone();
-    runtime.spawn(async move {
-        let response = match core.resolve_channel_name(platform, &account).await {
-            Ok(name) => Response::ChannelResolved {
-                index,
-                account,
-                name,
-            },
-            Err(error) => Response::ConfigError(format!(
-                "채널 이름 조회 실패 {platform}/{account}: {error:#}"
-            )),
-        };
-        let _ = responses.send(response);
-    });
-    LoopAction::Continue
 }
 
 fn handle_provider_save(
@@ -450,33 +498,21 @@ fn handle_clear_provider_credentials(
     }
 }
 
-fn handle_live_start(core: &StreamArchiveCore, runtime: &tokio::runtime::Runtime) -> Response {
-    match runtime.block_on(core.start_watcher()) {
+fn live_watcher_response(
+    result: Result<NativeWatcherStatus, impl std::fmt::Display>,
+    ok_message: &'static str,
+    err_prefix: &'static str,
+) -> Response {
+    match result {
         Ok(status) => Response::Live {
             generation: None,
             status,
             refresh_thumbnails: false,
-            message: Some("LIVE Watcher를 시작했습니다".into()),
+            message: Some(ok_message.into()),
             poll: false,
         },
         Err(error) => Response::LiveError {
-            message: format!("Watcher 시작 실패: {error:#}"),
-            poll: false,
-        },
-    }
-}
-
-fn handle_live_stop(core: &StreamArchiveCore, runtime: &tokio::runtime::Runtime) -> Response {
-    match runtime.block_on(core.stop_watcher()) {
-        Ok(status) => Response::Live {
-            generation: None,
-            status,
-            refresh_thumbnails: false,
-            message: Some("LIVE Watcher를 중지했습니다".into()),
-            poll: false,
-        },
-        Err(error) => Response::LiveError {
-            message: format!("Watcher 중지 실패: {error:#}"),
+            message: format!("{err_prefix}: {error:#}"),
             poll: false,
         },
     }
@@ -546,29 +582,6 @@ fn handle_live_password(
             message: format!("비밀번호를 적용하지 못했습니다: {error:#}"),
             poll: false,
         },
-    }
-}
-
-fn handle_vod_pick_output(responses: &mpsc::Sender<Response>, initial: String) -> LoopAction {
-    let responses_clone = responses.clone();
-    match spawn_detached_task("native-picker", move || {
-        let response = match native_picker::pick_directory(&initial) {
-            Ok(path) => Response::VodPicked(path),
-            Err(error) => Response::VodError {
-                message: format!("VOD 출력 폴더 선택기 오류: {error}"),
-                poll: false,
-            },
-        };
-        let _ = responses_clone.send(response);
-    }) {
-        Ok(()) => LoopAction::Continue,
-        Err(error) => send_response(
-            responses,
-            Response::VodError {
-                message: error,
-                poll: false,
-            },
-        ),
     }
 }
 
@@ -746,59 +759,22 @@ fn handle_history_load(core: &StreamArchiveCore, filter: HistoryFilter, view: St
     }
 }
 
-fn handle_backup_pick_directory(responses: &mpsc::Sender<Response>, initial: String) -> LoopAction {
-    let responses_clone = responses.clone();
-    match spawn_detached_task("native-picker", move || {
-        let response = match native_picker::pick_directory(&initial) {
-            Ok(path) => Response::MaintenancePicked(path),
-            Err(error) => Response::MaintenanceError {
-                message: format!("백업 폴더 선택기 오류: {error}"),
-                poll: false,
-            },
-        };
-        let _ = responses_clone.send(response);
-    }) {
-        Ok(()) => LoopAction::Continue,
-        Err(error) => send_response(
-            responses,
-            Response::MaintenanceError {
-                message: error,
-                poll: false,
-            },
-        ),
-    }
-}
-
-fn handle_backup_save(
+fn maintenance_response(
     core: &StreamArchiveCore,
     runtime: &tokio::runtime::Runtime,
-    policy: BackupPolicy,
-    directory: Option<String>,
+    result: Result<BackupSnapshot, impl std::fmt::Display>,
+    ok_message: &'static str,
+    err_prefix: &'static str,
 ) -> Response {
-    match runtime.block_on(core.update_backup_policy(&policy, directory.as_deref())) {
+    match result {
         Ok(snapshot) => Response::Maintenance {
             snapshot,
             diagnostics: core.diagnostics(),
             logs: runtime.block_on(core.runtime_logs(200)),
-            message: "백업 정책을 canonical SQLite에 저장했습니다.".into(),
+            message: ok_message.into(),
         },
         Err(error) => Response::MaintenanceError {
-            message: format!("백업 정책을 저장하지 못했습니다: {error:#}"),
-            poll: false,
-        },
-    }
-}
-
-fn handle_backup_create(core: &StreamArchiveCore, runtime: &tokio::runtime::Runtime) -> Response {
-    match runtime.block_on(core.create_manual_backup()) {
-        Ok(snapshot) => Response::Maintenance {
-            snapshot,
-            diagnostics: core.diagnostics(),
-            logs: runtime.block_on(core.runtime_logs(200)),
-            message: "수동 백업을 생성하고 검증했습니다.".into(),
-        },
-        Err(error) => Response::MaintenanceError {
-            message: format!("수동 백업 실패: {error:#}"),
+            message: format!("{err_prefix}: {error:#}"),
             poll: false,
         },
     }
@@ -849,32 +825,6 @@ fn handle_backup_restore(
     }
 }
 
-fn handle_open_live_folder(responses: &mpsc::Sender<Response>, file_path: String) -> LoopAction {
-    let responses_clone = responses.clone();
-    match spawn_detached_task("native-shell", move || {
-        let result = native_shell::open_containing_directory(&file_path);
-        let _ = responses_clone.send(Response::LiveFolderOpened(result));
-    }) {
-        Ok(()) => LoopAction::Continue,
-        Err(error) => send_response(responses, Response::LiveFolderOpened(Err(error))),
-    }
-}
-
-fn handle_open_live_stream(
-    responses: &mpsc::Sender<Response>,
-    platform: String,
-    account: String,
-) -> LoopAction {
-    let responses_clone = responses.clone();
-    match spawn_detached_task("native-shell", move || {
-        let result = native_shell::open_provider_url(&platform, &account);
-        let _ = responses_clone.send(Response::LiveStreamOpened(result));
-    }) {
-        Ok(()) => LoopAction::Continue,
-        Err(error) => send_response(responses, Response::LiveStreamOpened(Err(error))),
-    }
-}
-
 fn handle_open_logs_folder(
     core: &StreamArchiveCore,
     responses: &mpsc::Sender<Response>,
@@ -884,46 +834,29 @@ fn handle_open_logs_folder(
             .ok()
             .and_then(|exe| exe.parent().map(|p| p.join("log")))
     });
-    let result = match target {
+    let dir = match target {
         Some(dir) => match std::fs::create_dir_all(&dir) {
-            Ok(()) => Ok(dir.display().to_string()),
-            Err(err) => Err(format!("로그 폴더를 생성할 수 없습니다: {err}")),
-        },
-        None => Err("로그 폴더 경로를 확인할 수 없습니다.".to_string()),
-    };
-    match result {
-        Ok(dir) => {
-            let responses_clone = responses.clone();
-            match spawn_detached_task("native-shell", move || {
-                let result = native_shell::open_containing_directory(&dir);
-                let _ = responses_clone.send(Response::LogsFolderOpened(result));
-            }) {
-                Ok(()) => LoopAction::Continue,
-                Err(error) => send_response(responses, Response::LogsFolderOpened(Err(error))),
+            Ok(()) => dir.display().to_string(),
+            Err(err) => {
+                return send_response(
+                    responses,
+                    Response::LogsFolderOpened(Err(format!(
+                        "로그 폴더를 생성할 수 없습니다: {err}"
+                    ))),
+                );
             }
+        },
+        None => {
+            return send_response(
+                responses,
+                Response::LogsFolderOpened(Err("로그 폴더 경로를 확인할 수 없습니다.".into())),
+            );
         }
-        Err(err) => send_response(responses, Response::LogsFolderOpened(Err(err))),
-    }
-}
-
-fn handle_open_media_file(responses: &mpsc::Sender<Response>, file_path: String) -> LoopAction {
-    let responses_clone = responses.clone();
-    match spawn_detached_task("native-shell", move || {
-        let result = native_shell::open_media_file(&file_path);
-        let _ = responses_clone.send(Response::MediaFileOpened(result));
-    }) {
-        Ok(()) => LoopAction::Continue,
-        Err(error) => send_response(responses, Response::MediaFileOpened(Err(error))),
-    }
-}
-
-fn handle_open_release_url(responses: &mpsc::Sender<Response>, url: String) -> LoopAction {
-    let responses_clone = responses.clone();
-    match spawn_detached_task("native-shell", move || {
-        let result = native_shell::open_release_url(&url);
-        let _ = responses_clone.send(Response::ReleaseUrlOpened(result));
-    }) {
-        Ok(()) => LoopAction::Continue,
-        Err(error) => send_response(responses, Response::ReleaseUrlOpened(Err(error))),
-    }
+    };
+    spawn_detached(
+        responses,
+        "native-shell",
+        move || Response::LogsFolderOpened(native_shell::open_containing_directory(&dir)),
+        |err| Response::LogsFolderOpened(Err(err)),
+    )
 }

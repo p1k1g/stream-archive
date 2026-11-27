@@ -229,3 +229,21 @@ pub fn notice_banner(message: &str) -> Div {
         .text_color(rgb(TEXT_SECONDARY))
         .child(message.to_string())
 }
+
+pub fn card_header(title: impl Into<SharedString>, actions: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .pb(px(8.0))
+        .border_b_1()
+        .border_color(rgb(BORDER))
+        .child(
+            div()
+                .text_size(px(13.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(TEXT_PRIMARY))
+                .child(title.into()),
+        )
+        .child(actions)
+}

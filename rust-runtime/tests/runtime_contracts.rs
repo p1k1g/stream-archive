@@ -2909,13 +2909,19 @@ fn storage_ownership_contracts() {
         r"fs::copy\(source,\s*target\)",
         "CHZZK VOD must never copy directly into final pathname.",
     );
+    let platform_vod = read_repo_file("rust-runtime/src/platform/vod.rs");
     assert_match(
         &chzzk_vod,
+        r"ProviderVodRunner",
+        "CHZZK VOD must delegate job lifecycle to shared ProviderVodRunner.",
+    );
+    assert_match(
+        &platform_vod,
         r"should_mark_cancelled",
         "Late cancellation completion precedence helper is missing.",
     );
     assert_match(
-        &chzzk_vod,
+        &platform_vod,
         r#"state != "COMPLETED""#,
         "Successfully published file must remain COMPLETED after late cancel.",
     );

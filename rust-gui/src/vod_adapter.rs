@@ -246,17 +246,7 @@ fn normalize(value: &str) -> &str {
 }
 
 pub fn format_duration(seconds: u64) -> String {
-    if seconds == 0 {
-        return "-".into();
-    }
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let seconds = seconds % 60;
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes}:{seconds:02}")
-    }
+    crate::formatting::format_duration_compact(seconds)
 }
 
 pub struct VodView {
